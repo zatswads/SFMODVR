@@ -1,6 +1,6 @@
 # SF Body Morphs — handoff
 
-State at **0.5.0** (branch `main`). Not yet run in the game. Read this first, then `docs/TESTING.md`.
+State at **0.5.1** (branch `main`). Not yet run in the game. Read this first, then `docs/TESTING.md`.
 
 ## What this is
 
@@ -50,6 +50,7 @@ commit them). Toolchain: `apt-get update && apt-get install -y mono-mcs mono-dev
 | `GameRig.cs` | Reflection into Assembly-CSharp: the woman (`MovePlayerAndGirl.reika`) and her body-part bones from the game's own references. |
 | `Body.cs` | `Detail` table (slider: group, Op Size/Stretch/Move/Length, Dir, bones by game part → exact rig names → keywords, range, Keep), `Character` (renderers, skin bones, slider bones, bind-pose axes/move directions, look), scan every 2 s (cached; rebuilt only when the renderer set changes), apply/restore trackers for scale and position, one `Character '...'` log block per session. |
 | `Look.cs` | A look (bone factors, slider values keyed by `Detail.Id` in `Regions`, file token `region`), text format, `Store` (autosave/presets in `BepInEx\config\SfMorphs`). |
+| `MeshData.cs` | A mesh's data in game vertex order: CPU if `isReadable`, else GPU readback (`Mesh.GetVertexBuffer/GetIndexBuffer` + `GetData`, decoded by `GetVertexAttributeFormat/Offset/Stream/Dimension`, submeshes from `GetSubMesh`). All her meshes are GPU-only. Basis for the export and the future morph loader (readable clones). Bind poses are readable (0.5.0 log: slider directions worked). |
 | `Export.cs` | Presets tab export: per mesh `.obj` (bind space, game vertex order, `g` per submesh) + `.skin.txt` (bones, bind poses, 4 weights/vertex), `skeleton.txt`, `meshes.txt`. Skips meshes that aren't `isReadable`. |
 | `Panel.cs` | F8 window: character buttons, tabs Body (collapsible groups) / Bones / Presets, filter + 80-row cap, greyed rows with reasons. |
 

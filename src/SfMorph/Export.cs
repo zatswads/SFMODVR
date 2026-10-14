@@ -12,8 +12,8 @@ namespace SfMorph
     //   <mesh>.obj        positions, normals, UVs, faces per submesh, in the mesh's bind space
     //   <mesh>.skin.txt   bone names, bind poses, 4 bone weights per vertex
     //   skeleton.txt      every skin bone: name, parent, bind position (mesh space) and rotation
-    // to BepInEx\config\SfMorphs\export\<name>-<time>\. Unity needs a mesh to be readable for
-    // this; the game may have shipped some as GPU-only, which the log lists.
+    // to BepInEx\config\SfMorphs\export\<name>-<time>\. The game ships its meshes GPU-only, so
+    // MeshData reads them back from the GPU (meshes.txt says which way each was read).
     internal static class Export
     {
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
@@ -23,50 +23,53 @@ namespace SfMorph
             var dir = Path.Combine(Path.Combine(Store.Dir, "export"), Store.Safe(c.Key) + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
             Directory.CreateDirectory(dir);
             int written = 0;
-            var unreadable = new List<string>();
+            var failed = new List<string>();
             var bind = new Dictionary<Transform, Matrix4x4>();
             var seen = new HashSet<Mesh>();
-            var index = new StringBuilder("# mesh\trenderer\tvertices\tsubmeshes\tmaterials\n");
+            var index = new StringBuilder("# mesh\trenderer\tvertices\tsubmeshes\tmaterials\tread from\n");
             foreach (var r in c.Renderers)
             {
                 if (r == null || r.sharedMesh == null || !seen.Add(r.sharedMesh)) continue;
                 var m = r.sharedMesh;
-                if (!m.isReadable) { unreadable.Add(m.name); continue; }
+                string err;
+                var d = MeshData.Read(m, out err);
+                if (d == null) { failed.Add(m.name + " (" + err + ")"); continue; }
+                if (err != null) Plugin.Log.LogWarning("Export " + m.name + ": " + err);
                 var bones = r.bones;
-                var bp = m.bindposes;
+                var bp = d.Bind;
                 for (int i = 0; i < bones.Length && i < bp.Length; i++) if (bones[i] != null && !bind.ContainsKey(bones[i])) bind[bones[i]] = bp[i];
                 var name = Store.Safe(m.name);
-                File.WriteAllText(Path.Combine(dir, name + ".obj"), Obj(m, r));
-                File.WriteAllText(Path.Combine(dir, name + ".skin.txt"), Skin(m, bones, bp));
+                File.WriteAllText(Path.Combine(dir, name + ".obj"), Obj(m, r, d));
+                File.WriteAllText(Path.Combine(dir, name + ".skin.txt"), Skin(d, bones, bp));
                 var mats = new StringBuilder();
                 foreach (var mat in r.sharedMaterials) mats.Append(mat != null ? mat.name : "-").Append(';');
-                index.Append(name).Append('\t').Append(r.name).Append('\t').Append(m.vertexCount).Append('\t').Append(m.subMeshCount).Append('\t').Append(mats).Append('\n');
+                index.Append(name).Append('\t').Append(r.name).Append('\t').Append(m.vertexCount).Append('\t').Append(m.subMeshCount).Append('\t').Append(mats).Append('\t').Append(d.Source).Append('\n');
                 written++;
             }
             File.WriteAllText(Path.Combine(dir, "meshes.txt"), index.ToString());
             File.WriteAllText(Path.Combine(dir, "skeleton.txt"), Skeleton(c, bind));
-            var msg = "Exported " + written + " meshes of '" + c.Key + "' to " + dir + (unreadable.Count > 0 ? "; " + unreadable.Count + " not readable by mods: " + string.Join(", ", unreadable.ToArray()) : "");
+            var msg = "Exported " + written + " meshes of '" + c.Key + "' to " + dir + (failed.Count > 0 ? "; " + failed.Count + " failed: " + string.Join(", ", failed.ToArray()) : "");
             Plugin.Log.LogInfo(msg);
             return msg;
         }
 
         static string F(float v) { return v.ToString("0.######", Inv); }
 
-        static string Obj(Mesh m, SkinnedMeshRenderer r)
+        static string Obj(Mesh m, SkinnedMeshRenderer r, MeshData d)
         {
             var sb = new StringBuilder();
-            sb.Append("# SfMorph export of ").Append(m.name).Append(" (renderer ").Append(r.name).Append("), bind space, Unity axes (left-handed, Y up)\n");
-            var v = m.vertices; var n = m.normals; var uv = m.uv;
+            sb.Append("# SfMorph export of ").Append(m.name).Append(" (renderer ").Append(r.name).Append(", read from ").Append(d.Source).Append("), bind space, Unity axes (left-handed, Y up)\n");
+            var v = d.Pos; var n = d.Nrm ?? new Vector3[0]; var uv = d.Uv ?? new Vector2[0];
             foreach (var p in v) sb.Append("v ").Append(F(p.x)).Append(' ').Append(F(p.y)).Append(' ').Append(F(p.z)).Append('\n');
             foreach (var p in n) sb.Append("vn ").Append(F(p.x)).Append(' ').Append(F(p.y)).Append(' ').Append(F(p.z)).Append('\n');
             foreach (var p in uv) sb.Append("vt ").Append(F(p.x)).Append(' ').Append(F(p.y)).Append('\n');
             bool hasN = n.Length == v.Length, hasUv = uv.Length == v.Length;
-            for (int s = 0; s < m.subMeshCount; s++)
+            for (int s = 0; s < d.Sub.Count; s++)
             {
-                if (m.GetTopology(s) != MeshTopology.Triangles) continue;
+                var t = d.Sub[s];
+                if (t.Length == 0) continue;
                 var mat = s < r.sharedMaterials.Length && r.sharedMaterials[s] != null ? r.sharedMaterials[s].name : "submesh" + s;
                 sb.Append("g ").Append(Store.Safe(mat).Replace(' ', '_')).Append('\n');
-                var t = m.GetTriangles(s);
                 for (int i = 0; i + 2 < t.Length; i += 3)
                 {
                     sb.Append('f');
@@ -83,7 +86,7 @@ namespace SfMorph
             return sb.ToString();
         }
 
-        static string Skin(Mesh m, Transform[] bones, Matrix4x4[] bp)
+        static string Skin(MeshData d, Transform[] bones, Matrix4x4[] bp)
         {
             var sb = new StringBuilder("# bones: index name, then bind pose rows; weights: per vertex 4 x (bone index, weight)\n");
             sb.Append("bones ").Append(bones.Length).Append('\n');
@@ -93,7 +96,7 @@ namespace SfMorph
                 if (i < bp.Length) for (int k = 0; k < 16; k++) sb.Append(' ').Append(F(bp[i][k / 4, k % 4]));
                 sb.Append('\n');
             }
-            var w = m.boneWeights;
+            var w = d.Weights ?? new BoneWeight[0];
             sb.Append("weights ").Append(w.Length).Append('\n');
             foreach (var b in w)
                 sb.Append(b.boneIndex0).Append(' ').Append(F(b.weight0)).Append(' ').Append(b.boneIndex1).Append(' ').Append(F(b.weight1)).Append(' ')

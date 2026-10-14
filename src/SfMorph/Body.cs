@@ -407,7 +407,7 @@ namespace SfMorph
             if (!c.Female) { Plugin.Log.LogInfo(sb.ToString()); return; }
             int readable = 0;
             foreach (var r in c.Renderers) if (r != null && r.sharedMesh != null && r.sharedMesh.isReadable) readable++;
-            sb.Append(", ").Append(readable).Append(" of ").Append(c.Renderers.Count).Append(" meshes readable by mods (needed for export and real morphs)");
+            sb.Append(", ").Append(readable).Append(" of ").Append(c.Renderers.Count).Append(" meshes readable by mods directly (the rest are read back from the GPU)");
             sb.Append("\n  sliders: ");
             foreach (var d in Detail.All)
             {

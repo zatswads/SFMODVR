@@ -38,6 +38,12 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.5.1:
+- The 0.5.0 export wrote no meshes: the game ships all 36 of her meshes GPU-only (Read/Write off), and Unity refuses
+  their vertices to scripts. The export now reads each mesh's vertex and index buffers back from the GPU and
+  decodes them with the mesh's own vertex layout (positions, normals, tangents, UVs, bone weights, submeshes), so
+  the data and vertex order are the game's. `meshes.txt` says how each mesh was read; failures are listed with the reason.
+
 0.5.0:
 - Character pipeline, step 1: Presets tab → "Export … for the character pipeline" writes her meshes in the game's
   vertex order (OBJ with UVs per submesh), bone weights and bind poses, and the bind-pose skeleton to

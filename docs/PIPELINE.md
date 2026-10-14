@@ -8,9 +8,10 @@ is committed or shared; only scripts live in this repo.
 Keep her (the game's mesh, rig, skinning, UVs, materials, clothes, physics, expressions, interior parts) and
 transfer the **shape** and **skin textures** of a VaM character onto her:
 
-1. **Her side** (done, SfMorph 0.5.0): Presets tab → "Export … for the character pipeline" writes her meshes in the
+1. **Her side** (SfMorph 0.5.1): Presets tab → "Export … for the character pipeline" writes her meshes in the
    game's vertex order with UVs, bone weights and the bind-pose skeleton (`BepInEx\config\SfMorphs\export\…`).
-   Meshes the game shipped as GPU-only can't be read by a mod; the export and the log say which.
+   All 36 of her meshes are GPU-only (0.5.0 exported nothing), so `MeshData` reads their vertex and index buffers
+   back from the GPU and decodes them with the mesh's vertex layout; `meshes.txt` says CPU or GPU per mesh.
 2. **VaM side** (written, compile-checked against VaM's Assembly-CSharp, not yet run): `tools/vam/SfExport.cs`, a
    VaM plugin on the Person atom. "Export character for SF" writes to `VaM\Saves\PluginData\SfExport\<atom>-<time>\`:
    `body.obj` (Genesis 2 mesh, every morph applied, unposed rest frame, UV vertices + UVs, a group per material,
@@ -41,13 +42,23 @@ Genesis 2 morph → VaM), or sculpts. Front + side character-sheet views are wha
 
 ## Where to run it
 
-- **Local Claude Code session on the PC (recommended)**: VaM, the game and Blender are already there; nothing to upload.
-  Needs Blender 4.2+ installed, Python, and this repo cloned. Prompt to start it:
+- **Local Claude Code session on the PC (recommended; the VaM export with textures is ~250 MB)**: VaM, the game and
+  Blender are already there. Needs Claude Code, git, Blender 4.2+ (its Python gets numpy; add scipy with its pip) and
+  this repo cloned. Prompt to start it:
 
-  > Continue the SF Body Morphs character pipeline in this repo (read CLAUDE.md, docs/HANDOFF.md, docs/PIPELINE.md).
-  > VaM is at `E:\Bak\New folder\Misc\virt\vam`, the game at `E:\Bak\New folder\Misc\SF\VR`, Blender at `<path>`.
-  > Use the newest export in `BepInEx\config\SfMorphs\export` and the VaM export of `<character>`. Run the fit with
-  > Blender in the background, check the result yourself (vertex counts/order unchanged, offsets sane, renders of
-  > before/after), and only hand it to me when it passes. Commit scripts only, never game or VaM content.
+  > Continue SF Body Morphs' character pipeline in this repo: read CLAUDE.md, docs/HANDOFF.md, docs/PIPELINE.md and
+  > .claude/skills/sfmorph-dev/SKILL.md first. Paths: game `E:\Bak\New folder\Misc\SF\VR`, VaM
+  > `E:\Bak\New folder\Misc\virt\vam`, Blender `<path to blender.exe>`. Inputs: the newest VaM export in
+  > `<VaM>\Saves\PluginData\SfExport\` (Callie, Preset_callie) and the newest game export in
+  > `<game>\BepInEx\config\SfMorphs\export\` (SfMorph 0.5.1+; if its meshes.txt lists no meshes, stop and tell me).
+  > 1) Write `tools/pipeline/` (Blender in background + numpy/scipy): read both exports; map her AdvancedSkeleton joints to
+  > Genesis 2 bones; pose-match her bind pose to VaM's rest pose using her skin weights; landmark-guided non-rigid fit of
+  > her skin meshes onto Callie's body.obj; write per-vertex offsets in her exact vertex order for each mesh plus joint
+  > offsets; bake Callie's textures onto her UVs. 2) Verify it yourself before showing me: vertex counts and order
+  > unchanged, no flipped or stretched triangles, offsets sane, before/after renders. 3) Then add SfMorph's runtime loader
+  > and Characters gallery (readable clones of her meshes built from MeshData, AddBlendShapeFrame, a 0-100% slider,
+  > clothes follow by nearest body vertex, baked textures). Build with `dotnet build src/SfMorph -c Release
+  > -p:GameDir="<game>"`, bump the version, README entry, commit and push to main. Never commit game or VaM content.
+  > Keep replies short and tell me exactly what to test in the headset.
 
 - **Cloud session**: works too (Blender runs here as the `bpy` module); upload the two export folders as zips.
