@@ -25,7 +25,7 @@ Nothing here can run in a cloud session: the plugin only runs inside the game on
 
 ## Checklist
 
-- [ ] F8 lists only her (not the player, not the male partner); status "the game's woman found (N body parts ...)".
+- [ ] F8 lists only her (not the player, not the male partner); status "the game's woman found".
 - [ ] Each Body slider changes only that part; greyed parts say why. Thighs/arms don't grow the calves/hands.
 - [ ] Breasts resize and still jiggle smoothly (no jitter), also when grabbed (DynamicBone + CCD IK); hair too.
 - [ ] Each group's sliders: moves go the named way (up / out / forward) on both sides, in any pose; helper
