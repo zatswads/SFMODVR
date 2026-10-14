@@ -1,6 +1,6 @@
 # SF Body Morphs — handoff
 
-State at **0.2.1** (branch `main`). Not yet run in the game. Read this first, then `docs/TESTING.md`.
+State at **0.3.0** (branch `main`). Not yet run in the game. Read this first, then `docs/TESTING.md`.
 
 ## What this is
 
@@ -46,19 +46,34 @@ commit them). Toolchain: `apt-get update && apt-get install -y mono-mcs mono-dev
 
 | File | Role |
 |---|---|
-| `Plugin.cs` | Entry point, `ConfigEntry`s, hidden `Runner` object (`DefaultExecutionOrder(30000)`: Update = key + scan, LateUpdate = apply, OnGUI = panel), unfocused hotkey via `GetAsyncKeyState`. |
+| `Plugin.cs` | Entry point, `ConfigEntry`s, hidden `Runner` (Update = key + scan, OnGUI = panel), `ApplyStep` = the apply step inserted in Unity's PlayerLoop before `PreLateUpdate.ScriptRunBehaviourLateUpdate` (re-checked every 2 s; LateUpdate fallback), unfocused hotkey via `GetAsyncKeyState`. |
 | `GameRig.cs` | Reflection into Assembly-CSharp: the woman (`MovePlayerAndGirl.reika`) and her body-part bones from the game's own references. |
-| `Body.cs` | `Region` table (part → name keywords, range, Keep = scale children back), `Character` (renderers, skin bones, shape names, region bones, look), scan every 2 s (cached; rebuilt only when the renderer set changes), apply/restore trackers, one-shot `Character '...'` log block. |
-| `Look.cs` | A look (shape offsets, bone factors, region factors), text format, `Store` (autosave/presets in `BepInEx\config\SfMorphs`). |
-| `Panel.cs` | F8 window: character buttons, tabs Body / Morphs / Bones / Presets, filter + 80-row cap, greyed rows with reasons. |
+| `Body.cs` | `Detail` table (slider: group, Op Size/Stretch/Move/Length, Dir, bones by game part → exact rig names → keywords, range, Keep), `Character` (renderers, skin bones, slider bones, bind-pose axes/move directions, look), scan every 2 s (cached; rebuilt only when the renderer set changes), apply/restore trackers for scale and position, one `Character '...'` log block per session. |
+| `Look.cs` | A look (bone factors, slider values keyed by `Detail.Id` in `Regions`, file token `region`), text format, `Store` (autosave/presets in `BepInEx\config\SfMorphs`). |
+| `Panel.cs` | F8 window: character buttons, tabs Body (collapsible groups) / Bones / Presets, filter + 80-row cap, greyed rows with reasons. |
 
 ### How changes are applied (keep this model)
 
-Everything is relative to the game. Shape weight = game's weight + offset; bone scale = game's scale × factor.
+**When**: after animation, before LateUpdate scripts (PlayerLoop step). Applying after DynamicBone made the breast
+physics jitter in 0.2.x. **What**: everything is relative to the game. Bone scale = game's scale × factor;
+bone position = game's position × length factor + offset.
 A tracker keeps, per shape/bone, the base and the value we last wrote: if the current value differs from our
 last write, the game changed it, so it becomes the new base; otherwise the base stays (no accumulation on
 values nobody else writes). Anything no longer changed (slider reset, Apply off, error) is given back to its
-base if it still holds our value. Region factors with Keep multiply the bone by f and its direct children by 1/f.
+base if it still holds our value. Keep: the bone gets f, the part's own helpers below it (name starts with the
+bone's stem: `HipPart1_L` under `Hip_L`) keep it, the next joint gets 1/f (axis-mapped). Only uniform scale is
+safe on a bone whose children rotate (non-uniform skews them), so Stretch is allowed on leaves, or with Keep on
+the spine where children barely rotate. Moves use bind-pose directions: character left = Hip_L - Hip_R, up =
+pelvis → chest, forward = up × left (checked: toes in front of ankles), mapped into the parent's local space.
+
+## Her rig (from the 0.2.1 log)
+
+AdvancedSkeleton naming: `Root_M` (pelvis) › `Hip_L` › `HipPart1_L` › `HipPart2_L` › `Knee_L` › `Ankle_L` › `Toes_L`;
+`Spine1_M` › `Chest_M` › `Neck_M` › `NeckPart1_M` › `Head_M`; `Scapula_L` › `Shoulder_L` (+Part1/2) › `Elbow_L` (+Part1/2) › `Wrist_L`.
+Shaping helpers: `Left_UpperBreast` (DynamicBone root) / `Left_LowerBreast` / `Left_Breast_up|down|in|out` /
+`Left_Nipple`; `Butt_L` › `ButtSkin_L`; `LegFrontSkin_L`, `LegInsiteSkin_L`, `LegOutsiteSkin_L`; `Uterus_belly`;
+face: `Cheek_Left(_Raiser)`, `Eyebrow_*`, `Eyelid_*_skin_*`, `Lip_*`, `Jaw_M`, `Eye_L/R`; plus genital/rectum/uterus
+chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact parents of the helpers are logged by 0.3.0.
 
 ## Game facts (from Assembly-CSharp, 0.2.0 survey)
 
@@ -81,8 +96,7 @@ base if it still holds our value. Region factors with Keep multiply the bone by 
 
 ## Open items
 
-- 0.2.x untested in game. From the first log: `Game rig:` line, the `Character '...'` block (which bone each
-  part got and whether it says "(game rig)"; do her body/face meshes have blendshapes at all?).
-- Glutes and nipples still go by bone-name keywords; tune `Region.All` from the logged bone list.
+- 0.3.0 untested in game: jitter gone? which helper sliders visibly do something (helper bones may carry few
+  skin weights); check the `sliders:` line for each slider's bones, parents and child counts.
 - Ideas: hook the game's own save slots (`CustomPoseDate`) so a look follows the game's customise presets;
   translate/offset sliders (VaM "position" morphs) if bone scaling isn't enough.

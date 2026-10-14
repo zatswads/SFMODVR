@@ -17,16 +17,20 @@ Nothing here can run in a cloud session: the plugin only runs inside the game on
 - `SF Body Morphs <version>: panel on F8, looks in ...`
 - `Game rig: MovePlayerAndGirl found, FacialFunction, LadyBreastPhysics_Function` (anything missing = the game
   changed; parts fall back to names).
-- One `Character '<name>': female, N skinned meshes, ...` block per character, with `regions:` (bone per part,
-  `(game rig)` when from the game), `bones:` and `shapes:` lists.
+- `Body changes apply after the game's animation, before its physics and IK` (if instead "Couldn't join Unity's
+  frame loop", physics may jitter).
+- One `Character '<name>': female, ...` block per session, with `sliders:` (bones per slider with parent and child
+  count, `OFF:` reasons) and `bones (parent):`.
 - Red flag: `SF Body Morphs stopped after an error` (everything it changed is given back; the exception follows).
 
 ## Checklist
 
 - [ ] F8 lists only her (not the player, not the male partner); status "the game's woman found (N body parts ...)".
 - [ ] Each Body slider changes only that part; greyed parts say why. Thighs/arms don't grow the calves/hands.
-- [ ] Breasts resize and still jiggle, also when grabbed (DynamicBone + CCD IK).
-- [ ] Morphs (if any shapes): body shape moves the clothes with it; a face shape on top still animates.
+- [ ] Breasts resize and still jiggle smoothly (no jitter), also when grabbed (DynamicBone + CCD IK); hair too.
+- [ ] Each group's sliders: moves go the named way (up / out / forward) on both sides, in any pose; helper
+      sliders (breast top/bottom/inner/outer, thigh front/inner/outer) visibly change the skin; greyed ones say why.
+- [ ] Lengths (thigh, calf, arms, neck, torso) lengthen without skewing; Waist/Ribcage width/depth don't shear when she bends.
 - [ ] Changing face type / pregnancy stage / clothes in the game's menu keeps her changes on the new meshes.
 - [ ] Apply changes off = exactly the game's look; on brings it back.
 - [ ] Restart: her changes come back (file in `BepInEx\config\SfMorphs\characters`). Presets save and load.

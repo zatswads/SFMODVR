@@ -13,14 +13,11 @@ plugin, `dist/SfMorph.dll`, independent of the SF Neural Rendering VR plugin
 
 ## What it does
 
-- **Body**: size of breasts, nipples, glutes, hips, waist, ribcage, thighs, calves, upper arms, forearms,
-  hands, feet, neck, head, by scaling bones. Bones come from the game's own rig references where it has
-  them (see 0.2.0), otherwise from bone names. Parts that should only thicken (thighs, arms, hips, ...)
-  scale their children back, so a bigger thigh doesn't make a bigger calf and foot. A part with no bone
-  is greyed out with the reason.
-- **Morphs**: every blendshape on her meshes (body and clothes share a slider when the name matches).
-  The value is *added* to the game's weight, so expressions and lip sync keep working underneath;
-  -100..200 like VaM's over-range. Greyed out if her meshes have no blendshapes.
+- **Body**: about 50 sliders in six groups (Breasts, Glutes, Hips & legs, Torso, Arms, Head & face), built on
+  her rig's bones (the game's meshes have no blendshapes): sizes, lift/spacing/projection moves in cm, limb and
+  neck lengths, waist/ribcage width and depth, and the rig's shaping helpers (breast top/bottom/inner/outer,
+  thigh front/inner/outer, glute fullness, belly, cheeks, brows, lips, jaw). A slider whose bone is missing, or
+  that would skew the bones under it, is greyed out with the reason.
 - **Bones**: X/Y/Z scale of any skin bone.
 - **Presets**: her changes save to `BepInEx\config\SfMorphs\characters\<name>.txt` as you edit and come
   back when she appears; presets (`...\presets\`) store a look by name to load later.
@@ -38,6 +35,22 @@ REFS=<folder with reference DLLs> sh build.sh      # -> dist/SfMorph.dll
 See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfMorph -c Release -p:GameDir="..."`.
 
 ## Changelog
+
+0.3.0:
+- Breast (and hair) physics jittered after changing a size. The changes were applied after the game's
+  LateUpdate scripts, so DynamicBone simulated the unchanged body and was then resized under it: its
+  particles and the bones disagreed every frame. The changes now apply in Unity's frame loop right after
+  the animation and before the scripts' LateUpdate, so the physics and IK simulate the changed body. The
+  log says `Body changes apply after the game's animation, before its physics and IK`.
+- Detail sliders: the Body tab is now grouped (click a group to open it) with ~50 sliders using the rig's
+  own helper bones (`Left_Breast_up/down/in/out`, `LegFrontSkin/LegInsiteSkin/LegOutsiteSkin`, `ButtSkin`,
+  `Uterus_belly`, `Scapula`, cheeks, brows, lips, jaw) plus moves (cm), lengths and widths. Directions come
+  from the rig's bind pose, so "up", "out" and "forward" stay the same however she's posed. Old saved
+  looks keep their values (same ids for the original parts).
+- Neck size now scales the whole neck (`Neck_M`), not only its upper helper bone.
+- The Morphs tab is gone: none of her 36 meshes has a single blendshape (log), so it could never do anything.
+- The log describes her once per session (with each slider's bones, their parents and child counts) instead
+  of on every outfit change.
 
 0.2.1:
 - Moved to its own repository (SFMODVR). New plugin GUID `sfmodvr.sfmorph`, so its settings file is now
