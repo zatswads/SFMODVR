@@ -103,7 +103,14 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
 
 ## Character pipeline
 
-See `docs/PIPELINE.md` (VaM look → her: her export done in 0.5.0; VaM exporter plugin, Blender fit, gallery to do).
+See `docs/PIPELINE.md` (VaM look → her: her export done in 0.5.0; VaM exporter plugin `tools/vam/SfExport.cs` written
+and compile-checked; Blender fit, runtime morph loader and gallery to do). VaM facts (VaM Assembly-CSharp survey):
+Person skin = `DAZMergedSkinV2`, mesh = `skin.dazMesh` (`DAZMergedMesh`, metres); morphed unposed UV vertices via
+`DAZCharacterRun.doSnap` → `snappedMorphedUVVertices`, or `dazMesh.morphedUVVertices`; faces `dazMesh.UVPolyList`
+(MeshPoly: materialNum, vertices, may be quads); bones `skin.root.dazBones`, `morphedWorldPosition` = rest frame of the
+morphed mesh; textures `skin.GPUmaterials[i]` slots `_MainTex _SpecTex _GlossTex _BumpMap _DecalTex`; plugins write
+with `FileManagerSecure` under `Saves/PluginData` (no prompt). To compile-check the plugin here: mcs against VaM's
+Assembly-CSharp + Unity module refs + a stub UnityEngine.UI (Button.onClick).
 User decisions: personal use only; no Appearance tab (DLSS 5 NR repaints materials anyway); face likeness from AI
 character sheets via FaceGen or VaM. Not building selfie/photo-of-a-real-person features.
 

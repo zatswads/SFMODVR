@@ -11,10 +11,19 @@ transfer the **shape** and **skin textures** of a VaM character onto her:
 1. **Her side** (done, SfMorph 0.5.0): Presets tab → "Export … for the character pipeline" writes her meshes in the
    game's vertex order with UVs, bone weights and the bind-pose skeleton (`BepInEx\config\SfMorphs\export\…`).
    Meshes the game shipped as GPU-only can't be read by a mod; the export and the log say which.
-2. **VaM side** (to write): a VaM plugin (`tools/vam/SfExport.cs`, added to the Person atom) writes the character
-   as VaM shows it, with every morph applied, in a neutral pose: body/face mesh (Genesis 2 Female topology), UVs,
-   joint positions, the skin texture files, and a portrait thumbnail. Needs VaM's
-   `VaM_Data\Managed\Assembly-CSharp.dll` to write it against VaM's real API.
+2. **VaM side** (written, compile-checked against VaM's Assembly-CSharp, not yet run): `tools/vam/SfExport.cs`, a
+   VaM plugin on the Person atom. "Export character for SF" writes to `VaM\Saves\PluginData\SfExport\<atom>-<time>\`:
+   `body.obj` (Genesis 2 mesh, every morph applied, unposed rest frame, UV vertices + UVs, a group per material,
+   from VaM's own morph snapshot `DAZCharacterRun.doSnap`), `body_posed.obj` (as posed now), `joints.txt` (DAZ bones:
+   morphed rest position = same frame as body.obj, and posed position), `materials.txt` + `tex_*.png` (the textures
+   VaM renders with, per material slot), `urls.txt` (the appearance's original texture files), `thumb.jpg`, `info.txt`.
+
+   Running it (first character: MonsterShinkai.Callie.2 with `Custom\Atom\Person\Appearance\Preset_callie.vap`):
+   1. Copy `tools/vam/SfExport.cs` to `VaM\Custom\Scripts\SfMod\SfExport.cs`.
+   2. The `.var` must be where VaM loads packages (`AddonPackages`), as for normal play with that look.
+   3. Add a Person, Appearance → Presets → load `Preset_callie`.
+   4. Person → Plugins → Add Plugin → Select File → `Custom/Scripts/SfMod/SfExport.cs` → Open Custom UI →
+      "Export character for SF". The status line and VaM's message log say where it wrote.
 3. **Fit** (to write, headless Blender, `tools/pipeline/`): pose-match the two (joints), landmark-guided non-rigid
    fit of her surface onto the VaM surface (the job Wrap3D does in VaM porting tutorials, done here with numpy so
    no Wrap licence is needed), save per-vertex offsets for each of her meshes **in her vertex order** (never change
