@@ -405,6 +405,9 @@ namespace SfMorph
               .Append(", ").Append(c.Renderers.Count).Append(" skinned meshes, ").Append(c.BoneList.Count).Append(" bones")
               .Append(c.Look.Empty ? "" : ", saved look with " + c.Look.Count + " changes loaded");
             if (!c.Female) { Plugin.Log.LogInfo(sb.ToString()); return; }
+            int readable = 0;
+            foreach (var r in c.Renderers) if (r != null && r.sharedMesh != null && r.sharedMesh.isReadable) readable++;
+            sb.Append(", ").Append(readable).Append(" of ").Append(c.Renderers.Count).Append(" meshes readable by mods (needed for export and real morphs)");
             sb.Append("\n  sliders: ");
             foreach (var d in Detail.All)
             {

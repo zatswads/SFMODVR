@@ -20,6 +20,7 @@ plugin, `dist/SfMorph.dll`, independent of the SF Neural Rendering VR plugin
   chin). A slider whose bone is missing, or
   that would skew the bones under it, is greyed out with the reason.
 - **Bones**: X/Y/Z scale of any skin bone.
+- **Character pipeline**: export her meshes for turning a VaM character into a morph for her (`docs/PIPELINE.md`).
 - **Presets**: her changes save to `BepInEx\config\SfMorphs\characters\<name>.txt` as you edit and come
   back when she appears; presets (`...\presets\`) store a look by name to load later.
 - **Apply changes** off shows the game's own look (A/B); every value it changed is given back.
@@ -36,6 +37,13 @@ REFS=<folder with reference DLLs> sh build.sh      # -> dist/SfMorph.dll
 See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfMorph -c Release -p:GameDir="..."`.
 
 ## Changelog
+
+0.5.0:
+- Character pipeline, step 1: Presets tab → "Export … for the character pipeline" writes her meshes in the game's
+  vertex order (OBJ with UVs per submesh), bone weights and bind poses, and the bind-pose skeleton to
+  `BepInEx\config\SfMorphs\export\`. This is the target a VaM character's shape is fitted onto (see
+  `docs/PIPELINE.md`). The character log line now says how many of her meshes mods can read (needed for the export
+  and for real morphs later).
 
 0.4.0:
 - Face: a Face group (24 sliders) on her facial bones: upper/lower eyelids, outer eye corners (tilt), eye width,

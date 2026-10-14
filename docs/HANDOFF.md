@@ -1,6 +1,6 @@
 # SF Body Morphs — handoff
 
-State at **0.4.0** (branch `main`). Not yet run in the game. Read this first, then `docs/TESTING.md`.
+State at **0.5.0** (branch `main`). Not yet run in the game. Read this first, then `docs/TESTING.md`.
 
 ## What this is
 
@@ -50,6 +50,7 @@ commit them). Toolchain: `apt-get update && apt-get install -y mono-mcs mono-dev
 | `GameRig.cs` | Reflection into Assembly-CSharp: the woman (`MovePlayerAndGirl.reika`) and her body-part bones from the game's own references. |
 | `Body.cs` | `Detail` table (slider: group, Op Size/Stretch/Move/Length, Dir, bones by game part → exact rig names → keywords, range, Keep), `Character` (renderers, skin bones, slider bones, bind-pose axes/move directions, look), scan every 2 s (cached; rebuilt only when the renderer set changes), apply/restore trackers for scale and position, one `Character '...'` log block per session. |
 | `Look.cs` | A look (bone factors, slider values keyed by `Detail.Id` in `Regions`, file token `region`), text format, `Store` (autosave/presets in `BepInEx\config\SfMorphs`). |
+| `Export.cs` | Presets tab export: per mesh `.obj` (bind space, game vertex order, `g` per submesh) + `.skin.txt` (bones, bind poses, 4 weights/vertex), `skeleton.txt`, `meshes.txt`. Skips meshes that aren't `isReadable`. |
 | `Panel.cs` | F8 window: character buttons, tabs Body (collapsible groups) / Bones / Presets, filter + 80-row cap, greyed rows with reasons. |
 
 ### How changes are applied (keep this model)
@@ -99,6 +100,12 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
 - 0.3.0 untested in game: jitter gone? which helper sliders visibly do something (helper bones may carry few
   skin weights); check the `sliders:` line for each slider's bones, parents and child counts.
 - 0.4.0 face sliders untested: which visibly work, whether moves fight the expression animation.
+
+## Character pipeline
+
+See `docs/PIPELINE.md` (VaM look → her: her export done in 0.5.0; VaM exporter plugin, Blender fit, gallery to do).
+User decisions: personal use only; no Appearance tab (DLSS 5 NR repaints materials anyway); face likeness from AI
+character sheets via FaceGen or VaM. Not building selfie/photo-of-a-real-person features.
 
 ## Roadmap (agreed direction, in order)
 

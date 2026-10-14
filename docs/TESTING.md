@@ -36,4 +36,5 @@ Nothing here can run in a cloud session: the plugin only runs inside the game on
 - [ ] Changing face type / pregnancy stage / clothes in the game's menu keeps her changes on the new meshes.
 - [ ] Apply changes off = exactly the game's look; on brings it back.
 - [ ] Restart: her changes come back (file in `BepInEx\config\SfMorphs\characters`). Presets save and load.
+- [ ] Presets tab → Export: log `Exported N meshes ... to ...`; note any "not readable by mods" meshes. Zip the folder for the pipeline.
 - [ ] SfNr alongside still fine (AO, passthrough cut-out, NR follow the resized body).

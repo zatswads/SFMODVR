@@ -18,7 +18,7 @@ namespace SfMorph
         readonly HashSet<string> _open = new HashSet<string> { "Breasts" };
         bool _changedOnly, _showBones;
         string _bone;
-        string _message = "";
+        string _message = "", _exportMsg = "";
         List<string> _presets;
         GUIStyle _hint, _bold, _off;
         const int MaxRows = 80; // IMGUI gets slow with hundreds of sliders; the filter narrows it
@@ -207,6 +207,13 @@ namespace SfMorph
             GUILayout.EndHorizontal();
             if (c.Look.Empty) GUILayout.Label("off: nothing changed on " + c.Key + " yet", _off);
             if (_message.Length > 0) GUILayout.Label(_message, _hint);
+            GUILayout.Space(8);
+            GUILayout.Label("Character pipeline", _bold);
+            GUILayout.Label("Writes her meshes (game vertex order, UVs, bone weights, bind-pose skeleton) for turning a VaM character " +
+                            "into a morph for her. Files go to " + System.IO.Path.Combine(Store.Dir, "export") + ".", _hint);
+            if (GUILayout.Button("Export " + c.Key + " for the character pipeline")) _exportMsg = Export.Run(c);
+            if (_exportMsg.Length > 0) GUILayout.Label(_exportMsg, _hint);
+            GUILayout.Space(8);
             if (_presets == null) _presets = Store.Presets();
             if (_presets.Count == 0) GUILayout.Label("No presets yet.", _hint);
             foreach (var name in _presets)
