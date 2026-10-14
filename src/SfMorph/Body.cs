@@ -31,7 +31,16 @@ namespace SfMorph
         // "Left_Nipple" -> both sides.
         static string[] Pair(string left) { return new[] { left, "Right_" + left.Substring("Left_".Length) }; }
 
-        public static readonly string[] Groups = { "Breasts", "Glutes", "Hips & legs", "Torso", "Arms", "Head & face" };
+        public static readonly string[] Groups = { "Breasts", "Glutes", "Hips & legs", "Torso", "Arms", "Head & neck", "Face" };
+
+        static string[] Both(string a, string b) { return new[] { a, b }; }
+        static readonly string[] UpperLids = { "Eyelid_LeftUpper_skin_0", "Eyelid_LeftUpper_skin_1", "Eyelid_LeftUpper_skin_2", "Eyelid_RightUpper_skin_0", "Eyelid_RightUpper_skin_1", "Eyelid_RightUpper_skin_2" };
+        static readonly string[] LowerLids = { "Eyelid_LeftLower_skin_0", "Eyelid_LeftLower_skin_1", "Eyelid_LeftLower_skin_2", "Eyelid_RightLower_skin_0", "Eyelid_RightLower_skin_1", "Eyelid_RightLower_skin_2" };
+        static readonly string[] Brows = { "Eyebrow_Left_Insite", "Eyebrow_Left_Middle", "Eyebrow_Left_Outsite", "Eyebrow_Right_Insite", "Eyebrow_Right_Middle", "Eyebrow_Right_Outsite" };
+        static readonly string[] UpperLip = { "Lip_Upper_Inside", "Lip_LeftUpper_Inside", "Lip_RightUpper_Inside" };
+        static readonly string[] LowerLip = { "Lip_Lower_Insite", "Lip_LeftLower_Insite", "Lip_RightLower_Insite" };
+        static readonly string[] Corners = { "Lip_Left_Inside", "Lip_Right_Inside" };
+        static readonly string[] Lips = { "Lip_Left_Inside", "Lip_LeftLower_Insite", "Lip_LeftUpper_Inside", "Lip_Lower_Insite", "Lip_Right_Inside", "Lip_RightLower_Insite", "Lip_RightUpper_Inside", "Lip_Upper_Inside" };
 
         // Ids of the 0.1/0.2 regions are kept, so saved looks still load.
         public static readonly Detail[] All =
@@ -81,15 +90,37 @@ namespace SfMorph
             new Detail { Id = "forearmLength", Group = "Arms", Label = "Forearm length", Op = Op.Length, Part = "forearms", Min = 0.85f, Max = 1.2f },
             new Detail { Id = "hands", Group = "Arms", Label = "Hands", Op = Op.Size, Part = "hands", Words = new[] { "hand" }, Not = new[] { "handle", "ik" }, Min = 0.7f, Max = 1.4f },
 
-            new Detail { Id = "head", Group = "Head & face", Label = "Head size", Op = Op.Size, Part = "head", Words = new[] { "head" }, Not = new[] { "headtop", "headend", "end" }, Min = 0.8f, Max = 1.25f },
-            new Detail { Id = "neck", Group = "Head & face", Label = "Neck size", Op = Op.Size, Part = "neck", Words = new[] { "neck" }, Min = 0.7f, Max = 1.5f, Keep = true },
-            new Detail { Id = "neckLength", Group = "Head & face", Label = "Neck length", Op = Op.Length, Part = "neck", Min = 0.8f, Max = 1.3f },
-            new Detail { Id = "eyes", Group = "Head & face", Label = "Eye size", Op = Op.Size, Names = new[] { "Eye_L", "Eye_R" }, Min = 0.85f, Max = 1.2f },
-            new Detail { Id = "cheeks", Group = "Head & face", Label = "Cheeks", Op = Op.Size, Names = new[] { "Cheek_Left", "Cheek_Right" }, Min = 0.6f, Max = 1.6f },
-            new Detail { Id = "cheekHeight", Group = "Head & face", Label = "Cheekbone height", Op = Op.Move, Dir = Dir.Up, Names = new[] { "Cheek_Left_Raiser", "Cheek_Right_Raiser" }, Min = -0.6f, Max = 0.6f },
-            new Detail { Id = "brows", Group = "Head & face", Label = "Brow height", Op = Op.Move, Dir = Dir.Up, Names = new[] { "Eyebrow_Left_Insite", "Eyebrow_Left_Middle", "Eyebrow_Left_Outsite", "Eyebrow_Right_Insite", "Eyebrow_Right_Middle", "Eyebrow_Right_Outsite" }, Min = -0.5f, Max = 0.5f },
-            new Detail { Id = "lips", Group = "Head & face", Label = "Lips", Op = Op.Size, Names = new[] { "Lip_Left_Inside", "Lip_LeftLower_Insite", "Lip_LeftUpper_Inside", "Lip_Lower_Insite", "Lip_Right_Inside", "Lip_RightLower_Insite", "Lip_RightUpper_Inside", "Lip_Upper_Inside" }, Min = 0.7f, Max = 1.5f },
-            new Detail { Id = "jaw", Group = "Head & face", Label = "Jaw", Op = Op.Size, Names = new[] { "Jaw_M" }, Min = 0.8f, Max = 1.25f, Keep = true },
+            new Detail { Id = "head", Group = "Head & neck", Label = "Head size", Op = Op.Size, Part = "head", Words = new[] { "head" }, Not = new[] { "headtop", "headend", "end" }, Min = 0.8f, Max = 1.25f },
+            new Detail { Id = "faceWidth", Group = "Head & neck", Label = "Face width", Op = Op.Stretch, Dir = Dir.Width, Part = "head", Min = 0.88f, Max = 1.12f, Keep = true },
+            new Detail { Id = "faceLength", Group = "Head & neck", Label = "Face length", Op = Op.Stretch, Dir = Dir.Up, Part = "head", Min = 0.88f, Max = 1.12f, Keep = true },
+            new Detail { Id = "neck", Group = "Head & neck", Label = "Neck size", Op = Op.Size, Part = "neck", Words = new[] { "neck" }, Min = 0.7f, Max = 1.5f, Keep = true },
+            new Detail { Id = "neckLength", Group = "Head & neck", Label = "Neck length", Op = Op.Length, Part = "neck", Min = 0.8f, Max = 1.3f },
+
+            // Face: bones only (no blendshapes). Most are animated by her expressions, lip sync and blinks;
+            // the moves add to that animation, so expressions keep working on the changed face.
+            new Detail { Id = "eyes", Group = "Face", Label = "Eyeball size", Op = Op.Size, Names = Both("Eye_L", "Eye_R"), Min = 0.85f, Max = 1.2f },
+            new Detail { Id = "upperLids", Group = "Face", Label = "Upper eyelids", Op = Op.Move, Dir = Dir.Up, Names = UpperLids, Min = -0.4f, Max = 0.4f },
+            new Detail { Id = "lowerLids", Group = "Face", Label = "Lower eyelids", Op = Op.Move, Dir = Dir.Up, Names = LowerLids, Min = -0.4f, Max = 0.4f },
+            new Detail { Id = "eyeTilt", Group = "Face", Label = "Outer eye corners", Op = Op.Move, Dir = Dir.Up, Names = Both("Eyelid_Left_Outsite_skin", "Eyelid_Right_Outsite_skin"), Min = -0.4f, Max = 0.4f },
+            new Detail { Id = "eyeWidth", Group = "Face", Label = "Eye width", Op = Op.Move, Dir = Dir.Out, Names = Both("Eyelid_Left_Outsite_skin", "Eyelid_Right_Outsite_skin"), Min = -0.3f, Max = 0.4f },
+            new Detail { Id = "brows", Group = "Face", Label = "Brow height", Op = Op.Move, Dir = Dir.Up, Names = Brows, Min = -0.5f, Max = 0.5f },
+            new Detail { Id = "browInner", Group = "Face", Label = "Inner brows", Op = Op.Move, Dir = Dir.Up, Names = Both("Eyebrow_Left_Insite", "Eyebrow_Right_Insite"), Min = -0.4f, Max = 0.4f },
+            new Detail { Id = "browOuter", Group = "Face", Label = "Outer brows", Op = Op.Move, Dir = Dir.Up, Names = Both("Eyebrow_Left_Outsite", "Eyebrow_Right_Outsite"), Min = -0.4f, Max = 0.4f },
+            new Detail { Id = "browDepth", Group = "Face", Label = "Brow ridge", Op = Op.Move, Dir = Dir.Forward, Names = Brows, Min = -0.3f, Max = 0.4f },
+            new Detail { Id = "cheeks", Group = "Face", Label = "Cheeks", Op = Op.Size, Names = Both("Cheek_Left", "Cheek_Right"), Min = 0.6f, Max = 1.6f },
+            new Detail { Id = "cheekHeight", Group = "Face", Label = "Cheekbone height", Op = Op.Move, Dir = Dir.Up, Names = Both("Cheek_Left_Raiser", "Cheek_Right_Raiser"), Min = -0.6f, Max = 0.6f },
+            new Detail { Id = "cheekFullness", Group = "Face", Label = "Cheek fullness", Op = Op.Move, Dir = Dir.Forward, Names = Both("Cheek_Left", "Cheek_Right"), Min = -0.4f, Max = 0.6f },
+            new Detail { Id = "cheekWidth", Group = "Face", Label = "Cheek width", Op = Op.Move, Dir = Dir.Out, Names = Both("Cheek_Left", "Cheek_Right"), Min = -0.4f, Max = 0.6f },
+            new Detail { Id = "lips", Group = "Face", Label = "Lip size", Op = Op.Size, Names = Lips, Min = 0.7f, Max = 1.5f },
+            new Detail { Id = "upperLip", Group = "Face", Label = "Upper lip fullness", Op = Op.Move, Dir = Dir.Forward, Names = UpperLip, Min = -0.3f, Max = 0.4f },
+            new Detail { Id = "lowerLip", Group = "Face", Label = "Lower lip fullness", Op = Op.Move, Dir = Dir.Forward, Names = LowerLip, Min = -0.3f, Max = 0.4f },
+            new Detail { Id = "mouthWidth", Group = "Face", Label = "Mouth width", Op = Op.Move, Dir = Dir.Out, Names = Corners, Min = -0.4f, Max = 0.5f },
+            new Detail { Id = "mouthCorners", Group = "Face", Label = "Mouth corners", Op = Op.Move, Dir = Dir.Up, Names = Corners, Min = -0.3f, Max = 0.3f },
+            new Detail { Id = "mouthHeight", Group = "Face", Label = "Mouth height", Op = Op.Move, Dir = Dir.Up, Names = Lips, Min = -0.4f, Max = 0.4f },
+            new Detail { Id = "jaw", Group = "Face", Label = "Jaw size", Op = Op.Size, Names = new[] { "Jaw_M" }, Min = 0.8f, Max = 1.25f, Keep = true },
+            new Detail { Id = "jawWidth", Group = "Face", Label = "Jaw width", Op = Op.Stretch, Dir = Dir.Width, Names = new[] { "Jaw_M" }, Min = 0.85f, Max = 1.2f, Keep = true },
+            new Detail { Id = "chin", Group = "Face", Label = "Chin projection", Op = Op.Stretch, Dir = Dir.Depth, Names = new[] { "Jaw_M" }, Min = 0.85f, Max = 1.2f, Keep = true },
+            new Detail { Id = "chinHeight", Group = "Face", Label = "Chin height", Op = Op.Stretch, Dir = Dir.Up, Names = new[] { "Jaw_M" }, Min = 0.85f, Max = 1.2f, Keep = true },
         };
 
         public bool Matches(string norm)

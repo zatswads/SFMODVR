@@ -1,6 +1,6 @@
 # SF Body Morphs — handoff
 
-State at **0.3.0** (branch `main`). Not yet run in the game. Read this first, then `docs/TESTING.md`.
+State at **0.4.0** (branch `main`). Not yet run in the game. Read this first, then `docs/TESTING.md`.
 
 ## What this is
 
@@ -98,5 +98,19 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
 
 - 0.3.0 untested in game: jitter gone? which helper sliders visibly do something (helper bones may carry few
   skin weights); check the `sliders:` line for each slider's bones, parents and child counts.
-- Ideas: hook the game's own save slots (`CustomPoseDate`) so a look follows the game's customise presets;
-  translate/offset sliders (VaM "position" morphs) if bone scaling isn't enough.
+- 0.4.0 face sliders untested: which visibly work, whether moves fight the expression animation.
+
+## Roadmap (agreed direction, in order)
+
+1. **Bone sliders** (done, 0.3/0.4): limited to the bones the rig has. Face has no nose, ear or forehead bones.
+2. **Appearance tab** (next, cheap): the woman's material parameters the game already uses
+   (`LadyCustomiseFunction`: `_SkinColor`, `_BlushPower`, `_SmoothnessPower`, hair `_HairColor`, eye/lip colours on
+   `ladyFaceMat[]`, `ladyBodyMat`, `ladyEyeMat`, hair mats) as continuous sliders and colour pickers, re-applied
+   after the game's `DefaultSetting()` (mesh/material swaps). Log each material's float/colour properties first.
+3. **Real morphs (runtime blendshapes)**, the VaM-quality path: copy each body/face mesh, `Mesh.AddBlendShapeFrame`
+   with deltas, swap the copy into the renderer (re-do on the game's mesh swaps). Deltas from (a) procedural
+   regions (push along normals with falloff around a point/bone weights: nose width/bridge, ear tips, forehead,
+   belly, areola) and (b) shapes sculpted in Blender on the extracted game mesh, exported as a per-vertex delta file
+   the mod loads (same vertex order). Clothes must follow: transfer each body morph to clothing meshes by nearest
+   body vertex in bind space at load. Biggest win, most work; needs a mesh-extraction step on the user's PC.
+- Also possible: hook the game's own customise save slots (`CustomPoseDate`) so a look follows the game's presets.

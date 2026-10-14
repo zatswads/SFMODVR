@@ -13,10 +13,11 @@ plugin, `dist/SfMorph.dll`, independent of the SF Neural Rendering VR plugin
 
 ## What it does
 
-- **Body**: about 50 sliders in six groups (Breasts, Glutes, Hips & legs, Torso, Arms, Head & face), built on
+- **Body**: about 70 sliders in seven groups (Breasts, Glutes, Hips & legs, Torso, Arms, Head & neck, Face), built on
   her rig's bones (the game's meshes have no blendshapes): sizes, lift/spacing/projection moves in cm, limb and
   neck lengths, waist/ribcage width and depth, and the rig's shaping helpers (breast top/bottom/inner/outer,
-  thigh front/inner/outer, glute fullness, belly, cheeks, brows, lips, jaw). A slider whose bone is missing, or
+  thigh front/inner/outer, glute fullness, belly; face: eyelids, eye corners, brows, cheeks, lips, mouth, jaw,
+  chin). A slider whose bone is missing, or
   that would skew the bones under it, is greyed out with the reason.
 - **Bones**: X/Y/Z scale of any skin bone.
 - **Presets**: her changes save to `BepInEx\config\SfMorphs\characters\<name>.txt` as you edit and come
@@ -35,6 +36,13 @@ REFS=<folder with reference DLLs> sh build.sh      # -> dist/SfMorph.dll
 See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfMorph -c Release -p:GameDir="..."`.
 
 ## Changelog
+
+0.4.0:
+- Face: a Face group (24 sliders) on her facial bones: upper/lower eyelids, outer eye corners (tilt), eye width,
+  brow height / inner / outer / ridge, cheek size / height / fullness / width, lip size, upper and lower lip
+  fullness, mouth width / corners / height, jaw size / width, chin projection / height; plus face width and
+  length under Head & neck. They add to her expressions, blinks and lip sync rather than freezing them. The rig
+  has no nose, ear or forehead bones, so those can't be shaped with bones (see the roadmap in HANDOFF).
 
 0.3.0:
 - Breast (and hair) physics jittered after changing a size. The changes were applied after the game's

@@ -30,6 +30,8 @@ Nothing here can run in a cloud session: the plugin only runs inside the game on
 - [ ] Breasts resize and still jiggle smoothly (no jitter), also when grabbed (DynamicBone + CCD IK); hair too.
 - [ ] Each group's sliders: moves go the named way (up / out / forward) on both sides, in any pose; helper
       sliders (breast top/bottom/inner/outer, thigh front/inner/outer) visibly change the skin; greyed ones say why.
+- [ ] Face: each slider visibly changes her face in the named way on both sides; blinking, expressions and lip sync
+      still play on top; face width/length don't distort the eyes when she looks around.
 - [ ] Lengths (thigh, calf, arms, neck, torso) lengthen without skewing; Waist/Ribcage width/depth don't shear when she bends.
 - [ ] Changing face type / pregnancy stage / clothes in the game's menu keeps her changes on the new meshes.
 - [ ] Apply changes off = exactly the game's look; on brings it back.
