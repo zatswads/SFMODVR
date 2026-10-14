@@ -20,6 +20,9 @@ plugin, `dist/SfMorph.dll`, independent of the SF Neural Rendering VR plugin
   chin). A slider whose bone is missing, or
   that would skew the bones under it, is greyed out with the reason.
 - **Bones**: X/Y/Z scale of any skin bone.
+- **Characters**: a gallery of VaM characters converted for her (`tools/pipeline/run.ps1`, `docs/PIPELINE.md`). Picking
+  one gives her that character's body and face shape as a real blendshape (0–100 % slider, the other sliders still
+  work on top), moves her joints to match, makes her clothes follow, and puts the character's skin textures on her.
 - **Character pipeline**: export her meshes for turning a VaM character into a morph for her (`docs/PIPELINE.md`).
 - **Presets**: her changes save to `BepInEx\config\SfMorphs\characters\<name>.txt` as you edit and come
   back when she appears; presets (`...\presets\`) store a look by name to load later.
@@ -37,6 +40,20 @@ REFS=<folder with reference DLLs> sh build.sh      # -> dist/SfMorph.dll
 See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfMorph -c Release -p:GameDir="..."`.
 
 ## Changelog
+
+0.6.0:
+- Characters tab: converted VaM characters as cards (thumbnail + name). The shape goes onto readable copies of her
+  meshes (built from the GPU readback, since the game's meshes are GPU-only) as a blendshape with a 0–100 % slider,
+  swapped into her renderers and redone when the game swaps meshes. Her joints move with the shape (bind poses
+  moved to match), so elbows and knees bend where the new limbs bend; bones the breast/hair physics simulates keep
+  their parent's offset (the physics resets them every frame). Clothes and any mesh the pipeline didn't convert follow
+  the nearest skin vertex and are pushed out where the new shape would poke through. The baked skin textures go into
+  her skin materials (restored when you pick None or turn them off). Height stays hers (the VaM figure is scaled to her
+  eye height), so scenes and the other character still line up.
+- `tools/pipeline/`: one command (`run.ps1`) turns the newest VaM export and the newest export of her into a character:
+  pose-match (her weights, VaM's rest pose), landmark warp, non-rigid fit of her skin onto the VaM body, offsets in her
+  exact vertex order for all 33 meshes, joint offsets, texture bake on her UVs, and a check report with renders.
+- VaM exporter: turns auto blink off for the snapshot (a blink caught mid-way gave half-closed eyes).
 
 0.5.1:
 - The 0.5.0 export wrote no meshes: the game ships all 36 of her meshes GPU-only (Read/Write off), and Unity refuses

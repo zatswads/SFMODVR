@@ -1,6 +1,6 @@
 # SF Body Morphs — handoff
 
-State at **0.5.1** (branch `main`). Not yet run in the game. Read this first, then `docs/TESTING.md`.
+State at **0.6.0** (branch `main`). 0.6.0 built, not yet run in the game. Read this first, then `docs/TESTING.md`.
 
 ## What this is
 
@@ -52,7 +52,8 @@ commit them). Toolchain: `apt-get update && apt-get install -y mono-mcs mono-dev
 | `Look.cs` | A look (bone factors, slider values keyed by `Detail.Id` in `Regions`, file token `region`), text format, `Store` (autosave/presets in `BepInEx\config\SfMorphs`). |
 | `MeshData.cs` | A mesh's data in game vertex order: CPU if `isReadable`, else GPU readback (`Mesh.GetVertexBuffer/GetIndexBuffer` + `GetData`, decoded by `GetVertexAttributeFormat/Offset/Stream/Dimension`, submeshes from `GetSubMesh`). All her meshes are GPU-only. Basis for the export and the future morph loader (readable clones). Bind poses are readable (0.5.0 log: slider directions worked). |
 | `Export.cs` | Presets tab export: per mesh `.obj` (bind space, game vertex order, `g` per submesh) + `.skin.txt` (bones, bind poses, 4 weights/vertex), `skeleton.txt`, `meshes.txt`. Skips meshes that aren't `isReadable`. |
-| `Panel.cs` | F8 window: character buttons, tabs Body (collapsible groups) / Bones / Presets, filter + 80-row cap, greyed rows with reasons. |
+| `Morph.cs` | Characters (0.6.0): `MorphSet` (a converted character folder), `MorphState` per character (readable clones from MeshData + `AddBlendShapeFrame`, follow blendshapes for clothes via `SkinRef` nearest skin vertex + push-out, joint offsets as local moves for Body's trackers with matching bind poses, DynamicBone-simulated bones excluded, baked textures with restore). |
+| `Panel.cs` | F8 window: character buttons, tabs Body (collapsible groups) / Bones / Presets / Characters, filter + 80-row cap, greyed rows with reasons. |
 
 ### How changes are applied (keep this model)
 
@@ -104,8 +105,9 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
 
 ## Character pipeline
 
-See `docs/PIPELINE.md` (VaM look → her: her export done in 0.5.0; VaM exporter plugin `tools/vam/SfExport.cs` written
-and compile-checked; Blender fit, runtime morph loader and gallery to do). VaM facts (VaM Assembly-CSharp survey):
+See `docs/PIPELINE.md` (VaM look → her: her export 0.5.x; VaM exporter `tools/vam/SfExport.cs`; fit/bake
+`tools/pipeline/run.ps1` and the runtime loader + Characters gallery in 0.6.0). Local toolchain on the user's PC:
+.NET 8 SDK in `%LOCALAPPDATA%\Microsoft\dotnet` (for `dotnet build`), Blender 5.2, scipy in `%LOCALAPPDATA%\SfMorph\pydeps`. VaM facts (VaM Assembly-CSharp survey):
 Person skin = `DAZMergedSkinV2`, mesh = `skin.dazMesh` (`DAZMergedMesh`, metres); morphed unposed UV vertices via
 `DAZCharacterRun.doSnap` → `snappedMorphedUVVertices`, or `dazMesh.morphedUVVertices`; faces `dazMesh.UVPolyList`
 (MeshPoly: materialNum, vertices, may be quads); bones `skin.root.dazBones`, `morphedWorldPosition` = rest frame of the

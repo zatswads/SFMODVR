@@ -150,6 +150,8 @@ namespace SfMorph
         public readonly Dictionary<Transform, int[]> Axis = new Dictionary<Transform, int[]>();
         public readonly Dictionary<Transform, Vector3[]> MoveDir = new Dictionary<Transform, Vector3[]>();
         public readonly Look Look = new Look();
+        public readonly Dictionary<Transform, Matrix4x4> Bind = new Dictionary<Transform, Matrix4x4>(); // bone -> bind pose (mesh -> bone)
+        public MorphState Morph = new MorphState();   // a converted character's shape (Characters tab)
         public bool Dirty;
         public float DirtyAt;
     }
@@ -271,11 +273,11 @@ namespace SfMorph
             used.Add(key);
             var c = new Character { Root = root, Key = key };
             c.Renderers.AddRange(list);
-            if (prev != null) { c.Look.CopyFrom(prev.Look); c.Dirty = prev.Dirty; c.DirtyAt = prev.DirtyAt; } // clothes changed: same person
+            if (prev != null) { c.Look.CopyFrom(prev.Look); c.Dirty = prev.Dirty; c.DirtyAt = prev.DirtyAt; c.Morph = prev.Morph; } // clothes changed: same person
             else Store.LoadCharacter(c.Key, c.Look);
 
             // Skin bones and their bind poses (mesh space -> bone), from the first mesh that has each bone.
-            var bind = new Dictionary<Transform, Matrix4x4>();
+            var bind = c.Bind;
             foreach (var r in list)
             {
                 var bones = r.bones;
@@ -432,9 +434,17 @@ namespace SfMorph
         public void ApplyAll()
         {
             _frame++;
-            if (_p.Apply.Value)
-                foreach (var c in Found)
-                    if (!c.Look.Empty && c.Root != null) Apply(c);
+            foreach (var c in Found)
+            {
+                try { c.Morph.Update(c, _p.Apply.Value && c.Root != null); }  // before Apply: its joint moves go through the trackers
+                catch (Exception e)
+                {
+                    Plugin.Log.LogError("Character '" + c.Look.Morph + "' on '" + c.Key + "' failed, back to her own shape: " + e);
+                    c.Look.Morph = null; Touch(c);
+                    try { c.Morph.Release(); } catch { }
+                }
+                if (_p.Apply.Value && !c.Look.Empty && c.Root != null) Apply(c);
+            }
             Release();
         }
 
@@ -481,6 +491,16 @@ namespace SfMorph
                     }
                 }
             }
+
+            // a converted character's joints (Characters tab), matching the bind poses its clones carry
+            if (c.Morph.JointWeight > 0f)
+                foreach (var kv in c.Morph.JointLocal)
+                {
+                    if (kv.Key == null) continue;
+                    Vector3 a;
+                    _add[kv.Key] = (_add.TryGetValue(kv.Key, out a) ? a : Vector3.zero) + kv.Value * c.Morph.JointWeight;
+                    _posTargets.Add(kv.Key);
+                }
 
             foreach (var kv in _net)
             {
@@ -576,6 +596,11 @@ namespace SfMorph
             foreach (var t in _drop) _poss.Remove(t);
         }
 
-        public void RestoreAll() { _frame++; Release(); }
+        public void RestoreAll()
+        {
+            _frame++;
+            Release();
+            foreach (var c in Found) try { c.Morph.Release(); } catch { }
+        }
     }
 }

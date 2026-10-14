@@ -2,3 +2,6 @@ refs/
 *.il
 bin/
 obj/
+dist/*.pdb
+__pycache__/
+*.npz

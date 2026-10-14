@@ -25,15 +25,36 @@ transfer the **shape** and **skin textures** of a VaM character onto her:
    3. Add a Person, Appearance → Presets → load `Preset_callie`.
    4. Person → Plugins → Add Plugin → Select File → `Custom/Scripts/SfMod/SfExport.cs` → Open Custom UI →
       "Export character for SF". The status line and VaM's message log say where it wrote.
-3. **Fit** (to write, headless Blender, `tools/pipeline/`): pose-match the two (joints), landmark-guided non-rigid
-   fit of her surface onto the VaM surface (the job Wrap3D does in VaM porting tutorials, done here with numpy so
-   no Wrap licence is needed), save per-vertex offsets for each of her meshes **in her vertex order** (never change
-   her vertex count or order: the same rule as "keep vertex order" in VaM porting), new joint positions, and
-   VaM's skin textures baked onto her UV layout (Blender bake, selected to active).
-4. **Load** (to write, SfMorph): each converted character is a card in a **Characters gallery** (thumbnail + name).
-   Selecting one adds its shape as real blendshapes (runtime `Mesh.AddBlendShapeFrame` on copies of her meshes,
-   a 0–100% slider, so the bone sliders still work on top), moves the joints, carries the shape over to her clothes
-   (nearest body vertex) so they don't clip, and loads the baked textures into her materials.
+3. **Fit** (`tools/pipeline/`, done in 0.6.0). One command:
+
+   ```
+   powershell -ExecutionPolicy Bypass -File tools\pipelineun.ps1 -Name Yin -Game "<game>" -Vam "<VaM>" -Blender "<blender.exe>"
+   ```
+
+   Paths are remembered (`%LOCALAPPDATA%\SfMorph\pipeline.json`); later runs need only `-Name`. It takes the newest
+   export on each side, installs scipy for Blender's Python once (into `%LOCALAPPDATA%\SfMorph\pydeps`, never into
+   Blender), and writes `<game>\BepInEx\config\SfMorphs\morphs\<Name>\` in about a minute and a half:
+   - `sfpipe.py` (Blender's Python, numpy/scipy): her meshes into one bind space (the right eye's iris/sclera are
+     copies of the left eye placed by their own bind pose); the VaM figure scaled to her eye height; her skeleton
+     posed into VaM's rest pose by matching limb directions (not the spine: the two rigs put spine joints in
+     different places) and skinned with her weights; a thin-plate warp on anatomical joint centres, nipple tips and
+     the mouth; a non-rigid ICP of her welded skin (upper/lower body, feet, neck, face) onto the VaM skin,
+     restricted by body part (fingers can't grab fingers, upper lip can't grab lower lip), matches only along the
+     normal, stiffer on fingers, toes and around the eyes, eyelids keep her own opening; spring relax on the trunk;
+     unposed with the same blended skin matrices; folds untangled. Everything else follows: overlays (nipple discs,
+     nails, decals) stay on the skin surface, lash strands move with their skin patch, eyes/teeth/tongue rigidly,
+     the rest (mouth, hair, interior) smoothly. Output: `<mesh>.morph.txt` (position and normal deltas, her vertex
+     order), `joints.txt`, `character.txt`, `thumb.jpg`, `_checkeport.txt`.
+   - `blend.py` + `bake.py` (Blender, Cycles on the GPU): before/after renders in `_check\` and VaM's skin baked
+     onto her UVs (selected to active, albedo as emission, tangent normals; VaM's DXT5nm normal maps unswizzled):
+     `tex_reika_body_*`, `tex_reika_face_a_*`, `tex_reika_foot_*`.
+   - Check `_checkeport.txt`: vertex counts, offsets, flipped triangles and stretch per mesh, fit residual both ways.
+
+4. **Load** (SfMorph 0.6.0): Characters tab, see README.
+
+Known limits: the fit runs in VaM's T-pose and is unposed with her linear skinning, so her shoulders in the
+A-pose look a little narrower than VaM's; a few creases remain where her shape differs most (under a bigger
+breast, the navel, between toes). Her eyelid shape stays hers.
 
 ## Face sources
 
@@ -49,7 +70,7 @@ Genesis 2 morph → VaM), or sculpts. Front + side character-sheet views are wha
   > Continue SF Body Morphs' character pipeline in this repo: read CLAUDE.md, docs/HANDOFF.md, docs/PIPELINE.md and
   > .claude/skills/sfmorph-dev/SKILL.md first. Paths: game `E:\Bak\New folder\Misc\SF\VR`, VaM
   > `E:\Bak\New folder\Misc\virt\vam`, Blender `<path to blender.exe>`. Inputs: the newest VaM export in
-  > `<VaM>\Saves\PluginData\SfExport\` (Callie, Preset_callie) and the newest game export in
+  > `<VaM>\Saves\PluginData\SfExport\`  and the newest game export in
   > `<game>\BepInEx\config\SfMorphs\export\` (SfMorph 0.5.1+; if its meshes.txt lists no meshes, stop and tell me).
   > 1) Write `tools/pipeline/` (Blender in background + numpy/scipy): read both exports; map her AdvancedSkeleton joints to
   > Genesis 2 bones; pose-match her bind pose to VaM's rest pose using her skin weights; landmark-guided non-rigid fit of

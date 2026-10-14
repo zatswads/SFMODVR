@@ -15,14 +15,21 @@ namespace SfMorph
         public readonly Dictionary<string, Vector3> Bones = new Dictionary<string, Vector3>(); // bone name -> scale factor
         public readonly Dictionary<string, float> Regions = new Dictionary<string, float>();   // slider (Detail) id -> value
 
-        public bool Empty { get { return Bones.Count == 0 && Regions.Count == 0; } }
-        public int Count { get { return Bones.Count + Regions.Count; } }
+        // A converted character from the Characters tab (folder name under SfMorphs\morphs), how much of its shape,
+        // and whether its joints and baked skin are used.
+        public string Morph;
+        public float MorphWeight = 1f;
+        public bool MorphJoints = true, MorphSkin = true;
 
-        public void Clear() { Bones.Clear(); Regions.Clear(); }
+        public bool Empty { get { return Bones.Count == 0 && Regions.Count == 0 && Morph == null; } }
+        public int Count { get { return Bones.Count + Regions.Count + (Morph != null ? 1 : 0); } }
+
+        public void Clear() { Bones.Clear(); Regions.Clear(); Morph = null; MorphWeight = 1f; MorphJoints = true; MorphSkin = true; }
 
         public void CopyFrom(Look o)
         {
             Clear();
+            Morph = o.Morph; MorphWeight = o.MorphWeight; MorphJoints = o.MorphJoints; MorphSkin = o.MorphSkin;
             foreach (var kv in o.Bones) Bones[kv.Key] = kv.Value;
             foreach (var kv in o.Regions) Regions[kv.Key] = kv.Value;
         }
@@ -33,6 +40,9 @@ namespace SfMorph
         public string Write()
         {
             var sb = new StringBuilder("# SF Body Morphs look\n");
+            if (Morph != null)
+                sb.Append("character\t").Append(Morph).Append('\t').Append(MorphWeight.ToString("0.###", Inv)).Append(' ')
+                  .Append(MorphJoints ? 1 : 0).Append(' ').Append(MorphSkin ? 1 : 0).Append('\n');
             foreach (var kv in Regions) sb.Append("region\t").Append(kv.Key).Append('\t').Append(kv.Value.ToString("0.###", Inv)).Append('\n');
             foreach (var kv in Bones)
                 sb.Append("bone\t").Append(kv.Key).Append('\t').Append(kv.Value.x.ToString("0.###", Inv)).Append(' ')
@@ -51,6 +61,13 @@ namespace SfMorph
                 switch (f[0])
                 {
                     case "region": if (float.TryParse(f[2], NumberStyles.Float, Inv, out v)) Regions[f[1]] = v; break;
+                    case "character":
+                        var c = f[2].Split(' ');
+                        Morph = f[1];
+                        if (c.Length > 0 && float.TryParse(c[0], NumberStyles.Float, Inv, out v)) MorphWeight = v;
+                        if (c.Length > 1) MorphJoints = c[1] != "0";
+                        if (c.Length > 2) MorphSkin = c[2] != "0";
+                        break;
                     case "bone":
                         var p = f[2].Split(' ');
                         float x, y, z;

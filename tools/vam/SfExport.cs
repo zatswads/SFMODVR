@@ -56,6 +56,17 @@ public class SfExport : MVRScript
         // Morphed, unposed vertices: ask VaM's character runner for a snapshot (what VaM's own OBJ
         // export does), so the threaded morph update can't hand us a half-updated array.
         Vector3[] verts = null, normals = null;
+        // Auto blink drives the eyelid morphs: a snapshot mid-blink gives the character half-closed eyes for good.
+        // Blink off and the lids open again for the snapshot, then back as it was.
+        JSONStorableBool blink = null;
+        foreach (var id in containingAtom.GetStorableIDs())
+        {
+            var st = containingAtom.GetStorableByID(id);
+            var b = st != null ? st.GetBoolJSONParam("blinkEnabled") : null;
+            if (b != null) { blink = b; break; }
+        }
+        bool blinkWas = blink != null && blink.val;
+        if (blinkWas) { blink.val = false; Say("eyes open for the snapshot ..."); yield return new WaitForSeconds(0.8f); }
         var run = containingAtom.GetComponentInChildren<DAZCharacterRun>();
         if (run != null)
         {
@@ -64,6 +75,7 @@ public class SfExport : MVRScript
             verts = run.snappedMorphedUVVertices;
             normals = run.snappedMorphedUVNormals;
         }
+        if (blinkWas) blink.val = true;
         string source = "snapshot";
         if (verts == null || verts.Length != mesh.numUVVertices) { verts = mesh.morphedUVVertices; normals = mesh.morphedUVNormals; source = "dazMesh.morphedUVVertices"; }
         if (verts == null) { Say("no morphed vertices available"); _busy = false; yield break; }

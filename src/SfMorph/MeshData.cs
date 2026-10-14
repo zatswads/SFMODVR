@@ -14,6 +14,8 @@ namespace SfMorph
         public Vector3[] Pos, Nrm;
         public Vector4[] Tan;
         public Vector2[] Uv;
+        public List<Vector4>[] Uvs = new List<Vector4>[4];   // channels 1..3 as stored (index 0 unused), for faithful clones
+        public Color[] Col;
         public BoneWeight[] Weights;
         public Matrix4x4[] Bind;
         public List<int[]> Sub = new List<int[]>();   // triangles per submesh (vertex indices)
@@ -28,6 +30,8 @@ namespace SfMorph
             {
                 d.Source = "CPU";
                 d.Pos = m.vertices; d.Nrm = m.normals; d.Tan = m.tangents; d.Uv = m.uv; d.Weights = m.boneWeights;
+                for (int c = 1; c < 4; c++) if (m.HasVertexAttribute(VertexAttribute.TexCoord0 + c)) { d.Uvs[c] = new List<Vector4>(); m.GetUVs(c, d.Uvs[c]); }
+                if (m.HasVertexAttribute(VertexAttribute.Color)) d.Col = m.colors;
                 for (int s = 0; s < m.subMeshCount; s++) d.Sub.Add(m.GetTopology(s) == MeshTopology.Triangles ? m.GetTriangles(s) : new int[0]);
                 return d;
             }
@@ -79,6 +83,15 @@ namespace SfMorph
             if (tan != null) { d.Tan = new Vector4[n]; for (int i = 0; i < n; i++) d.Tan[i] = new Vector4(tan[i][0], tan[i][1], tan[i][2], tan[i].Length > 3 ? tan[i][3] : 1f); }
             var uv = read(VertexAttribute.TexCoord0);
             if (uv != null) { d.Uv = new Vector2[n]; for (int i = 0; i < n; i++) d.Uv[i] = new Vector2(uv[i][0], uv[i][1]); }
+            for (int c = 1; c < 4; c++)
+            {
+                var ex = read(VertexAttribute.TexCoord0 + c);
+                if (ex == null) continue;
+                d.Uvs[c] = new List<Vector4>(n);
+                for (int i = 0; i < n; i++) d.Uvs[c].Add(new Vector4(ex[i][0], ex[i].Length > 1 ? ex[i][1] : 0f, ex[i].Length > 2 ? ex[i][2] : 0f, ex[i].Length > 3 ? ex[i][3] : 0f));
+            }
+            var col = read(VertexAttribute.Color);
+            if (col != null) { d.Col = new Color[n]; for (int i = 0; i < n; i++) d.Col[i] = new Color(col[i][0], col[i].Length > 1 ? col[i][1] : 0f, col[i].Length > 2 ? col[i][2] : 0f, col[i].Length > 3 ? col[i][3] : 1f); }
             var bw = read(VertexAttribute.BlendWeight);
             var bi = read(VertexAttribute.BlendIndices);
             if (bi != null)

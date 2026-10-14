@@ -37,4 +37,11 @@ Nothing here can run in a cloud session: the plugin only runs inside the game on
 - [ ] Apply changes off = exactly the game's look; on brings it back.
 - [ ] Restart: her changes come back (file in `BepInEx\config\SfMorphs\characters`). Presets save and load.
 - [ ] Presets tab → Export: log `Exported N meshes ... to ...`; note any "not readable by mods" meshes. Zip the folder for the pipeline.
+- [ ] Characters tab (0.6.0): the card shows (thumbnail + name); picking it logs `Character '<name>' on 'Reika': 33 meshes
+      morphed, N follow the skin, M joints, built in ... ms` (no "skipped"); her body and face take the shape; the Shape
+      slider blends 0-100 %; None gives the original back exactly (meshes, joints, textures).
+- [ ] With the shape: elbows/knees/fingers bend at the right place (Move joints on vs off); breasts and hair still
+      jiggle and don't shift away from the body; blink, expressions and lip sync still work; eyes sit in the sockets.
+- [ ] Clothes on (game's menu): they follow the new shape without skin poking through (log: they count as "follow").
+- [ ] Skin textures on/off: VaM skin vs hers; the log's `Material 'reika_body' (...) textures:` line lists the slots.
 - [ ] SfNr alongside still fine (AO, passthrough cut-out, NR follow the resized body).

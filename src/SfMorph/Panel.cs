@@ -5,7 +5,7 @@ using UnityEngine;
 namespace SfMorph
 {
     // Desktop-window panel (F8): pick the woman, then Body (VaM-style sliders by
-    // body area), Bones (any skin bone) and Presets.
+    // body area), Bones (any skin bone), Presets and Characters (converted VaM characters).
     internal class Panel
     {
         readonly Plugin _p;
@@ -23,7 +23,7 @@ namespace SfMorph
         GUIStyle _hint, _bold, _off;
         const int MaxRows = 80; // IMGUI gets slow with hundreds of sliders; the filter narrows it
 
-        static readonly string[] Tabs = { "Body", "Bones", "Presets" };
+        static readonly string[] Tabs = { "Body", "Bones", "Presets", "Characters" };
 
         public Panel(Plugin p, Body body)
         {
@@ -103,7 +103,8 @@ namespace SfMorph
             {
                 case 0: BodyTab(_sel); break;
                 case 1: BoneTab(_sel); break;
-                default: PresetTab(_sel); break;
+                case 2: PresetTab(_sel); break;
+                default: CharacterTab(_sel); break;
             }
             GUILayout.EndScrollView();
             GUI.DragWindow();
@@ -222,6 +223,58 @@ namespace SfMorph
                     var look = new Look();
                     if (Store.LoadPreset(name, look)) { c.Look.CopyFrom(look); _body.Touch(c); _message = "Loaded '" + name + "' onto " + c.Key + "."; }
                 }
+        }
+
+        void CharacterTab(Character c)
+        {
+            GUILayout.Label("VaM characters converted for her (tools/pipeline/run.ps1): her own meshes, rig, clothes and animations with " +
+                            "their shape and skin. The shape is a real blendshape, so the Body and Bones sliders still work on top. Folder: " + MorphSet.Root, _hint);
+            var all = MorphSet.All;
+            bool had = c.Look.Morph != null;  // IMGUI: the same controls in the Layout pass and the click pass
+            const int cols = 3;
+            const float card = 150f;
+            int i = 0;
+            string pick = null; bool pickNone = false;
+            GUILayout.BeginHorizontal();
+            if (Card(null, "None", c.Look.Morph == null, card)) pickNone = true;
+            i++;
+            foreach (var m in all)
+            {
+                if (i % cols == 0) { GUILayout.FlexibleSpace(); GUILayout.EndHorizontal(); GUILayout.BeginHorizontal(); }
+                if (Card(m.Thumb, m.Name, c.Look.Morph == m.Name, card)) pick = m.Name;
+                i++;
+            }
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+            if (pickNone && c.Look.Morph != null) { c.Look.Morph = null; _body.Touch(c); }
+            if (pick != null && c.Look.Morph != pick) { c.Look.Morph = pick; c.Look.MorphWeight = 1f; _body.Touch(c); }
+            if (all.Count == 0)
+                GUILayout.Label("off: no converted characters yet. Export her (Presets tab) and a VaM character (SfExport plugin), then run tools/pipeline/run.ps1.", _off);
+            if (GUILayout.Button("Rescan the folder", GUILayout.Width(160))) MorphSet.Rescan();
+
+            if (!had || c.Look.Morph == null) return;  // a pick shows its controls from the next frame on
+            GUILayout.Space(6);
+            GUILayout.Label(c.Look.Morph, _bold);
+            float w = Slider("Shape", c.Look.MorphWeight * 100f, 0f, 100f, "0", 100f, null, " %") / 100f;
+            if (Mathf.Abs(w - c.Look.MorphWeight) > 0.0001f) { c.Look.MorphWeight = w; _body.Touch(c); }
+            bool j = GUILayout.Toggle(c.Look.MorphJoints, " Move her joints to the new shape (limbs bend in the right place)");
+            if (j != c.Look.MorphJoints) { c.Look.MorphJoints = j; _body.Touch(c); }
+            bool sk = GUILayout.Toggle(c.Look.MorphSkin, " Skin textures baked from the VaM character");
+            if (sk != c.Look.MorphSkin) { c.Look.MorphSkin = sk; _body.Touch(c); }
+            if (!_p.Apply.Value) GUILayout.Label("off: 'Apply changes' is off", _off);
+            else if (c.Morph.Status.Length > 0) GUILayout.Label(c.Morph.Status, c.Morph.Status.StartsWith("off") ? _off : _hint);
+            GUILayout.Label("Clothes follow the skin by its nearest vertex and are pushed out where the new shape would poke through. " +
+                            "Her height stays the game's (the VaM character is scaled to her eye height), so scenes still line up.", _hint);
+        }
+
+        bool Card(Texture2D thumb, string name, bool on, float size)
+        {
+            GUILayout.BeginVertical(GUILayout.Width(size));
+            bool hit = thumb != null ? GUILayout.Toggle(on, thumb, GUI.skin.button, GUILayout.Width(size), GUILayout.Height(size))
+                                     : GUILayout.Toggle(on, name, GUI.skin.button, GUILayout.Width(size), GUILayout.Height(size));
+            GUILayout.Label((on ? "> " : "") + name, on ? _bold : GUI.skin.label, GUILayout.Width(size));
+            GUILayout.EndVertical();
+            return hit && !on;
         }
 
         // ---- controls ----
