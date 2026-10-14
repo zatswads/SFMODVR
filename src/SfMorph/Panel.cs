@@ -4,8 +4,8 @@ using UnityEngine;
 
 namespace SfMorph
 {
-    // Desktop-window panel (F8): pick a woman, then Body (part sizes), Morphs
-    // (the game's blendshapes), Bones (any skin bone) and Presets.
+    // Desktop-window panel (F8): pick the woman, then Body (VaM-style sliders by
+    // body area), Bones (any skin bone) and Presets.
     internal class Panel
     {
         readonly Plugin _p;
@@ -14,15 +14,16 @@ namespace SfMorph
         Rect _rect = new Rect(700, 40, 560, 720);
         Vector2 _scroll;
         Character _sel;
-        string _shapeFilter = "", _boneFilter = "", _presetName = "";
-        bool _changedOnly;
+        string _boneFilter = "", _presetName = "";
+        readonly HashSet<string> _open = new HashSet<string> { "Breasts" };
+        bool _changedOnly, _showBones;
         string _bone;
         string _message = "";
         List<string> _presets;
         GUIStyle _hint, _bold, _off;
         const int MaxRows = 80; // IMGUI gets slow with hundreds of sliders; the filter narrows it
 
-        static readonly string[] Tabs = { "Body", "Morphs", "Bones", "Presets" };
+        static readonly string[] Tabs = { "Body", "Bones", "Presets" };
 
         public Panel(Plugin p, Body body)
         {
@@ -101,8 +102,7 @@ namespace SfMorph
             switch (tab)
             {
                 case 0: BodyTab(_sel); break;
-                case 1: MorphTab(_sel); break;
-                case 2: BoneTab(_sel); break;
+                case 1: BoneTab(_sel); break;
                 default: PresetTab(_sel); break;
             }
             GUILayout.EndScrollView();
@@ -113,75 +113,59 @@ namespace SfMorph
 
         void BodyTab(Character c)
         {
-            GUILayout.Label("Size of each body part, on top of the game's own shape. Bones come from the game's own rig " +
-                            "where it names them, otherwise from bone names; a part with no bone is greyed out (use the Bones tab).", _hint);
-            foreach (var reg in Region.All)
+            GUILayout.Label("On top of the game's own shape. Sizes scale, moves are in cm. Each slider shows the bones it uses; " +
+                            "one that can't apply is greyed out with the reason. More: the Bones tab.", _hint);
+            foreach (var g in Detail.Groups)
             {
-                var bones = c.RegionBones[reg.Id];
-                float v;
-                if (!c.Look.Regions.TryGetValue(reg.Id, out v)) v = 1f;
-                string off = bones.Count == 0 ? "off: no matching bone in this rig" : null;
-                float nv = Slider(reg.Label, v, reg.Min, reg.Max, "0.00", off);
-                if (off == null)
+                int changed = 0;
+                foreach (var d in Detail.All) if (d.Group == g && c.Look.Regions.ContainsKey(d.Id)) changed++;
+                bool open = _open.Contains(g);
+                if (GUILayout.Button((open ? "- " : "+ ") + g + (changed > 0 ? "  (" + changed + " changed)" : ""), _bold))
+                    if (open) _open.Remove(g); else _open.Add(g);
+                if (!open) continue;
+                foreach (var d in Detail.All)
                 {
-                    var names = "";
-                    foreach (var b in bones) names += (names.Length > 0 ? ", " : "") + b.name;
-                    GUILayout.Label("    " + names + (c.FromGame.Contains(reg.Id) ? "  (the game's own bone)" : "  (found by name)"), _hint);
-                }
-                if (nv != v)
-                {
-                    if (Mathf.Abs(nv - 1f) < 0.005f) c.Look.Regions.Remove(reg.Id); else c.Look.Regions[reg.Id] = nv;
-                    _body.Touch(c);
-                }
-            }
-            GUILayout.Label("Big changes to hips, thighs or arms move where hands and hips meet in the game's animations. " +
-                            "Head size also shifts the game's eyelid tracking a little.", _hint);
-        }
-
-        void MorphTab(Character c)
-        {
-            if (c.ShapeNames.Count == 0)
-            {
-                GUILayout.Label("off: this character's meshes have no blendshapes (morphs); use the Body and Bones tabs.", _off);
-                return;
-            }
-            GUILayout.Label("The game's blendshapes. The slider adds to the game's weight (100 = the full shape), so face " +
-                            "expressions and lip sync keep working; past 100 or below 0 exaggerates or inverts a shape, like VaM.", _hint);
-            Filter(ref _shapeFilter, c.Look.Shapes.Count);
-            int shown = 0, matched = 0;
-            foreach (var name in c.ShapeNames)
-            {
-                float v;
-                bool set = c.Look.Shapes.TryGetValue(name, out v);
-                if (_changedOnly && !set) continue;
-                if (_shapeFilter.Length > 0 && name.IndexOf(_shapeFilter, System.StringComparison.OrdinalIgnoreCase) < 0) continue;
-                if (++matched > MaxRows) continue;
-                shown++;
-                float game = _body.GameWeight(c, name);
-                float nv = Slider(name, v, -100f, 200f, "0", null, "game " + game.ToString("0"));
-                if (nv != v)
-                {
-                    if (Mathf.Abs(nv) < 0.5f) c.Look.Shapes.Remove(name); else c.Look.Shapes[name] = Mathf.Round(nv);
-                    _body.Touch(c);
+                    if (d.Group != g) continue;
+                    var bones = c.DetailBones[d.Id];
+                    float v;
+                    if (!c.Look.Regions.TryGetValue(d.Id, out v)) v = d.Neutral;
+                    string off;
+                    c.Off.TryGetValue(d.Id, out off);
+                    float nv = Slider(d.Label, v, d.Min, d.Max, d.Op == Op.Move ? "+0.0;-0.0;0" : "0.00", d.Neutral, off == null ? null : "off: " + off, d.Unit);
+                    if (off == null && _showBones)
+                    {
+                        var names = "";
+                        foreach (var b in bones) names += (names.Length > 0 ? ", " : "") + b.name;
+                        string src;
+                        c.Source.TryGetValue(d.Id, out src);
+                        GUILayout.Label("      " + names + "  (" + src + ")", _hint);
+                    }
+                    if (nv != v)
+                    {
+                        if (Mathf.Abs(nv - d.Neutral) < 0.005f) c.Look.Regions.Remove(d.Id); else c.Look.Regions[d.Id] = nv;
+                        _body.Touch(c);
+                    }
                 }
             }
-            if (matched > shown) GUILayout.Label((matched - shown) + " more: type in the filter to narrow the list.", _hint);
+            _showBones = GUILayout.Toggle(_showBones, " Show which bones each slider uses");
+            GUILayout.Label("Big changes to hips, legs or arms move where bodies meet in the game's animations; head size nudges its eyelid tracking.", _hint);
         }
 
         void BoneTab(Character c)
         {
-            GUILayout.Label("Scale any bone of the skin (its children scale with it). For VaM-style part sizes use the Body tab.", _hint);
+            GUILayout.Label("Scale any bone of the skin (its children scale with it). Unequal X/Y/Z on a bone with children " +
+                            "skews them when they rotate; the Body tab's sliders avoid that.", _hint);
             Transform sel;
             if (_bone != null && c.Bones.TryGetValue(_bone, out sel))
             {
                 Vector3 v;
                 if (!c.Look.Bones.TryGetValue(_bone, out v)) v = Vector3.one;
                 GUILayout.Label(_bone, _bold);
-                float u = Slider("All", (v.x + v.y + v.z) / 3f, 0.3f, 3f, "0.00");
+                float u = Slider("All", (v.x + v.y + v.z) / 3f, 0.3f, 3f, "0.00", 1f);
                 var nv = Mathf.Abs(u - (v.x + v.y + v.z) / 3f) > 0.0001f ? new Vector3(u, u, u) : v;
-                nv.x = Slider("X", nv.x, 0.3f, 3f, "0.00");
-                nv.y = Slider("Y", nv.y, 0.3f, 3f, "0.00");
-                nv.z = Slider("Z", nv.z, 0.3f, 3f, "0.00");
+                nv.x = Slider("X", nv.x, 0.3f, 3f, "0.00", 1f);
+                nv.y = Slider("Y", nv.y, 0.3f, 3f, "0.00", 1f);
+                nv.z = Slider("Z", nv.z, 0.3f, 3f, "0.00", 1f);
                 GUILayout.Label("X/Y/Z are the bone's own axes, which differ from bone to bone.", _hint);
                 if (nv != v)
                 {
@@ -248,15 +232,13 @@ namespace SfMorph
         }
 
         // Label, slider, value and a reset button; greyed with the reason when it can't apply.
-        float Slider(string label, float v, float min, float max, string fmt, string off = null, string extra = null)
+        float Slider(string label, float v, float min, float max, string fmt, float neutral, string off = null, string unit = "")
         {
-            float neutral = min < 0f ? 0f : 1f;
             GUILayout.BeginHorizontal();
             GUI.enabled = off == null;
             GUILayout.Label(label, GUILayout.Width(170));
             float nv = GUILayout.HorizontalSlider(v, min, max, GUILayout.MinWidth(120));
-            GUILayout.Label(v.ToString(fmt, CultureInfo.InvariantCulture), GUILayout.Width(44));
-            if (extra != null) GUILayout.Label(extra, _hint, GUILayout.Width(70));
+            GUILayout.Label(v.ToString(fmt, CultureInfo.InvariantCulture) + unit, GUILayout.Width(64));
             GUI.enabled = off == null && Mathf.Abs(v - neutral) > 0.0001f;
             if (GUILayout.Button("Reset", GUILayout.Width(52))) nv = neutral;
             GUI.enabled = true;

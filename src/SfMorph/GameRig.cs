@@ -70,7 +70,13 @@ namespace SfMorph
                     var spine = Get(refs, "spine") as Transform[];
                     if (spine != null && spine.Length >= 2) { Put(d, lady, "waist", spine[0]); Put(d, lady, "ribcage", spine[spine.Length - 1]); }
                     var head = Get(refs, "head") as Transform;
-                    if (head != null && head.parent != null && (spine == null || Array.IndexOf(spine, head.parent) < 0)) Put(d, lady, "neck", head.parent);
+                    if (head != null && head.parent != null && (spine == null || Array.IndexOf(spine, head.parent) < 0))
+                    {
+                        // The top of the neck chain (Neck_M, not its helper NeckPart1_M under it).
+                        var n = head.parent;
+                        while (n.parent != null && Array.IndexOf(spine ?? new Transform[0], n.parent) < 0 && Body.Norm(n.parent.name).Contains("neck")) n = n.parent;
+                        Put(d, lady, "neck", n);
+                    }
                 }
             }
             if (_breast != null)

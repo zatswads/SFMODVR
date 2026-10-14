@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using BepInEx;
 using BepInEx.Configuration;
 using UnityEngine;
+using UnityEngine.LowLevel;
+using UnityEngine.PlayerLoop;
 
 namespace SfMorph
 {
@@ -14,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.2.1";
+        public const string Version = "0.3.0";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -40,15 +43,13 @@ namespace SfMorph
         }
     }
 
-    // Runs late so the morphs land after the game's animation and its own
-    // LateUpdate scripts (breast physics, lip sync) for the frame.
-    [DefaultExecutionOrder(30000)]
     internal class Runner : MonoBehaviour
     {
         Plugin _p;
         Body _body;
         Panel _panel;
-        bool _broken;
+        bool _broken, _inLoop;
+        float _nextLoopCheck;
 
         public void Init(Plugin p)
         {
@@ -64,11 +65,23 @@ namespace SfMorph
             {
                 if (Keys.Pressed(_p.PanelKey.Value, _p.KeysUnfocused.Value)) _panel.Visible = !_panel.Visible;
                 _body.Tick();
+                if (Time.unscaledTime >= _nextLoopCheck)
+                {
+                    _nextLoopCheck = Time.unscaledTime + 2f;
+                    bool was = _inLoop;
+                    _inLoop = ApplyStep.Ensure(Apply);
+                    if (_inLoop != was)
+                        Plugin.Log.LogInfo(_inLoop ? "Body changes apply after the game's animation, before its physics and IK"
+                                                   : "Couldn't join Unity's frame loop; body changes apply in LateUpdate (breast physics may jitter)");
+                }
             }
             catch (Exception e) { Fail(e); }
         }
 
-        void LateUpdate()
+        // Fallback only: in LateUpdate the game's physics may already have run for this frame.
+        void LateUpdate() { if (!_inLoop) Apply(); }
+
+        void Apply()
         {
             if (_broken) return;
             try { _body.ApplyAll(); }
@@ -87,6 +100,36 @@ namespace SfMorph
             _broken = true;
             Plugin.Log.LogError("SF Body Morphs stopped after an error (restart the game to retry): " + e);
             try { _body.RestoreAll(); } catch { }
+        }
+    }
+
+    // The body changes must land after the game's animation (which may rewrite bones every
+    // frame) and before its LateUpdate scripts: DynamicBone breast/hair physics and FinalIK
+    // simulate on the bones they find there. Applied after them (0.2.x), the physics ran on the
+    // unchanged body and was then resized under it, a mismatch every frame: jitter.
+    // Unity's frame loop runs animation (Director/constraints) in PreLateUpdate, then the
+    // scripts' LateUpdate; this step goes right before ScriptRunBehaviourLateUpdate.
+    internal struct ApplyStep
+    {
+        public static bool Ensure(PlayerLoopSystem.UpdateFunction fn)
+        {
+            var root = PlayerLoop.GetCurrentPlayerLoop();
+            var subs = root.subSystemList;
+            if (subs == null) return false;
+            for (int i = 0; i < subs.Length; i++)
+            {
+                if (subs[i].type != typeof(PreLateUpdate) || subs[i].subSystemList == null) continue;
+                var list = new List<PlayerLoopSystem>(subs[i].subSystemList);
+                if (list.Exists(s => s.type == typeof(ApplyStep))) return true;
+                int at = list.FindIndex(s => s.type == typeof(PreLateUpdate.ScriptRunBehaviourLateUpdate));
+                if (at < 0) return false;
+                list.Insert(at, new PlayerLoopSystem { type = typeof(ApplyStep), updateDelegate = fn });
+                subs[i].subSystemList = list.ToArray();
+                root.subSystemList = subs;
+                PlayerLoop.SetPlayerLoop(root);
+                return true;
+            }
+            return false;
         }
     }
 

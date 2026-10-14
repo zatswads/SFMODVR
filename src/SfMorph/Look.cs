@@ -7,25 +7,22 @@ using UnityEngine;
 
 namespace SfMorph
 {
-    // One character's changes. Everything is relative to what the game does:
-    // shapes are added to the game's weight, bone and region sizes multiply the
-    // game's scale. So the game's own customisation and animated shapes (face,
-    // lip sync) keep working underneath.
+    // One character's changes. Everything is relative to what the game does
+    // (sizes multiply the game's scale, moves add to its position), so the game's
+    // animation, physics and customisation keep working underneath.
     internal class Look
     {
-        public readonly Dictionary<string, float> Shapes = new Dictionary<string, float>();   // shape name -> added weight
         public readonly Dictionary<string, Vector3> Bones = new Dictionary<string, Vector3>(); // bone name -> scale factor
-        public readonly Dictionary<string, float> Regions = new Dictionary<string, float>();   // region id -> size factor
+        public readonly Dictionary<string, float> Regions = new Dictionary<string, float>();   // slider (Detail) id -> value
 
-        public bool Empty { get { return Shapes.Count == 0 && Bones.Count == 0 && Regions.Count == 0; } }
-        public int Count { get { return Shapes.Count + Bones.Count + Regions.Count; } }
+        public bool Empty { get { return Bones.Count == 0 && Regions.Count == 0; } }
+        public int Count { get { return Bones.Count + Regions.Count; } }
 
-        public void Clear() { Shapes.Clear(); Bones.Clear(); Regions.Clear(); }
+        public void Clear() { Bones.Clear(); Regions.Clear(); }
 
         public void CopyFrom(Look o)
         {
             Clear();
-            foreach (var kv in o.Shapes) Shapes[kv.Key] = kv.Value;
             foreach (var kv in o.Bones) Bones[kv.Key] = kv.Value;
             foreach (var kv in o.Regions) Regions[kv.Key] = kv.Value;
         }
@@ -37,7 +34,6 @@ namespace SfMorph
         {
             var sb = new StringBuilder("# SF Body Morphs look\n");
             foreach (var kv in Regions) sb.Append("region\t").Append(kv.Key).Append('\t').Append(kv.Value.ToString("0.###", Inv)).Append('\n');
-            foreach (var kv in Shapes) sb.Append("shape\t").Append(kv.Key).Append('\t').Append(kv.Value.ToString("0.##", Inv)).Append('\n');
             foreach (var kv in Bones)
                 sb.Append("bone\t").Append(kv.Key).Append('\t').Append(kv.Value.x.ToString("0.###", Inv)).Append(' ')
                   .Append(kv.Value.y.ToString("0.###", Inv)).Append(' ').Append(kv.Value.z.ToString("0.###", Inv)).Append('\n');
@@ -55,7 +51,6 @@ namespace SfMorph
                 switch (f[0])
                 {
                     case "region": if (float.TryParse(f[2], NumberStyles.Float, Inv, out v)) Regions[f[1]] = v; break;
-                    case "shape": if (float.TryParse(f[2], NumberStyles.Float, Inv, out v)) Shapes[f[1]] = v; break;
                     case "bone":
                         var p = f[2].Split(' ');
                         float x, y, z;

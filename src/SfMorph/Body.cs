@@ -5,36 +5,96 @@ using UnityEngine;
 
 namespace SfMorph
 {
-    // A body part VaM-style: a size slider that scales the bones whose names
-    // match. "Keep" scales the part's children back, so only that part changes
-    // size (a bigger thigh doesn't make a bigger calf and foot).
-    internal class Region
+    // A slider VaM-style, done with bones (the game's meshes have no blendshapes):
+    //   Size    uniform scale; Keep = scale the next joint back, so only this part changes
+    //           (uniform scale commutes with rotation, so it never skews the bones below);
+    //   Stretch scale along one body direction; only on leaf bones, or with Keep where the
+    //           bones below barely rotate (spine), since a non-uniform scale skews rotating children;
+    //   Move    shift along a body direction, in cm (translation never skews);
+    //   Length  push the next joint along the bone (thigh, arm, neck length).
+    internal enum Op { Size, Stretch, Move, Length }
+    internal enum Dir { None, Up, Out, Forward, Back, Width, Depth }
+
+    internal class Detail
     {
-        public string Id, Label;
-        public string[] Words, Not;
+        public string Id, Group, Label;
+        public Op Op;
+        public Dir Dir;
+        public string Part;              // GameRig part id (the game's own bone references), preferred
+        public string[] Names;           // exact bone names of this rig, next
+        public string[] Words, Not;      // name keywords (other rigs), last
         public float Min, Max;
         public bool Keep;
+        public float Neutral { get { return Op == Op.Move ? 0f : 1f; } }
+        public string Unit { get { return Op == Op.Move ? " cm" : ""; } }
 
-        public static readonly Region[] All =
+        // "Left_Nipple" -> both sides.
+        static string[] Pair(string left) { return new[] { left, "Right_" + left.Substring("Left_".Length) }; }
+
+        public static readonly string[] Groups = { "Breasts", "Glutes", "Hips & legs", "Torso", "Arms", "Head & face" };
+
+        // Ids of the 0.1/0.2 regions are kept, so saved looks still load.
+        public static readonly Detail[] All =
         {
-            new Region { Id = "breasts", Label = "Breasts", Words = new[] { "breast", "boob", "bust", "pectoral", "mune", "oppai", "chichi" }, Not = new[] { "nipple" }, Min = 0.3f, Max = 2.5f },
-            new Region { Id = "nipples", Label = "Nipples", Words = new[] { "nipple", "areola" }, Min = 0.3f, Max = 3f },
-            new Region { Id = "glutes", Label = "Glutes", Words = new[] { "glute", "buttock", "butt", "siri" }, Min = 0.5f, Max = 2f },
-            new Region { Id = "hips", Label = "Hips", Words = new[] { "pelvis", "hips" }, Min = 0.7f, Max = 1.5f, Keep = true },
-            new Region { Id = "waist", Label = "Waist", Words = new[] { "waist", "abdomen", "belly", "stomach" }, Min = 0.6f, Max = 1.5f, Keep = true },
-            new Region { Id = "ribcage", Label = "Ribcage", Words = new[] { "chest", "ribcage" }, Not = new[] { "breast" }, Min = 0.7f, Max = 1.4f, Keep = true },
-            new Region { Id = "thighs", Label = "Thighs", Words = new[] { "thigh", "upperleg", "upleg" }, Min = 0.6f, Max = 1.6f, Keep = true },
-            new Region { Id = "calves", Label = "Calves", Words = new[] { "calf", "shin", "lowerleg" }, Min = 0.6f, Max = 1.6f, Keep = true },
-            new Region { Id = "upperarms", Label = "Upper arms", Words = new[] { "upperarm", "uparm", "shldr" }, Not = new[] { "twist" }, Min = 0.6f, Max = 1.6f, Keep = true },
-            new Region { Id = "forearms", Label = "Forearms", Words = new[] { "forearm", "lowerarm" }, Min = 0.6f, Max = 1.6f, Keep = true },
-            new Region { Id = "hands", Label = "Hands", Words = new[] { "hand" }, Not = new[] { "handle", "ik" }, Min = 0.7f, Max = 1.4f },
-            new Region { Id = "feet", Label = "Feet", Words = new[] { "foot" }, Not = new[] { "ik" }, Min = 0.7f, Max = 1.4f },
-            new Region { Id = "neck", Label = "Neck", Words = new[] { "neck" }, Min = 0.7f, Max = 1.5f, Keep = true },
-            new Region { Id = "head", Label = "Head", Words = new[] { "head" }, Not = new[] { "headtop", "headend", "end" }, Min = 0.8f, Max = 1.25f },
+            new Detail { Id = "breasts", Group = "Breasts", Label = "Size", Op = Op.Size, Part = "breasts", Words = new[] { "breast", "boob", "bust", "pectoral", "mune", "oppai" }, Not = new[] { "nipple" }, Min = 0.3f, Max = 2.5f },
+            new Detail { Id = "breastLift", Group = "Breasts", Label = "Lift", Op = Op.Move, Dir = Dir.Up, Part = "breasts", Min = -4f, Max = 4f },
+            new Detail { Id = "breastSpacing", Group = "Breasts", Label = "Spacing", Op = Op.Move, Dir = Dir.Out, Part = "breasts", Min = -3f, Max = 3f },
+            new Detail { Id = "breastProjection", Group = "Breasts", Label = "Projection", Op = Op.Move, Dir = Dir.Forward, Names = Pair("Left_LowerBreast"), Min = -2f, Max = 4f },
+            new Detail { Id = "breastLower", Group = "Breasts", Label = "Lower fullness", Op = Op.Size, Names = Pair("Left_LowerBreast"), Min = 0.5f, Max = 2f },
+            new Detail { Id = "breastTop", Group = "Breasts", Label = "Top", Op = Op.Size, Names = Pair("Left_Breast_up"), Min = 0.5f, Max = 2f },
+            new Detail { Id = "breastBottom", Group = "Breasts", Label = "Bottom", Op = Op.Size, Names = Pair("Left_Breast_down"), Min = 0.5f, Max = 2f },
+            new Detail { Id = "breastInner", Group = "Breasts", Label = "Inner side", Op = Op.Size, Names = Pair("Left_Breast_in"), Min = 0.5f, Max = 2f },
+            new Detail { Id = "breastOuter", Group = "Breasts", Label = "Outer side", Op = Op.Size, Names = Pair("Left_Breast_out"), Min = 0.5f, Max = 2f },
+            new Detail { Id = "nipples", Group = "Breasts", Label = "Nipple size", Op = Op.Size, Names = Pair("Left_Nipple"), Words = new[] { "nipple", "areola" }, Min = 0.3f, Max = 3f },
+            new Detail { Id = "nippleProjection", Group = "Breasts", Label = "Nipple projection", Op = Op.Stretch, Dir = Dir.Depth, Names = Pair("Left_Nipple"), Min = 0.5f, Max = 2.5f },
+
+            new Detail { Id = "glutes", Group = "Glutes", Label = "Size", Op = Op.Size, Names = new[] { "Butt_L", "Butt_R" }, Words = new[] { "glute", "buttock", "butt", "siri" }, Min = 0.5f, Max = 2f },
+            new Detail { Id = "gluteLift", Group = "Glutes", Label = "Lift", Op = Op.Move, Dir = Dir.Up, Names = new[] { "Butt_L", "Butt_R" }, Min = -3f, Max = 3f },
+            new Detail { Id = "gluteProjection", Group = "Glutes", Label = "Projection", Op = Op.Move, Dir = Dir.Back, Names = new[] { "Butt_L", "Butt_R" }, Min = -2f, Max = 4f },
+            new Detail { Id = "gluteSpacing", Group = "Glutes", Label = "Spacing", Op = Op.Move, Dir = Dir.Out, Names = new[] { "Butt_L", "Butt_R" }, Min = -2f, Max = 3f },
+            new Detail { Id = "gluteSkin", Group = "Glutes", Label = "Fullness", Op = Op.Size, Names = new[] { "ButtSkin_L", "ButtSkin_R" }, Min = 0.5f, Max = 2f },
+
+            new Detail { Id = "hips", Group = "Hips & legs", Label = "Pelvis size", Op = Op.Size, Part = "hips", Words = new[] { "pelvis", "hips" }, Min = 0.7f, Max = 1.5f, Keep = true },
+            new Detail { Id = "hipWidth", Group = "Hips & legs", Label = "Hip width", Op = Op.Move, Dir = Dir.Out, Part = "thighs", Min = -2f, Max = 4f },
+            new Detail { Id = "thighs", Group = "Hips & legs", Label = "Thigh size", Op = Op.Size, Part = "thighs", Words = new[] { "thigh", "upperleg", "upleg" }, Min = 0.6f, Max = 1.6f, Keep = true },
+            new Detail { Id = "thighFront", Group = "Hips & legs", Label = "Thigh front", Op = Op.Size, Names = new[] { "LegFrontSkin_L", "LegFrontSkin_R" }, Min = 0.5f, Max = 2f },
+            new Detail { Id = "thighInner", Group = "Hips & legs", Label = "Inner thigh", Op = Op.Size, Names = new[] { "LegInsiteSkin_L", "LegInsiteSkin_R" }, Min = 0.5f, Max = 2f },
+            new Detail { Id = "thighOuter", Group = "Hips & legs", Label = "Outer thigh", Op = Op.Size, Names = new[] { "LegOutsiteSkin_L", "LegOutsiteSkin_R" }, Min = 0.5f, Max = 2f },
+            new Detail { Id = "thighLength", Group = "Hips & legs", Label = "Thigh length", Op = Op.Length, Part = "thighs", Min = 0.85f, Max = 1.2f },
+            new Detail { Id = "calves", Group = "Hips & legs", Label = "Calf size", Op = Op.Size, Part = "calves", Words = new[] { "calf", "shin", "lowerleg" }, Min = 0.6f, Max = 1.6f, Keep = true },
+            new Detail { Id = "calfLength", Group = "Hips & legs", Label = "Calf length", Op = Op.Length, Part = "calves", Min = 0.85f, Max = 1.2f },
+            new Detail { Id = "feet", Group = "Hips & legs", Label = "Feet", Op = Op.Size, Part = "feet", Words = new[] { "foot" }, Not = new[] { "ik" }, Min = 0.7f, Max = 1.4f },
+
+            new Detail { Id = "waist", Group = "Torso", Label = "Waist size", Op = Op.Size, Part = "waist", Words = new[] { "waist", "abdomen", "belly", "stomach" }, Min = 0.6f, Max = 1.5f, Keep = true },
+            new Detail { Id = "waistWidth", Group = "Torso", Label = "Waist width", Op = Op.Stretch, Dir = Dir.Width, Part = "waist", Min = 0.7f, Max = 1.4f, Keep = true },
+            new Detail { Id = "waistDepth", Group = "Torso", Label = "Waist depth", Op = Op.Stretch, Dir = Dir.Depth, Part = "waist", Min = 0.7f, Max = 1.4f, Keep = true },
+            new Detail { Id = "belly", Group = "Torso", Label = "Belly", Op = Op.Size, Names = new[] { "Uterus_belly" }, Min = 0.5f, Max = 2.5f },
+            new Detail { Id = "ribcage", Group = "Torso", Label = "Ribcage size", Op = Op.Size, Part = "ribcage", Words = new[] { "chest", "ribcage" }, Not = new[] { "breast" }, Min = 0.7f, Max = 1.4f, Keep = true },
+            new Detail { Id = "ribcageWidth", Group = "Torso", Label = "Ribcage width", Op = Op.Stretch, Dir = Dir.Width, Part = "ribcage", Min = 0.8f, Max = 1.3f, Keep = true },
+            new Detail { Id = "ribcageDepth", Group = "Torso", Label = "Ribcage depth", Op = Op.Stretch, Dir = Dir.Depth, Part = "ribcage", Min = 0.8f, Max = 1.3f, Keep = true },
+            new Detail { Id = "torsoLength", Group = "Torso", Label = "Torso length", Op = Op.Length, Part = "waist", Min = 0.85f, Max = 1.2f },
+            new Detail { Id = "shoulderWidth", Group = "Torso", Label = "Shoulder width", Op = Op.Move, Dir = Dir.Out, Names = new[] { "Scapula_L", "Scapula_R" }, Min = -3f, Max = 3f },
+
+            new Detail { Id = "upperarms", Group = "Arms", Label = "Upper arm size", Op = Op.Size, Part = "upperarms", Words = new[] { "upperarm", "uparm", "shldr" }, Not = new[] { "twist" }, Min = 0.6f, Max = 1.6f, Keep = true },
+            new Detail { Id = "armLength", Group = "Arms", Label = "Upper arm length", Op = Op.Length, Part = "upperarms", Min = 0.85f, Max = 1.2f },
+            new Detail { Id = "forearms", Group = "Arms", Label = "Forearm size", Op = Op.Size, Part = "forearms", Words = new[] { "forearm", "lowerarm" }, Min = 0.6f, Max = 1.6f, Keep = true },
+            new Detail { Id = "forearmLength", Group = "Arms", Label = "Forearm length", Op = Op.Length, Part = "forearms", Min = 0.85f, Max = 1.2f },
+            new Detail { Id = "hands", Group = "Arms", Label = "Hands", Op = Op.Size, Part = "hands", Words = new[] { "hand" }, Not = new[] { "handle", "ik" }, Min = 0.7f, Max = 1.4f },
+
+            new Detail { Id = "head", Group = "Head & face", Label = "Head size", Op = Op.Size, Part = "head", Words = new[] { "head" }, Not = new[] { "headtop", "headend", "end" }, Min = 0.8f, Max = 1.25f },
+            new Detail { Id = "neck", Group = "Head & face", Label = "Neck size", Op = Op.Size, Part = "neck", Words = new[] { "neck" }, Min = 0.7f, Max = 1.5f, Keep = true },
+            new Detail { Id = "neckLength", Group = "Head & face", Label = "Neck length", Op = Op.Length, Part = "neck", Min = 0.8f, Max = 1.3f },
+            new Detail { Id = "eyes", Group = "Head & face", Label = "Eye size", Op = Op.Size, Names = new[] { "Eye_L", "Eye_R" }, Min = 0.85f, Max = 1.2f },
+            new Detail { Id = "cheeks", Group = "Head & face", Label = "Cheeks", Op = Op.Size, Names = new[] { "Cheek_Left", "Cheek_Right" }, Min = 0.6f, Max = 1.6f },
+            new Detail { Id = "cheekHeight", Group = "Head & face", Label = "Cheekbone height", Op = Op.Move, Dir = Dir.Up, Names = new[] { "Cheek_Left_Raiser", "Cheek_Right_Raiser" }, Min = -0.6f, Max = 0.6f },
+            new Detail { Id = "brows", Group = "Head & face", Label = "Brow height", Op = Op.Move, Dir = Dir.Up, Names = new[] { "Eyebrow_Left_Insite", "Eyebrow_Left_Middle", "Eyebrow_Left_Outsite", "Eyebrow_Right_Insite", "Eyebrow_Right_Middle", "Eyebrow_Right_Outsite" }, Min = -0.5f, Max = 0.5f },
+            new Detail { Id = "lips", Group = "Head & face", Label = "Lips", Op = Op.Size, Names = new[] { "Lip_Left_Inside", "Lip_LeftLower_Insite", "Lip_LeftUpper_Inside", "Lip_Lower_Insite", "Lip_Right_Inside", "Lip_RightLower_Insite", "Lip_RightUpper_Inside", "Lip_Upper_Inside" }, Min = 0.7f, Max = 1.5f },
+            new Detail { Id = "jaw", Group = "Head & face", Label = "Jaw", Op = Op.Size, Names = new[] { "Jaw_M" }, Min = 0.8f, Max = 1.25f, Keep = true },
         };
 
         public bool Matches(string norm)
         {
+            if (Words == null) return false;
             if (Not != null) foreach (var w in Not) if (norm.Contains(w)) return false;
             foreach (var w in Words) if (norm.Contains(w)) return true;
             return false;
@@ -50,18 +110,22 @@ namespace SfMorph
         // Skin bones in hierarchy order (what the Bones tab lists), by name for lookups.
         public readonly List<Transform> BoneList = new List<Transform>();
         public readonly Dictionary<string, Transform> Bones = new Dictionary<string, Transform>();
-        public readonly Dictionary<string, List<Transform>> RegionBones = new Dictionary<string, List<Transform>>();
-        public readonly HashSet<string> FromGame = new HashSet<string>(); // parts whose bones the game itself named
+        public readonly Dictionary<string, List<Transform>> DetailBones = new Dictionary<string, List<Transform>>();
+        public readonly Dictionary<string, string> Source = new Dictionary<string, string>();  // detail id -> how its bones were found
+        public readonly Dictionary<string, string> Off = new Dictionary<string, string>();     // detail id -> why it can't apply
         public readonly List<Transform> Heads = new List<Transform>();
-        // Shape names (after the last '.', so the body's and the clothes' copies of a morph are one slider).
-        public readonly List<string> ShapeNames = new List<string>();
+        // Pose-independent directions from the bind pose: per bone, the local axis (0..2) of
+        // Width/Depth/Up, and per moved bone the local offset of 1 m Up/Out/Forward in its parent.
+        public readonly Dictionary<Transform, int[]> Axis = new Dictionary<Transform, int[]>();
+        public readonly Dictionary<Transform, Vector3[]> MoveDir = new Dictionary<Transform, Vector3[]>();
         public readonly Look Look = new Look();
         public bool Dirty;
         public float DirtyAt;
     }
 
-    // Finds the characters (skinned meshes grouped by root, like SfNr's People),
-    // keeps their looks, and applies them every frame after the game's animation.
+    // Finds the characters (skinned meshes grouped by root, the game's woman by
+    // MovePlayerAndGirl.reika), keeps their looks, and applies them every frame
+    // right after the game's animation and before its physics and IK.
     internal class Body
     {
         readonly Plugin _p;
@@ -72,17 +136,16 @@ namespace SfMorph
         readonly HashSet<string> _logged = new HashSet<string>();
         Transform _lady;
 
-        // Blendshape indices per mesh, by short name (a name can exist more than once).
-        readonly Dictionary<Mesh, Dictionary<string, List<int>>> _shapeIndex = new Dictionary<Mesh, Dictionary<string, List<int>>>();
-
         // What we wrote, so we can tell the game's own changes from ours and undo ours.
-        class ShapeTrack { public SkinnedMeshRenderer R; public int I; public float Base, Last; public int Used; }
-        class BoneTrack { public Transform T; public Vector3 Rest, Last; public int Used; }
-        readonly Dictionary<long, ShapeTrack> _shapes = new Dictionary<long, ShapeTrack>();
-        readonly Dictionary<Transform, BoneTrack> _bones = new Dictionary<Transform, BoneTrack>();
-        readonly Dictionary<Transform, Vector3> _net = new Dictionary<Transform, Vector3>();
-        readonly List<long> _dropShapes = new List<long>();
-        readonly List<Transform> _dropBones = new List<Transform>();
+        class ScaleTrack { public Transform T; public Vector3 Rest, Last; public int Used; }
+        class PosTrack { public Transform T; public Vector3 Rest, Last; public int Used; }
+        readonly Dictionary<Transform, ScaleTrack> _scales = new Dictionary<Transform, ScaleTrack>();
+        readonly Dictionary<Transform, PosTrack> _poss = new Dictionary<Transform, PosTrack>();
+        readonly Dictionary<Transform, Vector3> _net = new Dictionary<Transform, Vector3>();     // scale factor
+        readonly Dictionary<Transform, float> _len = new Dictionary<Transform, float>();         // localPosition factor
+        readonly Dictionary<Transform, Vector3> _add = new Dictionary<Transform, Vector3>();     // localPosition offset
+        readonly List<Transform> _drop = new List<Transform>();
+        readonly HashSet<Transform> _posTargets = new HashSet<Transform>();
 
         public Body(Plugin p) { _p = p; }
 
@@ -93,7 +156,15 @@ namespace SfMorph
             return sb.ToString();
         }
 
-        public static string ShortShape(string name) { int i = name.LastIndexOf('.'); return i >= 0 ? name.Substring(i + 1) : name; }
+        // "Hip_L" -> "hip", "Left_UpperBreast" -> "upperbreast": a child whose name starts with
+        // its parent's stem (HipPart1_L, NeckPart1_M) is a helper of the same part, not the next joint.
+        static string Stem(string name)
+        {
+            var n = name;
+            if (n.StartsWith("Left_") || n.StartsWith("Right_")) n = n.Substring(n.IndexOf('_') + 1);
+            if (n.EndsWith("_L") || n.EndsWith("_R") || n.EndsWith("_M")) n = n.Substring(0, n.Length - 2);
+            return Norm(n);
+        }
 
         // ---- scanning (every 2 s, cached per character) ----
 
@@ -149,7 +220,7 @@ namespace SfMorph
                         if (h != null && (h.position - e).sqrMagnitude < 0.2f * 0.2f) c.IsPlayer = true;
                 if (c.Female && !c.IsPlayer) women++;
             }
-            Status = _lady != null && women > 0 ? "the game's woman found (" + Found.Find(x => x.Root == _lady).FromGame.Count + " body parts from the game's rig)"
+            Status = _lady != null && women > 0 ? "the game's woman found"
                    : women > 0 ? women + (women == 1 ? " woman" : " women") + " found"
                    : Found.Count > 0 ? "couldn't tell who's female: showing everyone" : "no characters in the scene";
         }
@@ -172,114 +243,157 @@ namespace SfMorph
             if (prev != null) { c.Look.CopyFrom(prev.Look); c.Dirty = prev.Dirty; c.DirtyAt = prev.DirtyAt; } // clothes changed: same person
             else Store.LoadCharacter(c.Key, c.Look);
 
-            var skin = new HashSet<Transform>();
-            var shapes = new HashSet<string>();
+            // Skin bones and their bind poses (mesh space -> bone), from the first mesh that has each bone.
+            var bind = new Dictionary<Transform, Matrix4x4>();
             foreach (var r in list)
             {
-                foreach (var b in r.bones) if (b != null) skin.Add(b);
-                if (r.rootBone != null) skin.Add(r.rootBone);
-                foreach (var s in Index(r.sharedMesh).Keys) shapes.Add(s);
+                var bones = r.bones;
+                var bp = r.sharedMesh.bindposes;
+                for (int i = 0; i < bones.Length; i++)
+                    if (bones[i] != null && !bind.ContainsKey(bones[i]) && i < bp.Length) bind[bones[i]] = bp[i];
             }
-            // Hierarchy order, so a parent comes before its children.
-            foreach (var t in root.GetComponentsInChildren<Transform>(true))
-                if (skin.Contains(t))
+            foreach (var t in root.GetComponentsInChildren<Transform>(true)) // hierarchy order: parents first
+                if (bind.ContainsKey(t))
                 {
                     c.BoneList.Add(t);
                     if (!c.Bones.ContainsKey(t.name)) c.Bones[t.name] = t;
                     if (Norm(t.name).Contains("head")) c.Heads.Add(t);
                 }
-            c.ShapeNames.AddRange(shapes);
-            c.ShapeNames.Sort(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var reg in Region.All)
+            var rig = root == _lady ? GameRig.Parts(_lady) : new Dictionary<string, List<Transform>>();
+            foreach (var d in Detail.All)
             {
-                var hits = new List<Transform>();
-                foreach (var t in c.BoneList)
+                List<Transform> hits;
+                if (d.Part != null && rig.TryGetValue(d.Part, out hits)) c.Source[d.Id] = "the game's own bone";
+                else
                 {
-                    if (!reg.Matches(Norm(t.name))) continue;
-                    // Only the top of a matching chain (Breast_L, not also Breast_L_02 under it).
-                    bool under = false;
-                    for (var a = t.parent; a != null && !under; a = a.parent) under = hits.Contains(a);
-                    if (!under) hits.Add(t);
+                    hits = new List<Transform>();
+                    if (d.Names != null) foreach (var n in d.Names) { Transform t; if (c.Bones.TryGetValue(n, out t)) hits.Add(t); }
+                    if (hits.Count > 0) c.Source[d.Id] = "this rig's bone";
+                    else if (d.Words != null)
+                    {
+                        foreach (var t in c.BoneList)
+                        {
+                            if (!d.Matches(Norm(t.name))) continue;
+                            // Only the top of a matching chain (Breast_L, not also Breast_L_02 under it).
+                            bool under = false;
+                            for (var a = t.parent; a != null && !under; a = a.parent) under = hits.Contains(a);
+                            if (!under) hits.Add(t);
+                        }
+                        if (hits.Count > 0) c.Source[d.Id] = "found by name";
+                    }
                 }
-                c.RegionBones[reg.Id] = hits;
+                c.DetailBones[d.Id] = hits;
+                if (hits.Count == 0) c.Off[d.Id] = "this rig has no bone for it";
+                else if (d.Op == Op.Stretch && !d.Keep)
+                    foreach (var t in hits) if (t.childCount > 0) { c.Off[d.Id] = "would skew the bones under " + t.name; break; }
             }
-            // The game's own bone references beat name guesses.
-            if (root == _lady)
-                foreach (var kv in GameRig.Parts(_lady)) { c.RegionBones[kv.Key] = kv.Value; c.FromGame.Add(kv.Key); }
 
-            var female = new[] { "lady", "female", "girl", "woman", "heroine", "breast", "boob", "vagina", "pussy", "labia" };
-            string rootNorm = Norm(c.Key);
+            Directions(c, bind, rig);
+
             if (_lady != null) c.Female = root == _lady; // the game has exactly one woman
-            else foreach (var w in female) if (rootNorm.Contains(w)) c.Female = true;
-            if (!c.Female && _lady == null) foreach (var t in c.BoneList) { var n = Norm(t.name); foreach (var w in female) if (n.Contains(w)) { c.Female = true; break; } if (c.Female) break; }
-            if (!c.Female && _lady == null) foreach (var s in c.ShapeNames) { var n = Norm(s); foreach (var w in female) if (n.Contains(w)) { c.Female = true; break; } if (c.Female) break; }
+            else
+            {
+                var female = new[] { "lady", "female", "girl", "woman", "heroine", "breast", "boob", "vagina", "pussy", "labia" };
+                var names = new List<string> { Norm(c.Key) };
+                foreach (var t in c.BoneList) names.Add(Norm(t.name));
+                foreach (var n in names) { foreach (var w in female) if (n.Contains(w)) { c.Female = true; break; } if (c.Female) break; }
+            }
 
-            if (_logged.Add(c.Key + "/" + list.Count)) LogCharacter(c);
+            if (_logged.Add(c.Key)) LogCharacter(c);
             return c;
         }
 
-        // One-shot description of each new character, so the region names can be tuned to the game's rig from a log.
+        // Character directions in the meshes' bind space (left from the thighs, up from pelvis to
+        // chest, forward = their cross), then for each bone used by a direction slider: which of its
+        // local axes is Width/Depth/Up, and what 1 m Up/Out/Forward is in its parent's local space.
+        // Bind space doesn't move with the animation, so the axes don't flip as she bends.
+        void Directions(Character c, Dictionary<Transform, Matrix4x4> bind, Dictionary<string, List<Transform>> rig)
+        {
+            Func<Transform, Vector3?> pos = t => { Matrix4x4 m; return t != null && bind.TryGetValue(t, out m) ? (Vector3?)m.inverse.GetColumn(3) : null; };
+            List<Transform> th, hp, rc;
+            Transform hipL = null, hipR = null, pelvis = null, chest = null;
+            if (rig.TryGetValue("thighs", out th) && th.Count == 2) { hipL = th[0]; hipR = th[1]; }
+            else { c.Bones.TryGetValue("Hip_L", out hipL); c.Bones.TryGetValue("Hip_R", out hipR); }
+            if (rig.TryGetValue("hips", out hp)) pelvis = hp[0]; else c.Bones.TryGetValue("Root_M", out pelvis);
+            if (rig.TryGetValue("ribcage", out rc)) chest = rc[0]; else c.Bones.TryGetValue("Chest_M", out chest);
+            var pl = pos(hipL); var pr = pos(hipR); var pp = pos(pelvis); var pc = pos(chest);
+            Vector3 left, up;
+            if (pl.HasValue && pr.HasValue && pp.HasValue && pc.HasValue) { left = (pl.Value - pr.Value).normalized; up = (pc.Value - pp.Value).normalized; }
+            else { left = Vector3.left; up = Vector3.up; Plugin.Log.LogInfo("Body directions for '" + c.Key + "': no hips/chest in the bind pose, assuming Y up, X right"); }
+            var fwd = Vector3.Cross(up, left).normalized;
+            up = Vector3.Cross(left, fwd).normalized;
+            // Self-check: toes are in front of the ankles.
+            Transform toe, ankle;
+            if (c.Bones.TryGetValue("Toes_L", out toe) && c.Bones.TryGetValue("Ankle_L", out ankle) && pos(toe).HasValue && pos(ankle).HasValue
+                && Vector3.Dot(pos(toe).Value - pos(ankle).Value, fwd) < 0f)
+            {
+                fwd = -fwd;
+                Plugin.Log.LogInfo("Body directions for '" + c.Key + "': forward flipped (toes were behind the ankles)");
+            }
+            var center = pp ?? Vector3.zero;
+
+            foreach (var d in Detail.All)
+            {
+                if (d.Dir == Dir.None) continue;
+                foreach (var t in c.DetailBones[d.Id])
+                {
+                    Matrix4x4 bp;
+                    if (!bind.TryGetValue(t, out bp)) continue;
+                    if (!c.Axis.ContainsKey(t)) c.Axis[t] = new[] { Dominant(bp.MultiplyVector(left)), Dominant(bp.MultiplyVector(fwd)), Dominant(bp.MultiplyVector(up)) };
+                    if (c.MoveDir.ContainsKey(t) || t.parent == null) continue;
+                    // The parent's bind pose; for a parent outside the skin, derive it from this bone's.
+                    Matrix4x4 pbp;
+                    if (!bind.TryGetValue(t.parent, out pbp)) pbp = Matrix4x4.TRS(t.localPosition, t.localRotation, t.localScale) * bp;
+                    var tp = pos(t);
+                    float side = tp.HasValue && Vector3.Dot(tp.Value - center, left) < 0f ? -1f : 1f;
+                    var dirs = new[] { up, left * side, fwd };
+                    var m = new Vector3[3];
+                    for (int i = 0; i < 3; i++)
+                    {
+                        var v = pbp.MultiplyVector(dirs[i]);
+                        float world = t.parent.TransformVector(v).magnitude; // local units -> metres, now
+                        m[i] = world > 1e-6f ? v / world : Vector3.zero;
+                    }
+                    c.MoveDir[t] = m; // [0] up, [1] out, [2] forward: local offset per metre
+                }
+            }
+        }
+
+        static int Dominant(Vector3 v)
+        {
+            float x = Mathf.Abs(v.x), y = Mathf.Abs(v.y), z = Mathf.Abs(v.z);
+            return x >= y && x >= z ? 0 : y >= z ? 1 : 2;
+        }
+
+        // One description of each character per session, so slider bones can be tuned to the game's rig from a log.
         void LogCharacter(Character c)
         {
             var sb = new StringBuilder();
             sb.Append("Character '").Append(c.Key).Append("': ").Append(c.Female ? "female" : "not detected as female")
-              .Append(", ").Append(c.Renderers.Count).Append(" skinned meshes, ").Append(c.BoneList.Count).Append(" bones, ")
-              .Append(c.ShapeNames.Count).Append(" shapes").Append(c.Look.Empty ? "" : ", saved look with " + c.Look.Count + " changes loaded");
-            sb.Append("\n  meshes: ");
-            foreach (var r in c.Renderers) sb.Append(r.name).Append(" (").Append(r.sharedMesh.blendShapeCount).Append(" shapes) ");
-            sb.Append("\n  regions: ");
-            foreach (var reg in Region.All)
+              .Append(", ").Append(c.Renderers.Count).Append(" skinned meshes, ").Append(c.BoneList.Count).Append(" bones")
+              .Append(c.Look.Empty ? "" : ", saved look with " + c.Look.Count + " changes loaded");
+            if (!c.Female) { Plugin.Log.LogInfo(sb.ToString()); return; }
+            sb.Append("\n  sliders: ");
+            foreach (var d in Detail.All)
             {
-                sb.Append(reg.Label).Append('=');
-                var hits = c.RegionBones[reg.Id];
+                sb.Append(d.Id).Append('=');
+                var hits = c.DetailBones[d.Id];
                 if (hits.Count == 0) sb.Append("none");
-                for (int i = 0; i < hits.Count; i++) sb.Append(i > 0 ? "/" : "").Append(hits[i].name);
-                sb.Append(c.FromGame.Contains(reg.Id) ? " (game rig); " : "; ");
+                for (int i = 0; i < hits.Count; i++)
+                    sb.Append(i > 0 ? "/" : "").Append(hits[i].name).Append('(').Append(hits[i].parent != null ? hits[i].parent.name : "-").Append(',').Append(hits[i].childCount).Append(')');
+                string off;
+                if (c.Off.TryGetValue(d.Id, out off) && hits.Count > 0) sb.Append(" OFF: ").Append(off);
+                sb.Append("; ");
             }
-            sb.Append("\n  bones: ");
-            foreach (var t in c.BoneList) sb.Append(t.name).Append(' ');
-            sb.Append("\n  shapes: ");
-            foreach (var s in c.ShapeNames) sb.Append(s).Append(", ");
+            sb.Append("\n  bones (parent): ");
+            foreach (var t in c.BoneList) sb.Append(t.name).Append('(').Append(t.parent != null ? t.parent.name : "-").Append(") ");
             Plugin.Log.LogInfo(sb.ToString());
-        }
-
-        public Dictionary<string, List<int>> Index(Mesh m)
-        {
-            Dictionary<string, List<int>> d;
-            if (_shapeIndex.TryGetValue(m, out d)) return d;
-            d = new Dictionary<string, List<int>>();
-            for (int i = 0; i < m.blendShapeCount; i++)
-            {
-                var n = ShortShape(m.GetBlendShapeName(i));
-                List<int> l;
-                if (!d.TryGetValue(n, out l)) { l = new List<int>(); d[n] = l; }
-                l.Add(i);
-            }
-            _shapeIndex[m] = d;
-            return d;
-        }
-
-        // The game's weight of a shape right now (before our addition), for the panel.
-        public float GameWeight(Character c, string shape)
-        {
-            foreach (var r in c.Renderers)
-            {
-                if (r == null || r.sharedMesh == null) continue;
-                List<int> idx;
-                if (!Index(r.sharedMesh).TryGetValue(shape, out idx)) continue;
-                ShapeTrack t;
-                if (_shapes.TryGetValue(Id(r, idx[0]), out t)) return t.Base;
-                return r.GetBlendShapeWeight(idx[0]);
-            }
-            return 0f;
         }
 
         public void Touch(Character c) { c.Dirty = true; c.DirtyAt = Time.unscaledTime; }
 
-        // ---- applying (every LateUpdate) ----
-
-        static long Id(SkinnedMeshRenderer r, int i) { return ((long)r.GetInstanceID() << 16) ^ i; }
+        // ---- applying (every frame, after animation, before physics/IK) ----
 
         public void ApplyAll()
         {
@@ -292,53 +406,69 @@ namespace SfMorph
 
         void Apply(Character c)
         {
-            foreach (var kv in c.Look.Shapes)
-                foreach (var r in c.Renderers)
-                {
-                    if (r == null || r.sharedMesh == null) continue;
-                    List<int> idx;
-                    if (!Index(r.sharedMesh).TryGetValue(kv.Key, out idx)) continue;
-                    foreach (var i in idx)
-                    {
-                        long id = Id(r, i);
-                        ShapeTrack t;
-                        float w = r.GetBlendShapeWeight(i);
-                        if (!_shapes.TryGetValue(id, out t)) { t = new ShapeTrack { R = r, I = i, Base = w, Last = float.NaN }; _shapes[id] = t; }
-                        else if (Mathf.Abs(w - t.Last) > 0.001f) t.Base = w; // the game set it since our last write
-                        float target = t.Base + kv.Value;
-                        if (Mathf.Abs(target - w) > 0.0001f) r.SetBlendShapeWeight(i, target);
-                        t.Last = target;
-                        t.Used = _frame;
-                    }
-                }
-
-            // Bone sizes: each bone's own factor times its region's; "Keep" parts scale their children back.
-            _net.Clear();
+            _net.Clear(); _len.Clear(); _add.Clear(); _posTargets.Clear();
             foreach (var kv in c.Look.Bones)
             {
                 Transform b;
                 if (c.Bones.TryGetValue(kv.Key, out b) && b != null) Mul(b, kv.Value);
             }
-            foreach (var reg in Region.All)
+            foreach (var d in Detail.All)
             {
-                float f;
-                if (!c.Look.Regions.TryGetValue(reg.Id, out f) || Mathf.Abs(f - 1f) < 0.0001f) continue;
-                foreach (var b in c.RegionBones[reg.Id])
+                float v;
+                if (!c.Look.Regions.TryGetValue(d.Id, out v) || Mathf.Abs(v - d.Neutral) < 0.0001f || c.Off.ContainsKey(d.Id)) continue;
+                foreach (var b in c.DetailBones[d.Id])
                 {
                     if (b == null) continue;
-                    Mul(b, new Vector3(f, f, f));
-                    if (reg.Keep) for (int i = 0; i < b.childCount; i++) Mul(b.GetChild(i), new Vector3(1f / f, 1f / f, 1f / f));
+                    switch (d.Op)
+                    {
+                        case Op.Size:
+                            Mul(b, new Vector3(v, v, v));
+                            if (d.Keep) KeepBelow(b, Stem(b.name), new Vector3(v, v, v));
+                            break;
+                        case Op.Stretch:
+                            int[] ax;
+                            if (!c.Axis.TryGetValue(b, out ax)) break;
+                            var f = Vector3.one;
+                            f[d.Dir == Dir.Width ? ax[0] : d.Dir == Dir.Depth ? ax[1] : ax[2]] = v;
+                            Mul(b, f);
+                            if (d.Keep) KeepBelow(b, Stem(b.name), f);
+                            break;
+                        case Op.Move:
+                            Vector3[] md;
+                            if (!c.MoveDir.TryGetValue(b, out md)) break;
+                            var dv = d.Dir == Dir.Up ? md[0] : d.Dir == Dir.Out ? md[1] : d.Dir == Dir.Forward ? md[2] : -md[2];
+                            Vector3 a;
+                            _add[b] = (_add.TryGetValue(b, out a) ? a : Vector3.zero) + dv * (v * 0.01f);
+                            _posTargets.Add(b);
+                            break;
+                        case Op.Length:
+                            LengthBelow(b, Stem(b.name), v);
+                            break;
+                    }
                 }
             }
+
             foreach (var kv in _net)
             {
                 var tr = kv.Key;
-                BoneTrack t;
+                ScaleTrack t;
                 var s = tr.localScale;
-                if (!_bones.TryGetValue(tr, out t)) { t = new BoneTrack { T = tr, Rest = s, Last = new Vector3(float.NaN, 0, 0) }; _bones[tr] = t; }
+                if (!_scales.TryGetValue(tr, out t)) { t = new ScaleTrack { T = tr, Rest = s, Last = new Vector3(float.NaN, 0, 0) }; _scales[tr] = t; }
                 else if ((s - t.Last).sqrMagnitude > 1e-10f) t.Rest = s; // animation set it since our last write
                 var target = Vector3.Scale(t.Rest, kv.Value);
                 tr.localScale = target;
+                t.Last = target;
+                t.Used = _frame;
+            }
+            foreach (var tr in _posTargets)
+            {
+                PosTrack t;
+                var p = tr.localPosition;
+                if (!_poss.TryGetValue(tr, out t)) { t = new PosTrack { T = tr, Rest = p, Last = new Vector3(float.NaN, 0, 0) }; _poss[tr] = t; }
+                else if ((p - t.Last).sqrMagnitude > 1e-12f) t.Rest = p; // animation or physics reset it since our last write
+                float l; Vector3 a;
+                var target = t.Rest * (_len.TryGetValue(tr, out l) ? l : 1f) + (_add.TryGetValue(tr, out a) ? a : Vector3.zero);
+                tr.localPosition = target;
                 t.Last = target;
                 t.Used = _frame;
             }
@@ -350,27 +480,66 @@ namespace SfMorph
             _net[t] = _net.TryGetValue(t, out v) ? Vector3.Scale(v, f) : f;
         }
 
+        // Scales the next joints back (1/f), walking through the part's own helpers (HipPart1_L
+        // under Hip_L), which keep the scale. f is in b's axes; mapped to each child's axes.
+        void KeepBelow(Transform b, string stem, Vector3 f)
+        {
+            for (int i = 0; i < b.childCount; i++)
+            {
+                var ch = b.GetChild(i);
+                var g = MapAxes(f, ch.localRotation);
+                if (Norm(ch.name).StartsWith(stem)) KeepBelow(ch, stem, g);
+                else Mul(ch, new Vector3(1f / g.x, 1f / g.y, 1f / g.z));
+            }
+        }
+
+        // Pushes the next joints (and the part's helpers on the way) along the bone.
+        void LengthBelow(Transform b, string stem, float f)
+        {
+            for (int i = 0; i < b.childCount; i++)
+            {
+                var ch = b.GetChild(i);
+                float l;
+                _len[ch] = _len.TryGetValue(ch, out l) ? l * f : f;
+                _posTargets.Add(ch);
+                if (Norm(ch.name).StartsWith(stem)) LengthBelow(ch, stem, f); // a helper in the chain (Hip -> HipPart1 -> HipPart2 -> Knee): each segment grows
+            }
+        }
+
+        // A parent's per-axis factor as seen along each of the child's axes.
+        static Vector3 MapAxes(Vector3 f, Quaternion q)
+        {
+            if (Mathf.Approximately(f.x, f.y) && Mathf.Approximately(f.y, f.z)) return f;
+            var g = Vector3.one;
+            for (int j = 0; j < 3; j++)
+            {
+                var e = Vector3.zero; e[j] = 1f;
+                g[j] = f[Dominant(q * e)];
+            }
+            return g;
+        }
+
         // Gives back the game's values for everything we no longer change.
         void Release()
         {
-            _dropShapes.Clear();
-            foreach (var kv in _shapes)
-                if (kv.Value.Used != _frame)
-                {
-                    var t = kv.Value;
-                    if (t.R != null && Mathf.Abs(t.R.GetBlendShapeWeight(t.I) - t.Last) < 0.001f) t.R.SetBlendShapeWeight(t.I, t.Base);
-                    _dropShapes.Add(kv.Key);
-                }
-            foreach (var id in _dropShapes) _shapes.Remove(id);
-            _dropBones.Clear();
-            foreach (var kv in _bones)
+            _drop.Clear();
+            foreach (var kv in _scales)
                 if (kv.Value.Used != _frame)
                 {
                     var t = kv.Value;
                     if (t.T != null && (t.T.localScale - t.Last).sqrMagnitude < 1e-10f) t.T.localScale = t.Rest;
-                    _dropBones.Add(kv.Key);
+                    _drop.Add(kv.Key);
                 }
-            foreach (var t in _dropBones) _bones.Remove(t);
+            foreach (var t in _drop) _scales.Remove(t);
+            _drop.Clear();
+            foreach (var kv in _poss)
+                if (kv.Value.Used != _frame)
+                {
+                    var t = kv.Value;
+                    if (t.T != null && (t.T.localPosition - t.Last).sqrMagnitude < 1e-12f) t.T.localPosition = t.Rest;
+                    _drop.Add(kv.Key);
+                }
+            foreach (var t in _drop) _poss.Remove(t);
         }
 
         public void RestoreAll() { _frame++; Release(); }
