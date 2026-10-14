@@ -2,7 +2,6 @@
 // character as VaM shows it, for the SF Body Morphs character pipeline (docs/PIPELINE.md):
 //   body.obj        Genesis 2 mesh with every morph applied, NOT posed (rest frame, metres,
 //                   Unity axes), UV vertices with UVs, one group per material
-//   body_posed.obj  the same vertices as currently posed/skinned (world space), if available
 //   joints.txt      every DAZ bone: name, parent, morphed rest position, posed position
 //   materials.txt   material index, name, enabled, region, and the PNG written per texture slot
 //   urls.txt        the texture files the appearance uses (face/torso/limbs/genitals)
@@ -72,9 +71,9 @@ public class SfExport : MVRScript
         var matNames = mesh.materialNames;
         var enabled = mesh.materialsEnabled;
         FileManagerSecure.WriteAllText(dir + "/body.obj", Obj("VaM " + character.displayName + " morphed rest pose (" + source + ")", verts, normals, mesh.UV, mesh.UVPolyList, matNames));
-        var posed = skin.rawSkinnedVerts;
-        if (posed != null && posed.Length == verts.Length)
-            FileManagerSecure.WriteAllText(dir + "/body_posed.obj", Obj("VaM " + character.displayName + " posed (world space)", posed, null, mesh.UV, mesh.UVPolyList, matNames));
+        // No posed mesh: VaM skins on the GPU and its CPU copy (rawSkinnedVerts) is only kept up to date for
+        // the vertices its physics uses, so a posed export comes out torn. The fit uses the rest pose + joints.
+        int stretched = Stretched(verts, mesh.UVPolyList);
         yield return null;
 
         // Joints in the same rest frame as body.obj (morphedWorldPosition), plus where they are now.
@@ -136,9 +135,29 @@ public class SfExport : MVRScript
         yield return StartCoroutine(Thumb(dir + "/thumb.jpg", selector));
         FileManagerSecure.WriteAllText(dir + "/info.txt", "character\t" + character.displayName + "\natom\t" + containingAtom.uid +
             "\nvertices\t" + verts.Length + " (UV vertices; base " + mesh.numBaseVertices + ")\nmaterials\t" + (matNames != null ? matNames.Length : 0) +
-            "\nsource\t" + source + "\ntextures\t" + written.Count + "\n");
-        Say("done: " + verts.Length + " vertices, " + written.Count + " textures -> " + dir);
+            "\nsource\t" + source + "\ntextures\t" + written.Count + "\nstretched faces\t" + stretched + "\n");
+        Say("done: " + verts.Length + " vertices, " + written.Count + " textures -> " + dir + ". Check: " +
+            (stretched == 0 ? "body.obj looks intact" : stretched + " stretched faces in body.obj - the morph snapshot may be incomplete; press Export again"));
         _busy = false;
+    }
+
+    // Faces with an edge longer than 10 cm: Genesis 2's longest edges are a few cm, so any such face means
+    // vertices in the wrong place (a torn mesh like the one the posed export gave).
+    static int Stretched(Vector3[] v, MeshPoly[] polys)
+    {
+        int n = 0;
+        if (polys == null) return 0;
+        foreach (var poly in polys)
+        {
+            if (poly == null || poly.vertices == null) continue;
+            var p = poly.vertices;
+            for (int i = 0; i < p.Length; i++)
+            {
+                int a = p[i], b = p[(i + 1) % p.Length];
+                if (a < v.Length && b < v.Length && (v[a] - v[b]).sqrMagnitude > 0.01f) { n++; break; }
+            }
+        }
+        return n;
     }
 
     static string Region(DAZCharacterTextureControl tc, int i)

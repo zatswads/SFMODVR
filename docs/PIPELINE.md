@@ -14,8 +14,8 @@ transfer the **shape** and **skin textures** of a VaM character onto her:
 2. **VaM side** (written, compile-checked against VaM's Assembly-CSharp, not yet run): `tools/vam/SfExport.cs`, a
    VaM plugin on the Person atom. "Export character for SF" writes to `VaM\Saves\PluginData\SfExport\<atom>-<time>\`:
    `body.obj` (Genesis 2 mesh, every morph applied, unposed rest frame, UV vertices + UVs, a group per material,
-   from VaM's own morph snapshot `DAZCharacterRun.doSnap`), `body_posed.obj` (as posed now), `joints.txt` (DAZ bones:
-   morphed rest position = same frame as body.obj, and posed position), `materials.txt` + `tex_*.png` (the textures
+   from VaM's own morph snapshot `DAZCharacterRun.doSnap`; the status line reports stretched faces, 0 expected),
+   `joints.txt` (DAZ bones: morphed rest position = same frame as body.obj, and posed position), `materials.txt` + `tex_*.png` (the textures
    VaM renders with, per material slot), `urls.txt` (the appearance's original texture files), `thumb.jpg`, `info.txt`.
 
    Running it (first character: MonsterShinkai.Callie.2 with `Custom\Atom\Person\Appearance\Preset_callie.vap`):
