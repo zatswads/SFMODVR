@@ -897,6 +897,17 @@ namespace SfMorph
         static readonly List<Mirror> _mirrors = new List<Mirror>();
         static readonly List<KeyValuePair<IList, object>> _adds = new List<KeyValuePair<IList, object>>();
         static readonly List<IList> _dbLists = new List<IList>();   // the m_Colliders lists of the chosen breast DynamicBones (read again every 10 s)
+        static readonly List<Component> _dbComps = new List<Component>();   // 0.8.0: those DynamicBones themselves (Ripple's breast pulse)
+
+        // 0.8.0: the breast DynamicBones AttachToGameBreasts chose (main chains in mode 1), refreshed with it every 10 s; empty while
+        // the breast colliders are off. Root names start with Left_/Right_ (her side). DynamicBoneType: the game's DynamicBone type (null if absent).
+        public static void BreastDbs(List<Component> into)
+        {
+            into.Clear();
+            for (int i = 0; i < _dbComps.Count; i++) if (_dbComps[i] != null) into.Add(_dbComps[i]);
+        }
+        public static Type DynamicBoneType { get { Types(); return _db; } }
+        public static Transform DynamicBoneRoot(Component db) { return db != null && _fRoot != null ? _fRoot.GetValue(db) as Transform : null; }
         static readonly List<string> _namesIn = new List<string>(), _namesOut = new List<string>();
         static int _attVersion = -1, _attMode = -1;
         static Transform _attHer;
@@ -942,7 +953,7 @@ namespace SfMorph
                     var root = _fRoot.GetValue(o) as Transform;
                     if (root != null && root.IsChildOf(her) && Body.Norm(root.name).Contains("upperbreast")) { anyMain = true; break; }
                 }
-            _dbLists.Clear(); _namesIn.Clear(); _namesOut.Clear();
+            _dbLists.Clear(); _dbComps.Clear(); _namesIn.Clear(); _namesOut.Clear();
             int added = 0;
             foreach (var o in objs)
             {
@@ -957,6 +968,7 @@ namespace SfMorph
                 var list = _fColliders.GetValue(db) as IList;
                 if (list == null) { list = (IList)Activator.CreateInstance(_fColliders.FieldType); _fColliders.SetValue(db, list); }
                 _dbLists.Add(list);
+                _dbComps.Add(db);
                 foreach (var m in _mirrors)
                     if (m.Attached && m.Col != null && !list.Contains(m.Col)) { list.Add(m.Col); _adds.Add(new KeyValuePair<IList, object>(list, m.Col)); added++; }
             }
@@ -1006,7 +1018,7 @@ namespace SfMorph
                 try { if (kv.Key != null) kv.Key.Remove(kv.Value); } catch (Exception) { }
             }
             _adds.Clear();
-            _dbLists.Clear();
+            _dbLists.Clear(); _dbComps.Clear();
             foreach (var m in _mirrors) if (m.Go != null) UnityEngine.Object.Destroy(m.Go);
             _mirrors.Clear();
             _attVersion = -1;

@@ -469,6 +469,10 @@ namespace SfMorph
         public readonly Reactions React = new Reactions();   // 0.7.9: her reactions to touch (the Reactions tab reads its status)
         readonly ReactionSettings _rs = new ReactionSettings();
         public GpuContact Gpu;              // null until loaded (the shader bundle next to the DLL)
+        // 0.8.0 contact visuals v2: settings for GpuContact/BendPose/Ripple/SkinMarks (filled from [Physics] each frame), the skin marks
+        public readonly ContactSettings Contact = new ContactSettings();
+        public readonly SkinMarks Marks = new SkinMarks();
+        bool _marksOn, _rippleOn;
         bool _gpuTried, _gpuOn;
         public string GpuStatus { get { return Gpu != null ? Gpu.Status : _gpuTried ? (GpuContact.LastStatus.Length > 0 ? GpuContact.LastStatus : "GPU contact: off: shader bundle not loaded (see the log)") : ""; } }
         // 0.7.4 procedural skin wrinkles: loaded once from the DLL's folder when switched on; independent of the Physics toggle.
@@ -496,6 +500,8 @@ namespace SfMorph
             bool embody = _p.EmbodyOn.Value && her != null;
             bool physHands = _p.HandsOn.Value && her != null;
             VrHands.GateHidden = _p.GateHidden.Value; VrHands.BreastColliders = _p.BreastColliders.Value;
+            FillContact();
+            SoftZones.PartnerBody = Contact.PartnerBody;
             // Physics just went off: take our colliders out of the game's breast DynamicBones now, not at the next 2 s refresh
             // (and when nothing else needs the hands, the refresh below never runs again)
             if (_physicsWas && !physics)
@@ -603,7 +609,9 @@ namespace SfMorph
                     try
                     {
                         c.Soft.Simulate(Time.deltaTime, Contacts(), _p.Softness.Value, _p.Springiness.Value, _p.ShowSoftPoints.Value, quality, _p.Gravity.Value);
+                        RippleStep(c);
                         GpuStep(c);
+                        MarksStep(c);
                         VrHands.MirrorLive();
                     }
                     catch (Exception e)
@@ -618,6 +626,8 @@ namespace SfMorph
             if ((her == null || !(_p.ReactOn.Value || _p.VoiceGuard.Value)) && _reactOn) { _reactOn = false; try { React.Release(); } catch { } }
             if ((her == null || !_p.Apply.Value) && _overlapOn) { _overlapOn = false; try { Overlap.Release(); } catch { } }
             if ((!physics || her == null) && _gpuOn) { _gpuOn = false; try { if (Gpu != null) Gpu.Release(); } catch { } Gpu = null; _gpuTried = false; }
+            if (Gpu == null && _marksOn) MarksOff();
+            if ((!physics || her == null) && _rippleOn) RippleOff();
             // off, or she's gone (scene change): give the controllers, layers and her capsules back
             if (!physHands && _physHandsOn) { _physHandsOn = false; try { PhysicsHands.Release(); } catch { } }
             // her segments are needed by Physics or the physics hands; with neither (or without her) they go
@@ -661,8 +671,8 @@ namespace SfMorph
             _gpuOn = true;
             try
             {
-                Gpu.Sync(her.Soft);
-                Gpu.SetCapsules(Contacts(), Mathf.Lerp(0.02f, 0.045f, _p.Softness.Value), 0.003f);
+                Gpu.Sync(her.Soft, her);
+                Gpu.SetCapsules(Contacts(), Mathf.Lerp(0.02f, 0.045f, _p.Softness.Value), 0.003f, Contact);
             }
             catch (Exception e)
             {
@@ -672,6 +682,47 @@ namespace SfMorph
                 Gpu = null; _gpuOn = false;
             }
         }
+
+        void FillContact()
+        {
+            var s = Contact;
+            s.Softness = _p.Softness.Value;
+            s.Skirt = _p.ContactSkirt.Value; s.Bulge = _p.ContactBulge.Value; s.Normals = _p.ContactNormals.Value; s.Depth = _p.ContactDepth.Value;
+            s.SelfContact = _p.SelfContact.Value; s.PartnerBody = _p.PartnerBody.Value;
+            s.BendAmount = _p.BendBulge.Value; s.BicepsMm = _p.BendBicepsMm.Value; s.KneeMm = _p.BendKneeMm.Value; s.CalfMm = _p.BendCalfMm.Value;
+            s.HipMm = _p.BendHipMm.Value; s.BellyFoldMm = _p.BendBellyFoldMm.Value;
+            s.Ripple = _p.RippleAmount.Value; s.RippleSpeed = _p.RippleSpeed.Value; s.RippleWavelength = _p.RippleWavelength.Value; s.RippleDamping = _p.RippleDamping.Value;
+            s.Marks = _p.SkinMarksOn.Value; s.Redness = _p.MarksRedness.Value; s.MarkFade = _p.MarksFade.Value; s.Ao = _p.MarksAo.Value;
+        }
+
+        // 0.8.0: impacts of this frame's Simulate -> ripple waves (GpuContact draws them) and the breast pulse.
+        void RippleStep(Character her)
+        {
+            try { Ripple.Update(her, her.Soft, Contact, Time.time); _rippleOn = true; }
+            catch (Exception e)
+            {
+                Plugin.Log.LogError("Ripple failed, turned off: " + e);
+                _p.RippleAmount.Value = 0f;
+                RippleOff();
+            }
+        }
+
+        void RippleOff() { _rippleOn = false; try { Ripple.Release(); } catch { } }
+
+        // 0.8.0: hand prints and slap redness on her skin textures (needs GPU contact's per-vertex marks).
+        void MarksStep(Character her)
+        {
+            if (Gpu == null) { if (_marksOn) MarksOff(); return; }
+            try { Marks.Update(her, Contact, Gpu, Time.time); _marksOn = true; }
+            catch (Exception e)
+            {
+                Plugin.Log.LogError("Skin marks failed, turned off: " + e);
+                _p.SkinMarksOn.Value = false;
+                MarksOff();
+            }
+        }
+
+        void MarksOff() { _marksOn = false; try { Marks.Release(); } catch { } }
 
         // Procedural skin wrinkles: its own toggle (not the Physics one); the system does its per-frame work in its own render hooks,
         // this feeds it the settings and the character every frame.
@@ -902,6 +953,8 @@ namespace SfMorph
             _reactOn = false;
             try { if (Gpu != null) Gpu.Release(); } catch { }
             Gpu = null; _gpuOn = false; _gpuTried = false;
+            MarksOff(); RippleOff();
+            try { BendPose.Release(); } catch { }
             WrinkleOff();
             try { PhysicsHands.Release(); } catch { }
             try { HerBody.Release(); } catch { }

@@ -27,6 +27,10 @@ namespace SfMorph
         // 0.7.4: raised once per frame right after the frame guard, before Imprint writes the skinned buffers (wrinkle strain
         // must read the clean skinning result).
         public static event System.Action<int> BeforeImprint;
+        // 0.8.0: raised once per frame at the end of Run, after every renderer's chain (SkinMarks rasterises the marks from it).
+        public static event System.Action<int> AfterImprint;
+        // 0.8.0: bumped whenever a renderer's bake (and so its Canon/Marks buffers) is made or dropped: SkinMarks rebuilds its views on a change.
+        public int BakeVersion;
 
         [StructLayout(LayoutKind.Sequential)]
         struct CapData { public Vector4 A, B; }   // a.xyz + radius, b.xyz  (stride 32, mirrors the compute shader's Capsule)
@@ -78,6 +82,7 @@ namespace SfMorph
         Vector3[] _dv;                        // blendshape delta scratch for the calibration's CPU skin
         bool _inLoop;
         float _limit = 0.02f, _margin = 0.003f;
+        ContactSettings _set = new ContactSettings();
         readonly List<RendState> _rs = new List<RendState>();
         SoftZones _z;
         int _syncVersion = int.MinValue;
@@ -133,7 +138,7 @@ namespace SfMorph
 
         // ---- sync with the soft zones' build ----
 
-        public void Sync(SoftZones z)
+        public void Sync(SoftZones z, Character her)
         {
             try
             {
@@ -248,12 +253,14 @@ namespace SfMorph
         // ---- per frame inputs ----
 
         // Stores the caller's list; the world-space conversion and the upload happen inside the dispatch (the hook / loop step).
-        public void SetCapsules(List<SoftCapsule> caps, float limit, float margin)
+        // limit: v1's deepest press (m); v2 takes its caps from the bake and s (design 1.3).
+        public void SetCapsules(List<SoftCapsule> caps, float limit, float margin, ContactSettings s)
         {
             try
             {
                 if (_dead) { Teardown(); return; }
                 _limit = limit; _margin = margin;
+                _set = s;
                 _capList = caps;
                 _capFrame = Time.frameCount;
                 if (!_evSeen && !_evWarned && _rs.Count > 0 && ++_waitFrames > 600)
@@ -339,12 +346,34 @@ namespace SfMorph
             }
         }
 
+        // 0.8.0 (SkinMarks): her renderers whose v2 bake is live, and per renderer its bake, welded-id buffer (uint per vertex) and per-vertex
+        // marks buffer (float4 per vertex, indexed by canonical id: x redness, y live pressure, z lingering dent m). False when r has no v2 state.
+        public void MarkRenderers(List<SkinnedMeshRenderer> into)
+        {
+            into.Clear();
+        }
+
+        public bool MarksOf(SkinnedMeshRenderer r, out ContactBake bake, out GraphicsBuffer canon, out GraphicsBuffer marks)
+        {
+            bake = null; canon = null; marks = null;
+            return false;
+        }
+
         // The dispatch itself; called by the loop step and by the SRP hook, whichever comes first in a frame wins (shared frame guard).
         void Run()
         {
+            int frame = Time.frameCount;
+            if (frame == _lastFrame) return;   // Imprint is not idempotent: the first caller of the frame wins
+            RunChains(frame);
+            var after = AfterImprint;
+            if (after != null)
+                try { after(frame); }
+                catch (Exception e) { Plugin.Log.LogWarning("GPU contact: AfterImprint handler failed: " + e.Message); }
+        }
+
+        void RunChains(int frame)
+        {
             {
-                int frame = Time.frameCount;
-                if (frame == _lastFrame) return;   // Imprint is not idempotent
                 _lastFrame = frame;
                 _evSeen = true;
                 // before anything of ours writes the skinned buffers: the wrinkle strain must read the clean skinning result

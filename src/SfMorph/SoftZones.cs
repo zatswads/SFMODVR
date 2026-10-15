@@ -26,6 +26,18 @@ namespace SfMorph
     // morph swaps a mesh; everything (bones, meshes, weights, bind poses, the game's DynamicBone lists) is given back
     // on release. Helper bones are ours only: Body's trackers never write them. The contact capsules come from
     // VrHands; this file builds, SoftSim.cs simulates.
+    // 0.8.0: a fresh fast contact on a soft zone (SoftSim -> SoftZones.Impacts -> Ripple.Collect). P = contact point on the skin (world),
+    // Dir = the capsule's motion direction into her (unit, world), Speed = approach speed along the skin's inward normal (m/s),
+    // Bone = the helper's bone (the wave follows it), Zone = zone index (SoftZones.ZoneId), SrcId = CapSource.Id (0 none), By = source name.
+    internal struct SoftImpact
+    {
+        public Vector3 P, Dir;
+        public float Speed;
+        public Transform Bone;
+        public int Zone, SrcId;
+        public string By;
+    }
+
     internal partial class SoftZones
     {
         const BindingFlags Any = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -195,6 +207,7 @@ namespace SfMorph
             public Mesh Orig;          // OwnMesh: the game's mesh behind our readable (subdivided) clone Mesh
             public bool OwnMesh;       // Mesh is our own clone made for the subdivision (destroyed in Teardown)
             public float[] Mask;       // 0.7.3: per vertex of Mesh, 0..1 share of the zones (GPU contact deformer); null when not augmented
+            public float[] Zone;       // 0.8.0: Mask before the hard-skin floor (the zones' own share only; ContactBake's soft cap)
         }
 
         class Pt   // a spring point on the skin
@@ -265,6 +278,25 @@ namespace SfMorph
 
         // True while any point of a zone whose Id starts with the prefix (e.g. "thighOut_L", "glute", "thigh") is touched by anything.
         // Per frame state from the last Simulate; allocation-free.
+        // 0.8.0: like MaskFor, but without the 0.7.7 hard-skin floor: 0 outside the zones (GpuContact v2 caps bony skin by bone class instead).
+        public float[] ZoneFor(SkinnedMeshRenderer r)
+        {
+            Rs rs;
+            if (r == null || !_rs.TryGetValue(r, out rs) || !rs.Used || rs.Zone == null || r.sharedMesh != rs.Mesh) return null;
+            return rs.Zone;
+        }
+
+        // 0.8.0: Body sets this every frame from [Physics] PartnerBody: off = the "partnerBody" capsules (his pelvis, thighs) touch nothing.
+        public static bool PartnerBody = true;
+
+        // 0.8.0: fresh fast contacts of the last Simulate (SoftSim's contact loop writes them, Ripple.Collect reads them after Simulate).
+        // At most Impacts.Length per frame (the fastest kept); ImpactCount is reset at the start of every Simulate.
+        public readonly SoftImpact[] Impacts = new SoftImpact[4];
+        public int ImpactCount;
+
+        // The zone id of a zone index (Impact.Zone), "" when out of range.
+        public static string ZoneId(int zone) { return zone >= 0 && zone < Zones.Length ? Zones[zone].Id : ""; }
+
         public bool Touching(string zoneIdPrefix)
         {
             if (_zCnt == null || string.IsNullOrEmpty(zoneIdPrefix)) return false;
@@ -753,6 +785,7 @@ namespace SfMorph
                     // (zones keep their larger share). GPU only (MaskFor): the soft points (SoftSim) are built from s.F, not from this array.
                     // Body meshes only (0.7.8): thin parts like the nipple caps would be pushed through at their rim. s.Skin is the "body" test on the
                     // mesh name as Read saw it; MorphState's and our own clones keep the game's name plus a suffix, so it holds with a character on.
+                    s.S.Zone = (float[])mask.Clone();   // 0.8.0: the share before the floor (ZoneFor)
                     if (s.Skin)
                         for (int j = 0; j < mask.Length; j++) if (mask[j] < HardFloor) mask[j] = HardFloor;
                     if (s.S.Mesh != null && s.S.Mesh.vertexCount == mask.Length) { s.S.Mask = mask; GpuRenderers.Add(s.R); }
@@ -1043,6 +1076,7 @@ namespace SfMorph
             {
                 var r = kv.Key; var rs = kv.Value;
                 rs.Mask = null;
+                rs.Zone = null;
                 try
                 {
                 if (rs.Used && r != null) r.bones = rs.Bones;

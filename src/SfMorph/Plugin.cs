@@ -38,6 +38,10 @@ namespace SfMorph
         internal ConfigEntry<bool> ReactOn, ReactVoice, ReactFace, ReactFlinch, ReactSound, ReactBlush, ReactBlushBody, ReactGaze, ReactFeedDesire, ReactAuto, ReactClimax, VoiceGuard;
         internal ConfigEntry<float> ReactSensitivity, ReactCooldown, ReactVolume, ReactBlushGain, ReactVoicePitchVar;
         internal ConfigEntry<int> ReactVoiceMode, ReactLog;
+        // 0.8.0 contact visuals v2 (GPU contact: dent edge, rim bulge, bent normals, self-contact, partner body, bend bulges, ripple, skin marks)
+        internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn;
+        internal ConfigEntry<float> ContactSkirt, ContactBulge, ContactDepth, BendBulge, BendBicepsMm, BendKneeMm, BendCalfMm, BendHipMm, BendBellyFoldMm,
+            RippleAmount, RippleSpeed, RippleWavelength, RippleDamping, MarksRedness, MarksFade, MarksAo;
         internal ConfigEntry<Vector3> LeftHandPos, LeftHandRot, RightHandPos, RightHandRot;
         internal ConfigEntry<string> PanelRect;
         internal ConfigEntry<int> Tab;
@@ -62,6 +66,26 @@ namespace SfMorph
             OverlapSpine = Config.Bind("Motion", "Spine", 1f, new ConfigDescription("Overlap amount on the spine.", new AcceptableValueRange<float>(0f, 1f)));
             Gravity = Config.Bind("Physics", "Gravity", 0.5f, new ConfigDescription("Soft zones settle toward the floor as she moves (breasts most, thighs least): they hang when she stands, flatten on her back, drop when she bends over. 0 off.", new AcceptableValueRange<float>(0f, 1f)));
             GpuContactOn = Config.Bind("Physics", "GpuContact", true, "Per-vertex contact on the GPU (shader bundle sfmorph_shaders next to the DLL): her skin is pressed exactly around hands and fingers.");
+            ContactSkirt = Config.Bind("Physics", "ContactSkirt", 0.015f, new ConfigDescription("GPU contact: how far around a hand the skin still follows the dent (metres; 0.005 = the old hard edge).", new AcceptableValueRange<float>(0.005f, 0.04f)));
+            ContactBulge = Config.Bind("Physics", "ContactBulge", 0.6f, new ConfigDescription("GPU contact: how much the pressed skin bulges up around the dent (0 none).", new AcceptableValueRange<float>(0f, 1f)));
+            ContactNormals = Config.Bind("Physics", "ContactNormals", true, "GPU contact: the skin's shading follows the dent (bent normals), so a press reads as pressed flesh.");
+            ContactDepth = Config.Bind("Physics", "ContactDepth", 1f, new ConfigDescription("GPU contact: depth scale of the per-vertex dent on soft parts (1 = 1-2.5 cm by Softness; bony parts stay at 2-8 mm).", new AcceptableValueRange<float>(0.3f, 2f)));
+            SelfContact = Config.Bind("Physics", "SelfContact", true, "Her own limbs press her skin: thighs together, calf on thigh when kneeling, arm on breast and side.");
+            PartnerBody = Config.Bind("Physics", "PartnerBody", true, "The partner's pelvis and thighs press her skin too (not only his hands).");
+            BendBulge = Config.Bind("Physics", "BendBulge", 0.6f, new ConfigDescription("Muscles and flesh bulge when joints bend: biceps with the elbow, thigh and calf with the knee, thigh tops and a belly fold when sitting (0 off).", new AcceptableValueRange<float>(0f, 1f)));
+            BendBicepsMm = Config.Bind("Physics", "BendBicepsMm", 8f, new ConfigDescription("Biceps bulge at a fully bent elbow (mm, before BendBulge).", new AcceptableValueRange<float>(0f, 20f)));
+            BendKneeMm = Config.Bind("Physics", "BendKneeMm", 8f, new ConfigDescription("Back-of-thigh bulge at a fully bent knee (mm).", new AcceptableValueRange<float>(0f, 20f)));
+            BendCalfMm = Config.Bind("Physics", "BendCalfMm", 6f, new ConfigDescription("Calf bulge at a fully bent knee (mm).", new AcceptableValueRange<float>(0f, 20f)));
+            BendHipMm = Config.Bind("Physics", "BendHipMm", 5f, new ConfigDescription("Thigh-top bulge when the hip flexes (sitting, mm).", new AcceptableValueRange<float>(0f, 20f)));
+            BendBellyFoldMm = Config.Bind("Physics", "BendBellyFoldMm", 5f, new ConfigDescription("Lower-belly fold when both hips flex (mm).", new AcceptableValueRange<float>(0f, 20f)));
+            RippleAmount = Config.Bind("Physics", "Ripple", 0.6f, new ConfigDescription("An impact (a slap, a thrust against her glutes or thighs) sends a ripple through her flesh (0 off).", new AcceptableValueRange<float>(0f, 1f)));
+            RippleSpeed = Config.Bind("Physics", "RippleSpeed", 1f, new ConfigDescription("How fast the ripple travels (m/s).", new AcceptableValueRange<float>(0.3f, 3f)));
+            RippleWavelength = Config.Bind("Physics", "RippleWavelength", 0.07f, new ConfigDescription("Distance between ripple crests (m).", new AcceptableValueRange<float>(0.03f, 0.15f)));
+            RippleDamping = Config.Bind("Physics", "RippleDamping", 0.3f, new ConfigDescription("Seconds for a ripple to fade to a third.", new AcceptableValueRange<float>(0.1f, 1f)));
+            SkinMarksOn = Config.Bind("Physics", "SkinMarks", true, "A hand pressed on her glutes, thighs, belly or breasts leaves a fading print; slaps leave redness.");
+            MarksRedness = Config.Bind("Physics", "MarksRedness", 0.5f, new ConfigDescription("How red marks get (0 only the pressed shading).", new AcceptableValueRange<float>(0f, 1f)));
+            MarksFade = Config.Bind("Physics", "MarksFade", 15f, new ConfigDescription("Seconds for redness to fade to a third.", new AcceptableValueRange<float>(3f, 60f)));
+            MarksAo = Config.Bind("Physics", "MarksAo", 0.5f, new ConfigDescription("How much a live press darkens the skin (pressed-flesh shading).", new AcceptableValueRange<float>(0f, 1f)));
             GateHidden = Config.Bind("Physics", "GateHidden", true, "Hands that aren't drawn (a hidden partner, controller models replaced by the physics hands) don't touch her.");
             BreastColliders = Config.Bind("Physics", "BreastColliders", 1, new ConfigDescription("Hands push the game's own breast physics: 0 off, 1 the main breast chains, 2 every breast DynamicBone.", new AcceptableValueRange<int>(0, 2)));
             OverlapRipple = Config.Bind("Motion", "Ripple", 0.5f, new ConfigDescription("Motion travels down the chains: a fast turn of the torso swings the head and arms a little later (0 off).", new AcceptableValueRange<float>(0f, 1f)));

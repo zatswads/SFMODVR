@@ -515,6 +515,9 @@ namespace SfMorph
             GUI.enabled = sliderOff == null;
             GUILayout.EndHorizontal();
             if (sliderOff == null && _p.GpuContactOn.Value && _body.GpuStatus.Length > 0) GUILayout.Label(_body.GpuStatus, _body.GpuStatus.Contains("off:") ? _off : _hint);
+            GUI.enabled = true;
+            ContactVisualRows(sliderOff);
+            GUI.enabled = sliderOff == null;
             GUILayout.Label("Breast physics colliders (hands push the game's own breast physics)", _hint);
             int bc = GUILayout.Toolbar(Mathf.Clamp(_p.BreastColliders.Value, 0, 2), BreastModes);
             if (sliderOff == null && bc != _p.BreastColliders.Value) _p.BreastColliders.Value = bc;
@@ -530,6 +533,50 @@ namespace SfMorph
             GUILayout.Label("Soft points under her skin (springs, like VaM's soft physics) are pushed by your VR hands, the partner's hands and fingers, " +
                             "her forearms and hands, and her other thigh. Softness: how far the skin gives. Springiness: how much the zones lag " +
                             "and settle as she moves. Works with or without a character shape. Which hands count: VR tab, Contacts.", _hint);
+        }
+
+        // 0.8.0 contact visuals v2: the GPU dent's edge, rim, self-contact, partner body, bend bulges, ripple and skin marks.
+        void ContactVisualRows(string sliderOff)
+        {
+            string gpuOff = sliderOff ?? (!_p.GpuContactOn.Value ? "GPU contact is off" : _body.Gpu == null ? "shader bundle not loaded" : null);
+            string so = gpuOff == null ? null : "off: " + gpuOff;
+            bool en = gpuOff == null;
+            float v = Slider("  Dent edge", _p.ContactSkirt.Value * 1000f, 5f, 40f, "0", 15f, so, " mm") / 1000f;
+            if (Mathf.Abs(v - _p.ContactSkirt.Value) > 0.00001f) _p.ContactSkirt.Value = v;
+            v = Slider("  Rim bulge", _p.ContactBulge.Value * 100f, 0f, 100f, "0", 60f, so, " %") / 100f;
+            if (Mathf.Abs(v - _p.ContactBulge.Value) > 0.0001f) _p.ContactBulge.Value = v;
+            v = Slider("  Dent depth", _p.ContactDepth.Value * 100f, 30f, 200f, "0", 100f, so, " %") / 100f;
+            if (Mathf.Abs(v - _p.ContactDepth.Value) > 0.0001f) _p.ContactDepth.Value = v;
+            GUI.enabled = en;
+            bool nrm = GUILayout.Toggle(_p.ContactNormals.Value, " Shading follows the dent (pressed-flesh lighting)");
+            bool self = GUILayout.Toggle(_p.SelfContact.Value, " Her own limbs press her skin (thighs together, calf on thigh, arm on breast)");
+            bool pb = GUILayout.Toggle(_p.PartnerBody.Value, " The partner's body presses her too (pelvis, thighs)");
+            GUI.enabled = true;
+            if (en && nrm != _p.ContactNormals.Value) _p.ContactNormals.Value = nrm;
+            if (en && self != _p.SelfContact.Value) _p.SelfContact.Value = self;
+            if (en && pb != _p.PartnerBody.Value) _p.PartnerBody.Value = pb;
+            v = Slider("  Bend bulges", _p.BendBulge.Value * 100f, 0f, 100f, "0", 60f, so, " %") / 100f;
+            if (Mathf.Abs(v - _p.BendBulge.Value) > 0.0001f) _p.BendBulge.Value = v;
+            v = Slider("  Ripple on impact", _p.RippleAmount.Value * 100f, 0f, 100f, "0", 60f, so, " %") / 100f;
+            if (Mathf.Abs(v - _p.RippleAmount.Value) > 0.0001f) _p.RippleAmount.Value = v;
+            GUI.enabled = en;
+            bool mk = GUILayout.Toggle(_p.SkinMarksOn.Value, " Marks: hand prints and slap redness");
+            GUI.enabled = true;
+            if (en && mk != _p.SkinMarksOn.Value) _p.SkinMarksOn.Value = mk;
+            string mo = so ?? (_p.SkinMarksOn.Value ? null : "off: marks are off");
+            v = Slider("    fade", _p.MarksFade.Value, 3f, 60f, "0", 15f, mo, " s");
+            if (Mathf.Abs(v - _p.MarksFade.Value) > 0.001f) _p.MarksFade.Value = v;
+            v = Slider("    redness", _p.MarksRedness.Value * 100f, 0f, 100f, "0", 50f, mo, " %") / 100f;
+            if (Mathf.Abs(v - _p.MarksRedness.Value) > 0.0001f) _p.MarksRedness.Value = v;
+            if (en)
+            {
+                if (_body.Marks.Status.Length > 0) GUILayout.Label(_body.Marks.Status, _body.Marks.Status.Contains("off:") ? _off : _hint);
+                if (BendPose.Status.Length > 0) GUILayout.Label(BendPose.Status, _hint);
+                if (Ripple.Status.Length > 0) GUILayout.Label(Ripple.Status, _hint);
+            }
+            GUILayout.Label("Dent edge: how far around a hand the skin follows the dent (5 mm = the old hard edge). Rim bulge: the pressed flesh rises " +
+                            "around it. Bend bulges: biceps, thighs and calves thicken as the joints bend, a fold in the lower belly when she sits. " +
+                            "Ripple: a slap or a thrust sends a wave through her glutes, thighs and breasts.", _hint);
         }
 
         static readonly string[] WrinkleDebugs = { "Off", "Activation", "Axis" };
