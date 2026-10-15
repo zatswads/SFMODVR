@@ -758,7 +758,10 @@ namespace SfMorph
                 s.Strength = _p.WrinkStrength.Value; s.Threshold = _p.WrinkThreshold.Value; s.Debug = _p.WrinkDebug.Value;
                 s.Attack = _p.WrinkAttack.Value; s.Release = _p.WrinkRelease.Value;
                 s.SpacingFace = _p.WrinkSpacingFace.Value; s.SpacingBody = _p.WrinkSpacingBody.Value;
-                s.CullDistance = _p.WrinkCullDistance.Value; s.Resolution = _p.WrinkResolution.Value;
+                // config 0/1/2 -> texture size cap (0 = the skin texture's size, at most 4096); 0.8.1 passed 1/2 through as a 1/2 px cap (64 px textures)
+                int res = _p.WrinkResolution.Value;
+                s.CullDistance = _p.WrinkCullDistance.Value; s.Resolution = res == 1 ? 2048 : res == 2 ? 1024 : 0;
+                s.Cavity = _p.WrinkCavity.Value;
                 s.Recapture = _wrRecapture; _wrRecapture = false;
                 WrinkleBake.SpacingFace = s.SpacingFace; WrinkleBake.SpacingBody = s.SpacingBody;
                 Wrink.Update(her, s);

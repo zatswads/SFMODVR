@@ -9,6 +9,10 @@
 //   Pass 2  debug tint   : activation (or fold orientation) as a colour over the base albedo.
 //   Pass 3  self-test    : _TestMode 0 writes a UV gradient through the same uv -> clip mapping as pass 0/1, _TestMode 1 samples it
 //                          back at a fixed uv into a 1x1 target; the CPU reads that texel to learn whether _FlipY is right.
+//   Pass 4  albedo       : 0.8.4, fullscreen; the sheet's copy of her albedo = base x SkinMarks' marks (_MarksAlbedoOn, same maths as
+//                          SkinMarks.shader pass 1) x crease darkening (_Cavity: the divergence of the slope RT = the curvature of the
+//                          fold height, > 0 in the valleys) [+ the pass 2 debug tint]. Her skin shader's subsurface scattering blurs fine
+//                          normal-map detail out of the diffuse light; a darker crease in the skin colour survives it.
 // Normal encoding: R = x, G = y, B = z (all *0.5+0.5), A = 1 -> HDRP's RGorAG unpack takes x from R when A == 1; decode here
 // accepts R/G or A/G (xy = (R*A, G)*2-1).
 Shader "SfMorph/WrinkleRaster"
@@ -29,6 +33,11 @@ Shader "SfMorph/WrinkleRaster"
         _MarksOn ("Skin marks on", Float) = 0
         _MarksTexel ("Marks texel size", Vector) = (0.000488, 0.000488, 0, 0)
         _MarksScale ("1 / metres per UV", Float) = 1
+        _Cavity ("Crease darkening (0.8.4)", Float) = 0
+        _CavityScale ("Fold spacing / (metres per UV x 2)", Float) = 0
+        _MarksAlbedoOn ("Skin marks in the albedo", Float) = 0
+        _Redness ("Marks redness", Float) = 0.5
+        _Ao ("Marks pressure darkening", Float) = 0.175
     }
     SubShader
     {
@@ -46,6 +55,7 @@ Shader "SfMorph/WrinkleRaster"
         float4 _SlopeTexel;
         float _MarksOn, _MarksScale;
         float4 _MarksTexel;
+        float _Cavity, _CavityScale, _MarksAlbedoOn, _Redness, _Ao;
         Texture2D _Marks; SamplerState sampler_Marks;
         Texture2D _BaseNormal; SamplerState sampler_BaseNormal;
         Texture2D _BaseAlbedo; SamplerState sampler_BaseAlbedo;
@@ -97,7 +107,8 @@ Shader "SfMorph/WrinkleRaster"
         }
 
         // SkinMarks' marks RT (x redness, y pressure, z lingering dent in metres, w coverage), normalised by coverage and dilated like SampleSlope
-        float MarksDent(float2 uv)
+        // result: xyz = marks, w = coverage found (0 = none)
+        float4 SampleMarks(float2 uv)
         {
             float4 c = _Marks.SampleLevel(sampler_Marks, uv, 0);
             if (c.w < 0.999)
@@ -111,8 +122,11 @@ Shader "SfMorph/WrinkleRaster"
                     }
                 }
             }
-            return c.w < 1e-3 ? 0.0 : c.z / c.w;
+            if (c.w < 1e-3) return float4(0, 0, 0, 0);
+            return float4(c.xyz / c.w, saturate(c.w));
         }
+
+        float MarksDent(float2 uv) { return SampleMarks(uv).z; }
 
         // slope (x along +u, y along +v, metres/metre) of the height -dent; the same scale as SkinMarks.shader pass 2 (DentGain 0.6)
         float2 MarksSlope(float2 uv)
@@ -124,6 +138,28 @@ Shader "SfMorph/WrinkleRaster"
             float sl = length(s);
             if (sl > 1.0) s /= sl;
             return s;
+        }
+
+        float3 Hue(float h)
+        {
+            float3 k = frac(float3(1.0, 2.0 / 3.0, 1.0 / 3.0) + h);
+            return saturate(abs(k * 6.0 - 3.0) - 1.0);
+        }
+
+        // the debug view: activation (mode 1) or fold orientation (mode 2) as a tint over rgb
+        float3 DebugTint(float3 rgb, float2 uv)
+        {
+            float4 s = SampleSlope(uv);
+            float amt = saturate(s.w * 1.5);
+            float3 tint = float3(1.0, 0.05, 0.02);
+            if (_DebugMode > 1.5)
+            {
+                float ang = atan2(s.y, s.x);                                         // fold orientation (slope runs across the folds)
+                if (ang < 0.0) ang += PI;
+                if (ang >= PI) ang -= PI;
+                tint = Hue(ang / PI);
+            }
+            return lerp(rgb, tint, amt * 0.8);
         }
         ENDHLSL
 
@@ -274,26 +310,10 @@ Shader "SfMorph/WrinkleRaster"
             #pragma vertex FullscreenVert
             #pragma fragment frag
 
-            float3 Hue(float h)
-            {
-                float3 k = frac(float3(1.0, 2.0 / 3.0, 1.0 / 3.0) + h);
-                return saturate(abs(k * 6.0 - 3.0) - 1.0);
-            }
-
             float4 frag(FsIn i) : SV_Target
             {
                 float4 a = _BaseAlbedo.Sample(sampler_BaseAlbedo, i.uv);
-                float4 s = SampleSlope(i.uv);
-                float amt = saturate(s.w * 1.5);
-                float3 tint = float3(1.0, 0.05, 0.02);
-                if (_DebugMode > 1.5)
-                {
-                    float ang = atan2(s.y, s.x);                                     // fold orientation (slope runs across the folds)
-                    if (ang < 0.0) ang += PI;
-                    if (ang >= PI) ang -= PI;
-                    tint = Hue(ang / PI);
-                }
-                return float4(lerp(a.rgb, tint, amt * 0.8), a.a);
+                return float4(DebugTint(a.rgb, i.uv), a.a);
             }
             ENDHLSL
         }
@@ -310,6 +330,56 @@ Shader "SfMorph/WrinkleRaster"
             {
                 if (_TestMode < 0.5) return float4(i.uv.x, i.uv.y, 0.0, 1.0);        // mode 0: a UV gradient through the mapping under test
                 return _Test.SampleLevel(sampler_Test, float2(0.5, 0.25), 0);        // mode 1: read it back where v = 0.25
+            }
+            ENDHLSL
+        }
+
+        // ---- pass 4: albedo copy = base x marks x crease darkening (+ debug tint) ----
+        Pass
+        {
+            Name "Albedo"
+            HLSLPROGRAM
+            #pragma vertex FullscreenVert
+            #pragma fragment frag
+
+            // SkinMarks.shader pass 1's tints (keep in sync)
+            static const float3 RedTint = float3(0.95, 0.52, 0.48);
+            static const float3 PaleTint = float3(1.0, 0.93, 0.9);
+            // a crease is a little warmer than plain shade (blood under thin folded skin): blue and green darken a bit more than red
+            static const float3 CreaseTint = float3(0.85, 1.0, 1.05);
+
+            // How deep in a crease uv is, 0..1. div(slope) is the Laplacian of the fold height (the slope RT holds dh/dx along +u and dh/dy
+            // along +v in metres/metre): > 0 in a valley (a crease), < 0 on a ridge's shoulders. Central differences per UV unit;
+            // _CavityScale = spacing / (metres per UV x 2) makes it the profile's own curvature over 2: the bottom of a fully active fold at
+            // Strength 1 is 0.15 x 0.3 x 4 pi^2 x 2 = 3.6 (pass 0's profile and _Amp), so 1 = about 55 % activation and up.
+            float Crease(float2 uv)
+            {
+                float2 tx = float2(_SlopeTexel.x, 0.0), ty = float2(0.0, _SlopeTexel.y);
+                float4 l = SampleSlope(uv - tx), r = SampleSlope(uv + tx), d = SampleSlope(uv - ty), u = SampleSlope(uv + ty);
+                float div = (r.x - l.x) * 0.5 / max(_SlopeTexel.x, 1e-6) + (u.y - d.y) * 0.5 / max(_SlopeTexel.y, 1e-6);
+                // UV island borders: the dilated samples there are not neighbours on her skin; fade out where the raw coverage is partial
+                float cov = min(min(_Slope.SampleLevel(sampler_Slope, uv - tx, 0).z, _Slope.SampleLevel(sampler_Slope, uv + tx, 0).z),
+                                min(_Slope.SampleLevel(sampler_Slope, uv - ty, 0).z, _Slope.SampleLevel(sampler_Slope, uv + ty, 0).z));
+                return saturate(div * _CavityScale) * saturate(cov * 2.0 - 1.0);
+            }
+
+            float4 frag(FsIn i) : SV_Target
+            {
+                float4 a = _BaseAlbedo.Sample(sampler_BaseAlbedo, i.uv);
+                float3 c = a.rgb;
+                if (_MarksAlbedoOn > 0.5)                                            // SkinMarks.shader pass 1, on this copy
+                {
+                    float4 m = SampleMarks(i.uv);
+                    float3 tint = lerp(float3(1, 1, 1), RedTint, saturate(m.x * _Redness));
+                    float shade = 1.0 - _Ao * saturate(m.y);
+                    float pale = saturate(m.z / 0.004);
+                    float3 paleTint = lerp(float3(1, 1, 1), PaleTint, pale) * (1.0 + 0.15 * pale);
+                    c *= tint * shade * paleTint;
+                }
+                if (_Cavity > 0.0 && _CavityScale > 0.0)
+                    c *= saturate(1.0 - _Cavity * Crease(i.uv) * CreaseTint);
+                if (_DebugMode > 0.5) c = DebugTint(c, i.uv);
+                return float4(c, a.a);
             }
             ENDHLSL
         }

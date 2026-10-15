@@ -41,6 +41,21 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.8.4:
+- Wrinkles on her face didn't show in the headset although the Activation debug view was red there: the folds were written only into her
+  skin's normal map, and her skin shader's subsurface scattering blurs fine normal-map detail out of the diffuse light (the face most of
+  all), so only a faint trace in the highlights was left. Now each fold also darkens her skin colour at the bottom of its crease (Crease
+  shade, Wrinkles section, default 0.3; [Wrinkles] Cavity): the crease is found from the curvature of the fold height, so the broad ridges
+  stay her own colour and only the narrow valleys get darker, a little warmer than plain shadow. Colour detail is not blurred by the
+  scattering, so the folds read on her face. Works on the neck and body sheets too.
+- One copy of her skin colour per material: with Body wrinkles on, hand prints and slap redness (Skin marks) are now drawn into the
+  wrinkles' copy instead of a second one of their own (log: "Skin marks: ... albedo via Wrinkles"), so the two never take the slot from
+  each other. The Characters tab skin toggle still works: the slot is handed back to it for its next pass when a skin switches (log:
+  "albedo slot handed back"), then the shade goes on over the character's skin.
+- [Wrinkles] Resolution 1 and 2 made 64-pixel wrinkle textures (the setting's 1/2 was taken as a pixel size): now 2048 and 1024 as described.
+- Install both dist/SfMorph.dll and dist/sfmorph_shaders (new albedo pass; with the old bundle the Crease shade row is greyed and the log
+  says so).
+
 0.8.3:
 - Her arm went "crazy like a Newton's cradle" on the slightest push. The push was a force on springs that were far too light (an
   arm weighed like 1/6 of a real one, under-damped), and it was measured after the limb had already moved: the arm yielded, the
@@ -129,7 +144,7 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
   their own dent: the areola could z-fight or a tattoo float). Her own limbs only cost GPU time while they actually touch her.
 - Wrinkles looked like stretch marks: each fold was a thin crease line on flat skin. Now compressed skin rolls into broad rounded ridges
   between narrow creases. On her face the folds stay subtle: her skin shader's subsurface scattering blurs fine normal-map detail out of
-  the diffuse light (they show mostly in highlights); a darker crease in the skin colour would make them read, planned separately.
+  the diffuse light (they show mostly in highlights); 0.8.4 adds a darker crease in the skin colour.
 - Character shapes with body-slider morphs: the soft zones now take her rest shape from every non-corrective blendshape (the character and
   the body sliders) and rebuild when one of them moves.
 - Install both dist/SfMorph.dll and dist/sfmorph_shaders (the shader bundle has new kernels; with the old bundle the GPU contact stays the

@@ -18,6 +18,7 @@ namespace SfMorph
         public bool Recapture;        // one-shot (panel button)
         public float Attack = 0.12f, Release = 0.3f, SpacingFace = 0.004f, SpacingBody = 0.008f, CullDistance = 3f;
         public int Resolution;        // 0 base size (cap 4096), else 2048/1024
+        public float Cavity = 0.3f;   // 0.8.4: crease darkening in the albedo copy (0 = no albedo copy unless the debug view is on)
     }
 
     // PlayerLoop marker type of the wrinkle step (right after PostLateUpdate.UpdateAllSkinnedMeshes).
@@ -88,6 +89,21 @@ namespace SfMorph
             return false;
         }
 
+        // 0.8.4: true while a built Wrinkles sheet keeps its albedo copy (crease darkening / debug view, with the marks composed in) for this
+        // material, including the few seconds it hands the slot back for Morph's skin toggle. SkinMarks then leaves the albedo slot to it.
+        internal static bool OwnsAlbedoSlot(Material m)
+        {
+            var w = _live;
+            if (w == null || w._dead || !w._active || !w._albedoPass || m == null) return false;
+            var sheets = w._sheets;
+            for (int i = 0; i < sheets.Count; i++)
+            {
+                var sh = sheets[i];
+                if (sh != null && sh.Mat == m && sh.Built && !sh.Skip && sh.Albedo != null) return true;
+            }
+            return false;
+        }
+
         // The self-tested clip-Y sign of the live instance (-1 = D3D until it has settled, or when none runs).
         internal static float FlipY { get { var w = _live; return w != null ? w._flip : -1f; } }
         internal static bool FlipSettled { get { var w = _live; return w != null && w._flipState == 2; } }
@@ -98,8 +114,12 @@ namespace SfMorph
         const int SlopeSize = 2048;
         const int MaxInflight = 6;
         const string BsWhy = "blendshape weights changed";
+        const float CreaseRef = 2f;              // the crease curvature (fold-profile units) that reads as a full crease in the albedo
+        const float HandBack = 2.4f;             // Morph re-applies the character's textures every 2 s
+        const int AlbedoPass = 4;
         static readonly string[] NormalProps = { "_NormalMap", "_BumpMap" };
-        internal static readonly string[] AlbedoProps = { "_ColorMap", "_BaseColorMap", "_BaseMap", "_MainTex", "_AlbedoMap" };
+        // Morph.cs's list (the game's skin is a shader graph: the property is not certain)
+        internal static readonly string[] AlbedoProps = { "_ColorMap", "_BaseColorMap", "_BaseMap", "_MainTex", "_AlbedoMap", "_Albedo", "_DiffuseMap", "_Diffuse" };
 
         static readonly int PVerts = Shader.PropertyToID("_Verts"), PStride = Shader.PropertyToID("_Stride"), PPosOff = Shader.PropertyToID("_PosOff"),
             PTriCount = Shader.PropertyToID("_TriCount"), PVertCount = Shader.PropertyToID("_VertCount"), PDt = Shader.PropertyToID("_Dt"),
@@ -112,7 +132,8 @@ namespace SfMorph
             PBaseAlbedo = Shader.PropertyToID("_BaseAlbedo"), PSlope = Shader.PropertyToID("_Slope"), PTest = Shader.PropertyToID("_Test"),
             PSlopeTexel = Shader.PropertyToID("_SlopeTexel"), PDebugMode = Shader.PropertyToID("_DebugMode"), PInvScale2 = Shader.PropertyToID("_InvScale2"),
             PMarks = Shader.PropertyToID("_Marks"), PMarksOn = Shader.PropertyToID("_MarksOn"), PMarksTexel = Shader.PropertyToID("_MarksTexel"),
-            PMarksScale = Shader.PropertyToID("_MarksScale");
+            PMarksScale = Shader.PropertyToID("_MarksScale"), PCavity = Shader.PropertyToID("_Cavity"), PCavityScale = Shader.PropertyToID("_CavityScale"),
+            PMarksAlbedoOn = Shader.PropertyToID("_MarksAlbedoOn"), PRedness = Shader.PropertyToID("_Redness"), PAo = Shader.PropertyToID("_Ao");
 
         // ---- state ----
 
@@ -138,6 +159,7 @@ namespace SfMorph
             public float ScaleFix = 1f;           // median live/rest vertex distance ratio (1 until measured)
             public bool ScaleChecked;
             public int Inflight;
+            public float Mpu;                     // metres per UV of the baked rest mesh (0 = unknown)
             public GraphicsBuffer Tris, Uv, RestTri, Canon, AdjOff, AdjTri, RestV, StateBuf, TriOut, Counter;
             public long Bytes;
             public MaterialPropertyBlock Mpb;
@@ -159,14 +181,18 @@ namespace SfMorph
             public bool Face, Skip;
             public readonly List<Rend> Rends = new List<Rend>();
             public Texture Base;                  // the normal map under ours (the game's, or Morph's baked one)
-            public Texture AlbedoBase;
+            public Texture AlbedoBase;            // the albedo under our copy (the game's, the character's, or what SkinMarks has under its copy)
+            public Texture AlbedoOrig;            // her own albedo (Morph's saved original when a character skin is on)
             public Texture Orig;                  // her own normal map (what to put back when we leave; never Morph's baked one or ours)
-            public RenderTexture Normal, Debug;
+            public RenderTexture Normal, Albedo;  // Albedo (0.8.4): crease darkening + SkinMarks' marks + the debug tint, in the albedo slot
             public int DebugMode;
-            public bool Built, Dirty, Asleep, Culled, RasterLogged;
+            public bool Built, Dirty, Asleep, Culled, RasterLogged, AlbedoHeld;
             public float LastChange, LastComputeAt, LastTransLog = -100f;
             public int LastRasterFrame = -100;
-            public float StrengthApplied = -1f;
+            public float StrengthApplied = -1f, CavityApplied = -1f;
+            public int SkinSig;                   // Morph's skin state when last checked (a change while our copy is in the slot = Morph skipped it)
+            public Texture Pending;               // a texture someone else put in the albedo slot while a character skin is on: taken once it stays
+            public float PendingSince;
             public int Res;
             public MaterialPropertyBlock Mpb = new MaterialPropertyBlock();
         }
@@ -186,7 +212,7 @@ namespace SfMorph
         readonly HashSet<string> _logged = new HashSet<string>();
         WrinkleSettings _s = new WrinkleSettings();
         Character _her;
-        bool _dead, _active, _bundleHeld, _subscribed, _inLoop, _evSeen, _evWarned, _tornDown, _released;
+        bool _dead, _active, _bundleHeld, _subscribed, _inLoop, _evSeen, _evWarned, _tornDown, _released, _albedoPass;
         int _lastFrame = -1, _waitFrames, _updateCount;
         float _nextDiscover, _recaptureAt, _seenDirtyAt = -1f, _offSince = -1f, _nextCull, _nextStatus, _lastDt;
         bool _recapAll;
@@ -223,6 +249,9 @@ namespace SfMorph
                 if (w._kClear < 0 || w._kStrain < 0 || w._kGather < 0) { Fail("kernel"); w.Teardown(); return null; }
                 if (!w._shader.isSupported) { Fail("WrinkleRaster shader not supported on " + SystemInfo.graphicsDeviceType); w.Teardown(); return null; }
                 w._mat = new Material(w._shader) { hideFlags = HideFlags.HideAndDontSave };
+                // 0.8.4's albedo pass (crease darkening); an older bundle has passes 0-3 only: the debug view still works, no crease shade
+                w._albedoPass = w._mat.passCount > AlbedoPass;
+                if (!w._albedoPass) Plugin.Log.LogWarning("Wrinkles: the shader bundle has no albedo pass (" + w._mat.passCount + " passes): no crease shade; install the sfmorph_shaders that came with this DLL");
                 w._cmd = new CommandBuffer { name = "SfMorph wrinkles" };
                 w._flat = new Texture2D(1, 1, TextureFormat.RGBA32, false, true) { name = "SfMorph flat normal", hideFlags = HideFlags.HideAndDontSave };
                 w._flat.SetPixel(0, 0, new Color(0.5f, 0.5f, 1f, 1f));
@@ -249,8 +278,11 @@ namespace SfMorph
 
         static Wrinkles _live;
 
+        // False when the shader bundle predates 0.8.4 (no crease shade).
+        public bool HasCavity { get { return _albedoPass; } }
+
         // Called by Morph.cs by reflection: the base texture Wrinkles saw under its own texture in this material slot (her own / Morph's
-        // normal map for the normal slot, the albedo for the debug-tinted slot); null when Wrinkles doesn't own the slot or doesn't know.
+        // normal map for the normal slot, her own albedo for the albedo copy's slot); null when Wrinkles doesn't own the slot or doesn't know.
         // Never throws, never returns a texture we own.
         internal static Texture BaseOf(Material m, string prop)
         {
@@ -266,7 +298,7 @@ namespace SfMorph
                         var sh = sheets[i];
                         if (sh == null || sh.Mat != m) continue;
                         if (sh.Built && sh.Prop == prop) return Usable(sh.Orig) ?? Usable(sh.Base);
-                        if (sh.Debug != null && sh.AlbedoProp == prop) return Usable(sh.AlbedoBase);
+                        if (sh.Albedo != null && sh.AlbedoProp == prop) return Usable(sh.AlbedoOrig) ?? Usable(sh.AlbedoBase);
                         break;
                     }
                 }
@@ -558,13 +590,26 @@ namespace SfMorph
             cmd.SetRenderTarget(sh.Normal);
             cmd.DrawProcedural(Matrix4x4.identity, _mat, 1, MeshTopology.Triangles, 3, 1, sh.Mpb);
             cmd.GenerateMips(sh.Normal);
-            if (sh.Debug != null)
+            if (sh.Albedo != null)
             {
                 sh.Mpb.SetTexture(PBaseAlbedo, sh.AlbedoBase != null ? sh.AlbedoBase : (Texture)Texture2D.whiteTexture);
                 _mat.SetFloat(PDebugMode, sh.DebugMode);
-                cmd.SetRenderTarget(sh.Debug);
-                cmd.DrawProcedural(Matrix4x4.identity, _mat, 2, MeshTopology.Triangles, 3, 1, sh.Mpb);
-                cmd.GenerateMips(sh.Debug);
+                if (_albedoPass)
+                {
+                    // 0.8.4: crease darkening, and SkinMarks' albedo marks on this copy (it leaves the slot to us while we hold it)
+                    float cs = CavityScale(sh);
+                    sh.Mpb.SetFloat(PCavity, cs > 0f ? Mathf.Clamp01(_s.Cavity) : 0f);
+                    sh.Mpb.SetFloat(PCavityScale, cs);
+                    float red = 0f, ao = 0f;
+                    bool monA = mrt != null && SkinMarks.AlbedoParams(out red, out ao);
+                    sh.Mpb.SetFloat(PMarksAlbedoOn, monA ? 1f : 0f);
+                    sh.Mpb.SetFloat(PRedness, red);
+                    sh.Mpb.SetFloat(PAo, ao);
+                    if (monA && !mon) { sh.Mpb.SetTexture(PMarks, mrt); sh.Mpb.SetVector(PMarksTexel, new Vector4(1f / mrt.width, 1f / mrt.height, 0f, 0f)); }
+                }
+                cmd.SetRenderTarget(sh.Albedo);
+                cmd.DrawProcedural(Matrix4x4.identity, _mat, _albedoPass ? AlbedoPass : 2, MeshTopology.Triangles, 3, 1, sh.Mpb);
+                cmd.GenerateMips(sh.Albedo);
             }
             Stopwatch sw = null;
             if (!sh.RasterLogged && !initial) sw = Stopwatch.StartNew();
@@ -572,12 +617,45 @@ namespace SfMorph
             sh.Dirty = false;
             sh.LastRasterFrame = frame;
             sh.StrengthApplied = _s.Strength;
+            sh.CavityApplied = _s.Cavity;
             if (sw != null)
             {
                 sw.Stop();
                 sh.RasterLogged = true;
                 Plugin.Log.LogInfo("Wrinkles: first raster of sheet '" + sh.Name + "' (" + sh.Rends.Count + " renderers, submit " + sw.Elapsed.TotalMilliseconds.ToString("0.00") + " ms CPU)");
             }
+        }
+
+        // _CavityScale of a sheet: fold spacing / (metres per UV x CreaseRef), so the shader's divergence per UV becomes the fold profile's own
+        // curvature over CreaseRef. Metres per UV = the vertex-weighted mean of its renderers' bakes; 0 (no crease shade) while unknown.
+        static float CavityScale(Sheet sh)
+        {
+            float w = 0f, m = 0f;
+            for (int i = 0; i < sh.Rends.Count; i++)
+            {
+                var r = sh.Rends[i];
+                if (!r.Ready || !(r.Mpu > 1e-4f)) continue;
+                w += r.V; m += r.V * r.Mpu;
+            }
+            if (!(w > 0f)) return 0f;
+            float spacing = sh.Face ? WrinkleBake.SpacingFace : WrinkleBake.SpacingBody;
+            return spacing / (m / w * CreaseRef);
+        }
+
+        // sqrt(sum of rest triangle areas / sum of UV triangle areas) of a bake (RestTri[4] = rest area in m^2).
+        static float MetresPerUv(BakeResult b)
+        {
+            double a3 = 0.0, auv = 0.0;
+            for (int t = 0; t < b.T; t++)
+            {
+                float a = b.RestTri[t * 20 + 4];
+                if (!(a > 0f)) continue;
+                Vector2 p0 = b.Uv[b.Tris[3 * t]], p1 = b.Uv[b.Tris[3 * t + 1]], p2 = b.Uv[b.Tris[3 * t + 2]];
+                double u = 0.5 * Math.Abs((p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y));
+                if (u < 1e-12) continue;
+                a3 += a; auv += u;
+            }
+            return auv > 1e-9 ? (float)Math.Sqrt(a3 / auv) : 0f;
         }
 
         // ---- _FlipY self-test ----
@@ -724,7 +802,14 @@ namespace SfMorph
             for (int i = 0; i < _sheets.Count; i++) if (_sheets[i].Mat == mat) return _sheets[i];
             var sh = new Sheet { Mat = mat, Name = mat.name.Replace(" (Instance)", "").Trim(), Face = face };
             foreach (var p in NormalProps) if (mat.HasProperty(p)) { sh.Prop = p; break; }
-            foreach (var p in AlbedoProps) if (mat.HasProperty(p)) { sh.AlbedoProp = p; break; }
+            // the albedo: the first of the usual names holding a real texture (ours or SkinMarks' copy count), else the first that exists
+            foreach (var p in AlbedoProps)
+            {
+                if (!mat.HasProperty(p)) continue;
+                if (sh.AlbedoProp == null) sh.AlbedoProp = p;
+                var t = mat.GetTexture(p);
+                if (t != null && t.width >= 8 && t.height >= 8) { sh.AlbedoProp = p; break; }
+            }
             if (sh.Prop == null)
             {
                 sh.Skip = true;
@@ -902,6 +987,7 @@ namespace SfMorph
             r.Mesh = b.Mesh != null ? b.Mesh : r.R.sharedMesh;
             r.V = b.V; r.T = b.T;
             r.BakeMs = sw.Elapsed.TotalMilliseconds;
+            try { r.Mpu = MetresPerUv(b); } catch { r.Mpu = 0f; }
             Upload(r, b);
             if (!r.RawAcquired) { RawTarget.Acquire(r.R); r.RawAcquired = true; }
             r.Layout = 0; r.ScaleChecked = false;
@@ -1057,7 +1143,8 @@ namespace SfMorph
                 if (resize) MakeNormalRT(sh, s);
                 if (slot != sh.Normal) sh.Mat.SetTexture(sh.Prop, sh.Normal);   // self-heal: the game or Morph put its own back
                 if (Mathf.Abs(sh.StrengthApplied - s.Strength) > 0.001f) sh.Dirty = true;
-                ServiceDebug(sh, s);
+                if (sh.Albedo != null && Mathf.Abs(sh.CavityApplied - s.Cavity) > 0.001f) sh.Dirty = true;
+                ServiceAlbedo(sh, her, s, now);
             }
         }
 
@@ -1151,63 +1238,198 @@ namespace SfMorph
             UnityEngine.Object.Destroy(rt);
         }
 
-        // Debug view: the activation (or fold orientation) as a tint over the base albedo, in a debug RT on the albedo slot.
-        void ServiceDebug(Sheet sh, WrinkleSettings s)
+        // 0.8.4: the sheet's albedo copy in the albedo slot while Cavity > 0 or a debug view is on: base x SkinMarks' marks (body sheets) x crease
+        // darkening, + the debug tint. Her skin shader's subsurface scattering blurs the folds' normal-map detail out of the diffuse light; a
+        // darker crease in the skin colour survives it. The base is what the slot held (SkinMarks' copy: what it has under it).
+        // Morph's Characters tab skips a slot holding our texture: when its skin state changes with our copy in the slot, the base goes back for
+        // its next 2 s pass; and while a character skin is on, a texture someone else puts in the slot is taken over only once it has stayed
+        // there HandBack seconds (Morph may be about to replace it).
+        void ServiceAlbedo(Sheet sh, Character her, WrinkleSettings s, float now)
         {
             int mode = sh.AlbedoProp != null ? s.Debug : 0;
-            if (mode == 0)
+            bool cav = sh.AlbedoProp != null && _albedoPass && s.Cavity > 0.001f;
+            if (mode == 0 && !cav)
             {
-                if (sh.Debug != null) RestoreDebug(sh);
+                if (sh.Albedo != null) RestoreAlbedo(sh);
                 return;
             }
-            Texture slot = sh.Mat.GetTexture(sh.AlbedoProp);
-            if (sh.Debug == null)
+            var mat = sh.Mat;
+            Texture slot = mat.GetTexture(sh.AlbedoProp);
+            bool skinOn;
+            int sig = SkinSig(her, mat, out skinOn);
+            if (sh.Albedo == null)
             {
-                sh.AlbedoBase = slot != null && !Owns(slot) ? slot : (slot != null ? ExternalBaseOf(sh.Mat, sh.AlbedoProp) : null);   // SkinMarks' albedo copy: what it has under it
-                int bw = sh.AlbedoBase != null ? sh.AlbedoBase.width : 1024, bh = sh.AlbedoBase != null ? sh.AlbedoBase.height : 1024;
-                int cap = Math.Min(2048, s.Resolution <= 0 ? 2048 : s.Resolution);
-                int mx = Math.Max(bw, bh);
-                if (mx > cap) { float f = (float)cap / mx; bw = Math.Max(64, Mathf.RoundToInt(bw * f)); bh = Math.Max(64, Mathf.RoundToInt(bh * f)); }
-                var rt = new RenderTexture(bw, bh, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB)
+                Texture b = slot != null && !Owns(slot) ? slot : (slot != null ? ExternalBaseOf(mat, sh.AlbedoProp) : null);   // SkinMarks' copy: what it has under it
+                if (b == null && (slot != null || mode == 0))
                 {
-                    name = "SfMorph wrinkles debug " + sh.Name, useMipMap = true, autoGenerateMips = false, filterMode = FilterMode.Trilinear,
-                    wrapMode = TextureWrapMode.Repeat, hideFlags = HideFlags.HideAndDontSave
-                };
-                rt.Create();
-                _owned.Add(rt.GetInstanceID());
-                sh.Debug = rt;
-                sh.Dirty = true;
+                    // a render texture of another system we can't see under, or no texture at all (nothing to shade): leave the slot alone
+                    if (_logged.Add("noalb|" + sh.Name))
+                        Plugin.Log.LogInfo("Wrinkles: sheet '" + sh.Name + "': albedo " + sh.AlbedoProp + (slot != null ? " holds a render texture of another system" : " is empty") + "; no crease shade on it");
+                    return;
+                }
+                sh.AlbedoBase = b;
+                sh.AlbedoOrig = OriginalVia(her != null ? her.Morph : null, mat, sh.AlbedoProp) ?? b;
+                sh.SkinSig = sig;
+                sh.Pending = null;
+                sh.DebugMode = mode;
+                MakeAlbedoRT(sh, s);
+                Raster(sh, Time.frameCount, false);   // filled before it goes into the slot
+                mat.SetTexture(sh.AlbedoProp, sh.Albedo);
+                sh.AlbedoHeld = true;
+                float cs = CavityScale(sh), sp = sh.Face ? WrinkleBake.SpacingFace : WrinkleBake.SpacingBody;
+                Plugin.Log.LogInfo("Wrinkles: sheet '" + sh.Name + "' albedo copy: " + sh.AlbedoProp + " '" + Describe(b) + "' -> RT " + sh.Albedo.width + "x" + sh.Albedo.height
+                    + (cav ? ", crease shade " + s.Cavity.ToString("0.00") + (cs > 0f ? " (folds " + (sp * 1000f).ToString("0.0") + " mm apart, " + (sp / (cs * CreaseRef)).ToString("0.000") + " m per UV)"
+                        : " (metres per UV unknown: no crease shade)") : "")
+                    + (mode != 0 ? ", debug view " + mode : "") + (skinOn ? ", character skin on" : ""));
                 LogMemory();
+                return;
             }
-            else if (slot != sh.Debug && slot != null && !Owns(slot))
+            if (slot == sh.Albedo)
             {
-                sh.AlbedoBase = slot;       // the game or Morph changed the albedo: tint over the new one
-                sh.Dirty = true;
-            }
-            if (sh.DebugMode != mode) { sh.DebugMode = mode; sh.Dirty = true; }
-            if (slot != sh.Debug) sh.Mat.SetTexture(sh.AlbedoProp, sh.Debug);
-        }
-
-        void RestoreDebug(Sheet sh)
-        {
-            if (sh.Debug == null) return;
-            if (sh.Mat != null && sh.AlbedoProp != null)
-            {
-                var cur = sh.Mat.GetTexture(sh.AlbedoProp);
-                if (cur == sh.Debug || Owns(cur))
+                sh.Pending = null;
+                if (sig != sh.SkinSig)
                 {
-                    // never write an owned / destroyed texture back: fall to Morph's original when AlbedoBase is unusable
-                    Texture back = Usable(sh.AlbedoBase) ?? Usable(OriginalVia(_her != null ? _her.Morph : null, sh.Mat, sh.AlbedoProp));
-                    sh.Mat.SetTexture(sh.AlbedoProp, back);
+                    // the Characters tab switched a skin or the character: Morph skipped our slot; give it the base for its next pass
+                    sh.SkinSig = sig;
+                    mat.SetTexture(sh.AlbedoProp, Usable(sh.AlbedoBase) ?? Usable(sh.AlbedoOrig));
+                    sh.AlbedoHeld = false;
+                    sh.Pending = mat.GetTexture(sh.AlbedoProp);
+                    sh.PendingSince = now;
+                    Plugin.Log.LogInfo("Wrinkles: sheet '" + sh.Name + "': skin textures changed; albedo slot handed back for Morph's next pass");
+                    return;
                 }
             }
-            DestroyRT(sh.Debug);
-            sh.Debug = null;
+            else
+            {
+                sh.SkinSig = sig;
+                if (slot != null && Owns(slot))
+                {
+                    // another system's render texture (SkinMarks' copy, before it saw ours): what it has under it is the base
+                    var eb = ExternalBaseOf(mat, sh.AlbedoProp);
+                    if (eb != null && eb != sh.AlbedoBase) { sh.AlbedoBase = eb; sh.Dirty = true; }
+                }
+                else if (slot != null)
+                {
+                    // the game (DefaultSetting) or Morph put a texture in: shade over it; with a character skin on (or the slot handed back)
+                    // only once it has stayed, so Morph's own pass can replace the game's texture first
+                    if (skinOn || !sh.AlbedoHeld)
+                    {
+                        if (slot != sh.Pending) { sh.Pending = slot; sh.PendingSince = now; return; }
+                        if (now - sh.PendingSince < HandBack) return;
+                    }
+                    sh.Pending = null;
+                    if (slot != sh.AlbedoBase)
+                    {
+                        Plugin.Log.LogInfo("Wrinkles: sheet '" + sh.Name + "' albedo base now " + Describe(slot));
+                        sh.AlbedoBase = slot;
+                        sh.Dirty = true;
+                    }
+                    sh.AlbedoOrig = OriginalVia(her != null ? her.Morph : null, mat, sh.AlbedoProp) ?? sh.AlbedoOrig ?? slot;
+                }
+                // empty slot: someone cleared it; ours goes back over the last base
+            }
+            if (AlbedoSize(sh.AlbedoBase, s) != sh.Albedo.width * 65536 + sh.Albedo.height) MakeAlbedoRT(sh, s);   // a bigger character skin, a Resolution change
+            if (sh.DebugMode != mode) { sh.DebugMode = mode; sh.Dirty = true; }
+            if (slot != sh.Albedo)
+            {
+                if (sh.Dirty) Raster(sh, Time.frameCount, false);
+                mat.SetTexture(sh.AlbedoProp, sh.Albedo);
+                sh.AlbedoHeld = true;
+            }
+        }
+
+        // Albedo copy size: the base's size capped by Resolution (0 = 4096; the copy replaces her skin colour, so no 2048 body cap).
+        static int AlbedoSize(Texture b, WrinkleSettings s)
+        {
+            int bw = b != null ? b.width : 1024, bh = b != null ? b.height : 1024;
+            int cap = s.Resolution <= 0 ? 4096 : s.Resolution;
+            int mx = Math.Max(bw, bh);
+            if (mx > cap) { float f = (float)cap / mx; bw = Math.Max(64, Mathf.RoundToInt(bw * f)); bh = Math.Max(64, Mathf.RoundToInt(bh * f)); }
+            return Math.Max(64, bw) * 65536 + Math.Max(64, bh);
+        }
+
+        void MakeAlbedoRT(Sheet sh, WrinkleSettings s)
+        {
+            int packed = AlbedoSize(sh.AlbedoBase, s);
+            int w = packed / 65536, h = packed % 65536;
+            var old = sh.Albedo;
+            var rt = new RenderTexture(w, h, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB)
+            {
+                name = "SfMorph wrinkles albedo " + sh.Name, useMipMap = true, autoGenerateMips = false, filterMode = FilterMode.Trilinear,
+                wrapMode = TextureWrapMode.Repeat, anisoLevel = sh.AlbedoBase != null ? Math.Max(1, sh.AlbedoBase.anisoLevel) : 4, hideFlags = HideFlags.HideAndDontSave
+            };
+            rt.Create();
+            _owned.Add(rt.GetInstanceID());
+            sh.Albedo = rt;
+            sh.Dirty = true;
+            if (old != null)
+            {
+                Raster(sh, Time.frameCount, false);
+                if (sh.Mat != null && sh.AlbedoProp != null && sh.Mat.GetTexture(sh.AlbedoProp) == old) sh.Mat.SetTexture(sh.AlbedoProp, rt);
+                DestroyRT(old);
+                Plugin.Log.LogInfo("Wrinkles: sheet '" + sh.Name + "' albedo copy now " + w + "x" + h);
+                LogMemory();
+            }
+        }
+
+        void RestoreAlbedo(Sheet sh)
+        {
+            if (sh.Albedo == null) return;
+            if (sh.Mat != null && sh.AlbedoProp != null && sh.Mat.GetTexture(sh.AlbedoProp) == sh.Albedo)
+            {
+                // never write an owned / destroyed texture back: fall to Morph's original when AlbedoBase is unusable
+                Texture back = Usable(sh.AlbedoBase) ?? Usable(OriginalVia(_her != null ? _her.Morph : null, sh.Mat, sh.AlbedoProp)) ?? Usable(sh.AlbedoOrig);
+                sh.Mat.SetTexture(sh.AlbedoProp, back);
+            }
+            DestroyRT(sh.Albedo);
+            sh.Albedo = null;
             sh.AlbedoBase = null;
+            sh.AlbedoOrig = null;
+            sh.AlbedoHeld = false;
+            sh.Pending = null;
             sh.DebugMode = 0;
             sh.Dirty = true;
             LogMemory();
         }
+
+        // Morph's skin state as a number (which skins are on, for which character; 0 = no character skin): its _texOn / _texKey / _set fields
+        // by reflection (Morph.cs has no accessor for them), else the baked normal it reports for this material.
+        int SkinSig(Character her, Material mat, out bool skinOn)
+        {
+            skinOn = false;
+            var morph = her != null ? her.Morph : null;
+            if (morph == null) return 0;
+            try
+            {
+                var t = morph.GetType();
+                if (t != _skType)
+                {
+                    _skType = t;
+                    const BindingFlags F = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                    _skOn = t.GetField("_texOn", F); _skKey = t.GetField("_texKey", F); _skSet = t.GetField("_set", F);
+                    if (_skOn != null && _skOn.FieldType != typeof(bool)) _skOn = null;
+                    if (_skKey != null && _skKey.FieldType != typeof(int)) _skKey = null;
+                    Plugin.Log.LogInfo("Wrinkles: Morph's skin state " + (_skOn != null && _skKey != null ? "found" : "not found (watching its baked normal maps instead)"));
+                }
+                if (_skOn != null && _skKey != null)
+                {
+                    skinOn = (bool)_skOn.GetValue(morph);
+                    if (!skinOn) return 0;
+                    object set = _skSet != null ? _skSet.GetValue(morph) : null;
+                    return ((int)_skKey.GetValue(morph) * 397) ^ (set != null ? System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(set) : 0) | 1;
+                }
+            }
+            catch (Exception e)
+            {
+                _skOn = null; _skKey = null;
+                Plugin.Log.LogWarning("Wrinkles: reading Morph's skin state failed (" + e.Message + "); watching its baked normal maps instead");
+            }
+            var nf = NormalFor(her, mat);
+            skinOn = nf != null;
+            return nf != null ? nf.GetInstanceID() | 1 : 0;
+        }
+        Type _skType;
+        FieldInfo _skOn, _skKey, _skSet;
 
         // t if it is a live texture that isn't one of ours, else null.
         static Texture Usable(Texture t) { return t != null && !Owns(t) ? t : null; }
@@ -1331,12 +1553,12 @@ namespace SfMorph
             {
                 var sh = _sheets[i];
                 if (sh.Normal != null) rts += (long)sh.Normal.width * sh.Normal.height * 4 * 4 / 3;
-                if (sh.Debug != null) dbg += (long)sh.Debug.width * sh.Debug.height * 4 * 4 / 3;
+                if (sh.Albedo != null) dbg += (long)sh.Albedo.width * sh.Albedo.height * 4 * 4 / 3;
             }
             long tot = buf + slope + rts + dbg;
             if (tot == _lastMemLog) return;
             _lastMemLog = tot;
-            Plugin.Log.LogInfo("Wrinkles: memory: buffers " + MB(buf) + " MB, slope RT " + MB(slope) + " MB, normal RTs " + MB(rts) + " MB" + (dbg > 0 ? ", debug RTs " + MB(dbg) + " MB" : "") + ", total " + MB(tot) + " MB");
+            Plugin.Log.LogInfo("Wrinkles: memory: buffers " + MB(buf) + " MB, slope RT " + MB(slope) + " MB, normal RTs " + MB(rts) + " MB" + (dbg > 0 ? ", albedo RTs " + MB(dbg) + " MB" : "") + ", total " + MB(tot) + " MB");
         }
 
         static string MB(long b) { return (b / 1048576.0).ToString("0.0"); }
@@ -1367,7 +1589,7 @@ namespace SfMorph
                         sh.Mat.SetTexture(sh.Prop, back);
                     }
                 }
-                RestoreDebug(sh);
+                RestoreAlbedo(sh);
             }
             catch (Exception e) { Plugin.Log.LogWarning("Wrinkles: restoring '" + sh.Name + "' failed: " + e.Message); }
             DestroyRT(sh.Normal);

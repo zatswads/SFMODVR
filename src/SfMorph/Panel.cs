@@ -687,6 +687,9 @@ namespace SfMorph
             if (Mathf.Abs(st - _p.WrinkStrength.Value) > 0.0001f) _p.WrinkStrength.Value = st;
             float th = Slider("Threshold", _p.WrinkThreshold.Value, 0.01f, 0.06f, "0.000", 0.025f, why);
             if (Mathf.Abs(th - _p.WrinkThreshold.Value) > 0.00001f) _p.WrinkThreshold.Value = th;
+            string cavOff = why ?? (_body.Wrink != null && !_body.Wrink.HasCavity ? "off: the shader bundle is older than this DLL (install dist/sfmorph_shaders)" : null);
+            float cv = Slider("Crease shade", _p.WrinkCavity.Value, 0f, 1f, "0.00", 0.3f, cavOff);
+            if (Mathf.Abs(cv - _p.WrinkCavity.Value) > 0.0001f) _p.WrinkCavity.Value = cv;
             GUI.enabled = sliderOff == null;
             GUILayout.BeginHorizontal();
             bool face = GUILayout.Toggle(_p.WrinkFace.Value, " Face", GUILayout.Width(90));
@@ -711,7 +714,9 @@ namespace SfMorph
             if (off != null) GUILayout.Label("off: " + off, _off);
             else if (_p.WrinkOn.Value && _body.WrinkleStatus.Length > 0) GUILayout.Label(_body.WrinkleStatus, _body.WrinkleStatus.Contains("off:") ? _off : _hint);
             GUILayout.Label("Where her skin compresses (a smile, a frown, bending) fine folds appear in the skin's normal map, computed on the GPU. " +
-                            "Threshold: how much it has to compress first. Debug: Activation tints compressed skin red, Axis shows the fold direction. " +
+                            "Threshold: how much it has to compress first. Crease shade darkens her skin colour at the bottom of each fold: her skin's " +
+                            "subsurface scattering blurs the fine fold shading (most of all on her face), the darker crease stays visible. " +
+                            "Debug: Activation tints compressed skin red, Axis shows the fold direction. " +
                             "Spacing, speed and texture size are in the config file ([Wrinkles]).", _hint);
         }
 

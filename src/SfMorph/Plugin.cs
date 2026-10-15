@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.8.3";
+        public const string Version = "0.8.4";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -34,7 +34,7 @@ namespace SfMorph
         internal ConfigEntry<int> EmbodyHands, EmbodyView, EmbodyPartner, HandsMesh, Quality;
         // 0.7.4 procedural skin wrinkles
         internal ConfigEntry<bool> WrinkOn, WrinkFace, WrinkNeck, WrinkBody;
-        internal ConfigEntry<float> WrinkStrength, WrinkThreshold, WrinkAttack, WrinkRelease, WrinkSpacingFace, WrinkSpacingBody, WrinkCullDistance;
+        internal ConfigEntry<float> WrinkStrength, WrinkThreshold, WrinkAttack, WrinkRelease, WrinkSpacingFace, WrinkSpacingBody, WrinkCullDistance, WrinkCavity;
         internal ConfigEntry<int> WrinkDebug, WrinkResolution;
         // 0.7.9 reactions
         internal ConfigEntry<bool> ReactOn, ReactVoice, ReactFace, ReactFlinch, ReactSound, ReactBlush, ReactBlushBody, ReactGaze, ReactFeedDesire, ReactAuto, ReactClimax, VoiceGuard;
@@ -120,6 +120,7 @@ namespace SfMorph
             WrinkSpacingFace = Config.Bind("Wrinkles", "SpacingFace", 0.004f, new ConfigDescription("Distance between folds on the face in metres (applies at the next rebuild).", new AcceptableValueRange<float>(0.001f, 0.02f)));
             WrinkSpacingBody = Config.Bind("Wrinkles", "SpacingBody", 0.008f, new ConfigDescription("Distance between folds on the neck and body in metres (applies at the next rebuild).", new AcceptableValueRange<float>(0.002f, 0.04f)));
             WrinkResolution = Config.Bind("Wrinkles", "Resolution", 0, new ConfigDescription("Wrinkle texture size: 0 the skin texture's size (at most 4096), 1 at most 2048, 2 at most 1024.", new AcceptableValueRange<int>(0, 2)));
+            WrinkCavity = Config.Bind("Wrinkles", "Cavity", 0.3f, new ConfigDescription("Crease shade: how much darker her skin colour is at the bottom of a fold (0 off, 1 strong). Her skin's subsurface scattering blurs the folds' normal-map detail, most of all on her face; the darker crease stays visible.", new AcceptableValueRange<float>(0f, 1f)));
             WrinkCullDistance = Config.Bind("Wrinkles", "CullDistance", 3f, new ConfigDescription("No wrinkle updates while her head is farther than this from your headset (metres).", new AcceptableValueRange<float>(0.5f, 20f)));
             EmbodyOn = Config.Bind("Embody", "On", false, "See through the partner's eyes (VR), his head hidden, his hands on your controllers.");
             EmbodyHands = Config.Bind("Embody", "Hands", 3, new ConfigDescription("His hands follow the controllers: 0 none, 1 left, 2 right, 3 both.", new AcceptableValueRange<int>(0, 3)));

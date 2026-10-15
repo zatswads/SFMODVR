@@ -97,6 +97,19 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.8.4 (crease shade)
+
+Install `dist/SfMorph.dll` + `dist/sfmorph_shaders` (new albedo pass; the old bundle logs "the shader bundle has no albedo pass" and greys
+Crease shade). Log: `Wrinkles: sheet 'reika_face_a' albedo copy: <prop> '<tex>' -> RT WxH, crease shade 0.30 (folds 4.0 mm apart, 0.xxx m
+per UV)` (metres per UV plausible: roughly 0.2-0.5 for the face; "unknown" = no shade), `Morph's skin state found`, `memory: ... albedo
+RTs`. Headset: (1) Wrinkles on, Debug off, a smile / frown / closed eyes: thin darker lines in the crease of each fold on her face (nose-lip
+line, crow's feet, brow), none at rest; Crease shade 0 = the 0.8.1 look, 1 = clearly dark; (2) no dark lines along UV seams (jaw, behind
+the ears, hairline) while she makes expressions; (3) Characters tab: face skin on/off with Wrinkles on: the character's face skin appears
+within ~5 s and gets the shade; off gives her own skin back (log "albedo slot handed back"); switching characters the same; (4) Body
+wrinkles on + a slap / hand press (Reactions, marks on): redness and the pale print still show on her body (log "albedo via Wrinkles"),
+creases too; Body off: marks as in 0.8.1; (5) Wrinkles off: her skin colour exactly as without the mod; (6) fps unchanged in a still
+pose, < 0.5 ms more while her face moves. Send the log + screenshots.
+
 ## 0.8.3 (limb yield, planted lock, hands, Embody hands)
 
 Install `dist/SfMorph.dll` (+ `dist/sfmorph_shaders` unchanged). Log first: `Grip: left trigger from VR_HandController.activateValue_left`
