@@ -629,7 +629,7 @@ namespace SfMorph
             {
                 _emb.On = true; _emb.Hands = _p.EmbodyHands.Value; _emb.HideHead = _p.EmbodyHideHead.Value; _emb.View = _p.EmbodyView.Value;
                 _emb.Partner = _p.EmbodyPartner.Value;
-                _emb.NeutralFingers = _p.EmbodyNeutralFingers.Value; _emb.ElbowAvoid = _p.EmbodyElbowAvoid.Value; _emb.RestCurl = _p.HandsRestCurl.Value; _emb.Softness = _p.Softness.Value;
+                _emb.NeutralFingers = _p.EmbodyNeutralFingers.Value; _emb.ElbowAvoid = _p.EmbodyElbowAvoid.Value; _emb.RestCurl = _p.HandsRestCurl.Value; _emb.Softness = _p.Softness.Value; _emb.SoftZonesOn = physics;
                 _emb.LeftPos = _p.LeftHandPos.Value; _emb.LeftRot = _p.LeftHandRot.Value; _emb.RightPos = _p.RightHandPos.Value; _emb.RightRot = _p.RightHandRot.Value;
                 try { Embody.Update(her, Found, _emb); _embodyOn = true; }
                 catch (Exception e)
