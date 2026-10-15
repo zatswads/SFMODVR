@@ -197,8 +197,27 @@ namespace SfMorph
         }
 
         // package C (0.7.9 reactions): wakes the soft helpers within `radius` of `point` with a velocity along `dir` (m/s, falling off with
-        // distance); called before Simulate in the same frame. A no-op in R0.
-        public void Kick(Vector3 point, Vector3 dir, float speed, float radius) { }
+        // distance); called before Simulate in the same frame. Uses only what the previous Simulate left (R = the world rest place, HasPrev,
+        // _bOk), so it needs nothing of this frame. The velocity is world space like Helper.Vel; the spring brings the skin back and Simulate's
+        // Clamp bounds the displacement. Speed is clamped to 1 m/s. No allocation. A no-op when not built.
+        public void Kick(Vector3 point, Vector3 dir, float speed, float radius)
+        {
+            if (_bOk == null || _helpers.Count == 0 || !(radius > 1e-4f) || !(speed > 0f)) return;
+            if (float.IsNaN(point.x) || float.IsNaN(dir.x) || float.IsNaN(speed) || float.IsNaN(radius)) return;
+            float dm = dir.magnitude;
+            if (!(dm > 1e-5f)) return;
+            if (speed > 1f) speed = 1f;
+            float r2 = radius * radius, k = speed / dm;
+            for (int i = 0; i < _helpers.Count; i++)
+            {
+                var h = _helpers[i];
+                if (!h.HasPrev || !_bOk[h.BoneIdx]) continue;
+                float d2 = (h.R - point).sqrMagnitude;
+                if (d2 >= r2) continue;
+                h.Vel += dir * (k * (1f - Mathf.Sqrt(d2) / radius));
+                h.Asleep = false;
+            }
+        }
 
         // Every frame after Body applies (bones carry our scales), inside the apply step: the soft points' springs and contacts.
         // softness 0..1 (stiff..soft), spring 0..1 (0 = settles at once and doesn't lag her motion). quality (0..2) is accepted so the
