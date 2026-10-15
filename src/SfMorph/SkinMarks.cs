@@ -196,7 +196,7 @@ namespace SfMorph
             if (_flipState != 2) { Status = "Skin marks: starting (orientation self-test)"; return; }
             _updateCount++;
 
-            // activity: a hand or body on her soft zones, or a slap. (GpuContact.Contact will replace the zone test once it exists.)
+            // activity: a hand or body on her soft zones (prints belong on the fatty parts; GpuContact.Contact also fires for a hand near a shin), or a slap
             if (Touching(her)) _lastActivity = now;
             if (_slapAt > _lastActivity) _lastActivity = _slapAt;
 
