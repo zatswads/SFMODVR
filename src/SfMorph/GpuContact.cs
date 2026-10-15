@@ -24,6 +24,11 @@ namespace SfMorph
         public bool Dead { get { return _dead; } }
         // Why the last TryLoad returned null (same wording as Status).
         public static string LastStatus = "";
+        // 0.7.4: raised once per frame right after the frame guard, before Imprint writes the skinned buffers (wrinkle strain
+        // must read the clean skinning result). (Stub: raised by the implementation.)
+#pragma warning disable 67
+        public static event System.Action<int> BeforeImprint;
+#pragma warning restore 67
 
         [StructLayout(LayoutKind.Sequential)]
         struct CapData { public Vector4 A, B; }   // a.xyz + radius, b.xyz  (stride 32, mirrors the compute shader's Capsule)
