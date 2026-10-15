@@ -22,15 +22,26 @@ namespace SfMorph
         public float MorphFace = 1f, MorphBody = 1f;
         public bool MorphJoints = true, MorphSkin = true, MorphSkinBody = true;   // MorphSkin = the face's skin texture
 
+        // The character's body sliders (name -> s in 0..1; absent = the slider's own s0, meaning no change), the joint-corrective
+        // switch, and the skin's tone (-0.1..+0.1 multiplier on the tint, 0 = none) and gloss (0..2 multiplier on _SmoothnessPower, 1 = none).
+        public readonly Dictionary<string, float> Sliders = new Dictionary<string, float>();
+        public bool MorphJcm = true;
+        public float SkinTone, Gloss = 1f;
+
         public bool Empty { get { return Bones.Count == 0 && Regions.Count == 0 && Morph == null; } }
         public int Count { get { return Bones.Count + Regions.Count + (Morph != null ? 1 : 0); } }
 
-        public void Clear() { Bones.Clear(); Regions.Clear(); Morph = null; MorphFace = 1f; MorphBody = 1f; MorphJoints = true; MorphSkin = true; MorphSkinBody = true; }
+        public void Clear() { Bones.Clear(); Regions.Clear(); Morph = null; MorphFace = 1f; MorphBody = 1f; MorphJoints = true; MorphSkin = true; MorphSkinBody = true; ResetMorphExtras(); }
+
+        // A new character gets its own s0 sliders, neutral tone and gloss, correctives on.
+        public void ResetMorphExtras() { Sliders.Clear(); MorphJcm = true; SkinTone = 0f; Gloss = 1f; }
 
         public void CopyFrom(Look o)
         {
             Clear();
             Morph = o.Morph; MorphFace = o.MorphFace; MorphBody = o.MorphBody; MorphJoints = o.MorphJoints; MorphSkin = o.MorphSkin; MorphSkinBody = o.MorphSkinBody;
+            MorphJcm = o.MorphJcm; SkinTone = o.SkinTone; Gloss = o.Gloss;
+            foreach (var kv in o.Sliders) Sliders[kv.Key] = kv.Value;
             foreach (var kv in o.Bones) Bones[kv.Key] = kv.Value;
             foreach (var kv in o.Regions) Regions[kv.Key] = kv.Value;
         }
@@ -44,6 +55,13 @@ namespace SfMorph
             if (Morph != null)
                 sb.Append("character\t").Append(Morph).Append('\t').Append(MorphFace.ToString("0.###", Inv)).Append(' ').Append(MorphBody.ToString("0.###", Inv)).Append(' ')
                   .Append(MorphJoints ? 1 : 0).Append(' ').Append(MorphSkin ? 1 : 0).Append(' ').Append(MorphSkinBody ? 1 : 0).Append('\n');
+            if (Morph != null)
+            {
+                foreach (var kv in Sliders) sb.Append("slider\t").Append(kv.Key).Append('\t').Append(kv.Value.ToString("0.####", Inv)).Append('\n');
+                if (SkinTone != 0f) sb.Append("look\tskintone\t").Append(SkinTone.ToString("0.####", Inv)).Append('\n');
+                if (Gloss != 1f) sb.Append("look\tgloss\t").Append(Gloss.ToString("0.####", Inv)).Append('\n');
+                if (!MorphJcm) sb.Append("look\tjcm\t0\n");
+            }
             foreach (var kv in Regions) sb.Append("region\t").Append(kv.Key).Append('\t').Append(kv.Value.ToString("0.###", Inv)).Append('\n');
             foreach (var kv in Bones)
                 sb.Append("bone\t").Append(kv.Key).Append('\t').Append(kv.Value.x.ToString("0.###", Inv)).Append(' ')
@@ -80,6 +98,13 @@ namespace SfMorph
                             if (c.Length > 2) MorphSkin = c[2] != "0";
                             MorphSkinBody = MorphSkin;
                         }
+                        break;
+                    case "slider": if (float.TryParse(f[2], NumberStyles.Float, Inv, out v)) Sliders[f[1]] = v; break;
+                    case "look":
+                        if (!float.TryParse(f[2], NumberStyles.Float, Inv, out v)) break;
+                        if (f[1] == "skintone") SkinTone = Mathf.Clamp(v, -0.1f, 0.1f);
+                        else if (f[1] == "gloss") Gloss = Mathf.Clamp(v, 0f, 2f);
+                        else if (f[1] == "jcm") MorphJcm = v != 0f;
                         break;
                     case "bone":
                         var p = f[2].Split(' ');
