@@ -222,7 +222,7 @@ namespace SfMorph
             _lady = GameRig.Lady();
             foreach (var r in UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>())
             {
-                if (r == null || r.sharedMesh == null) continue;
+                if (r == null || r.sharedMesh == null || VrHands.UnderSf(r.transform)) continue;   // our own hand meshes aren't characters
                 var root = _lady != null && r.transform.IsChildOf(_lady) ? _lady : r.transform.root;
                 List<SkinnedMeshRenderer> list;
                 if (!byRoot.TryGetValue(root, out list)) { list = new List<SkinnedMeshRenderer>(); byRoot[root] = list; order.Add(root); }
@@ -442,6 +442,9 @@ namespace SfMorph
         public readonly Embody Embody = new Embody();
         readonly EmbodySettings _emb = new EmbodySettings();
         readonly HandsSettings _hands = new HandsSettings();
+        public readonly Overlap Overlap = new Overlap();
+        readonly OverlapSettings _ovs = new OverlapSettings();
+        bool _overlapOn;
         readonly List<SoftCapsule> _caps = new List<SoftCapsule>();
         int _capsVr = -1, _capsPh = -1;
         float _nextHands;
@@ -467,6 +470,8 @@ namespace SfMorph
                 _handsOn = true;
             }
             else if (_handsOn) { _handsOn = false; try { VrHands.Release(); } catch { } }
+            if (physHands || embody) try { Grip.Update(); } catch (Exception e) { Plugin.Log.LogWarning("Grip: " + e.Message); }
+            int quality = _p.Quality.Value;
             foreach (var c in Found)
             {
                 try { c.Morph.Update(c, _p.Apply.Value && c.Root != null); }  // before Apply: its joint moves go through the trackers
@@ -476,7 +481,7 @@ namespace SfMorph
                     c.Look.Morph = null; Touch(c);
                     try { c.Morph.Release(); } catch { }
                 }
-                try { c.Soft.Update(c, physics && c == her, _p.Softness.Value, _p.Springiness.Value, Found); }
+                try { c.Soft.Update(c, physics && c == her, _p.Softness.Value, _p.Springiness.Value, Found, quality); }
                 catch (Exception e)
                 {
                     Plugin.Log.LogError("Soft zones on '" + c.Key + "' failed, physics turned off: " + e);
@@ -484,6 +489,19 @@ namespace SfMorph
                     try { c.Soft.Release(); } catch { }
                 }
                 if (_p.Apply.Value && !c.Look.Empty && c.Root != null) Apply(c);
+                // her secondary motion after our bone changes, before the soft points read her bones
+                if (c == her && _p.Apply.Value)
+                {
+                    _ovs.Amount = _p.OverlapAmount.Value; _ovs.Arms = _p.OverlapArms.Value; _ovs.Legs = _p.OverlapLegs.Value;
+                    _ovs.Head = _p.OverlapHead.Value; _ovs.Spine = _p.OverlapSpine.Value; _ovs.Embody = Embody;
+                    try { Overlap.Update(c, _ovs, Time.deltaTime); _overlapOn = true; }
+                    catch (Exception e)
+                    {
+                        Plugin.Log.LogError("Overlap failed, turned off: " + e);
+                        _p.OverlapAmount.Value = 0f;
+                        try { Overlap.Release(); } catch { }
+                    }
+                }
                 // the physics hands' visual pose for this frame (the soft points read their capsules)
                 if (c == her)
                 {
@@ -504,7 +522,7 @@ namespace SfMorph
                 }
                 // the soft points after her bones carry our changes, before the game's physics and IK
                 if (physics && c == her)
-                    try { c.Soft.Simulate(Time.deltaTime, Contacts(), _p.Softness.Value, _p.Springiness.Value, _p.ShowSoftPoints.Value); }
+                    try { c.Soft.Simulate(Time.deltaTime, Contacts(), _p.Softness.Value, _p.Springiness.Value, _p.ShowSoftPoints.Value, quality); }
                     catch (Exception e)
                     {
                         Plugin.Log.LogError("Soft zones on '" + c.Key + "' failed, physics turned off: " + e);
@@ -513,6 +531,7 @@ namespace SfMorph
                     }
             }
             Release();
+            if ((her == null || !_p.Apply.Value) && _overlapOn) { _overlapOn = false; try { Overlap.Release(); } catch { } }
             // off, or she's gone (scene change): give the controllers, layers and her capsules back
             if (!physHands && _physHandsOn) { _physHandsOn = false; try { PhysicsHands.Release(); } catch { } }
             // Embody last: his head and arms after the animation, the view after everything that moves him
@@ -706,6 +725,7 @@ namespace SfMorph
             Release();
             foreach (var c in Found) { try { c.Soft.Release(); } catch { } try { c.Morph.Release(); } catch { } }
             try { Embody.Release(); } catch { }
+            try { Overlap.Release(); } catch { }
             try { PhysicsHands.Release(); } catch { }
             try { VrHands.Release(); } catch { }
         }

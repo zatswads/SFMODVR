@@ -268,6 +268,8 @@ namespace SfMorph
         {
             PhysicsSection(c);
             GUILayout.Space(10);
+            MotionSection(c);
+            GUILayout.Space(10);
             HandsSection(c);
             GUILayout.Space(10);
             GUILayout.Label("Embody", _bold);
@@ -337,12 +339,35 @@ namespace SfMorph
             GUILayout.Label("Grip curls the fingers. Hand position/rotation offsets per controller: [Embody] Left/RightHandOffset in sfmodvr.sfmorph.cfg.", _hint);
         }
 
+        static readonly string[] Qualities = { "Performance", "Balanced", "Fidelity" };
+
+        // Her secondary motion: limbs, head and spine trail the animation through damped springs.
+        void MotionSection(Character c)
+        {
+            GUILayout.Label("Secondary motion", _bold);
+            string off = !_p.Apply.Value ? "'Apply changes' is off" : !c.Female || c.IsPlayer ? "only for the game's woman" : null;
+            float a = Slider("Overlap", _p.OverlapAmount.Value * 100f, 0f, 100f, "0", 30f, off == null ? null : "off: " + off, " %") / 100f;
+            if (Mathf.Abs(a - _p.OverlapAmount.Value) > 0.0001f) _p.OverlapAmount.Value = a;
+            string sub = off ?? (_p.OverlapAmount.Value > 0f ? null : "overlap is 0");
+            float v;
+            v = Slider("  Arms", _p.OverlapArms.Value * 100f, 0f, 100f, "0", 100f, sub == null ? null : "off: " + sub, " %") / 100f;
+            if (Mathf.Abs(v - _p.OverlapArms.Value) > 0.0001f) _p.OverlapArms.Value = v;
+            v = Slider("  Legs", _p.OverlapLegs.Value * 100f, 0f, 100f, "0", 100f, sub == null ? null : "off: " + sub, " %") / 100f;
+            if (Mathf.Abs(v - _p.OverlapLegs.Value) > 0.0001f) _p.OverlapLegs.Value = v;
+            v = Slider("  Head & neck", _p.OverlapHead.Value * 100f, 0f, 100f, "0", 100f, sub == null ? null : "off: " + sub, " %") / 100f;
+            if (Mathf.Abs(v - _p.OverlapHead.Value) > 0.0001f) _p.OverlapHead.Value = v;
+            v = Slider("  Spine", _p.OverlapSpine.Value * 100f, 0f, 100f, "0", 100f, sub == null ? null : "off: " + sub, " %") / 100f;
+            if (Mathf.Abs(v - _p.OverlapSpine.Value) > 0.0001f) _p.OverlapSpine.Value = v;
+            if (off == null && _body.Overlap.Status.Length > 0) GUILayout.Label(_body.Overlap.Status, _body.Overlap.Status.StartsWith("off") ? _off : _hint);
+            GUILayout.Label("Her elbows, wrists, knees, head and spine trail fast animation a little and settle (follow-through). " +
+                            "It fades out where a hand or her other leg touches her, so contacts don't slide.", _hint);
+        }
+
         void PhysicsSection(Character c)
         {
             GUILayout.Space(10);
             GUILayout.Label("Physics", _bold);
             string off = !_p.Apply.Value ? "'Apply changes' is off"
-                       : !SoftZones.Available ? "the game has no DynamicBone class"
                        : !c.Female || c.IsPlayer ? "only for the game's woman" : null;
             GUI.enabled = off == null;
             bool on = GUILayout.Toggle(_p.Physics.Value, " Soft zones: hands and limbs press into her glutes, thighs, belly and breasts");
@@ -354,6 +379,9 @@ namespace SfMorph
             float sp = Slider("Springiness", _p.Springiness.Value * 100f, 0f, 100f, "0", 30f, sliderOff == null ? null : "off: " + sliderOff, " %") / 100f;
             if (Mathf.Abs(sp - _p.Springiness.Value) > 0.0001f) _p.Springiness.Value = sp;
             GUI.enabled = sliderOff == null;
+            GUILayout.Label("Quality", _hint);
+            int q = GUILayout.Toolbar(Mathf.Clamp(_p.Quality.Value, 0, 2), Qualities);
+            if (sliderOff == null && q != _p.Quality.Value) _p.Quality.Value = q;
             bool show = GUILayout.Toggle(_p.ShowSoftPoints.Value, " Show soft points and contact capsules (debug)");
             if (sliderOff == null && show != _p.ShowSoftPoints.Value) _p.ShowSoftPoints.Value = show;
             GUI.enabled = true;

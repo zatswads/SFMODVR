@@ -166,6 +166,14 @@ namespace SfMorph
             into.Add(new SoftCapsule { T = t, LocalA = t.InverseTransformPoint(a), LocalB = t.InverseTransformPoint(b), Radius = r, Owner = owner, Kind = kind });
         }
 
+        // Our own objects (SfPhys_* hand visuals, SfSoft_* helpers) are never a rig of someone else: a transform that is, or sits under,
+        // one whose name starts with "Sf".
+        internal static bool UnderSf(Transform t)
+        {
+            for (var p = t; p != null; p = p.parent) if (p.name.StartsWith("Sf", StringComparison.Ordinal)) return true;
+            return false;
+        }
+
         // Anything on a UI canvas is not a hand (0.6.3 matched 'HandJob_Panel'/'handJob' in [VR Mode]). A Canvas always sits on a
         // RectTransform, so one RectTransform on the way up is enough (the UI module itself isn't referenced).
         static bool IsUi(Transform t)
@@ -193,7 +201,7 @@ namespace SfMorph
             for (int i = 0; i < hand.childCount; i++)
             {
                 var c = hand.GetChild(i);
-                if (IsUi(c)) continue;
+                if (IsUi(c) || c.name.StartsWith("Sf", StringComparison.Ordinal)) continue;
                 if (IsFingerName(c.name))
                 {
                     int fingerKids = 0;
@@ -213,7 +221,7 @@ namespace SfMorph
                 for (int i = 0; i < t.childCount; i++)
                 {
                     var c = t.GetChild(i);
-                    if (IsUi(c) || c.name.StartsWith(SoftZones.Prefix)) continue;
+                    if (IsUi(c) || c.name.StartsWith("Sf", StringComparison.Ordinal)) continue;
                     int cnt = c.GetComponentsInChildren<Transform>(true).Length + (IsFingerName(c.name) ? 1000 : 0);
                     if (cnt > most) { most = cnt; next = c; }
                 }
@@ -307,7 +315,7 @@ namespace SfMorph
 
         static bool VrFromAnimator(Animator a, bool left)
         {
-            if (a == null || IsUi(a.transform)) return false;
+            if (a == null || IsUi(a.transform) || UnderSf(a.transform)) return false;
             var caps = left ? _vrL : _vrR;
             string owner = "VR_HandController." + (left ? "controller_left" : "controller_right");
             string how;
@@ -415,7 +423,7 @@ namespace SfMorph
             int dl = 99, dr = 99;
             foreach (var t in vr.GetComponentsInChildren<Transform>(true))
             {
-                if (IsUi(t)) continue;
+                if (IsUi(t) || UnderSf(t)) continue;
                 int d = 0; for (var p = t; p != vr.transform && p != null; p = p.parent) d++;
                 if (_vrL.Count == 0 && IsControllerName(t.name, true) && d < dl) { left = t; dl = d; }
                 if (_vrR.Count == 0 && IsControllerName(t.name, false) && d < dr) { right = t; dr = d; }
@@ -446,16 +454,16 @@ namespace SfMorph
         {
             bool ch = false;
             var roots = new List<Transform>();
-            foreach (var go in GameRig.Partners()) if (go != null) roots.Add(go.transform);
+            foreach (var go in GameRig.Partners()) if (go != null && !UnderSf(go.transform)) roots.Add(go.transform);
             if (everyone != null)
                 foreach (var o in everyone)
-                    if (o != null && o.Root != null && !o.Female && (her == null || o.Root != her.Root) && !roots.Contains(o.Root)) roots.Add(o.Root);
+                    if (o != null && o.Root != null && !o.Female && (her == null || o.Root != her.Root) && !roots.Contains(o.Root) && !UnderSf(o.Root)) roots.Add(o.Root);
             // rigs that are gone from the scene
             for (int i = _partners.Count - 1; i >= 0; i--)
                 if (!roots.Contains(_partners[i].Root)) { _partners.RemoveAt(i); ch = true; }
             foreach (var r in roots)
             {
-                if (r == null || (her != null && (r == her.Root || r.IsChildOf(her.Root)))) continue;
+                if (r == null || (her != null && (r == her.Root || r.IsChildOf(her.Root))) || UnderSf(r)) continue;
                 Partner p = null;
                 foreach (var q in _partners) if (q.Root == r) { p = q; break; }
                 if (p == null) { p = new Partner { Root = r }; _partners.Add(p); ch = true; }
@@ -476,7 +484,7 @@ namespace SfMorph
             string owner = root.name;
             Animator anim = null;   // not hers, if she happens to live under the same scene root
             foreach (var a in root.GetComponentsInChildren<Animator>(true))
-                if (a != null && (her == null || !a.transform.IsChildOf(her.Root)) && (anim == null || (a.isHuman && !anim.isHuman))) anim = a;
+                if (a != null && !UnderSf(a.transform) && (her == null || !a.transform.IsChildOf(her.Root)) && (anim == null || (a.isHuman && !anim.isHuman))) anim = a;
             string how;
             int hands = 0, segs = 0;
             if (anim != null && anim.isHuman && anim.avatar != null)
@@ -494,7 +502,7 @@ namespace SfMorph
                 var wrists = new List<Transform>();
                 foreach (var t in root.GetComponentsInChildren<Transform>(true))
                 {
-                    if (t.name.StartsWith(SoftZones.Prefix) || (her != null && t.IsChildOf(her.Root)) || IsUi(t)) continue;
+                    if (t.name.StartsWith(SoftZones.Prefix) || UnderSf(t) || (her != null && t.IsChildOf(her.Root)) || IsUi(t)) continue;
                     var n = Body.Norm(t.name);
                     if (n == "wristl" || n == "wristr") wrists.Add(t);
                 }
@@ -505,7 +513,7 @@ namespace SfMorph
                     foreach (var t in root.GetComponentsInChildren<Transform>(true))
                     {
                         var n = Body.Norm(t.name);
-                        if (t.childCount == 0 || t.name.StartsWith(SoftZones.Prefix) || (her != null && t.IsChildOf(her.Root)) || IsUi(t)
+                        if (t.childCount == 0 || t.name.StartsWith(SoftZones.Prefix) || UnderSf(t) || (her != null && t.IsChildOf(her.Root)) || IsUi(t)
                             || !(n.Contains("hand") || n.Contains("wrist") || n.Contains("palm"))) continue;
                         if (IsFingerName(t.name) || n.Contains("handle") || n.Contains("target") || n.Contains("ik") || n.Contains("twist")) continue;
                         bool under = false;

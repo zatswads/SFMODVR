@@ -24,7 +24,21 @@ namespace SfMorph
     internal class Embody
     {
         public string Status = "";
-        public bool DrivesArm(bool left) { return false; }   // 0.7.2 stub: Embody's IK owns his arm this frame
+        // True while Embody's IK wrote that arm of his this frame (or last frame: callers that run before the apply step see
+        // the previous frame's write). False as soon as the arm is given back.
+        public bool DrivesArm(bool left)
+        {
+            var r = _rig;
+            if (!_active || _failed || r == null) return false;
+            var a = left ? r.L : r.R;
+            return a.Written && a.PlacedFrame >= Time.frameCount - 1;
+        }
+
+        // The physics hand's finger rest locals (Quaternion[15]) for Inverse(rest) * current; null until PhysicsHands publishes them.
+        static Quaternion[] PhysRest(bool left)
+        {
+            return null;   // TODO(integrator): PhysicsHands.LeftFingerRest / RightFingerRest
+        }
 
         const float FollowSeconds = 0.1f;   // exponential catch-up of the rig to his eye in Follow
         const float JumpMeters = 0.5f;      // something else moving the rig this far in one frame is logged once
@@ -33,6 +47,13 @@ namespace SfMorph
         const float OverrideMeters = 0.02f; // his wrist is not where we put it by render time: IK or a script overwrote it
         const float HiddenScale = 0.001f;   // Head_M scale while hidden
         const float EyeForward = 0.07f, EyeUp = 0.03f; // eye point from Head_M when there are no eye bones
+        const float FollowHz = 6f;          // arm IK target: critically damped follow (zeta 1)
+        const float FollowReset = 0.5f;     // the target jumped this far in one frame: follow restarts there
+        const float FollowMaxLag = 0.2f;    // the follow never trails the target by more than this
+        const float CurlRate = 25f;         // his fingers' catch-up to the grip, per second
+        static readonly float[] FingerMax = { 80f, 90f, 60f };   // curl at full grip, proximal / middle / distal (same as the physics hands)
+        static readonly float[] ThumbMax = { 20f, 35f, 45f };
+        static readonly string[] FingerWord = { "thumb", "index", "middle", "ring", "pinky" };
 
         // One arm: Shoulder (upper arm joint), Elbow, Wrist, and the finger roots that give the hand its frame.
         class Arm
@@ -50,6 +71,23 @@ namespace SfMorph
             public bool Overridden, OverrideLogged;
             public float Dist = -1f;        // shoulder -> target, m (before the reach clamp)
             public string Note = "";
+            // Fingers: 5 chains (thumb, index, middle, ring, pinky) of 3 bones, null when none were found.
+            public Finger[] Fingers;
+            public string FingerInfo = "", FingerSrc = "";
+            public float Curl = -1f;        // the grip as his fingers follow it (smoothed)
+            // Follow of the IK target (world): the smoothed point, its velocity, and how far it trails the raw target.
+            public bool Follow;
+            public Vector3 SmoothT, SmoothV, LastRaw, Lag;
+            public bool JumpLogged;
+        }
+
+        // One finger of his: three bones, the curl axis in each bone's own frame, and the same give-back bookkeeping as the arm.
+        class Finger
+        {
+            public readonly Transform[] B = new Transform[3];
+            public readonly Vector3[] AxisL = new Vector3[3];
+            public readonly Quaternion[] Pre = new Quaternion[3], Post = new Quaternion[3];
+            public readonly bool[] Written = new bool[3];
         }
 
         // His bones, found once per partner.
@@ -86,6 +124,7 @@ namespace SfMorph
         // His eye smoothed over FollowSeconds (the TARGET is smoothed; every rig move puts the headset exactly on it).
         Vector3 _eyeSmooth;
         bool _eyeInit;
+        float _dt = 0.016f, _dtRaw = 0.016f;   // this frame's step (clamped, raw) for the arm follow
         Transform _rootCam;             // the camera the cached rig root was resolved for
         float _nextRoot;
         string _rootWhy = "";
@@ -142,6 +181,7 @@ namespace SfMorph
         {
             float now = Time.unscaledTime;
             float dt = Mathf.Min(Time.unscaledDeltaTime, 0.1f);
+            _dt = dt; _dtRaw = Time.unscaledDeltaTime;
             if (!_active) { _active = true; _snapPending = true; }
             _cur = s;
             if (!_subscribed) { Application.onBeforeRender += BeforeRender; _subscribed = true; }
@@ -257,6 +297,8 @@ namespace SfMorph
                 }
             }
             if (corrected || a.Overridden) Place(a, ctrl, pos, rot, false);   // the rig moved, so the controller (and the wrist target) did
+            // His fingers are put again when the arm was overridden, or when something rewrote a finger bone after our step.
+            if (a.Fingers != null && (a.Overridden || FingersMoved(a))) WriteFingers(a, 0f);
         }
 
         // ---- finding his bones ----
@@ -265,7 +307,7 @@ namespace SfMorph
         {
             var r = new Rig { Go = go };
             var by = new Dictionary<string, Transform>();
-            foreach (var t in go.GetComponentsInChildren<Transform>(true)) if (!by.ContainsKey(t.name)) by[t.name] = t;
+            foreach (var t in go.GetComponentsInChildren<Transform>(true)) if (!by.ContainsKey(t.name) && !VrHands.UnderSf(t)) by[t.name] = t;
             Transform x;
             r.Head = by.TryGetValue("Head_M", out x) ? x : null;
             r.Neck = by.TryGetValue("Neck_M", out x) ? x : null;
@@ -338,6 +380,11 @@ namespace SfMorph
             }
 
             foreach (var a in new[] { r.L, r.R }) Calibrate(a);
+            foreach (var a in new[] { r.L, r.R })
+            {
+                try { FindFingers(a, human ? an : null); }
+                catch (Exception e) { a.Fingers = null; a.FingerInfo = "search failed: " + e.Message; }
+            }
 
             var sb = new StringBuilder();
             sb.Append("Embody: partner '").Append(go.name).Append("' via ").Append(via).Append(": head ").Append(r.Head != null ? r.Head.name : "MISSING")
@@ -347,9 +394,150 @@ namespace SfMorph
             {
                 sb.Append("; ").Append(a.Side).Append(" arm ").Append(a.Ready ? a.Shoulder.name + "/" + a.Elbow.name + "/" + a.Wrist.name : "MISSING bones");
                 if (a.Ready) sb.Append(a.Calibrated ? ", hand frame from " + a.Middle.name + (a.Thumb != null ? "/" + a.Thumb.name : "") + (a.Pinky != null ? "/" + a.Pinky.name : "") : ", no finger bones: wrist axes used as they are");
+                if (a.Ready) sb.Append(", fingers ").Append(a.FingerInfo);
             }
             Plugin.Log.LogInfo(sb.ToString());
             return r;
+        }
+
+        // ---- his fingers ----
+
+        // A finger word in a raw bone name, only where a word starts (so "ring" is not found in "spring"/"string").
+        static bool NameHas(string raw, string word)
+        {
+            var n = raw.ToLowerInvariant();
+            for (int i = n.IndexOf(word, StringComparison.Ordinal); i >= 0; i = n.IndexOf(word, i + 1, StringComparison.Ordinal))
+                if (i == 0 || !char.IsLetter(raw[i - 1]) || char.IsUpper(raw[i])) return true;
+            return false;
+        }
+
+        static bool IsFingerWord(string raw, int f)
+        {
+            return NameHas(raw, FingerWord[f]) || (f == 4 && NameHas(raw, "little"));
+        }
+
+        // The chain of one finger below the wrist: the first bone with the finger's word whose parent has none, then on through the
+        // child carrying the word (the one with most bones below it when there are helpers). Null if there is none.
+        static List<Transform> FingerChain(Transform wrist, int f)
+        {
+            Transform root = null;
+            var q = new Queue<Transform>();
+            q.Enqueue(wrist);
+            int guard = 0;
+            while (q.Count > 0 && guard++ < 600 && root == null)
+            {
+                var t = q.Dequeue();
+                for (int i = 0; i < t.childCount; i++)
+                {
+                    var c = t.GetChild(i);
+                    if (c.name.StartsWith("Sf", StringComparison.Ordinal)) continue;
+                    if (IsFingerWord(c.name, f) && (t == wrist || !IsFingerWord(t.name, f))) { root = c; break; }
+                    q.Enqueue(c);
+                }
+            }
+            if (root == null) return null;
+            var chain = new List<Transform> { root };
+            for (var t = root; chain.Count < 8;)
+            {
+                Transform next = null; int most = -1;
+                for (int i = 0; i < t.childCount; i++)
+                {
+                    var c = t.GetChild(i);
+                    if (c.name.StartsWith("Sf", StringComparison.Ordinal) || !IsFingerWord(c.name, f)) continue;
+                    int cnt = c.GetComponentsInChildren<Transform>(true).Length;
+                    if (cnt > most) { most = cnt; next = c; }
+                }
+                if (next == null) break;
+                chain.Add(next);
+                t = next;
+            }
+            return chain;
+        }
+
+        // His finger chains and their curl axes. A humanoid Animator's thumb..little bones are used where it has them, else the chains
+        // are found by name; three bones per finger (the three deepest, but a trailing end joint with nothing below it is not one).
+        // Curl axis = cross(finger direction, palm normal), so a positive angle moves the tip toward the palm; the palm normal comes
+        // from the fingers' curvature when it is clear, else from the hand's chirality (index side of the knuckle line = thumb side).
+        static void FindFingers(Arm a, Animator human)
+        {
+            a.Fingers = null; a.FingerInfo = "none"; a.Curl = -1f;
+            if (!a.Ready) { a.FingerInfo = "none (no arm)"; return; }
+            bool left = a.Side == "left";
+            var fin = new Finger[5];
+            var names = new StringBuilder();
+            int first = (int)(left ? HumanBodyBones.LeftThumbProximal : HumanBodyBones.RightThumbProximal);
+            int got = 0;
+            for (int f = 0; f < 5; f++)
+            {
+                var fg = new Finger();
+                bool ok = false;
+                if (human != null)
+                {
+                    ok = true;
+                    for (int j = 0; j < 3; j++)
+                    {
+                        var b = human.GetBoneTransform((HumanBodyBones)(first + f * 3 + j));
+                        if (b == null || !b.IsChildOf(a.Wrist) || b.name.StartsWith("Sf", StringComparison.Ordinal)) { ok = false; break; }
+                        fg.B[j] = b;
+                    }
+                }
+                if (!ok)
+                {
+                    var ch = FingerChain(a.Wrist, f);
+                    if (ch == null || ch.Count < 3) continue;
+                    int n = ch.Count;
+                    int s0 = n >= 4 && ch[n - 1].childCount == 0 ? n - 4 : n - 3;
+                    for (int j = 0; j < 3; j++) fg.B[j] = ch[s0 + j];
+                }
+                fin[f] = fg;
+                got++;
+                if (names.Length > 0) names.Append(' ');
+                names.Append(fg.B[0].name).Append('>').Append(fg.B[1].name).Append('>').Append(fg.B[2].name);
+            }
+            // The palm frame from the knuckle line: forward = wrist -> mean of the fingers' first bones, across = pinky -> index.
+            Vector3 mean = Vector3.zero; int nk = 0; Transform lastK = null, firstK = null;
+            for (int f = 1; f < 5; f++) if (fin[f] != null) { mean += fin[f].B[0].position; nk++; if (firstK == null) firstK = fin[f].B[0]; lastK = fin[f].B[0]; }
+            if (nk < 2) { a.FingerInfo = "none (" + got + " finger chains found, need two besides the thumb)"; return; }
+            var fwd = mean / nk - a.Wrist.position;
+            var across = firstK.position - lastK.position;                      // pinky -> index: the thumb side
+            if (fwd.sqrMagnitude < 1e-8f || across.sqrMagnitude < 1e-8f) { a.FingerInfo = "none (palm too small)"; return; }
+            fwd.Normalize();
+            across -= fwd * Vector3.Dot(across, fwd);
+            if (across.sqrMagnitude < 1e-8f) { a.FingerInfo = "none (palm too narrow)"; return; }
+            across.Normalize();
+            var n0 = Vector3.Cross(fwd, across);                               // palm-down normal of a right hand, palm-up of a left one
+            var normal = left ? -n0 : n0;
+            string how = "chirality";
+            float sum = 0f; int nf = 0;
+            for (int f = 1; f < 5; f++)
+            {
+                if (fin[f] == null) continue;
+                var d = fin[f].B[1].position - fin[f].B[0].position;
+                if (d.sqrMagnitude < 1e-10f) continue;
+                d.Normalize();
+                var v = fin[f].B[2].position - fin[f].B[0].position;
+                v -= d * Vector3.Dot(v, d);
+                sum += Vector3.Dot(v, normal); nf++;
+            }
+            float mm = nf > 0 ? sum / nf * 1000f : 0f;
+            if (Mathf.Abs(mm) >= 3f)
+            {
+                if (mm < 0f) normal = -normal;
+                how = "finger curvature " + mm.ToString("0.0") + " mm";
+            }
+            for (int f = 0; f < 5; f++)
+            {
+                if (fin[f] == null) continue;
+                var d = fin[f].B[1].position - fin[f].B[0].position;
+                if (d.sqrMagnitude < 1e-10f) d = fwd;
+                d.Normalize();
+                var ax = Vector3.Cross(d, normal);
+                if (ax.sqrMagnitude < 1e-8f) ax = Vector3.Cross(fwd, normal);
+                ax.Normalize();
+                for (int j = 0; j < 3; j++) fin[f].AxisL[j] = Quaternion.Inverse(fin[f].B[j].rotation) * ax;
+            }
+            a.Fingers = fin;
+            a.FingerInfo = got + "/5 (palm normal by " + how + "; " + names + ")";
         }
 
         // The first transform below root (breadth first, so Finger1 before Finger2) whose name contains the word.
@@ -635,6 +823,7 @@ namespace SfMorph
             if (ctrl == null) { StopArm(a); a.Note = "no controller found"; return; }
             a.Note = "";
             Place(a, ctrl, pos, rot, true);
+            if (a.Fingers != null && a.PlacedFrame == Time.frameCount) WriteFingers(a, _dt);
         }
 
         // Analytic two-bone IK: Shoulder -> Elbow -> Wrist reaches the controller's wrist point. The elbow stays on the side the
@@ -654,7 +843,10 @@ namespace SfMorph
                 else { dp = PhysicsHands.RightDp; dq = PhysicsHands.RightDq; }
             }
             var cq = dq * ctrl.rotation;
-            var T = ctrl.position + dp + cq * offPos;
+            var raw = ctrl.position + dp + cq * offPos;
+            // The target trails the controller a little (critically damped, 6 Hz): wrist and elbow lag on fast moves. Advanced once per
+            // frame (save); the pre-render pass keeps the same trail as an offset on the new raw target.
+            var T = save ? FollowStep(a, raw) : raw + a.Lag;
             var tq = cq * Quaternion.Euler(offRot) * a.Kinv;
 
             var toT = T - A;
@@ -689,6 +881,127 @@ namespace SfMorph
             a.PlacedFrame = Time.frameCount;
         }
 
+        // Exact critically damped step toward `raw` (zeta 1, FollowHz) over this frame, reset on a first frame, a hitch or a jump.
+        Vector3 FollowStep(Arm a, Vector3 raw)
+        {
+            float jump = a.Follow ? (raw - a.LastRaw).magnitude : 0f;
+            if (!a.Follow || jump > FollowReset || _dtRaw > 0.25f)
+            {
+                if (a.Follow && jump > FollowReset && !a.JumpLogged)
+                {
+                    a.JumpLogged = true;
+                    Plugin.Log.LogInfo("Embody: his " + a.Side + " arm target moved " + jump.ToString("0.00") + " m in one frame; the arm follow restarts there (logged once per arm)");
+                }
+                a.Follow = true; a.SmoothT = raw; a.SmoothV = Vector3.zero;
+            }
+            else
+            {
+                float w = 2f * Mathf.PI * FollowHz;
+                float dt = Mathf.Max(_dt, 1e-4f);
+                var e = a.SmoothT - raw;
+                var c2 = a.SmoothV + w * e;
+                float ex = Mathf.Exp(-w * dt);
+                a.SmoothT = raw + (e + c2 * dt) * ex;
+                a.SmoothV = (a.SmoothV - w * c2 * dt) * ex;
+                var lag = a.SmoothT - raw;
+                if (lag.sqrMagnitude > FollowMaxLag * FollowMaxLag)
+                {
+                    lag = lag.normalized * FollowMaxLag;
+                    a.SmoothT = raw + lag;
+                    a.SmoothV = Vector3.zero;
+                }
+            }
+            a.LastRaw = raw;
+            a.Lag = a.SmoothT - raw;
+            return a.SmoothT;
+        }
+
+        // ---- his fingers ----
+
+        // True if any finger bone is not where our last write left it (something wrote it after our step).
+        static bool FingersMoved(Arm a)
+        {
+            if (a.Fingers == null || !a.Written) return false;
+            foreach (var fg in a.Fingers)
+            {
+                if (fg == null) continue;
+                for (int j = 0; j < 3; j++)
+                    if (fg.Written[j] && fg.B[j] != null && Quaternion.Angle(fg.B[j].localRotation, fg.Post[j]) > 0.5f) return true;
+            }
+            return false;
+        }
+
+        // Curls his fingers on top of the pose the animation gave them: by the simulated fingers of the physics hand when it has them
+        // (its curl angle per bone, applied about his own curl axis), else by the grip. dt 0: no smoothing step (the pre-render pass).
+        void WriteFingers(Arm a, float dt)
+        {
+            bool left = a.Side == "left";
+            float grip = Mathf.Clamp01(left ? Grip.Left : Grip.Right);
+            if (float.IsNaN(grip)) grip = 0f;
+            if (a.Curl < 0f) a.Curl = grip;
+            else if (dt > 0f) a.Curl += (grip - a.Curl) * (1f - Mathf.Exp(-CurlRate * dt));
+
+            Quaternion[] sim = left ? PhysicsHands.LeftFingerLocal : PhysicsHands.RightFingerLocal;
+            Quaternion[] rest = PhysRest(left);
+            bool useSim = PhysicsHands.Active && (left ? PhysicsHands.LeftFingersValid : PhysicsHands.RightFingersValid)
+                          && sim != null && sim.Length >= 15 && rest != null && rest.Length >= 15;
+            string src = useSim ? "simulated" : "grip";
+            if (src != a.FingerSrc)
+            {
+                a.FingerSrc = src;
+                Plugin.Log.LogInfo("Embody: his " + a.Side + " fingers now follow " + (useSim ? "the physics hand's simulated fingers" : "the controller grip (Grip." + (left ? "Left" : "Right") + ", " + Grip.Source + ")")
+                    + (PhysicsHands.Active && !useSim ? (rest == null ? " [no finger rest from the physics hand yet]" : " [its fingers are not valid]") : ""));
+            }
+
+            for (int f = 0; f < 5; f++)
+            {
+                var fg = a.Fingers[f];
+                if (fg == null) continue;
+                for (int j = 0; j < 3; j++)
+                {
+                    var b = fg.B[j];
+                    if (b == null) continue;
+                    float ang = (f == 0 ? ThumbMax[j] : FingerMax[j]) * a.Curl;
+                    if (useSim)
+                    {
+                        int i = f * 3 + j;
+                        float sa;
+                        Vector3 sx;
+                        (Quaternion.Inverse(rest[i]) * sim[i]).ToAngleAxis(out sa, out sx);
+                        if (!float.IsNaN(sa) && !float.IsInfinity(sa))
+                        {
+                            if (sa > 180f) sa = 360f - sa;
+                            ang = Mathf.Clamp(sa, 0f, 120f);
+                        }
+                    }
+                    var cur = b.localRotation;
+                    // Our last write still there: the animation did not write this bone, so its pose is the one from before our write.
+                    var baseQ = fg.Written[j] && Quaternion.Angle(cur, fg.Post[j]) < 0.05f ? fg.Pre[j] : cur;
+                    fg.Pre[j] = baseQ;
+                    var q = baseQ * Quaternion.AngleAxis(ang, fg.AxisL[j]);
+                    b.localRotation = q;
+                    fg.Post[j] = q;
+                    fg.Written[j] = true;
+                }
+            }
+        }
+
+        // Gives his finger bones back where still ours.
+        static void StopFingers(Arm a)
+        {
+            if (a.Fingers == null) return;
+            foreach (var fg in a.Fingers)
+            {
+                if (fg == null) continue;
+                for (int j = 0; j < 3; j++)
+                {
+                    if (fg.Written[j] && fg.B[j] != null && Quaternion.Angle(fg.B[j].localRotation, fg.Post[j]) < 0.05f) fg.B[j].localRotation = fg.Pre[j];
+                    fg.Written[j] = false;
+                }
+            }
+            a.Curl = -1f; a.FingerSrc = "";
+        }
+
         static Quaternion FromTo(Vector3 a, Vector3 b)
         {
             if (a.sqrMagnitude < 1e-10f || b.sqrMagnitude < 1e-10f) return Quaternion.identity;
@@ -705,7 +1018,9 @@ namespace SfMorph
                 if (Quaternion.Angle(a.Elbow.localRotation, a.PostE) < 0.01f) a.Elbow.localRotation = a.PreE;
                 if (Quaternion.Angle(a.Wrist.localRotation, a.PostW) < 0.01f) a.Wrist.localRotation = a.PreW;
             }
+            StopFingers(a);
             a.Written = false; a.PlacedFrame = -1; a.Overridden = false; a.Dist = -1f;
+            a.Follow = false; a.Lag = Vector3.zero;
         }
 
         // ---- status line for the panel ----
@@ -747,6 +1062,7 @@ namespace SfMorph
             {
                 sb.Append(" target ").Append(a.Dist.ToString("0.00")).Append(" m");
                 if (a.Overridden) sb.Append(", overridden by the game's IK or a script, placed again before render");
+                if (a.Fingers != null && a.FingerSrc.Length > 0) sb.Append(", fingers ").Append(a.FingerSrc);
             }
         }
     }

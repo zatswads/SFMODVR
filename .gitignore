@@ -5,3 +5,8 @@ obj/
 dist/*.pdb
 __pycache__/
 *.npz
+
+# Unity bundle build by-products (the folder-named manifest bundle)
+dist/dist
+dist/dist.manifest
+.claude/worktrees/

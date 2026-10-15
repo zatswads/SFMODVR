@@ -7,9 +7,12 @@ namespace SfMorph
 {
     // The soft zones' simulation (see SoftZones.cs for what the points and helper bones are). Every frame after Body applies:
     // each helper's rest place R follows its bone, a spring holds the displacement Disp (world space) to it, contact
-    // capsules (VrHands) push the point out of themselves and hand it some of their speed, the displacement is clamped
-    // to what skin can do, a hit spreads a little to the zone's other points, and S is written at R + Disp. No allocations
-    // per frame: state lives in preallocated arrays and fields; strings are rebuilt only when the contacts change.
+    // capsules (VrHands, PhysicsHands) imprint the point (it is moved along its inward normal to where that line leaves the
+    // capsule, so the dent has the capsule's profile; a radial push when that fails) and hand it some of their speed, the
+    // displacement is clamped to what skin can do, a hit spreads a little to the zone's other points, and S is written at
+    // R + Disp. How deep each physics hand is in feeds back as LeftResist/RightResist (PhysicsHands caps the hand's force
+    // with it). No allocations per frame: state lives in preallocated arrays and fields; strings are rebuilt only when the
+    // contacts change.
     internal partial class SoftZones
     {
         const float Step = 1f / 120f;                  // fixed substep: the springs behave the same at any frame rate
@@ -24,6 +27,7 @@ namespace SfMorph
         bool[] _bOk;
         int[] _zH0, _zH1;              // per zone: its helpers [H0, H1) in _helpers (they are built zone by zone), -1 = none
         float[] _zSigma;               // per zone: spacing of its points (m), the reach of a hit
+        float[] _zBulge;               // per zone: how much of a push its other points get (0.25 at Performance; less with more points)
         float _acc;                    // fixed-step accumulator
 
         // ---- the capsules this frame ----
@@ -31,6 +35,7 @@ namespace SfMorph
         Vector3[] _cA = new Vector3[0], _cB = new Vector3[0], _cPA = new Vector3[0], _cPB = new Vector3[0], _cVA = new Vector3[0], _cVB = new Vector3[0], _cMid = new Vector3[0];
         float[] _cR = new float[0], _cReach2 = new float[0];
         int[] _cCode = new int[0];     // 0 any zone, 1 her left thigh (only the right inner thigh feels it), 2 her right thigh
+        int[] _cHand = new int[0];     // 0 not a physics hand, 1 the left physics hand, 2 the right one (see HandOf)
         bool[] _cOk = new bool[0], _cHit = new bool[0];
         int _cN, _capVersion = -1;
 
@@ -41,20 +46,26 @@ namespace SfMorph
         int _stamp, _nContacts;
         long _sig = -1;
         float _nextSummary, _peak;
+        float _rL, _rR, _peakRL, _peakRR, _peakDL, _peakDR;   // smoothed resist per physics hand; peaks (resist, dent in m) since the last log line
+        bool _ownsResist;
         readonly StringBuilder _sb = new StringBuilder();
         public string Contacts = "";
 
         void SimBuilt(int[] zoneH0, int[] zoneH1)
         {
             _zH0 = zoneH0; _zH1 = zoneH1;
-            _zSigma = new float[Zones.Length]; _zCnt = new int[Zones.Length]; _zSeen = new bool[Zones.Length];
+            _zSigma = new float[Zones.Length]; _zBulge = new float[Zones.Length]; _zCnt = new int[Zones.Length]; _zSeen = new bool[Zones.Length];
             var pts = new int[Zones.Length];
             foreach (var p in _pts) pts[p.ZoneIdx]++;
             for (int z = 0; z < Zones.Length; z++)
             {
-                int ring = pts[z] - 1;   // the ring points around the centre one
+                // the reach of a hit stays what it was in 0.7.0 at every quality (the 0.7.0 ring of K-1 points at 0.55 R); with more points the
+                // amount each pushes its neighbours is scaled down by the density, so the bulge stays about as large
+                int ring = (_bq == 0 ? pts[z] : Zones[z].K) - 1;
                 _zSigma[z] = Mathf.Max(0.02f, ring >= 2 ? 0.55f * Zones[z].Radius * 2f * Mathf.Sin(Mathf.PI / ring) : 0.55f * Zones[z].Radius);
+                _zBulge[z] = Mathf.Min(0.25f, 0.25f * Zones[z].K / Mathf.Max(1, pts[z]));
             }
+            _rL = _rR = 0f; _peakRL = _peakRR = _peakDL = _peakDR = 0f;
             _bL2W = new Matrix4x4[_bones.Count]; _bW2L = new Matrix4x4[_bones.Count]; _bOk = new bool[_bones.Count];
             _acc = 0f; _capVersion = -1; _nContacts = 0; _sig = -1; _stamp = 0; _peak = 0f;
         }
@@ -62,8 +73,10 @@ namespace SfMorph
         void SimReset()
         {
             DebugOff();
-            _bL2W = _bW2L = null; _bOk = null; _zH0 = _zH1 = null; _zSigma = null; _zCnt = null; _zSeen = null;
+            _bL2W = _bW2L = null; _bOk = null; _zH0 = _zH1 = null; _zSigma = null; _zBulge = null; _zCnt = null; _zSeen = null;
             _nContacts = 0; _sig = -1;
+            _rL = _rR = 0f;
+            if (_ownsResist) { LeftResist = RightResist = 0f; _ownsResist = false; }
         }
 
         void EnsureCaps(int n)
@@ -71,12 +84,92 @@ namespace SfMorph
             if (_cA.Length >= n) return;
             int m = Math.Max(n, Math.Max(16, _cA.Length * 2));
             _cA = new Vector3[m]; _cB = new Vector3[m]; _cPA = new Vector3[m]; _cPB = new Vector3[m]; _cVA = new Vector3[m]; _cVB = new Vector3[m]; _cMid = new Vector3[m];
-            _cR = new float[m]; _cReach2 = new float[m]; _cCode = new int[m]; _cOk = new bool[m]; _cHit = new bool[m];
+            _cR = new float[m]; _cReach2 = new float[m]; _cCode = new int[m]; _cHand = new int[m]; _cOk = new bool[m]; _cHit = new bool[m];
             _capVersion = -1;   // the old previous positions are gone
         }
 
+        // Which physics hand a capsule belongs to: 1 left, 2 right, 0 none. A physics hand's capsule has Kind "vr" and is made by PhysicsHands
+        // (Owner "PhysicsHands" in 0.7.0; the SfPhys* naming from 0.7.2 on). It counts when its Owner starts with "SfPhys" or is "PhysicsHands",
+        // or when a transform above it is named SfPhys*; the side is read from the Owner, else from that SfPhys* ancestor's name (PhysicsHands names
+        // its roots SfPhys_L_visual / SfPhys_R_visual): "Left"/"Right" anywhere, or "_L"/"_R" as a whole token ("SfPhys_L_visual", "SfPhysHand_R").
+        // Everything else (the controllers' "vr" capsules of VrHands, partners, her own) gives no feedback. Only called when the capsule set changes.
+        static int HandOf(SoftCapsule cp)
+        {
+            if (cp.Kind != "vr") return 0;
+            string o = cp.Owner ?? "";
+            bool phys = o.StartsWith("SfPhys", StringComparison.Ordinal) || o == "PhysicsHands";
+            int side = SideOf(o);
+            for (var t = cp.T; t != null && (side == 0 || !phys); t = t.parent)
+            {
+                string n = t.name;
+                if (!n.StartsWith("SfPhys", StringComparison.Ordinal)) continue;
+                phys = true;
+                if (side == 0) side = SideOf(n);
+            }
+            return phys ? side : 0;
+        }
+
+        static int SideOf(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return 0;
+            if (s.IndexOf("Left", StringComparison.OrdinalIgnoreCase) >= 0) return 1;
+            if (s.IndexOf("Right", StringComparison.OrdinalIgnoreCase) >= 0) return 2;
+            if (s.IndexOf("_L_", StringComparison.Ordinal) >= 0 || s.EndsWith("_L", StringComparison.Ordinal)) return 1;
+            if (s.IndexOf("_R_", StringComparison.Ordinal) >= 0 || s.EndsWith("_R", StringComparison.Ordinal)) return 2;
+            return 0;
+        }
+
+        // Ray p + t d (d unit) against the capsule a, a+ab with radius r, p inside it: the largest t >= 0 where the ray leaves it. The capsule is
+        // convex, so the ray meets it in one interval, which is the union of its pieces' intervals (the cylinder between the end planes, the two end
+        // spheres): the exit is the largest exit among them.
+        static bool RayExit(Vector3 p, Vector3 d, Vector3 a, Vector3 ab, float len2, float r, out float tExit)
+        {
+            tExit = -1f;
+            bool any = false;
+            float r2 = r * r;
+            for (int k = 0; k < 2; k++)
+            {
+                Vector3 oc = p - (k == 0 ? a : a + ab);
+                float b = Vector3.Dot(oc, d), disc = b * b - (oc.sqrMagnitude - r2);
+                if (disc < 0f) continue;
+                float t1 = -b + Mathf.Sqrt(disc);
+                if (t1 >= 0f && (!any || t1 > tExit)) { tExit = t1; any = true; }
+            }
+            if (len2 > 1e-10f)
+            {
+                float len = Mathf.Sqrt(len2);
+                Vector3 u = ab / len, w = p - a;
+                float dd = Vector3.Dot(d, u), wu = Vector3.Dot(w, u);
+                Vector3 wp = w - u * wu, dp = d - u * dd;
+                float A = dp.sqrMagnitude, B = Vector3.Dot(wp, dp), C = wp.sqrMagnitude - r2;
+                float lo = -float.MaxValue, hi = float.MaxValue;
+                bool ok = true;
+                if (A > 1e-8f)
+                {
+                    float disc = B * B - A * C;
+                    if (disc < 0f) ok = false;
+                    else { float sq = Mathf.Sqrt(disc); lo = (-B - sq) / A; hi = (-B + sq) / A; }
+                }
+                else if (C > 0f) ok = false;   // parallel to the axis and outside the tube
+                if (ok)
+                {
+                    if (Mathf.Abs(dd) > 1e-6f)
+                    {
+                        float s0 = -wu / dd, s1 = (len - wu) / dd;   // the end planes
+                        if (s0 > s1) { float x = s0; s0 = s1; s1 = x; }
+                        if (s0 > lo) lo = s0;
+                        if (s1 < hi) hi = s1;
+                    }
+                    else if (wu < 0f || wu > len) ok = false;
+                    if (ok && hi >= lo && hi >= 0f && (!any || hi > tExit)) { tExit = hi; any = true; }
+                }
+            }
+            return any;
+        }
+
         // Every frame after Body applies (bones carry our scales), inside the apply step: the soft points' springs and contacts.
-        // softness 0..1 (stiff..soft), spring 0..1 (0 = settles at once and doesn't lag her motion).
+        // softness 0..1 (stiff..soft), spring 0..1 (0 = settles at once and doesn't lag her motion). quality (0..2) is accepted so the
+        // caller can pass its setting along; the build's own quality (Update) decides the points, so nothing here depends on it.
         public void Simulate(float dt, List<SoftCapsule> caps, float softness, float spring, bool debug, int quality = 1)
         {
             int nh = _helpers.Count;
@@ -126,6 +219,7 @@ namespace SfMorph
                         if (sbb > MaxCapSpeed * MaxCapSpeed) vb *= MaxCapSpeed / Mathf.Sqrt(sbb);
                     }
                 }
+                if (reset || !_cOk[i]) _cHand[i] = HandOf(cp);
                 _cPA[i] = a; _cPB[i] = b; _cOk[i] = true;
                 _cA[i] = a; _cB[i] = b; _cVA[i] = va; _cVB[i] = vb;
                 _cR[i] = cp.Radius;
@@ -140,7 +234,7 @@ namespace SfMorph
             for (int i = 0; i < nh; i++)
             {
                 var h = _helpers[i];
-                h.Touched = false; h.Bulged = false; h.Push = Vector3.zero;
+                h.Touched = false; h.Bulged = false; h.Push = Vector3.zero; h.HandMask = 0;
                 if (!_bOk[h.BoneIdx]) continue;
                 var m = _bL2W[h.BoneIdx];
                 var r = m.MultiplyPoint3x4(h.SLocal);
@@ -199,14 +293,26 @@ namespace SfMorph
                     float reach = cr + PointRadius + Margin;
                     float d2 = u.sqrMagnitude;
                     if (d2 >= reach * reach) continue;
-                    float dist = Mathf.Sqrt(d2);
-                    Vector3 dir = dist > 1e-5f ? u / dist : h.N;   // from the capsule to the point; inside its axis: into the body
-                    h.Disp = closest + dir * reach - h.R;
-                    // no velocity into the capsule; at most 60% of the capsule's own speed along the push (set, not summed, so it can't pile up)
+                    // Imprint: the point goes along its inward normal to where that line leaves the capsule, so the dent has the capsule's profile.
+                    // No exit found (numerically on the axis, or the normal is degenerate): the old radial push out of the capsule.
+                    float te;
+                    Vector3 np;
+                    if (RayExit(p, h.N, a, ab, len2, reach, out te)) np = p + h.N * (te + 1e-4f);
+                    else
+                    {
+                        float dist = Mathf.Sqrt(d2);
+                        np = closest + (dist > 1e-5f ? u / dist : h.N) * reach;
+                    }
+                    h.Disp = np - h.R;
+                    // the capsule's own outward direction at the new place: no velocity into it; at most 60% of its speed along it (set, not summed)
+                    Vector3 un = np - (a + ab * (len2 > 1e-10f ? Mathf.Clamp01(Vector3.Dot(np - a, ab) / len2) : 0f));
+                    float unm = un.magnitude;
+                    Vector3 dir = unm > 1e-5f ? un / unm : h.N;
                     float vn = Vector3.Dot(h.Vel, dir);
                     if (vn < 0f) { h.Vel -= dir * vn; vn = 0f; }
                     float vc = Vector3.Dot(_cVA[ci] + (_cVB[ci] - _cVA[ci]) * t, dir) * 0.6f;
                     if (vc > vn) h.Vel += dir * (vc - vn);
+                    if (_cHand[ci] != 0) h.HandMask |= _cHand[ci];
                     h.Touched = true; h.Asleep = false; h.LastCap = ci;
                     _cHit[ci] = true;
                 }
@@ -220,18 +326,41 @@ namespace SfMorph
                 if (!h.Asleep) Clamp(h, limit);
             }
 
+            // 5b: how deep each physics hand is into her (the deepest touched point's inward dent, as a share of the limit), smoothed 0.1 s
+            float dentL = 0f, dentR = 0f;
+            for (int i = 0; i < nh; i++)
+            {
+                var h = _helpers[i];
+                if (!h.Touched || h.HandMask == 0) continue;
+                float dn = Vector3.Dot(h.Disp, h.N);
+                if (dn > limit) dn = limit;
+                if ((h.HandMask & 1) != 0 && dn > dentL) dentL = dn;
+                if ((h.HandMask & 2) != 0 && dn > dentR) dentR = dn;
+            }
+            {
+                float ka = 1f - Mathf.Exp(-dt / 0.1f);
+                _rL += (Mathf.Clamp01(dentL / limit) - _rL) * ka;
+                _rR += (Mathf.Clamp01(dentR / limit) - _rR) * ka;
+                LeftResist = _rL; RightResist = _rR; _ownsResist = true;
+                if (_rL > _peakRL) _peakRL = _rL;
+                if (_rR > _peakRR) _peakRR = _rR;
+                if (dentL > _peakDL) _peakDL = dentL;
+                if (dentR > _peakDR) _peakDR = dentR;
+            }
+
             // 6: a hit drags the zone's other points along, fading with distance
             for (int i = 0; i < nh; i++)
             {
                 var h = _helpers[i];
                 if (!h.Touched || h.Push.sqrMagnitude < 1e-10f) continue;
                 float s2 = _zSigma[h.ZoneIdx]; s2 *= s2;
+                float bulge = _zBulge[h.ZoneIdx];
                 for (int j = _zH0[h.ZoneIdx]; j < _zH1[h.ZoneIdx]; j++)
                 {
                     var o = _helpers[j];
                     if (o.Point == h.Point || !_bOk[o.BoneIdx]) continue;
                     var dr = o.R - h.R;
-                    o.Disp += h.Push * (0.25f * Mathf.Exp(-dr.sqrMagnitude / s2));
+                    o.Disp += h.Push * (bulge * Mathf.Exp(-dr.sqrMagnitude / s2));
                     o.Asleep = false; o.Bulged = true;
                 }
             }
@@ -318,8 +447,9 @@ namespace SfMorph
             if (_nContacts > 0 && Time.unscaledTime >= _nextSummary)
             {
                 _nextSummary = Time.unscaledTime + 10f;
-                Plugin.Log.LogInfo("Soft zones: " + Contacts + ", deepest " + (_peak * 100f).ToString("0.0") + " cm since the last line");
-                _peak = 0f;
+                Plugin.Log.LogInfo("Soft zones: " + Contacts + ", deepest " + (_peak * 100f).ToString("0.0") + " cm since the last line; physics hands: dent L "
+                                   + (_peakDL * 100f).ToString("0.0") + " cm / R " + (_peakDR * 100f).ToString("0.0") + " cm, resist L " + _peakRL.ToString("0.00") + " / R " + _peakRR.ToString("0.00"));
+                _peak = 0f; _peakRL = _peakRR = _peakDL = _peakDR = 0f;
             }
         }
 
