@@ -16,6 +16,9 @@ namespace SfMorph
         // 0.8.0: his fingers rest neutral (trigger = index, grip = clasp that stops on her), his elbow swings around her, the rest curl
         public bool NeutralFingers = true, ElbowAvoid = true;
         public float RestCurl = 0.25f;
+        // how soft her body is (the Physics tab's Softness, 0..1): the clasp sinks past first contact by ClaspGive * (0.5 + Softness).
+        // Body.cs fills it next to RestCurl (or HerBody.Softness once P2 publishes it).
+        public float Softness = 0.5f;
         // Controller -> his wrist (m, degrees), in the controller's axes. The position is where the wrist sits relative to the
         // tracked pose (Quest Touch, from Embody for VaM); the right hand is the left mirrored. The rotation is added to an
         // automatic hand alignment (fingers along the controller's forward, thumb along its up, palm toward the body's midline;
@@ -27,9 +30,23 @@ namespace SfMorph
     internal class Embody
     {
         public string Status = "";
+        static Embody _inst;
+        public Embody() { _inst = this; }
+
         // 0.8.0 (design-0.8.0 section 6.3): his hands at the CONTROLLER (the IK target), only for arms Embody drives this frame and only
-        // while !PhysicsHands.Active. Stub until P3.
-        internal static int FillGhost(WorldCap[] into, int start, int max) { return 0; }
+        // while !PhysicsHands.Active (the physics ghost stands for the same hand otherwise). HerBody.Update calls it before Embody's
+        // own step, so it reads the previous step's finger curl and trail (a frame of lag at most) and this frame's controller.
+        internal static int FillGhost(WorldCap[] into, int start, int max)
+        {
+            var e = _inst;
+            if (e == null || into == null || max <= 0 || start < 0) return 0;
+            try { return e.Ghost(into, start, max); }
+            catch (Exception ex)
+            {
+                if (!e._ghostErr) { e._ghostErr = true; Plugin.Log.LogWarning("Embody: ghost capsules failed (logged once): " + ex.Message); }
+                return 0;
+            }
+        }
         // True while Embody's IK wrote that arm of his this frame (or last frame: callers that run before the apply step see
         // the previous frame's write). False as soon as the arm is given back.
         public bool DrivesArm(bool left)
@@ -54,6 +71,18 @@ namespace SfMorph
         static readonly float[] FingerMax = { 80f, 90f, 60f };   // curl at full grip, proximal / middle / distal (same as the physics hands)
         static readonly float[] ThumbMax = { 20f, 35f, 45f };
         static readonly string[] FingerWord = { "thumb", "index", "middle", "ring", "pinky" };
+        // 0.8.0 commands (the same numbers as the physics hands, design 5.1): rest curl per finger at RestCurl 0.25, the followers' share
+        // of the touching fingers' average curl (DynamicLimbs: 0.5 index/pinky, 0.75 middle/ring), the ease (15/s, at most 8/s)
+        static readonly float[] RestCurlF = { 0.15f, 0.20f, 0.25f, 0.30f, 0.35f };
+        static readonly float[] FollowerK = { 0f, 0.5f, 0.75f, 0.75f, 0.5f };
+        const float EaseRate = 15f, EaseMax = 8f;
+        const float FanR = 0.010f;          // finger probe radius (m) of the analytic fan
+        const float GhostFingerR = 0.009f, GhostThumbR = 0.010f, GhostPalmR = 0.015f;
+        // elbow swivel: arm capsule radii (m), how far the forearm capsule runs toward the wrist (the hand itself may touch her),
+        // the penetration that starts a search / that is good enough / that keeps the current swivel, the ease (1/s)
+        const float UpperArmR = 0.045f, ForearmR = 0.035f, ForearmShare = 0.7f;
+        const float SwivelStart = 0.010f, SwivelOk = 0.010f, SwivelKeep = 0.015f, SwivelEase = 8f, SwivelRetry = 0.25f;
+        static readonly float[] SwivelDeg = { 0f, 15f, 30f, 45f, 60f, 90f, 120f };
 
         // One arm: Shoulder (upper arm joint), Elbow, Wrist, and the finger roots that give the hand its frame.
         class Arm
@@ -75,6 +104,22 @@ namespace SfMorph
             public Finger[] Fingers;
             public string FingerInfo = "", FingerSrc = "";
             public float Curl = -1f;        // the grip as his fingers follow it (smoothed)
+            // 0.8.0 neutral fingers: the palm normal and each finger root in the wrist's frame (metres), per-finger commands as eased
+            public Vector3 PalmNL;
+            public readonly Vector3[] RootW = new Vector3[5];
+            public readonly float[] FCurl = new float[5];
+            public bool FInit;
+            public int NeutralN;            // fingers with a neutral base from the bind pose
+            public string NeutralRend = "", NeutralDiag = "";
+            public bool WasStopped;         // a finger stopped on her last step (counts stop EVENTS, not frames)
+            public int Stops, SwN;          // 10 s diagnostics: clasp stops, frames with a swivel
+            public float SwSum, SwMax;
+            // 0.8.0 elbow swivel (degrees about the shoulder -> target line): applied, target; where we put the elbow, what we applied
+            // to the pole there (so a pass that finds the pole already swivelled can take it out again), the next search time
+            public float Swivel, SwivelT, Applied, NextSearch;
+            public Vector3 PlacedElbow;
+            public bool SwivelLogged;
+            public string GhostBy; public int GhostIdx = -1;
             // Follow of the IK target (world): the smoothed point, its velocity, and how far it trails the raw target.
             public bool Follow;
             public Vector3 SmoothT, SmoothV, LastRaw, Lag;
@@ -88,6 +133,12 @@ namespace SfMorph
             public readonly Vector3[] AxisL = new Vector3[3];
             public readonly Quaternion[] Pre = new Quaternion[3], Post = new Quaternion[3];
             public readonly bool[] Written = new bool[3];
+            // 0.8.0 neutral pose from the bind pose (null = the animation's pose is the base): rotation of each bone relative to the
+            // previous one in the chain (the wrist for the first), the joints' origins (+ the tip) and rotations in the wrist's frame
+            public Quaternion[] Neutral;
+            public Vector3[] NP;            // 4: B0, B1, B2, tip (metres)
+            public Quaternion[] NQ;         // 3: neutral rotations in the wrist's frame
+            public FingerFan Fan;
         }
 
         // His bones, found once per partner.
@@ -107,7 +158,9 @@ namespace SfMorph
         EmbodySettings _cur;
         bool _active, _failed, _subscribed, _snapPending;
         int _partnerIdx = -1;
-        float _nextRig, _nextStatus;
+        float _nextRig, _nextStatus, _nextStat;
+        bool _ghostErr;
+        readonly HashSet<string> _claspLogged = new HashSet<string>();
 
         // The eye point in his head's frame (so it survives the head being scaled away), his head's directions now.
         Vector3 _eyeRel, _hFwd, _hUp;
@@ -174,6 +227,7 @@ namespace SfMorph
             _active = false; _failed = false; _partnerIdx = -1; _nextRig = 0f; _snapPending = false;
             _snapLogged = false; _lateLogged = false; _jumpLogged = false; _lateUntil = 0; _fight = 0;
             _eyeInit = false; _rootCam = null; _nextRoot = 0f;
+            _claspLogged.Clear(); _nextStat = 0f;
             Status = "";
         }
 
@@ -386,9 +440,10 @@ namespace SfMorph
             foreach (var a in new[] { r.L, r.R }) Calibrate(a);
             foreach (var a in new[] { r.L, r.R })
             {
-                try { FindFingers(a, human ? an : null); }
+                try { FindFingers(a, human ? an : null, go.transform); }
                 catch (Exception e) { a.Fingers = null; a.FingerInfo = "search failed: " + e.Message; }
             }
+            LogNeutral(r, go);
 
             var sb = new StringBuilder();
             sb.Append("Embody: partner '").Append(go.name).Append("' via ").Append(via).Append(": head ").Append(r.Head != null ? r.Head.name : "MISSING")
@@ -462,7 +517,7 @@ namespace SfMorph
         // are found by name; three bones per finger (the three deepest, but a trailing end joint with nothing below it is not one).
         // Curl axis = cross(finger direction, palm normal), so a positive angle moves the tip toward the palm; the palm normal comes
         // from the fingers' curvature when it is clear, else from the hand's chirality (index side of the knuckle line = thumb side).
-        static void FindFingers(Arm a, Animator human)
+        static void FindFingers(Arm a, Animator human, Transform root)
         {
             a.Fingers = null; a.FingerInfo = "none"; a.Curl = -1f;
             if (!a.Ready) { a.FingerInfo = "none (no arm)"; return; }
@@ -540,8 +595,130 @@ namespace SfMorph
                 ax.Normalize();
                 for (int j = 0; j < 3; j++) fin[f].AxisL[j] = Quaternion.Inverse(fin[f].B[j].rotation) * ax;
             }
+            var wi = Quaternion.Inverse(a.Wrist.rotation);
+            a.PalmNL = wi * normal;
+            for (int f = 0; f < 5; f++) if (fin[f] != null) a.RootW[f] = wi * (fin[f].B[0].position - a.Wrist.position);
             a.Fingers = fin;
             a.FingerInfo = got + "/5 (palm normal by " + how + "; " + names + ")";
+            BuildNeutral(a, root);
+        }
+
+        // The neutral hand from the bind pose (design 6.1): the bone-to-wrist matrix of each finger bone is Bwrist * Bj^-1 (Bj = the
+        // mesh -> bone bind matrix), so its rotation part is the bone's neutral rotation in the wrist's frame and its translation the
+        // joint's origin there (in the wrist's local units: times the wrist's lossy scale for metres). A renderer that carries the wrist
+        // and a whole finger chain gives that finger its neutral pose; a body mesh is preferred. Anything missing leaves that finger's
+        // Neutral null: it then rests in the animation's pose as before, and the clasp skips it.
+        static void BuildNeutral(Arm a, Transform root)
+        {
+            a.NeutralN = 0; a.NeutralRend = ""; a.NeutralDiag = "";
+            if (a.Fingers == null || root == null) return;
+            SkinnedMeshRenderer best = null; int bestN = -1; bool bestBody = false;
+            var bestIdx = new int[16];
+            var idx = new int[16];
+            foreach (var r in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                if (r == null || r.sharedMesh == null || r.bones == null || VrHands.UnderSf(r.transform)) continue;
+                var bones = r.bones;
+                idx[0] = Array.IndexOf(bones, a.Wrist);
+                if (idx[0] < 0) continue;
+                int n = 0;
+                for (int f = 0; f < 5; f++)
+                {
+                    var fg = a.Fingers[f];
+                    bool ok = fg != null;
+                    for (int j = 0; j < 3; j++)
+                    {
+                        int k = ok ? Array.IndexOf(bones, fg.B[j]) : -1;
+                        idx[1 + f * 3 + j] = k;
+                        if (k < 0) ok = false;
+                    }
+                    if (ok) n++;
+                }
+                bool body = r.name.ToLowerInvariant().Contains("body") || r.sharedMesh.name.ToLowerInvariant().Contains("body");
+                if (n > bestN || (n == bestN && body && !bestBody))
+                {
+                    best = r; bestN = n; bestBody = body;
+                    Array.Copy(idx, bestIdx, 16);
+                }
+            }
+            if (best == null || bestN <= 0) return;
+            var bp = best.sharedMesh.bindposes;
+            var ls = a.Wrist.lossyScale;
+            float sc = (Mathf.Abs(ls.x) + Mathf.Abs(ls.y) + Mathf.Abs(ls.z)) / 3f;
+            if (!(sc > 1e-6f) || float.IsInfinity(sc) || bestIdx[0] >= bp.Length) return;
+            var bw = bp[bestIdx[0]];
+            var wi = Quaternion.Inverse(a.Wrist.rotation);
+            float rootDev = 0f, axisDev = 0f;
+            int got = 0;
+            for (int f = 0; f < 5; f++)
+            {
+                var fg = a.Fingers[f];
+                if (fg == null) continue;
+                bool ok = true;
+                var np = new Vector3[4]; var nq = new Quaternion[3];
+                for (int j = 0; j < 3 && ok; j++)
+                {
+                    int k = bestIdx[1 + f * 3 + j];
+                    if (k < 0 || k >= bp.Length) { ok = false; break; }
+                    var m = bw * bp[k].inverse;
+                    np[j] = (Vector3)m.GetColumn(3) * sc;
+                    nq[j] = RotOf(m);
+                    if (!Finite(np[j]) || np[j].sqrMagnitude > 0.25f || !Finite(nq[j])) ok = false;
+                }
+                if (!ok) continue;
+                np[3] = np[2] + (np[2] - np[1]) * 0.8f;
+                // the bind pose and the live rig must agree where the finger starts, else these are not the matrices for these bones
+                float dev = (np[0] - wi * (fg.B[0].position - a.Wrist.position)).magnitude;
+                if (dev > 0.02f) continue;
+                rootDev = Mathf.Max(rootDev, dev);
+                // the curl axis again, in the neutral pose: across the finger and the palm normal (the hand's own: it does not curl)
+                var dn = np[1] - np[0];
+                var axw = dn.sqrMagnitude > 1e-10f ? Vector3.Cross(dn.normalized, a.PalmNL) : Vector3.zero;
+                if (axw.sqrMagnitude > 1e-4f)
+                {
+                    axw.Normalize();
+                    for (int j = 0; j < 3; j++)
+                    {
+                        var axl = Quaternion.Inverse(nq[j]) * axw;
+                        axisDev = Mathf.Max(axisDev, Vector3.Angle(axl, fg.AxisL[j]));
+                        fg.AxisL[j] = axl;
+                    }
+                }
+                var rel = new Quaternion[3];
+                rel[0] = nq[0];
+                rel[1] = Quaternion.Inverse(nq[0]) * nq[1];
+                rel[2] = Quaternion.Inverse(nq[1]) * nq[2];
+                fg.NP = np; fg.NQ = nq; fg.Neutral = rel;
+                fg.Fan = new FingerFan();
+                fg.Fan.Build(3, np, nq, fg.AxisL, f == 0 ? ThumbMax : FingerMax, FanR);
+                got++;
+            }
+            a.NeutralN = got;
+            a.NeutralRend = best.name;
+            a.NeutralDiag = "finger roots match the live rig to " + (rootDev * 1000f).ToString("0.0") + " mm, curl axes moved up to " + axisDev.ToString("0") + " deg from the animation pose's";
+        }
+
+        static bool Finite(Vector3 v) { return !(float.IsNaN(v.x) || float.IsNaN(v.y) || float.IsNaN(v.z) || float.IsInfinity(v.x) || float.IsInfinity(v.y) || float.IsInfinity(v.z)); }
+        static bool Finite(Quaternion q) { return !(float.IsNaN(q.x) || float.IsNaN(q.y) || float.IsNaN(q.z) || float.IsNaN(q.w)); }
+
+        // The rotation of a bone-to-parent matrix from its z and y axes, so a scale in the matrix does not tilt it (PhysicsHands.Decompose).
+        static Quaternion RotOf(Matrix4x4 m)
+        {
+            Vector3 c1 = m.GetColumn(1), c2 = m.GetColumn(2);
+            return c1.sqrMagnitude > 1e-12f && c2.sqrMagnitude > 1e-12f ? Quaternion.LookRotation(c2.normalized, c1.normalized) : Quaternion.identity;
+        }
+
+        // Once per partner: where his fingers' neutral pose came from, or why they rest in the animation's.
+        void LogNeutral(Rig r, GameObject go)
+        {
+            if (r.L.Fingers == null && r.R.Fingers == null) return;
+            if (r.L.NeutralN + r.R.NeutralN > 0)
+            {
+                string rend = r.L.NeutralN > 0 ? r.L.NeutralRend : r.R.NeutralRend;
+                Plugin.Log.LogInfo("Embody: neutral finger pose from the bind pose of '" + rend + "' (left " + r.L.NeutralN + "/5, right " + r.R.NeutralN + "/5 fingers); rest curl "
+                    + (_cur != null ? _cur.RestCurl : 0.25f).ToString("0.00") + "; left: " + r.L.NeutralDiag + "; right: " + r.R.NeutralDiag);
+            }
+            else Plugin.Log.LogInfo("Embody: no skinned renderer carries his finger bones: fingers rest in the animation's pose (no clasp stop either)");
         }
 
         // The first transform below root (breadth first, so Finger1 before Finger2) whose name contains the word.
@@ -818,6 +995,30 @@ namespace SfMorph
         {
             DoArm(_rig.L, s.Hands == 1 || s.Hands == 3, VrHands.LeftController, s.LeftPos, s.LeftRot);
             DoArm(_rig.R, s.Hands == 2 || s.Hands == 3, VrHands.RightController, s.RightPos, s.RightRot);
+            LogStats();
+        }
+
+        // Every 10 s, only when something happened: how much each elbow swivelled, how often a clasp stopped on her.
+        void LogStats()
+        {
+            float now = Time.unscaledTime;
+            if (now < _nextStat) return;
+            _nextStat = now + 10f;
+            var l = _rig.L; var r = _rig.R;
+            if (l.SwN + r.SwN + l.Stops + r.Stops > 0)
+            {
+                var sb = new StringBuilder("Embody: last 10 s: elbow swivel L ");
+                SwivelWord(sb, l); sb.Append(", R "); SwivelWord(sb, r);
+                sb.Append("; clasp stops L ").Append(l.Stops).Append(" R ").Append(r.Stops);
+                Plugin.Log.LogInfo(sb.ToString());
+            }
+            l.SwN = r.SwN = l.Stops = r.Stops = 0; l.SwSum = r.SwSum = l.SwMax = r.SwMax = 0f;
+        }
+
+        static void SwivelWord(StringBuilder sb, Arm a)
+        {
+            if (a.SwN == 0) sb.Append("none");
+            else sb.Append("avg ").Append((a.SwSum / a.SwN).ToString("0")).Append(" deg max ").Append(a.SwMax.ToString("0"));
         }
 
         void DoArm(Arm a, bool want, Transform ctrl, Vector3 pos, Vector3 rot)
@@ -866,7 +1067,25 @@ namespace SfMorph
             if (pole.sqrMagnitude < 1e-6f) pole = Vector3.down - dir * Vector3.Dot(Vector3.down, dir);   // a straight arm: elbow down
             if (pole.sqrMagnitude < 1e-6f) pole = Vector3.Cross(dir, Vector3.right);
             pole.Normalize();
-            var B2 = A + dir * (l1 * cosA) + pole * (l1 * sinA);
+            // 0.8.0 elbow swivel (design 6.4). The pole above comes from where the elbow is now: the animation's, unless nothing rewrote
+            // the arm since our last write, then it already carries the swivel we applied (take that out again, so it is never added twice;
+            // the pre-render pass finds our own elbow the same way).
+            if (a.Written && Mathf.Abs(a.Applied) > 0.01f && (B - a.PlacedElbow).sqrMagnitude < 0.005f * 0.005f)
+            {
+                var un = Ik.SwivelPole(pole, dir, -a.Applied);
+                if (un.sqrMagnitude > 1e-8f && Finite(un)) pole = un.normalized;
+            }
+            float cA = l1 * cosA, sA = l1 * sinA;
+            if (save) SwivelStep(a, A, dir, pole, cA, sA, Tc);
+            if (float.IsNaN(a.Swivel) || float.IsInfinity(a.Swivel)) a.Swivel = a.SwivelT = 0f;
+            if (Mathf.Abs(a.Swivel) > 0.01f)
+            {
+                var sp = Ik.SwivelPole(pole, dir, a.Swivel);
+                if (sp.sqrMagnitude > 1e-8f && Finite(sp)) pole = sp.normalized;
+            }
+            a.Applied = a.Swivel;
+            var B2 = A + dir * cA + pole * sA;
+            a.PlacedElbow = B2;
 
             if (save)
             {
@@ -883,6 +1102,77 @@ namespace SfMorph
             }
             a.Placed = a.Wrist.position;
             a.PlacedFrame = Time.frameCount;
+        }
+
+        // Penetration of his two arm capsules into her skin for a swivel phi (degrees): the upper arm shoulder -> elbow, and the forearm
+        // from the elbow toward the wrist but not all the way (the hand itself is allowed to touch her; the wrist end would otherwise
+        // read as the arm passing through her whenever the palm rests on her skin and no swivel could ever fix it).
+        static float ArmPen(Vector3 A, Vector3 dir, Vector3 pole0, float cA, float sA, Vector3 Tc, float phi, out int seg)
+        {
+            var p = pole0;
+            if (Mathf.Abs(phi) > 0.01f)
+            {
+                var sp = Ik.SwivelPole(pole0, dir, phi);
+                if (sp.sqrMagnitude > 1e-8f && Finite(sp)) p = sp.normalized;
+            }
+            var B2 = A + dir * cA + p * sA;
+            var Wm = Vector3.Lerp(B2, Tc, ForearmShare);
+            int s1, s2; Vector3 n;
+            float p1 = HerBody.CapsuleDepth(A, B2, UpperArmR, 0u, out s1, out n);
+            float p2 = HerBody.CapsuleDepth(B2, Wm, ForearmR, 0u, out s2, out n);
+            seg = p2 > p1 ? s2 : s1;
+            return Mathf.Max(p1, p2);
+        }
+
+        // The elbow swivel target and its ease (design 6.4), once per frame. With the animation's pole (swivel 0) clear of her nothing
+        // happens and the swivel eases back to 0. Otherwise the current target is kept while it is clear enough (hysteresis: it does not
+        // flip between two good answers) and a search for the smallest swivel that clears her runs only when it is not, at most every
+        // 0.25 s when it finds nothing better.
+        void SwivelStep(Arm a, Vector3 A, Vector3 dir, Vector3 pole0, float cA, float sA, Vector3 Tc)
+        {
+            float target = 0f;
+            if (_cur != null && _cur.ElbowAvoid && HerBody.Built)
+            {
+                int seg0;
+                float pen0 = ArmPen(A, dir, pole0, cA, sA, Tc, 0f, out seg0);
+                if (pen0 > SwivelStart)
+                {
+                    target = a.SwivelT;
+                    int sg;
+                    float penCur = Mathf.Abs(target) < 0.5f ? pen0 : ArmPen(A, dir, pole0, cA, sA, Tc, target, out sg);
+                    float now = Time.unscaledTime;
+                    if (penCur >= SwivelKeep && now >= a.NextSearch)
+                    {
+                        float bestPhi = 0f, bestPen = pen0;
+                        bool clear = false;
+                        for (int i = 1; i < SwivelDeg.Length && !clear; i++)
+                        {
+                            for (int sgn = 1; sgn >= -1; sgn -= 2)
+                            {
+                                float phi = SwivelDeg[i] * sgn;
+                                float pen = ArmPen(A, dir, pole0, cA, sA, Tc, phi, out sg);
+                                if (pen < bestPen) { bestPen = pen; bestPhi = phi; }
+                                if (pen < SwivelOk) clear = true;   // the other sign of this size still competes for the smaller penetration
+                            }
+                        }
+                        if (bestPen < penCur - 0.004f) target = bestPhi;
+                        else a.NextSearch = now + SwivelRetry;
+                        if (Mathf.Abs(target) > 0.5f && !a.SwivelLogged)
+                        {
+                            a.SwivelLogged = true;
+                            string sn = seg0 >= 0 && seg0 < HerBody.SegNames.Length ? HerBody.SegNames[seg0] : "body";
+                            Plugin.Log.LogInfo("Embody: his " + a.Side + " elbow swivels around her (first time: " + target.ToString("0") + " deg, the arm was "
+                                + (pen0 * 100f).ToString("0.0") + " cm inside her " + sn + ")");
+                        }
+                    }
+                }
+            }
+            a.SwivelT = target;
+            float dt = Mathf.Max(_dt, 1e-4f);
+            float d = a.SwivelT - a.Swivel;
+            a.Swivel = Mathf.Abs(d) < 0.05f ? a.SwivelT : a.Swivel + d * (1f - Mathf.Exp(-SwivelEase * dt));
+            float aw = Mathf.Abs(a.Swivel);
+            if (aw > 1f) { a.SwN++; a.SwSum += aw; if (aw > a.SwMax) a.SwMax = aw; }
         }
 
         // Exact critically damped step toward `raw` (zeta 1, FollowHz) over this frame, reset on a first frame, a hitch or a jump.
@@ -935,51 +1225,225 @@ namespace SfMorph
             return false;
         }
 
-        // Curls his fingers on top of the pose the animation gave them: by the simulated fingers of the physics hand when it has them
-        // (its curl angle per bone, applied about his own curl axis), else by the grip. dt 0: no smoothing step (the pre-render pass).
-        void WriteFingers(Arm a, float dt)
+        static float Grip01(float v) { return float.IsNaN(v) ? 0f : Mathf.Clamp01(v); }
+
+        // The finger commands (design 5.1/6.2, the physics hands' numbers): the trigger curls the index, the grip the middle, ring and
+        // pinky, the thumb opposes with max(grip, 0.6 trigger); each rests at RestCurlF scaled by RestCurl / 0.25.
+        void Commands(bool left, float[] cmd)
         {
-            bool left = a.Side == "left";
-            float grip = Mathf.Clamp01(left ? Grip.Left : Grip.Right);
-            if (float.IsNaN(grip)) grip = 0f;
-            if (a.Curl < 0f) a.Curl = grip;
-            else if (dt > 0f) a.Curl += (grip - a.Curl) * (1f - Mathf.Exp(-CurlRate * dt));
-
-            float[] curl = left ? PhysicsHands.LeftFingerCurlDeg : PhysicsHands.RightFingerCurlDeg;
-            bool useSim = PhysicsHands.Active && (left ? PhysicsHands.LeftFingersValid : PhysicsHands.RightFingersValid)
-                          && curl != null && curl.Length >= 15;
-            string src = useSim ? "simulated" : "grip";
-            if (src != a.FingerSrc)
+            float rs = _cur != null ? Mathf.Clamp01(_cur.RestCurl) / 0.25f : 1f;
+            float grip = Grip01(left ? Grip.Left : Grip.Right), trig = Grip01(left ? Grip.TriggerLeft : Grip.TriggerRight);
+            for (int f = 0; f < 5; f++)
             {
-                a.FingerSrc = src;
-                Plugin.Log.LogInfo("Embody: his " + a.Side + " fingers now follow " + (useSim ? "the physics hand's simulated fingers" : "the controller grip (Grip." + (left ? "Left" : "Right") + ", " + Grip.Source + ")")
-                    + (PhysicsHands.Active && !useSim ? " [its fingers are not valid]" : ""));
+                float rest = Mathf.Clamp01(RestCurlF[f] * rs);
+                float drive = f == 1 ? trig : f == 0 ? Mathf.Max(grip, 0.6f * trig) : grip;
+                cmd[f] = Mathf.Lerp(rest, 1f, drive);
             }
+        }
 
+        static readonly float[] _cmd = new float[5], _contact = new float[5];
+        static readonly int[] _cseg = new int[5];
+
+        // One step of the neutral-pose fingers' curl (design 6.2): the commands, the analytic fan against her skin (open-loop: it depends only
+        // on the wrist's pose, so the fingers closing cannot change what it senses), DynamicLimbs' followers when some finger has touched,
+        // the stop at contact + ClaspGive * (0.5 + Softness), then the ease (exponential 15/s, at most 8/s: DL's 0.15 s).
+        void UpdateFingerCurl(Arm a, bool left, float dt)
+        {
+            Commands(left, _cmd);
+            bool fan = HerBody.Built;   // the fan tests her skin shapes: without them the clasp has nothing to stop on
+            float sumC = 0f; int nTouch = 0;
+            for (int f = 0; f < 5; f++)
+            {
+                _contact[f] = 1f; _cseg[f] = -1;
+                var fg = a.Fingers[f];
+                if (!fan || fg == null || fg.Fan == null) continue;
+                int sg;
+                float c = fg.Fan.ConformAnalytic(a.Wrist.position, a.Wrist.rotation, 1f, out sg);
+                if (float.IsNaN(c)) c = 1f;
+                c = Mathf.Clamp01(c);
+                _contact[f] = c; _cseg[f] = sg;
+                if (c < 1f && f != 0) { sumC += c; nTouch++; }
+            }
+            float avg = nTouch > 0 ? sumC / nTouch : 1f;
+            float soft = _cur != null ? Mathf.Clamp01(_cur.Softness) : 0.5f;
+            bool stopped = false;
             for (int f = 0; f < 5; f++)
             {
                 var fg = a.Fingers[f];
                 if (fg == null) continue;
+                float target = _cmd[f];
+                if (nTouch > 0 && _contact[f] >= 1f && f != 0 && fg.Fan != null) target = Mathf.Max(target, FollowerK[f] * avg);
+                float fin = target;
+                if (_contact[f] < 1f)
+                {
+                    float give = HerBody.ClaspGive(_cseg[f]) * (0.5f + soft);
+                    if (float.IsNaN(give) || give < 0f) give = 0f;
+                    fin = Mathf.Min(target, _contact[f] + give);
+                    if (fin < target - 0.02f)
+                    {
+                        stopped = true;
+                        string sn = _cseg[f] >= 0 && _cseg[f] < HerBody.SegNames.Length ? HerBody.SegNames[_cseg[f]] : "body";
+                        if (_claspLogged.Add(a.Side + sn))
+                            Plugin.Log.LogInfo("Embody: " + a.Side + " clasp stopped on her " + sn + " at curl " + fin.ToString("0.00") + " (cmd " + target.ToString("0.00") + ", give " + give.ToString("0.00") + ")");
+                    }
+                }
+                fin = Mathf.Clamp01(fin);
+                if (!a.FInit) a.FCurl[f] = fin;
+                else
+                {
+                    float step = (fin - a.FCurl[f]) * (1f - Mathf.Exp(-EaseRate * dt));
+                    a.FCurl[f] += Mathf.Clamp(step, -EaseMax * dt, EaseMax * dt);
+                }
+            }
+            a.FInit = true;
+            if (stopped && !a.WasStopped) a.Stops++;
+            a.WasStopped = stopped;
+        }
+
+        // Curls his fingers on top of a base pose: the simulated fingers of the physics hand when it has them (its curl angle per bone,
+        // applied about his own curl axis), else the commands (trigger = index, grip = the rest, stopping on her skin) or, with
+        // NeutralFingers off, the grip alone as in 0.7.x. The base is the neutral hand from the bind pose where we have it (world
+        // rotations, top-down per finger so helper bones between do not matter), else the animation's own pose.
+        // dt 0: no step (the pre-render pass writes the same pose again).
+        void WriteFingers(Arm a, float dt)
+        {
+            bool left = a.Side == "left";
+            float[] curl = left ? PhysicsHands.LeftFingerCurlDeg : PhysicsHands.RightFingerCurlDeg;
+            bool useSim = PhysicsHands.Active && (left ? PhysicsHands.LeftFingersValid : PhysicsHands.RightFingersValid)
+                          && curl != null && curl.Length >= 15;
+            bool cmdMode = _cur != null && _cur.NeutralFingers && !useSim;
+            bool neutral = _cur != null && _cur.NeutralFingers;
+            if (cmdMode)
+            {
+                if (dt > 0f || !a.FInit) UpdateFingerCurl(a, left, Mathf.Max(dt, 1e-4f));
+            }
+            else
+            {
+                a.FInit = false; a.WasStopped = false;
+                float grip = Grip01(left ? Grip.Left : Grip.Right);
+                if (a.Curl < 0f) a.Curl = grip;
+                else if (dt > 0f) a.Curl += (grip - a.Curl) * (1f - Mathf.Exp(-CurlRate * dt));
+            }
+
+            string src = (useSim ? "simulated" : cmdMode ? "trigger/grip" : "grip") + (neutral ? ", neutral base" : "");
+            if (src != a.FingerSrc)
+            {
+                a.FingerSrc = src;
+                Plugin.Log.LogInfo("Embody: his " + a.Side + " fingers now follow " + (useSim ? "the physics hand's simulated fingers"
+                    : cmdMode ? "the controller trigger (index) and grip (Grip." + (left ? "Left" : "Right") + ", " + Grip.Source + ") with the clasp stopping on her"
+                    : "the controller grip (Grip." + (left ? "Left" : "Right") + ", " + Grip.Source + ")")
+                    + (neutral ? " on the neutral hand from the bind pose" : " on the animation's pose")
+                    + (PhysicsHands.Active && !useSim ? " [its fingers are not valid]" : ""));
+            }
+
+            var wq = a.Wrist.rotation;
+            for (int f = 0; f < 5; f++)
+            {
+                var fg = a.Fingers[f];
+                if (fg == null) continue;
+                bool nb = neutral && fg.Neutral != null && Finite(wq);
+                float cf = cmdMode ? a.FCurl[f] : a.Curl;
                 for (int j = 0; j < 3; j++)
                 {
                     var b = fg.B[j];
                     if (b == null) continue;
-                    float ang = (f == 0 ? ThumbMax[j] : FingerMax[j]) * a.Curl;
+                    float ang = (f == 0 ? ThumbMax[j] : FingerMax[j]) * cf;
                     if (useSim)
                     {
                         float sa = curl[f * 3 + j];   // signed twist about the curl axis: a sideways swing or a backward bend is not a curl
                         if (!float.IsNaN(sa) && !float.IsInfinity(sa)) ang = Mathf.Clamp(sa, -15f, 120f);
                     }
+                    if (float.IsNaN(ang) || float.IsInfinity(ang)) ang = 0f;
                     var cur = b.localRotation;
                     // Our last write still there: the animation did not write this bone, so its pose is the one from before our write.
                     var baseQ = fg.Written[j] && Quaternion.Angle(cur, fg.Post[j]) < 0.05f ? fg.Pre[j] : cur;
                     fg.Pre[j] = baseQ;
+                    if (nb)
+                    {
+                        var parentRot = j == 0 ? wq : fg.B[j - 1].rotation;   // the bone above, already curled this pass
+                        b.rotation = parentRot * fg.Neutral[j];
+                        baseQ = b.localRotation;
+                    }
                     var q = baseQ * Quaternion.AngleAxis(ang, fg.AxisL[j]);
                     b.localRotation = q;
                     fg.Post[j] = q;
                     fg.Written[j] = true;
                 }
             }
+        }
+
+        // ---- 0.8.0 ghost capsules: his hands at the controller, for what HerBody lets push her ----
+
+        int Ghost(WorldCap[] into, int start, int max)
+        {
+            if (PhysicsHands.Active || !_active || _failed || _cur == null || _rig == null || _rig.Go == null) return 0;
+            int n = GhostArm(_rig.L, _cur.Hands == 1 || _cur.Hands == 3, VrHands.LeftController, _cur.LeftPos, _cur.LeftRot, 0, into, start, max);
+            n += GhostArm(_rig.R, _cur.Hands == 2 || _cur.Hands == 3, VrHands.RightController, _cur.RightPos, _cur.RightRot, 1, into, start + n, max - n);
+            return n;
+        }
+
+        static readonly Vector3[] _fkP = new Vector3[4];
+
+        // The capsules of one hand at the pose Place would give it (the controller + its offsets + last frame's trail; no physics offset
+        // since the physics hands are off): the palm (wrist -> middle root, and two more toward the index and pinky roots) and, where the
+        // neutral hand is known, the three bone segments of each finger at the current curl.
+        int GhostArm(Arm a, bool want, Transform ctrl, Vector3 offPos, Vector3 offRot, int hand, WorldCap[] into, int at, int room)
+        {
+            if (room <= 0 || !want || !a.Ready || ctrl == null || a.Fingers == null || !a.Written || a.PlacedFrame < Time.frameCount - 1) return 0;
+            var cq = ctrl.rotation;
+            var T = ctrl.position + cq * offPos + a.Lag;
+            var tq = cq * Quaternion.Euler(offRot) * a.Kinv;
+            if (!Finite(T) || !Finite(tq)) return 0;
+            if (a.GhostBy == null || a.GhostIdx != _partnerIdx)
+            {
+                a.GhostIdx = _partnerIdx;
+                a.GhostBy = "your " + a.Side + " hand (" + (_partnerIdx == 1 ? "BadGuy" : "Player") + ")";
+            }
+            int n = 0;
+            int mid = a.Fingers[2] != null ? 2 : a.Fingers[1] != null ? 1 : a.Fingers[3] != null ? 3 : a.Fingers[4] != null ? 4 : -1;
+            if (mid >= 0)
+            {
+                var pm = a.RootW[mid];
+                n += Put(into, at + n, room - n, T, T + tq * pm, GhostPalmR, hand, a.GhostBy);
+                if (mid != 1 && a.Fingers[1] != null) n += Put(into, at + n, room - n, T, T + tq * Vector3.Lerp(pm, a.RootW[1], 0.4f), GhostPalmR, hand, a.GhostBy);
+                if (mid != 4 && a.Fingers[4] != null) n += Put(into, at + n, room - n, T, T + tq * Vector3.Lerp(pm, a.RootW[4], 0.4f), GhostPalmR, hand, a.GhostBy);
+            }
+            bool cmdMode = _cur.NeutralFingers && a.FInit;
+            for (int f = 0; f < 5; f++)
+            {
+                var fg = a.Fingers[f];
+                if (fg == null || fg.Neutral == null || !_cur.NeutralFingers) continue;
+                float c = cmdMode ? a.FCurl[f] : Mathf.Max(a.Curl, 0f);
+                FingerFk(fg, f, Mathf.Clamp01(c), _fkP);
+                float r = f == 0 ? GhostThumbR : GhostFingerR;
+                for (int j = 0; j < 3; j++) n += Put(into, at + n, room - n, T + tq * _fkP[j], T + tq * _fkP[j + 1], r, hand, a.GhostBy);
+            }
+            return n;
+        }
+
+        static int Put(WorldCap[] into, int i, int room, Vector3 A, Vector3 B, float r, int hand, string by)
+        {
+            if (room <= 0 || i < 0 || i >= into.Length) return 0;
+            into[i] = new WorldCap { A = A, B = B, R = r, Hand = hand, By = by, Src = null };
+            return 1;
+        }
+
+        // Forward kinematics of one finger from its neutral pose at curl fraction c, in the wrist's frame: the same composition WriteFingers
+        // makes with the bones (each bone's neutral rotation relative to the one above, then its curl about its own axis).
+        static void FingerFk(Finger fg, int f, float c, Vector3[] outP)
+        {
+            var mx = f == 0 ? ThumbMax : FingerMax;
+            var q = fg.NQ[0] * Quaternion.AngleAxis(mx[0] * c, fg.AxisL[0]);
+            var p = fg.NP[0];
+            outP[0] = p;
+            for (int j = 1; j < 3; j++)
+            {
+                var qPrevN = Quaternion.Inverse(fg.NQ[j - 1]);
+                p = p + q * (qPrevN * (fg.NP[j] - fg.NP[j - 1]));
+                q = q * (qPrevN * fg.NQ[j]) * Quaternion.AngleAxis(mx[j] * c, fg.AxisL[j]);
+                outP[j] = p;
+            }
+            outP[3] = p + q * (Quaternion.Inverse(fg.NQ[2]) * (fg.NP[3] - fg.NP[2]));
         }
 
         // Gives his finger bones back where still ours.
@@ -996,6 +1460,7 @@ namespace SfMorph
                 }
             }
             a.Curl = -1f; a.FingerSrc = "";
+            a.FInit = false; a.WasStopped = false;
         }
 
         static Quaternion FromTo(Vector3 a, Vector3 b)
@@ -1017,6 +1482,7 @@ namespace SfMorph
             StopFingers(a);
             a.Written = false; a.PlacedFrame = -1; a.Overridden = false; a.Dist = -1f;
             a.Follow = false; a.Lag = Vector3.zero;
+            a.Swivel = a.SwivelT = a.Applied = 0f; a.NextSearch = 0f;   // the arm goes back to the animation's elbow with the arm itself
         }
 
         // ---- status line for the panel ----
