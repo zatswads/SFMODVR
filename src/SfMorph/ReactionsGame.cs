@@ -125,6 +125,7 @@ namespace SfMorph
         object _facial, _lv, _snd, _gs, _bp, _sm, _gauge, _solver;
         Animator _anim;
         Transform _herRoot;
+        UnityEngine.Object _animCtrl;
         Behaviour _srcMoan, _srcDirty, _srcDialogue, _srcSfx, _srcVoice;
         Type _tSrc;
         // members
@@ -153,6 +154,7 @@ namespace SfMorph
         // blush
         readonly List<BMat> _bm = new List<BMat>();
         readonly List<Renderer> _bmSrc = new List<Renderer>();
+        readonly List<Material> _bmFirst = new List<Material>();   // each tracked renderer's first sharedMaterial at scan time (a swapped one means rescan)
         int _idBlush;
         // trackers and timers
         bool _trigSet; float _trigT;
@@ -208,6 +210,14 @@ namespace SfMorph
 
         Mem M(Type t, string name, string label)
         {
+            var m = Q(t, name);
+            if (!m.Ok) Miss(label);
+            return m;
+        }
+
+        // The same lookup without reporting a miss (for the alternatives of a fallback list).
+        Mem Q(Type t, string name)
+        {
             var m = new Mem();
             if (t != null)
                 for (var k = t; k != null && !m.Ok && k != typeof(object); k = k.BaseType)
@@ -215,7 +225,6 @@ namespace SfMorph
                     m.F = k.GetField(name, Own);
                     if (m.F == null) { var p = k.GetProperty(name, Own); if (p != null && p.CanRead && p.GetIndexParameters().Length == 0) m.P = p; }
                 }
-            if (!m.Ok) Miss(label);
             return m;
         }
 
@@ -229,6 +238,7 @@ namespace SfMorph
             return mi;
         }
 
+        static object Peek(Mem m, object o) { try { return m.Get(o); } catch (Exception) { return null; } }
         static bool Bool(Mem m, object o) { try { var v = m != null && m.Ok ? m.Get(o) : null; return v is bool && (bool)v; } catch (Exception) { return false; } }
         static int Int(Mem m, object o, int def) { try { var v = m != null && m.Ok ? m.Get(o) : null; return v == null ? def : Convert.ToInt32(v); } catch (Exception) { return def; } }
         static float Flt(Mem m, object o, float def) { try { var v = m != null && m.Ok ? m.Get(o) : null; return v == null ? def : Convert.ToSingle(v); } catch (Exception) { return def; } }
@@ -261,15 +271,33 @@ namespace SfMorph
                 if (Due(ref _nextSet, now, 0.5f)) CheckBlushSet(her);
                 if (Due(ref _nextSlow, now, 2f))
                 {
-                    if (Dead(_lv) || Dead(_snd) || Dead(_gs) || Dead(_anim) || Dead(_srcMoan) || (_srcSfx != null && Dead(_srcSfx)))
+                    // a null (not destroyed) _lv or _srcMoan is "not there yet": peek at the member and re-resolve once it appears
+                    bool appeared = (_lv == null && _mLv != null && _mLv.Ok && Peek(_mLv, _facial) != null)
+                        || (_srcMoan == null && _snd != null && _mSrcMoan != null && _mSrcMoan.Ok && Peek(_mSrcMoan, _snd) is Behaviour);
+                    if (appeared || Dead(_lv) || Dead(_snd) || Dead(_gs) || Dead(_anim) || Dead(_srcMoan) || (_srcSfx != null && Dead(_srcSfx)))
                     {
                         LogOnce("reresolve" + _nextSlow.ToString("0"), "a game object was replaced, looking its members up again");
                         ReleaseHeld();
                         Resolve(false);
                     }
+                    else if (_anim != null && !Dead(_anim) && !ReferenceEquals(_anim.runtimeAnimatorController, _animCtrl))
+                    {
+                        bool had = HasAnim;
+                        CheckAnim();
+                        if (had != HasAnim) LogOnce("animctrl" + (HasAnim ? "y" : "n") + _nextSlow.ToString("0"), "the Animator's controller changed: moan trigger " + (HasAnim ? "present" : "missing"));
+                    }
                     if (_gauge == null || Dead(_gauge)) FindGauge(now, false);
                     ResolveGaze();
-                    for (int i = 0; i < _bm.Count; i++) if (Dead(_bm[i].M)) { DiscoverBlush(her); break; }
+                    bool rescan = false;
+                    for (int i = 0; i < _bm.Count; i++) if (Dead(_bm[i].M)) { rescan = true; break; }
+                    // a tracked renderer whose sharedMaterial changed (the game swapped materials): rescan too
+                    try
+                    {
+                        for (int i = 0; !rescan && i < _bmSrc.Count && i < _bmFirst.Count; i++)
+                            if (_bmSrc[i] != null && !ReferenceEquals(_bmSrc[i].sharedMaterial, _bmFirst[i])) rescan = true;
+                    }
+                    catch (Exception) { rescan = true; }
+                    if (rescan) DiscoverBlush(her);
                 }
                 return true;
             }
@@ -306,10 +334,28 @@ namespace SfMorph
             return Dead(f) ? null : f;
         }
 
+        // Whether the facial Animator's controller has a "moan" trigger (at resolve, and again when the controller is swapped).
+        void CheckAnim()
+        {
+            HasAnim = false; _animCtrl = null;
+            if (_anim == null || Dead(_anim)) return;
+            _hMoan = Animator.StringToHash("moan");
+            try
+            {
+                _animCtrl = _anim.runtimeAnimatorController;
+                foreach (var p in _anim.parameters)
+                    if (p.type == AnimatorControllerParameterType.Trigger && p.nameHash == _hMoan) HasAnim = true;
+            }
+            catch (Exception e) { LogOnce("animparams", "Animator parameters unreadable: " + e.Message); HasAnim = true; }
+            if (!HasAnim) Miss("Animator trigger 'moan'");
+            else if (_missing.Remove("Animator trigger 'moan'")) Missing = string.Join(", ", _missing.ToArray());
+        }
+
         // Look every member up (once per session, or again when a game object was replaced).
         void Resolve(bool first)
         {
             if (first) { _missing.Clear(); Missing = ""; _bridgeLogged = false; }
+            _guardDead = false;      // members are looked up again: the guard re-evaluates (GuardTick turns itself off again if they are still missing)
             var tf = _facial.GetType();
             _mLv = M(tf, "ladyVoice_Function", "FacialFunction.ladyVoice_Function");
             _mSnd = M(tf, "sound_Function", "FacialFunction.sound_Function");
@@ -330,18 +376,7 @@ namespace SfMorph
             if (Dead(_snd)) _snd = null;
 
             // animator parameters: only fire a trigger the controller has (a missing one would warn every call)
-            HasAnim = false;
-            if (_anim != null)
-            {
-                _hMoan = Animator.StringToHash("moan");
-                try
-                {
-                    foreach (var p in _anim.parameters)
-                        if (p.type == AnimatorControllerParameterType.Trigger && p.nameHash == _hMoan) HasAnim = true;
-                }
-                catch (Exception e) { LogOnce("animparams", "Animator parameters unreadable: " + e.Message); HasAnim = true; }
-                if (!HasAnim) Miss("Animator trigger 'moan'");
-            }
+            CheckAnim();
 
             // LadyVoice_Function
             var tl = _lv != null ? _lv.GetType() : Ty("LadyVoice_Function");
@@ -484,9 +519,23 @@ namespace SfMorph
                     }
                     HasLibrary = true;
                 }
-                var ex = ToClips(M(tl, "Exhale_slow", "SexVoice_Source_Library.Exhale_slow").Get(lib) as Array);
-                if (ex == null || ex.Length == 0) ex = ToClips(M(tl, "Exhale_normal", "SexVoice_Source_Library.Exhale_normal").Get(lib) as Array);
-                if (ex != null && ex.Length > 0 && _miOneShot != null) { _breath.Clips = ex; HasBreath = true; }
+                // the real fields are Exhale_f32/f64/f128_slow|normal|fast: try the slow trio, then the normal trio (no Miss for the alternatives)
+                UnityEngine.Object[] ex = null; string exName = null;
+                string[] exNames = { "Exhale_f32_slow", "Exhale_f64_slow", "Exhale_f128_slow", "Exhale_f32_normal", "Exhale_f64_normal", "Exhale_f128_normal" };
+                for (int e = 0; e < exNames.Length && (ex == null || ex.Length == 0); e++)
+                {
+                    var mf = Q(tl, exNames[e]);
+                    if (!mf.Ok) continue;
+                    ex = ToClips(mf.Get(lib) as Array); exName = exNames[e];
+                }
+                if (ex != null && ex.Length > 0 && _miOneShot != null)
+                {
+                    _breath.Clips = ex; HasBreath = true;
+                    var sbx = new System.Text.StringBuilder();
+                    for (int i = 0; i < ex.Length; i++) { if (i > 0) sbx.Append(", "); sbx.Append(ClipLen(ex[i]).ToString("0.00")).Append('s'); }
+                    LogOnce("breath" + lang, "breath clips: " + exName + ", " + ex.Length + " clip(s) (" + sbx + ")");
+                }
+                else if (ex == null) Miss("SexVoice_Source_Library.Exhale_f32_slow/_normal");
             }
             catch (Exception e) { LogOnce("buildlib", "voice library unreadable: " + e.Message); HasLibrary = false; }
             if (_bridgeLogged) Log("voice language " + lang + ": " + BanksText());
@@ -581,7 +630,7 @@ namespace SfMorph
         void DiscoverBlush(Character her)
         {
             RestoreBlush();
-            _bm.Clear(); _bmSrc.Clear();
+            _bm.Clear(); _bmSrc.Clear(); _bmFirst.Clear();
             BlushFaceCount = BlushBodyCount = 0;
             if (_idBlush == 0) _idBlush = Shader.PropertyToID("_BlushPower");
             try
@@ -589,7 +638,7 @@ namespace SfMorph
                 foreach (var r in her.Renderers)
                 {
                     if (r == null) continue;
-                    _bmSrc.Add(r);
+                    _bmSrc.Add(r); _bmFirst.Add(r.sharedMaterial);
                     var mats = r.sharedMaterials;
                     for (int i = 0; i < mats.Length; i++)
                     {
@@ -701,8 +750,8 @@ namespace SfMorph
             {
                 if (Dead(_facial)) return;
                 InSexMode = _sm != null && (Bool(_mSexMode, _sm) || Bool(_mForeplay, _sm));
-                VoiceOn = _gs == null || Bool(_mVoiceOn, _gs);
-                SfxOn = _gs == null || Bool(_mSfxOn, _gs);
+                VoiceOn = _gs == null || _mVoiceOn == null || !_mVoiceOn.Ok || Bool(_mVoiceOn, _gs);
+                SfxOn = _gs == null || _mSfxOn == null || !_mSfxOn.Ok || Bool(_mSfxOn, _gs);
                 BreakSystemOn = Bool(_mBreakOn, _gs);
                 int lang = Int(_mLang, _gs, 0);
                 Language = lang;
@@ -1079,7 +1128,13 @@ namespace SfMorph
         void GuardTick(bool err, int ms)
         {
             var lv = _lv;
-            if (lv == null || Dead(lv) || !_mDtActive.Ok || !_mDtList.Ok || !_mDtVoice.Ok || !_mDtNum.Ok || !_mRandSeq.Ok)
+            if (lv == null || Dead(lv))
+            {
+                // not there (yet): not a verdict. The 2 s tick re-resolves when the object appears.
+                GuardStatus = "waiting for the game's voice object";
+                return;
+            }
+            if (!_mDtActive.Ok || !_mDtList.Ok || !_mDtVoice.Ok || !_mDtNum.Ok || !_mRandSeq.Ok)
             {
                 _guardDead = true; GuardStatus = "off: the game's dirty-talk members were not found";
                 LogOnce("guarddead", "voice guard: off (dirty-talk members missing: " + Missing + ")");
@@ -1181,7 +1236,7 @@ namespace SfMorph
             _miMoan = _miBlink = _miDesirePlus = null;
             for (int i = 0; i < _moanBanks.Length; i++) _moanBanks[i].Clips = null;
             _breath.Clips = null; _slap.Clips = null; _bankLang = -1;
-            _bm.Clear(); _bmSrc.Clear(); BlushFaceCount = BlushBodyCount = 0;
+            _bm.Clear(); _bmSrc.Clear(); _bmFirst.Clear(); BlushFaceCount = BlushBodyCount = 0;
             _hasMoanFn = false;
             HasMoan = HasLibrary = HasBreath = HasSfx = HasBlush = HasGaze = HasGauge = HasAnim = HasBlink = false;
             InSexMode = VoiceOn = SfxOn = BreakSystemOn = DirtyTalkPlaying = DialoguePlaying = DirtyTalkPause = FunctionPause = FacialOff = MoanPlaying = OwnVoicePlaying = false;

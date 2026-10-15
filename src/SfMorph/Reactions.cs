@@ -6,7 +6,7 @@ namespace SfMorph
     // Her reactions to touch (0.7.9): what the Body hands the director each frame. Filled from the config once per frame (no allocation).
     internal class ReactionSettings
     {
-        public bool On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard;
+        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard;
         public float Sensitivity, Cooldown, Volume, BlushGain, VoicePitchVar, LimbPush;
         public int VoiceMode, Log;
 
@@ -18,6 +18,7 @@ namespace SfMorph
             Sensitivity = p.ReactSensitivity.Value; Cooldown = p.ReactCooldown.Value; Volume = p.ReactVolume.Value;
             BlushGain = p.ReactBlushGain.Value; VoicePitchVar = p.ReactVoicePitchVar.Value;
             VoiceMode = p.ReactVoiceMode.Value; Log = p.ReactLog.Value;
+            PushByTouch = p.HandsPushByTouch.Value;   // the geometric push of other hands: without it and without physics hands nothing is classified
             LimbPush = p.HandsLimbPush.Value;   // the flinch's swing is a push on her limbs: it needs the slider above 0
         }
     }
@@ -98,6 +99,9 @@ namespace SfMorph
         readonly System.Random _rng = new System.Random();
         readonly StringBuilder _sb = new StringBuilder(160), _resp = new StringBuilder(160);
 
+        // set when the reactions part of Update threw (logged once); Body turns ReactOn off and clears it. The voice guard is not affected.
+        public bool Failed;
+        bool _failLogged;
         Character _her; Transform _root; ReactionSettings _s; Overlap _ov;
         float _now, _nextRefresh, _nextGate, _nextSummary;
         float _lastEvT = -100f, _lastStimT = -100f, _lastVoiceT = -100f, _lastBreathT = -100f, _lastFlinchT = -100f, _lastSlapT = -100f, _lastFaceT = -100f, _lastDesireT = -100f;
@@ -131,6 +135,7 @@ namespace SfMorph
             // the game link, the voice guard (independent of On) and the delayed trigger reset
             if (_now >= _nextRefresh) { _nextRefresh = _now + 1f; _g.Refresh(her, _now); }
             if (_g.Found && !_bridgeLogged) { _bridgeLogged = true; if (_g.BridgeLine != null && _g.BridgeLine.Length > 0) L(_g.BridgeLine); }
+            else if (!_g.Found) _bridgeLogged = false;       // a re-found bridge is logged again
             _g.Guard(s.VoiceGuard, _now);
             GuardStatus = _g.GuardStatus != null ? _g.GuardStatus : "";
             if (_resetAt > 0f && _now >= _resetAt) { _resetAt = 0f; _g.ResetMoan(); }
@@ -142,24 +147,36 @@ namespace SfMorph
                 return;
             }
             _wasOn = true;
-            if (_now >= _nextGate) { _nextGate = _now + 0.1f; _g.ReadGates(_now); }
-
-            if (HerBody.Built)
+            try
             {
-                if (HerBody.BuildVersion != _bv) RebuildMap();
-                if (cut) ClearR();
-                else Classify(dt, s);
-            }
-            else if (_bv != -2) { _bv = -2; ClearR(); }
+                if (_now >= _nextGate) { _nextGate = _now + 0.1f; _g.ReadGates(_now); }
 
-            if (cut) return;
-            Tick(dt, s);
-            Display(s);
+                if (HerBody.Built)
+                {
+                    if (HerBody.BuildVersion != _bv) RebuildMap();
+                    if (cut) ClearR();
+                    else Classify(dt, s);
+                }
+                else if (_bv != -2) { _bv = -2; ClearR(); }
+
+                if (cut) return;
+                Tick(dt, s);
+                Display(s);
+            }
+            catch (System.Exception e)
+            {
+                // only the reactions fail here: the caller turns off ReactOn; the voice guard above keeps running
+                if (!_failLogged) { _failLogged = true; Plugin.Log.LogError("Reactions failed, turned off: " + e); }
+                Failed = true;
+                try { GiveBack(); ResetSession(); } catch { }
+                Status = "off: reactions failed (see the log)"; StateLine = ""; Bars = "";
+            }
         }
 
         // Gives back everything we changed (blush, look-at weight, the guard's hooks) and forgets the session.
         public void Release()
         {
+            try { if (_resetAt > 0f) _g.ResetMoan(); } catch { }     // the delayed "moan" trigger safety must not be lost
             try { _g.Release(); } catch { }
             ResetSession();
             _wasOn = false; _bridgeLogged = false; _nextRefresh = 0f; _resetAt = 0f;
@@ -173,6 +190,7 @@ namespace SfMorph
         // The listeners' values we wrote go back (blush, look-at), once.
         void GiveBack()
         {
+            if (_resetAt > 0f) { _resetAt = 0f; try { _g.ResetMoan(); } catch { } }
             if (_blushSent) { _blushSent = false; _g.SetBlush(0f, 0f); }
             if (_gazeSent) { _gazeSent = false; _g.SetGaze(0f); }
             _blushCur = 0f; _away = 0f;
@@ -554,14 +572,19 @@ namespace SfMorph
             SetTier();
 
             // states
+            // the timed states always expire (also with AutoState off); only the automatic entries below need AutoState
+            switch (State)
+            {
+                case RState.Startled: if (_now >= _until) Derive(); break;
+                case RState.Climax: if (_now >= _until) { E = 0.25f; SetTier(); EnterState(RState.Afterglow, 12f); _nextBreathAt = _now + 4f; } break;
+                case RState.Afterglow: if (_now >= _until) Derive(); break;
+            }
             if (s.AutoState)
             {
                 switch (State)
                 {
-                    case RState.Startled: if (_now >= _until) Derive(); break;
-                    case RState.Climax: if (_now >= _until) { E = 0.25f; SetTier(); EnterState(RState.Afterglow, 12f); _nextBreathAt = _now + 4f; } break;
-                    case RState.Afterglow: if (_now >= _until) Derive(); break;
                     case RState.Guarded: if (P < 0.15f) Derive(); break;
+                    case RState.Startled: case RState.Climax: case RState.Afterglow: break;
                     default:
                         if (P >= 0.4f && E < 0.4f)
                         {
@@ -584,7 +607,7 @@ namespace SfMorph
                     {
                         _g.ReadGatesNow(_now);   // forced: ReadGates itself only reads every 0.1 s
                         string b = VoiceBlock(5, false, false);
-                        if (b == null && _g.Moan()) { _lastVoiceT = _now; _resetAt = _now + 1f; _vPlayed++; }
+                        if (b == null && PlayMoan()) { _lastVoiceT = _now; _resetAt = _now + 1f; _vPlayed++; }
                         else _vSkipped++;
                     }
                 }
@@ -670,6 +693,8 @@ namespace SfMorph
                 | (s.LimbPush > 0f ? 128 : 0) | (s.Sound ? 256 : 0) | (s.Blush ? 512 : 0) | (s.Gaze ? 1024 : 0) | (_slapFail ? 2048 : 0) | (HerBody.Built ? 4096 : 0)
                 | (s.VoiceMode == 1 ? 8192 : 0) | (_g.SfxOn ? 16384 : 0);
             key ^= ((int)(_g.Desire + 0.5f) & 0x1FF) << 15;
+            bool noHand = !PhysicsHands.Active && !s.PushByTouch;
+            if (noHand) key |= 1 << 24;
             if (key != _stKey)
             {
                 _stKey = key;
@@ -690,6 +715,7 @@ namespace SfMorph
                     _sb.Append(s.Blush ? ", blush" : ", blush off");
                     _sb.Append(s.Gaze ? "; gaze on" : "; gaze off");
                     if (_g.Found && _g.Desire >= 0f) _sb.Append("; game desire ").Append((int)(_g.Desire + 0.5f));
+                    if (noHand) _sb.Append(" (no hand is tracked: turn on physics hands or 'Other hands push too')");
                 }
                 Status = _sb.ToString();
             }

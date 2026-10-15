@@ -581,11 +581,19 @@ namespace SfMorph
                 if (c == her && (_p.ReactOn.Value || _p.VoiceGuard.Value))
                 {
                     _rs.Fill(_p);
-                    try { React.Update(c, _rs, Time.deltaTime, Overlap); _reactOn = true; }
+                    bool reactWasOn = _p.ReactOn.Value;
+                    try
+                    {
+                        React.Update(c, _rs, Time.deltaTime, Overlap); _reactOn = true;
+                        // the reactions part failed inside Update (logged there): turn off the reactions only; the voice guard keeps running
+                        if (React.Failed) { React.Failed = false; _p.ReactOn.Value = false; }
+                    }
                     catch (Exception e)
                     {
+                        // outside the reactions part (the game link / the guard): attributed to the reactions when they were on, else to the guard
                         Plugin.Log.LogError("Reactions failed, turned off: " + e);
-                        _p.ReactOn.Value = false; _p.VoiceGuard.Value = false;
+                        _p.ReactOn.Value = false;
+                        if (!reactWasOn) _p.VoiceGuard.Value = false;
                         try { React.Release(); } catch { }
                         _reactOn = false;
                     }

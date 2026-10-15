@@ -296,6 +296,7 @@ namespace SfMorph
                 // Target: the animation's rotation, unless our last write is still there (the animation didn't write the bone).
                 bool animWrote = !(b.HasLast && Same(cur, b.LastWrite));
                 Vector3 pos = tr.position;
+                bool hardReset = false;   // a real reset (not just waking from sleep): only this drops a pending kick
                 if (b.Init)
                 {
                     if (animWrote) { b.Prev = b.Target; b.Target = cur; } else b.Prev = b.Target;
@@ -306,7 +307,7 @@ namespace SfMorph
                     if (why != 0)
                     {
                         if (why > 1 && !_loggedReset[why - 1]) { _loggedReset[why - 1] = true; Plugin.Log.LogInfo("Overlap: reset on " + tr.name + ": " + (why == 2 ? "moved more than 0.3 m in one frame" : "turned more than 60 deg in one frame")); }
-                        b.Init = false;
+                        b.Init = false; hardReset = true;
                     }
                 }
                 if (!b.Init)
@@ -315,7 +316,8 @@ namespace SfMorph
                     b.Prev = b.Target; b.Qs = b.Target; b.Omega = Vector3.zero; b.Init = true;
                     // every reset path zeroes the ripple and push state too
                     b.PState = 0; b.POmega = Vector3.zero;
-                    b.Qp = Quaternion.identity; b.OmegaP = Vector3.zero; b.PushLive = false; b.KickW = Vector3.zero;
+                    b.Qp = Quaternion.identity; b.OmegaP = Vector3.zero; b.PushLive = false;
+                    if (hardReset) b.KickW = Vector3.zero;     // a kick that arrived while the bone slept must survive the wake
                     _grpReset[b.Group] = true;
                 }
                 b.LastPos = pos;
@@ -364,11 +366,11 @@ namespace SfMorph
                 bool pushOn = b.CanPush && _lp > 0f;
                 float pInertia = PushInertiaR[rg], pClampDeg = PushClampDegR[rg];
                 // 0.7.9 flinch: a pending angular impulse J (N*m*s) becomes an instant change of the push spring's velocity, d(omega) = J / I
-                // (the same I as the torque kick above, in the parent's frame), capped at 0.15 x the region's torque cap so no kick outruns
+                // (the same I as the torque kick above, in the parent's frame), capped at 0.08 x the region's torque cap so no kick outruns
                 // a hard push; the spring then returns it. Runs with no hand pushing and at region weight 0 (PushLive keeps the bone awake).
                 if (pushOn && b.KickW.sqrMagnitude > 1e-12f && b.P != null && n > 0)
                 {
-                    float km = b.KickW.magnitude, kcap = PushTauMaxR[rg] * 0.15f;
+                    float km = b.KickW.magnitude, kcap = PushTauMaxR[rg] * 0.08f;
                     if (km > kcap) b.KickW *= kcap / km;
                     b.OmegaP += (Quaternion.Inverse(b.P.rotation) * b.KickW) / pInertia;
                     float ko = b.OmegaP.magnitude;

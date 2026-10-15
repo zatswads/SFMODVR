@@ -1555,8 +1555,10 @@ namespace SfMorph
                 if (!_segOfCol.TryGetValue(col, out b)) return;
                 var g = b.S;
                 float t = Time.fixedTime;
-                bool fresh = t - g.TouchT > 0.15f;   // 0.7.9 reactions: a resting hand chatters enter/exit; only a contact after >= 0.15 s of none is an arrival
+                // 0.7.9 reactions: a resting hand chatters enter/exit; only a contact after >= 0.15 s of none from THIS hand is an arrival
+                bool fresh = t - (left ? g.TouchTL : g.TouchTR) > 0.15f;
                 g.TouchT = t;
+                if (left) g.TouchTL = t; else g.TouchTR = t;
                 _handTouchT[left ? 0 : 1] = t;
                 HerBody.AddImpulse(g, left, c);
                 if (!enter) return;

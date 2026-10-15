@@ -117,6 +117,7 @@ namespace SfMorph
             // sits there (SegPose puts the frame at A, not at the sphere's centre). Zero for every other segment.
             public Vector3 FrameCenter;
             public float HullRMin, HullRMax;        // radial extent of the hull (about the axis, or about the centre): for logs and markers
+            public float TouchTL = -100f, TouchTR = -100f;   // the same per hand (a resting hand's chatter must not hide the other hand's arrival)
             public float TouchT = -100f;            // Time.fixedTime of the last contact with a hand collider (see PhysicsHands.TouchingHer)
             public Track Trk;                       // her bones' pose sampled per frame (0.7.8 package A)
             // 0.7.9 reactions: the last physics-hand contact ENTER that was a new touch (no contact for 0.15 s before it)
@@ -984,6 +985,7 @@ namespace SfMorph
                 Matrix4x4 m = c.T.localToWorldMatrix;
                 Vector3 a = m.MultiplyPoint3x4(c.LocalA), b = m.MultiplyPoint3x4(c.LocalB);
                 Vector3 va = Vector3.zero, vb = Vector3.zero;
+                Vector3 raA = Vector3.zero, raB = Vector3.zero;   // the same velocities before the MaxCapSpeed clamp: what the reactions classify a slap by
                 if (_pOk[ci] && invDt > 0f)
                 {
                     va = (a - _pA[ci]) * invDt; vb = (b - _pB[ci]) * invDt;
@@ -991,6 +993,7 @@ namespace SfMorph
                     if (sa > TeleportSpeed * TeleportSpeed || sbb > TeleportSpeed * TeleportSpeed) { va = Vector3.zero; vb = Vector3.zero; }   // jumped, not moved
                     else
                     {
+                        raA = va; raB = vb;
                         if (sa > MaxCapSpeed * MaxCapSpeed) va *= MaxCapSpeed / Mathf.Sqrt(sa);
                         if (sbb > MaxCapSpeed * MaxCapSpeed) vb *= MaxCapSpeed / Mathf.Sqrt(sbb);
                     }
@@ -1014,7 +1017,8 @@ namespace SfMorph
                     if (pen <= 0f || dist < 1e-4f) continue;
                     Vector3 nrm = diff / dist;                             // into her
                     float vn = Mathf.Max(0f, Vector3.Dot(Vector3.Lerp(va, vb, t), nrm));
-                    if (vn > g.GeoVn) g.GeoVn = vn;
+                    float vnRaw = Mathf.Max(0f, Vector3.Dot(Vector3.Lerp(raA, raB, t), nrm));   // unclamped: a hand-model slap above the push clamp still reads as one
+                    if (vnRaw > g.GeoVn) g.GeoVn = vnRaw;
                     float mag = Mathf.Min(PushCapPerHand, PushStiffness * pen + PushDamp * vn);
                     Vector3 f = nrm * mag;
                     g.GeoF += f;
