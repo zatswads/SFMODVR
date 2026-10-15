@@ -5,7 +5,8 @@ using UnityEngine;
 namespace SfMorph
 {
     // Desktop-window panel (F8): pick the woman, then Body (VaM-style sliders by
-    // body area), Bones (any skin bone), Presets and Characters (converted VaM characters).
+    // body area), Bones (any skin bone), Presets and Characters (converted VaM characters), Physics (what her
+    // body does: soft zones, secondary motion, pushes, wrinkles) and VR (Embody, your hands, who touches her).
     internal class Panel
     {
         readonly Plugin _p;
@@ -23,7 +24,7 @@ namespace SfMorph
         GUIStyle _hint, _bold, _off;
         const int MaxRows = 80; // IMGUI gets slow with hundreds of sliders; the filter narrows it
 
-        static readonly string[] Tabs = { "Body", "Bones", "Presets", "Characters", "VR" };
+        static readonly string[] Tabs = { "Body", "Bones", "Presets", "Characters", "Physics", "VR" };   // appended: the saved Tab indices 0-3 stay valid
 
         public Panel(Plugin p, Body body)
         {
@@ -105,6 +106,7 @@ namespace SfMorph
                 case 1: BoneTab(_sel); break;
                 case 2: PresetTab(_sel); break;
                 case 3: CharacterTab(_sel); break;
+                case 4: PhysicsTab(_sel); break;
                 default: VrTab(_sel); break;
             }
             GUILayout.EndScrollView();
@@ -266,24 +268,43 @@ namespace SfMorph
             if (had && c.Look.Morph != null) MorphControls(c);  // a pick shows its controls from the next frame on
         }
 
-        // ---- VR: soft zones (touch) and Embody (his view and hands) ----
+        // ---- Physics (her body: soft zones, motion, pushes, wrinkles) and VR (Embody, your hands, who touches her) ----
 
         static readonly string[] HandModes = { "None", "Left", "Right", "Both" };
         static readonly string[] ViewModes = { "Game camera", "Snap to his eyes", "Follow his eyes" };
         static readonly string[] Partners = { "Player", "Other man" };
 
         static readonly string[] HandMeshes = { "Game hands", "Simple" };
+        static readonly string[] BodyColliders = { "Convex hulls", "Capsules" };
 
-        void VrTab(Character c)
+        void PhysicsTab(Character c)
         {
             PhysicsSection(c);
             GUILayout.Space(10);
-            WrinklesSection(c);
-            GUILayout.Space(10);
             MotionSection(c);
+            GUILayout.Space(10);
+            PushesSection(c);
+            GUILayout.Space(10);
+            WrinklesSection(c);
+            ReactionsSection(c);
+        }
+
+        void VrTab(Character c)
+        {
+            EmbodySection(c);
             GUILayout.Space(10);
             HandsSection(c);
             GUILayout.Space(10);
+            ContactsSection(c);
+        }
+
+        // Impact reactions (package E) draw their rows here, below the wrinkles; nothing until then.
+        void ReactionsSection(Character c)
+        {
+        }
+
+        void EmbodySection(Character c)
+        {
             GUILayout.Label("Embody", _bold);
             string off = !c.Female || c.IsPlayer ? "only with the game's woman in the scene" : null;
             GUI.enabled = off == null;
@@ -348,22 +369,78 @@ namespace SfMorph
         {
             GUILayout.Label("VR hands", _bold);
             string off = !c.Female || c.IsPlayer ? "only with the game's woman in the scene" : null;
+            // what the gating reads is taken before any control here changes the config: the same controls in the Layout pass and the click pass
+            bool handsOn = _p.HandsOn.Value, collide = _p.HandsCollide.Value;
             GUI.enabled = off == null;
-            bool on = GUILayout.Toggle(_p.HandsOn.Value, " Physics hands instead of the controller models (they collide and press her skin)");
+            bool on = GUILayout.Toggle(handsOn, " Physics hands instead of the controller models (they collide and press her skin)");
             GUI.enabled = true;
             if (off == null && on != _p.HandsOn.Value) _p.HandsOn.Value = on;
             if (off != null) { GUILayout.Label("off: " + off, _off); return; }
-            GUI.enabled = _p.HandsOn.Value;
+            string handsOff = handsOn ? null : "physics hands are off";
+            string hitOff = handsOff ?? (collide ? null : "collisions are off");   // what only matters while her body can be hit
+            GUI.enabled = handsOn;
             int mesh = GUILayout.Toolbar(_p.HandsMesh.Value, HandMeshes);
             if (mesh != _p.HandsMesh.Value) _p.HandsMesh.Value = mesh;
-            bool col = GUILayout.Toggle(_p.HandsCollide.Value, " Stop at her body (the skin gives first, then resistance)");
+            bool col = GUILayout.Toggle(collide, " Stop at her body (the skin gives first, then resistance)");
             if (col != _p.HandsCollide.Value) _p.HandsCollide.Value = col;
-            string pushOff = !_p.HandsOn.Value ? "off: physics hands are off" : !_p.HandsCollide.Value ? "off: collisions are off" : null;
-            float lp = Slider("Push her arms", _p.HandsLimbPush.Value * 100f, 0f, 100f, "0", 50f, pushOff, " %") / 100f;
-            if (Mathf.Abs(lp - _p.HandsLimbPush.Value) > 0.0001f) _p.HandsLimbPush.Value = lp;
+            // her body's collision shapes: hulls follow the skin's cross-section, capsules are the 0.7.7 shapes
+            GUI.enabled = hitOff == null;
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Body colliders", GUILayout.Width(170));
+            int bc = GUILayout.Toolbar(_p.HandsHull.Value ? 0 : 1, BodyColliders);
+            if (hitOff == null && (bc == 0) != _p.HandsHull.Value) _p.HandsHull.Value = bc == 0;
+            GUILayout.EndHorizontal();
+            if (hitOff != null) { GUI.enabled = true; GUILayout.Label("    off: " + hitOff, _off); }
+            GUI.enabled = handsOn;
+            bool jf = GUILayout.Toggle(_p.HandsJointed.Value, " Jointed fingers (simulated finger bodies that bend on her skin; off: posed by the grip only)");
+            if (handsOn && jf != _p.HandsJointed.Value) _p.HandsJointed.Value = jf;
+            if (handsOff != null) { GUI.enabled = true; GUILayout.Label("    off: " + handsOff, _off); }
+            float fr = Slider("Grip friction", _p.HandsFriction.Value * 100f, 0f, 100f, "0", 80f, hitOff == null ? null : "off: " + hitOff, " %") / 100f;
+            if (hitOff == null && Mathf.Abs(fr - _p.HandsFriction.Value) > 0.0001f) _p.HandsFriction.Value = fr;
             GUI.enabled = true;
-            if (_p.HandsOn.Value && PhysicsHands.Status.Length > 0) GUILayout.Label(PhysicsHands.Status, PhysicsHands.Status.StartsWith("off") ? _off : _hint);
-            GUILayout.Label("Grip curls the fingers. Hand position/rotation offsets per controller: [Embody] Left/RightHandOffset in sfmodvr.sfmorph.cfg.", _hint);
+            if (handsOn && PhysicsHands.Status.Length > 0) GUILayout.Label(PhysicsHands.Status, PhysicsHands.Status.StartsWith("off") ? _off : _hint);
+            GUILayout.Label("Grip curls the fingers. Friction: a resting hand is carried along when she moves. " +
+                            "Hand position/rotation offsets per controller: [Embody] Left/RightHandOffset in sfmodvr.sfmorph.cfg.", _hint);
+        }
+
+        // The hands that touch her, whichever hands they are: yours (controller models or physics hands), the partner's, her own.
+        void ContactsSection(Character c)
+        {
+            GUILayout.Label("Contacts", _bold);
+            bool touch = (_p.Apply.Value && _p.Physics.Value) || _p.HandsOn.Value;   // something reads the contacts
+            string who = !c.Female || c.IsPlayer ? "only for the game's woman" : null;
+            string off = who ?? (touch ? null : "soft zones and physics hands are off");
+            GUI.enabled = off == null;
+            bool gate = GUILayout.Toggle(_p.GateHidden.Value, " Hidden hands don't touch her (partner not drawn, controller models replaced)");
+            GUI.enabled = true;
+            if (off == null && gate != _p.GateHidden.Value) _p.GateHidden.Value = gate;
+            if (off != null) GUILayout.Label("    off: " + off, _off);
+            if (who == null && VrHands.Status.Length > 0)
+            {
+                GUILayout.Label(VrHands.Status, _hint);
+                GUILayout.Label(VrHands.ContactsFeed, _hint);
+            }
+            GUILayout.Label("Contacts come from your VR hands (or your physics hands), the partner's hands and fingers, her forearms and hands, and her other thigh. " +
+                            "They press her soft zones and push her limbs. A hand that isn't drawn is left out when the toggle is on.", _hint);
+        }
+
+        // Her limbs, head and spine give way to hands that press into them and spring back.
+        void PushesSection(Character c)
+        {
+            GUILayout.Label("Pushes", _bold);
+            string off = !_p.Apply.Value ? "'Apply changes' is off" : !c.Female || c.IsPlayer ? "only for the game's woman" : null;
+            float push = _p.HandsLimbPush.Value;   // read before the controls: the same rows in the Layout pass and the click pass
+            float lp = Slider("Push her limbs", push * 100f, 0f, 100f, "0", 50f, off == null ? null : "off: " + off, " %") / 100f;
+            if (off == null && Mathf.Abs(lp - _p.HandsLimbPush.Value) > 0.0001f) _p.HandsLimbPush.Value = lp;
+            string byOff = off ?? (push > 0f ? null : "push is 0");
+            GUI.enabled = byOff == null;
+            bool touch = GUILayout.Toggle(_p.HandsPushByTouch.Value, " Other hands push too (your hand models, the partner), by how deep they are");
+            GUI.enabled = true;
+            if (byOff == null && touch != _p.HandsPushByTouch.Value) _p.HandsPushByTouch.Value = touch;
+            if (byOff != null) GUILayout.Label("    off: " + byOff, _off);
+            if (off == null && HerBody.Status.Length > 0) GUILayout.Label(HerBody.Status, HerBody.Status.StartsWith("off") ? _off : _hint);
+            GUILayout.Label("Push: a hand that presses into an arm, leg, her head or torso moves it aside and the pose springs back (never past 30/20/15/10 degrees). " +
+                            "Physics hands push by how hard they press; other hands by how deep they are in her.", _hint);
         }
 
         static readonly string[] Qualities = { "Performance", "Balanced", "Fidelity" };
@@ -410,8 +487,7 @@ namespace SfMorph
 
         void PhysicsSection(Character c)
         {
-            GUILayout.Space(10);
-            GUILayout.Label("Physics", _bold);
+            GUILayout.Label("Soft zones", _bold);
             string off = !_p.Apply.Value ? "'Apply changes' is off"
                        : !c.Female || c.IsPlayer ? "only for the game's woman" : null;
             GUI.enabled = off == null;
@@ -437,8 +513,6 @@ namespace SfMorph
             GUI.enabled = sliderOff == null;
             GUILayout.EndHorizontal();
             if (sliderOff == null && _p.GpuContactOn.Value && _body.GpuStatus.Length > 0) GUILayout.Label(_body.GpuStatus, _body.GpuStatus.Contains("off:") ? _off : _hint);
-            bool gate = GUILayout.Toggle(_p.GateHidden.Value, " Hidden hands don't touch her (partner not drawn, controller models replaced)");
-            if (sliderOff == null && gate != _p.GateHidden.Value) _p.GateHidden.Value = gate;
             GUILayout.Label("Breast physics colliders (hands push the game's own breast physics)", _hint);
             int bc = GUILayout.Toolbar(Mathf.Clamp(_p.BreastColliders.Value, 0, 2), BreastModes);
             if (sliderOff == null && bc != _p.BreastColliders.Value) _p.BreastColliders.Value = bc;
@@ -450,22 +524,16 @@ namespace SfMorph
             {
                 if (c.Soft.Status.Length > 0) GUILayout.Label(c.Soft.Status, c.Soft.Status.StartsWith("off") ? _off : _hint);
                 if (c.Soft.Contacts.Length > 0) GUILayout.Label(c.Soft.Contacts, _hint);
-                if (VrHands.Status.Length > 0)
-                {
-                    GUILayout.Label(VrHands.Status, _hint);
-                    GUILayout.Label(VrHands.ContactsFeed, _hint);
-                }
             }
             GUILayout.Label("Soft points under her skin (springs, like VaM's soft physics) are pushed by your VR hands, the partner's hands and fingers, " +
                             "her forearms and hands, and her other thigh. Softness: how far the skin gives. Springiness: how much the zones lag " +
-                            "and settle as she moves. Works with or without a character shape.", _hint);
+                            "and settle as she moves. Works with or without a character shape. Which hands count: VR tab, Contacts.", _hint);
         }
 
         static readonly string[] WrinkleDebugs = { "Off", "Activation", "Axis" };
 
         void WrinklesSection(Character c)
         {
-            GUILayout.Space(10);
             GUILayout.Label("Skin wrinkles", _bold);
             string off = !_p.Apply.Value ? "'Apply changes' is off"
                        : !c.Female || c.IsPlayer ? "only for the game's woman" : null;

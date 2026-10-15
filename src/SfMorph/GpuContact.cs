@@ -33,7 +33,9 @@ namespace SfMorph
 
         const int MaxCaps = 256;
         const int CalibVerts = 256;
-        const float CalibAccept = 0.02f, CalibSeparate = 0.10f;
+        // The best space must fit (median error below CalibAccept) and clearly beat every other: by an absolute margin (CalibSeparate) or, for a small
+        // mesh (nipples: the root bone carries the breast size, so scaled and unscaled skinning differ by centimetres only), by a relative one.
+        const float CalibAccept = 0.02f, CalibSeparate = 0.10f, CalibRelative = 8f, CalibRelFloor = 0.01f;
         const int CalibMaxTries = 3, CalibRetryFrames = 30;
 
         // ---- per renderer ----
@@ -540,7 +542,7 @@ namespace SfMorph
                     string errs = "";
                     for (int k = 0; k < cm.Count; k++)
                         errs += (k > 0 ? ", " : "") + SpaceNames[ci[k]] + " median " + (med[k] * 1000.0).ToString("0.0") + " / mean " + (mean[k] * 1000.0).ToString("0.0") + " mm";
-                    if (bestE < CalibAccept && second > CalibSeparate)
+                    if (bestE < CalibAccept && (second > CalibSeparate || second > CalibRelative * bestE + CalibRelFloor))
                     {
                         s.Space = ci[best];
                         Plugin.Log.LogInfo("GPU contact: renderer " + s.Name + " space " + SpaceNames[s.Space] + " (" + errs + ", " + cnt + " vertices)");
