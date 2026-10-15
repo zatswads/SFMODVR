@@ -1,6 +1,6 @@
 # SF Body Morphs — handoff
 
-State at **0.8.0** (branch `main`). 0.8.0 (contact visuals v2: smooth GPU dents with anatomical depth, bent normals and a rim bulge, self-contact and the partner's body, bend bulges, skin marks, ripple; design-0.8.0-contact-visuals.md in the session notes) built, not yet run in the game. 0.7.9 (reactions and states, Reactions tab, dirty-talk voice guard) and 0.7.8 (physics-hand follow fix,
+State at **0.8.1** (branch `main`). 0.8.1 (contact visuals v2: smooth GPU dents with anatomical depth, bent normals and a rim bulge, self-contact and the partner's body, bend bulges, skin marks, ripple; design-0.8.0-contact-visuals.md in the session notes) built, not yet run in the game. 0.7.9 (reactions and states, Reactions tab, dirty-talk voice guard) and 0.7.8 (physics-hand follow fix,
 hull colliders, pushes from any hand on limbs/spine/head, friction, Physics/VR tabs) built, not yet run in the game. 0.7.7 ran once (log 2026-10-15 14:51): GPU contact and wrinkles load and run; the
 physics hands stuttered (fixed in 0.7.8). GPU contact (0.7.3) and wrinkles (0.7.5) never ran before 0.7.7: the bundle lacked its
 AssetBundle object (the bundle project's Packages/manifest.json must list com.unity.modules.assetbundle; build.ps1 checks it).
@@ -121,7 +121,7 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
 
 ## Open items
 
-- 0.8.0 to check in the headset (TESTING.md 0.8.0): no v1 fallback, dent smooth (no steps) and not deeper than the Tissue caps, no permanent
+- 0.8.1 to check in the headset (TESTING.md 0.8.1): no v1 fallback, dent smooth (no steps) and not deeper than the Tissue caps, no permanent
   self-contact dents standing at rest (thighs, arm on side), bend bulge sizes, marks albedo property found on "Shader Graphs/Skin" (log line per
   sheet), print/redness visible through Wrinkles, ripple size, GPU cost (first v2 frame line). Hands session may inset HerBody's hulls by Tissue.
 - 0.7.8 to check in the headset: free-air "at the cap" near 0 % and low drawn-hand jitter (if not: Jointed fingers off to isolate the

@@ -13,8 +13,12 @@ import shutil
 import sys
 import time
 import traceback
+from types import SimpleNamespace
 
 import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+from scipy.spatial import cKDTree
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sfio  # noqa: E402
@@ -280,6 +284,458 @@ def check_game(meshes, canon, missing):
         die('her skeleton/skin export lacks the bone(s) %s: export her again from SfMorph' % ', '.join(gone))
 
 
+def make_chain(s, t, Ainv, bsrc, bdst, w_head, t_eye):
+    """The VaM export -> her bind space chain of the base run, frozen (no re-fit, no landmark moved): scale s and offset t,
+    unpose with the per-vertex matrices Ainv (inverse of the borrowed-weight Av), the thin-plate warp (bsrc -> bdst, same
+    smoothing), the head blend (w_head, t_eye). chain(X, idx) maps VaM export positions X of the vertices idx (all when idx is
+    None); for the base body.obj it gives the fitted-VaM-body vam_b exactly."""
+    from scipy.interpolate import RBFInterpolator
+    tps = RBFInterpolator(bsrc, bdst - bsrc, kernel='thin_plate_spline', smoothing=1e-4) if len(bsrc) >= 4 else None
+
+    def chain(X, idx=None):
+        sel = slice(None) if idx is None else idx
+        u = rig.apply(Ainv[sel], X * s + t)
+        b = u.copy()
+        if tps is not None:
+            for i in range(0, len(u), 50000):
+                b[i:i + 50000] += tps(u[i:i + 50000])
+        wh = w_head[sel][:, None]
+        return b * (1 - wh) + (u + t_eye) * wh
+    return chain
+
+
+def _smooth(c, m, d0, pinned, soft=0.02):
+    """fit.smooth_follow with the factorisation kept per mesh (the matrix depends only on the mesh and its pinned set)."""
+    if len(m.faces) == 0:
+        return d0
+    key = (m.name, soft)
+    if key not in c.sm_cache:
+        L = fit.uniform_laplacian(len(m.vc), m.faces)
+        w = np.where(pinned, 1e4, soft)
+        c.sm_cache[key] = (w, spla.factorized((L.T @ L + sp.diags(w)).tocsc()))
+    w, solve = c.sm_cache[key]
+    out = np.empty_like(d0)
+    for k in range(3):
+        out[:, k] = solve(w * d0[:, k])
+    return out
+
+
+def follow(c, m, wk, dskin, vn0, vn1, ref=None, vref=None, cap_d=None, base=True):
+    """Offsets (common bind space) of her mesh m for the welded-skin offsets dskin: the follower logic of the main shape,
+    without the untangling and the nipple-cap ICP.
+      base: the main shape (skin at c.wc, mesh at m.vc, cap_d = the fitted nipple cap, eyes at VaM's eye centres, the mouth
+        shrunk with S). Not base: a shape on top of the base morph; ref = the base fitted skin (wc + wd), vref = the base
+        fitted mesh (m.vc + m.dc), vn0/vn1 = the skin normals before/after, and the nipple cap takes idw like the rest.
+      wk: the welded skin index of m.fit_idx.
+    Returns (d, capped)."""
+    wref = c.wc if ref is None else ref
+    v = m.vc if vref is None else vref
+    d = fit.idw(c.wc, dskin, m.vc, k=8)
+    capped = False
+    if not base and not d.any() and not dskin[wk].any():
+        # nothing of the skin round it moves (idw and its seam vertices are all exactly zero): nothing follows
+        near = c.sup_tree.query(m.vc)[0].min() if c.sup_tree is not None else np.inf
+        if near > 0.05:
+            return np.zeros_like(d), False
+    if m.name in ATTACH:
+        if m is c.nip and c.cap_target is not None:
+            if base:
+                d = cap_d.copy()
+                capped = True   # (the generic untangle only makes this cap worse)
+            else:
+                # idw of the skin round its rim (the rim vertices sit on skin vertices and keep their values), then the cap's
+                # displacement is made as smooth as the rim allows (nearly no tie to the idw values): the idw alone shears the dome
+                near, _ = c.skin_tree.query(m.vc)
+                d = _smooth(c, m, d, near < 2e-5, soft=1e-5)
+        else:
+            d = fit.surface_attach(v, wref, c.wf, dskin, c.hsign, vn0=vn0, vn1=vn1)
+    elif m.name in PATCH_RIGID:
+        d = fit.patch_rigid(v, m.faces, wref, dskin)
+    elif m.name not in RIGID and len(m.fit_idx) < len(m.v):
+        near, _ = c.skin_tree.query(m.vc)
+        pinned = near < 2e-5
+        pinned[m.fit_idx] = True
+        if base and c.S is not None and m.name in ('reika_upperMouth', 'reika_lowerMouth'):
+            d = np.where(pinned[:, None], d, c.S(m.vc) - m.vc)   # soft target: the shrunk mouth; the seams stay on the skin
+        d = _smooth(c, m, d, pinned, soft=0.02 if base else SHAPE_SOFT)
+    if len(m.fit_idx):
+        d[m.fit_idx] = dskin[wk]
+    if m.name in RIGID:
+        j = RIGID[m.name]
+        if base and j in c.eye_off:   # eyeball: moves to VaM's eye centre and takes its size
+            d[:] = c.eye_off[j] + (c.eye_ratio.get(j, 1.0) - 1.0) * (m.vc - c.bind_pos[j])
+        elif base and c.S is not None:
+            d[:] = c.S(m.vc) - m.vc
+        else:
+            d[:] = d.mean(0)
+    return d, capped
+
+
+# ---- VaM morph deltas -> shapes (sliders, joint correctives) -----------------------------------------------------------
+JCM_RE = re.compile(r'^pJCM(ThighFwd|ThighBack|ThighSide|ShinBend|ShldrUp|ShldrDown|ShldrFwd|ShldrBack|ForeArmFwd|CollarUp)_(\d+)_([LR])$')
+# DAZ driver -> (her bone, its child bone, the way the child swings: a world axis, 'lat' = away from the midline)
+JCM_DRIVER = {'ThighFwd': ('Hip', 'Knee', (0, 0, 1)), 'ThighBack': ('Hip', 'Knee', (0, 0, -1)), 'ThighSide': ('Hip', 'Knee', 'lat'),
+              'ShinBend': ('Knee', 'Ankle', (0, 0, -1)), 'ShldrUp': ('Shoulder', 'Elbow', (0, 1, 0)),
+              'ShldrFwd': ('Shoulder', 'Elbow', (0, 0, 1)), 'ShldrBack': ('Shoulder', 'Elbow', (0, 0, -1)),
+              'ForeArmFwd': ('Elbow', 'Wrist', (0, 0, 1)), 'CollarUp': ('Scapula', 'Shoulder', (0, 1, 0))}
+JCM_HEAD = ("# jcm <shape file> <her bone> <child bone> <plane normal, parent-local> <rest child direction, parent-local> <theta0 deg> <angle deg>\n"
+            "# theta = signed angle (deg) turning the rest child direction into the child's current direction (both in the PARENT bone's bind-local space,\n"
+            "# projected onto the plane normal to the plane normal, right-hand rule); corrective value = clamp((theta - theta0) / angle, 0, 1);\n"
+            "# the shape is the full corrective (value 1): add value * shape on top of the base morph\n")
+
+
+def jcm_line(fname, j):
+    return 'jcm\t%s\t%s\t%s\t%.5f %.5f %.5f\t%.5f %.5f %.5f\t%.2f\t%g\n' % ((fname, j['bone'], j['child']) + tuple(j['n']) + tuple(j['d']) + (j['theta0'], j['angle']))
+
+
+SHAPE_MIN = 5e-5       # a shape vertex that moves less than 0.05 mm is not written
+SHAPE_SOFT = 2e-4      # follower meshes: tie of a shape's offsets to the idw values (the base's 0.02, much looser here: no untangling afterwards)
+SHAPE_NEAR = 0.015     # a welded skin vertex farther than 15 mm from the VaM surface takes idw of the matched ones
+SUPPORT_R = 0.06       # "outside the morph's region": farther than this from every vertex the morph moves
+
+
+def signed_angle(a, b, n):
+    """Angle (degrees) turning a into b about n (a, b projected onto the plane normal to n; right-hand rule in these axes)."""
+    a = a - (a @ n) * n; b = b - (b @ n) * n
+    return float(np.degrees(np.arctan2(np.cross(a, b) @ n, a @ b)))
+
+
+def jcm_setup(name, canon, bind_pos, Mpose, log, skel_parent={}):
+    """('jcm' fields) for a pJCM morph, or None (with a log line). Fields: her bone, child bone, plane normal in the bone's
+    PARENT bone's bind-local space, rest child direction (parent-local, on the plane), theta0 (degrees), angle (degrees).
+    The game measures theta = the signed angle (degrees, about the plane normal, both in the parent bone's local space) from
+    the rest child direction to the child's current direction; the corrective's value is clamp((theta - theta0) / angle, 0, 1).
+    -theta0 = where her bind pose stands relative to VaM's rest pose, along the same swing (the signed angle from the child
+    direction posed into VaM's rest pose, rig.pose_skeleton matrix of her bone, to her bind direction), so theta - theta0
+    is the swing measured from VaM's rest pose, the angle DAZ drives the corrective by."""
+    m = JCM_RE.match(name)
+    if not m:
+        log('  jcm: %s is not a pJCM name this pipeline reads: skipped' % name)
+        return None
+    kind, ang, side = m.group(1), float(m.group(2)), m.group(3)
+    if kind == 'ShldrDown':
+        log('  jcm: %s skipped (ShldrDown is not applied by default: her A-pose arms already hang)' % name)
+        return None
+    bn, cn, tgt = JCM_DRIVER[kind]
+    bone, child = '%s_%s' % (bn, side), '%s_%s' % (cn, side)
+    if bone not in canon or child not in canon or bone not in Mpose:
+        log('  jcm: %s skipped (her rig has no %s / %s)' % (name, bone, child))
+        return None
+    d = bind_pos[child] - bind_pos[bone]
+    d /= np.linalg.norm(d)
+    if tgt == 'lat':     # away from the midline, on her side of the body
+        tgt = (np.sign(bind_pos[bone][0]) or 1.0) * np.array([1.0, 0.0, 0.0])
+    tgt = np.asarray(tgt, float)
+    n = np.cross(d, tgt)
+    if bn in ('Hip', 'Knee'):
+        # the leg swings in her sagittal (x normal) or coronal (z normal) plane: that axis, signed so the swing is positive
+        ax = np.array([0.0, 0.0, 1.0]) if kind == 'ThighSide' else np.array([1.0, 0.0, 0.0])
+        n = ax * (np.sign(n @ ax) or 1.0)
+    n = n / np.linalg.norm(n)
+    dv = Mpose[bone][:3, :3] @ d
+    th0 = signed_angle(dv, d, n)
+    # the child's direction only changes in the PARENT bone's frame (in the bone's own frame it is constant), so the
+    # plane normal and rest direction are expressed in the parent's bind-local space; the game measures there too
+    par = skel_parent.get(bone)
+    if par not in canon:
+        log('  jcm: %s skipped (no bind pose for the parent %s of %s)' % (name, par, bone))
+        return None
+    R = canon[par][:3, :3]
+    nl = R @ n; nl /= np.linalg.norm(nl)
+    dl = R @ d; dl -= (dl @ nl) * nl; dl /= np.linalg.norm(dl)
+    return dict(bone=bone, child=child, n=nl, d=dl, theta0=-th0, angle=ang, nw=n)
+
+
+def load_morph_files(vamdir, nvert, log, warn):
+    """VaM export morphs/ + morphs.txt -> ({name: (dense unit delta (n,3), nonzero idx)}, morphs.txt rows) or None."""
+    mdir = os.path.join(vamdir, 'morphs')
+    if not os.path.isdir(mdir):
+        warn('VaM export has no morphs/ folder: no slider or joint-corrective shapes (re-export with the SfExport plugin that writes morph deltas)')
+        return None
+    table = {}
+    tp = os.path.join(vamdir, 'morphs.txt')
+    if os.path.isfile(tp):
+        table = sfio.read_morphs_txt(tp)
+    else:
+        warn('VaM export has morphs/ but no morphs.txt: current morph values unknown (all taken as 0)')
+    out = {}
+    for fn in sorted(os.listdir(mdir)):
+        if not fn.lower().endswith('.delta'):
+            continue
+        try:
+            dl = sfio.read_morph_delta(os.path.join(mdir, fn))
+        except (OSError, ValueError) as e:
+            warn('morphs/%s unreadable (%s): skipped' % (fn, e))
+            continue
+        name = dl['name'] or fn[:-6]
+        row = table.get(name)
+        if dl['name'] and dl['name'] != fn[:-6]:
+            log('  morph file %s says its name is "%s"' % (fn, dl['name']))
+        if dl['count'] is not None and dl['count'] != nvert:
+            warn('morph "%s": delta file is for %d vertices, body.obj has %d: skipped' % (name, dl['count'], nvert))
+            continue
+        if len(dl['idx']) and (dl['idx'].min() < 0 or dl['idx'].max() >= nvert):
+            warn('morph "%s": vertex index outside body.obj: skipped' % name)
+            continue
+        step = dl['step']
+        if step is None and row is not None and abs(row['probe'] - row['cur']) > 1e-9:
+            step = row['probe'] - row['cur']
+        if not step:
+            step = 1.0
+            log('  morph "%s": no probe step in the file or in morphs.txt: the delta is taken per unit value' % name)
+        D = np.zeros((nvert, 3))
+        np.add.at(D, dl['idx'], dl['d'] / step)      # per unit change of the morph value
+        nz = np.flatnonzero(np.abs(D).max(1) > 0)
+        if row is not None:
+            mx = 1000 * np.linalg.norm(dl['d'], axis=1).max() if len(dl['d']) else 0.0
+            if (row['maxmm'] is not None and abs(row['maxmm'] - mx) > 0.05 * max(mx, 0.1) + 0.02) or \
+               (row['nz'] is not None and abs(row['nz'] - len(np.unique(dl['idx']))) > 0.02 * max(row['nz'], 1)):
+                warn('morph "%s": morphs.txt says max %s mm / %s vertices, the delta file has %.2f mm / %d' % (
+                    name, row['maxmm'], row['nz'], mx, len(np.unique(dl['idx']))))
+            if not row['found']:
+                log('  morph "%s": morphs.txt says missing, but a delta file exists: used' % name)
+        elif table:
+            log('  morph "%s": not in morphs.txt (current value taken as 0)' % name)
+        out[name] = (D, nz)
+    log('morph deltas: %d files in morphs/ (%d rows in morphs.txt)' % (len(out), len(table)))
+    return out, table
+
+
+def area_weights(v, f):
+    """Vertex areas (a third of each adjacent triangle) of triangles f on points v."""
+    _, a = sfio.face_normals(v, f)
+    w = np.zeros(len(v))
+    for k in range(3):
+        np.add.at(w, f[:, k], a / 3)
+    return w
+
+
+def build_shapes(a, c, vam, vam_b, vf, results, canon, bind_pos, Mpose, skel_parent):
+    """Sliders (sliders.txt) and joint correctives (pJCM morphs) as shape files. c: the context of the base run (c.chain frozen).
+    Returns dict(files={filename: writer args}, sliders=[(name, s0, file)], jcm=[line fields], rows=[PASS/WARN lines],
+    render=...), or None when there is nothing to do."""
+    loaded = load_morph_files(a.vam, len(vam.v), log, warn)
+    if loaded is None:
+        return None
+    morphs, table = loaded
+    if not morphs:
+        warn('morphs/ has no .delta files: no shapes')
+        return None
+    nv = len(vam.v)
+    log('--- shapes: slider and joint-corrective deltas through the frozen chain of the base run ---')
+    # VaM surface at the base state -> her final welded skin: closest triangle (barycentric), idw beyond 15 mm
+    fin = c.wc + c.wd
+    srf = fit.Surface(vam_b, vf, np.zeros((len(vf), 3)))
+    q, dist, fi = srf.nearest(fin, k=12)
+    bu, bv, bw = fit._bary(vam_b, vf, q, fi)
+    W = np.clip(np.c_[bu, bv, bw], 0, None)
+    W /= np.maximum(W.sum(1, keepdims=True), 1e-12)
+    tri = vf[fi]
+    near = dist <= SHAPE_NEAR
+    log('skin transfer: %d of %d welded skin vertices within %.0f mm of the VaM surface (mean %.3f mm, p99 %.2f mm); %d take idw of those' % (
+        near.sum(), len(near), 1000 * SHAPE_NEAR, 1000 * dist[near].mean(), 1000 * np.percentile(dist[near], 99), (~near).sum()))
+    skin_vi = np.unique(vf.ravel())
+    vam_area = area_weights(vam_b, vf)[skin_vi]
+    her_area = area_weights(fin, c.wf)
+
+    def to_skin(Db):
+        Dw = Db[tri[:, 0]] * W[:, :1] + Db[tri[:, 1]] * W[:, 1:2] + Db[tri[:, 2]] * W[:, 2:]
+        if (~near).any() and near.any():
+            Dw[~near] = fit.idw(c.wc[near], Dw[near], c.wc[~near], k=8)
+        return Dw
+
+    db_cache = {}
+
+    def morph_db(name):
+        """Db: the morph's delta per unit value after the frozen chain, minus the base chain, per VaM vertex."""
+        if name not in db_cache:
+            D, nz = morphs[name]
+            Db = np.zeros((nv, 3))
+            if len(nz):
+                Db[nz] = c.chain(vam.v[nz] + D[nz], nz) - vam_b[nz]
+            db_cache[name] = Db
+        return db_cache[name]
+
+    # her chest: the upper body and the cap welded for the normals (as in the base run)
+    def skin_normals(Dw, cap_ds):
+        if c.chest is None:
+            return sfio.vertex_normals(fin + Dw, c.wf, c.hsign), None
+        cw, fa, ncw, ccnt = c.chest
+        p1 = np.concatenate([fin + Dw, c.nip.vc + c.nip.dc + cap_ds])
+        pw = np.zeros((ncw, 3)); np.add.at(pw, cw, p1); pw /= ccnt[:, None]
+        nn = sfio.vertex_normals(pw, fa, c.hsign)[cw]
+        return nn[:c.nw], nn[c.nw:]
+
+    cap_n0 = c.nrm_cap[1] if c.nrm_cap is not None else None
+    files, rows_info, rep = {}, [], []
+
+    def emit(title, Db, factors, note):
+        """One shape from Db: her mesh blocks + skin block, and its checks. factors: {label: multiplier of the shape} for the
+        flipped-triangle test (on top of the base morph)."""
+        Dw = to_skin(Db)
+        cap_ds = fit.idw(c.wc, Dw, c.nip.vc, k=8) if (c.nip is not None and c.cap_target is not None) else None
+        wnS, cap_n1 = skin_normals(Dw, cap_ds)
+        mov = np.linalg.norm(Dw, axis=1) > 1e-9
+        c.sup_tree = cKDTree(c.wc[mov]) if mov.any() else None
+        blocks, dmesh = [], {}
+        flips = {lab: 0 for lab in factors}
+        worst_flip = {lab: (0, '') for lab in factors}
+        flip_list = []
+        dmax = 0.0
+        sup_pts = vam_b[np.linalg.norm(Db, axis=1) > SHAPE_MIN]
+        sup_tree = cKDTree(sup_pts) if len(sup_pts) else None
+        leak = 0.0; leak_at = ''; follow_leak = 0.0
+        for m in results:
+            wk = c.widx[c.fit_off[m.name] + np.arange(len(m.fit_idx))] if len(m.fit_idx) else np.zeros(0, np.int64)
+            d, _ = follow(c, m, wk, Dw, c.wn1, wnS, ref=fin, vref=m.vc + m.dc, base=False)
+            if not d.any():
+                blocks.append((m.name, len(m.v), np.zeros(0, np.int64), np.zeros((0, 3)), np.zeros((0, 3))))
+                continue
+            n_a = sfio.vertex_normals(m.vc + m.dc, m.faces, m.sgn); n_b = sfio.vertex_normals(m.vc + m.dc + d, m.faces, m.sgn)
+            if len(m.fit_idx):
+                n_a[m.fit_idx] = c.wn1[wk]; n_b[m.fit_idx] = wnS[wk]
+            if m is c.nip and cap_n1 is not None:
+                n_a, n_b = cap_n0, cap_n1
+            n_new = fit.rotate_normals(m.nfin, n_a, n_b)
+            d_own = np.einsum('nij,nj->ni', m.Cinv, d)
+            dn_own = np.einsum('nij,nj->ni', m.Cinv, n_new - m.nfin)
+            keep = np.flatnonzero(np.linalg.norm(d, axis=1) >= SHAPE_MIN)
+            blocks.append((m.name, len(m.v), keep, d_own[keep], dn_own[keep]))
+            dmesh[m.name] = d
+            dmax = max(dmax, np.linalg.norm(d, axis=1).max())
+            if sup_tree is not None:
+                far = sup_tree.query(m.vc + m.dc)[0] > SUPPORT_R
+            else:
+                far = np.ones(len(m.v), bool)
+            if far.any():
+                # (only vertices lying on her skin, within 5 mm of it, count: interior parts, hair and the like follow the skin round them by design)
+                ds_ = c.skin_tree.query(m.vc + m.dc)[0]
+                lk_all = np.linalg.norm(d[far], axis=1).max()
+                follow_leak = max(follow_leak, lk_all)
+                far &= ds_ < 0.005
+                lk = np.linalg.norm(d[far], axis=1).max() if far.any() else 0.0
+                if lk > leak:
+                    leak, leak_at = lk, m.name
+            n0, a0 = sfio.face_normals(m.vc, m.faces)
+            good = a0 > 1e-12
+            for lab, fac in factors.items():
+                n1, _ = sfio.face_normals(m.vc + m.dc + fac * d, m.faces)
+                fl = int(((np.einsum('ij,ij->i', n0, n1) < 0) & good).sum())
+                inc = fl - m.stats['flipped']
+                if inc > 0:
+                    flip_list.append('%s %s +%d/%d' % (lab, m.name.replace('reika_', ''), inc, len(m.faces)))
+                if inc > max(3, 0.001 * len(m.faces)) and inc > worst_flip[lab][0]:
+                    worst_flip[lab] = (inc, '%s +%d of %d' % (m.name, inc, len(m.faces)))
+        dwn = np.linalg.norm(Dw, axis=1)
+        dbn = np.linalg.norm(Db[skin_vi], axis=1)
+        mb, mw = dbn > SHAPE_MIN, dwn > SHAPE_MIN
+        st = dict(
+            max_b=float(dbn.max()), max_w=float(dwn.max()),
+            mean_b=float(np.average(dbn[mb], weights=vam_area[mb])) if mb.any() else 0.0,
+            mean_w=float(np.average(dwn[mw], weights=her_area[mw])) if mw.any() else 0.0)
+        if sup_tree is not None:
+            farw = sup_tree.query(fin)[0] > SUPPORT_R
+            lkw = float(dwn[farw].max()) if farw.any() else 0.0
+            if lkw > leak:
+                leak, leak_at = lkw, 'skin'
+        keep = np.flatnonzero(dwn >= SHAPE_MIN)
+        skin = (c.nw, keep, Dw[keep], (wnS - c.wn1)[keep])
+        st.update(leak=leak, leak_at=leak_at, dmax=dmax, worst_flip=worst_flip, nsup=int(len(sup_pts)), flip_list=flip_list, follow_leak=follow_leak)
+        files[title] = (blocks, skin, note)
+        return Dw, dmesh, st
+
+    def stat_row(title, kind, st, rows):
+        rmax = st['max_w'] / st['max_b'] if st['max_b'] > 0 else np.nan
+        rmean = st['mean_w'] / st['mean_b'] if st['mean_b'] > 0 else np.nan
+        log('  %-30s |Db| max %.2f mean %.2f mm -> |Dw| max %.2f mean %.2f mm (ratios %.2f / %.2f); outside %.0f cm of the morph: max %.3f mm (%s; any mesh %.3f mm); largest mesh offset %.2f mm' % (
+            title, 1000 * st['max_b'], 1000 * st['mean_b'], 1000 * st['max_w'], 1000 * st['mean_w'], rmax, rmean, 100 * SUPPORT_R,
+            1000 * st['leak'], st['leak_at'] or '-', 1000 * st['follow_leak'], 1000 * st['dmax']))
+        if st['flip_list']:
+            log('    flipped triangles beyond the base: ' + ', '.join(st['flip_list']))
+        rows.append((title, kind, st, rmax, rmean))
+
+    sliders = []
+    jcm_lines = []
+    stats = []
+    render = None
+    sp_path = a.sliders
+    sl = []
+    if os.path.isfile(sp_path):
+        try:
+            sl = sfio.read_sliders(sp_path)
+        except ValueError as e:
+            warn('sliders.txt not read: %s' % e)
+    else:
+        warn('no sliders file %s: no slider shapes' % sp_path)
+    for s_ in sl:
+        use, scale = [], {}
+        for mn, st_, en in s_['morphs']:
+            if mn not in morphs:
+                warn("slider %s: morph '%s' has no delta file (%s): left out" % (
+                    s_['name'], mn, 'morphs.txt says missing' if table.get(mn) and not table[mn]['found'] else 'not exported'))
+                continue
+            use.append((mn, st_, en))
+        if not use:
+            warn('slider %s: none of its morphs was exported: no shape' % s_['name'])
+            continue
+        K = np.zeros((nv, 3))
+        for mn, st_, en in use:
+            K += (en - st_) * morph_db(mn)
+        sv = [(table[mn]['cur'] - st_) / (en - st_) for mn, st_, en in use if mn in table and table[mn]['found'] and en != st_]
+        if sv:
+            s0 = float(np.median(sv))
+            if max(sv) - min(sv) > 0.1:
+                vu = [u for u in use if u[0] in table and table[u[0]]['found'] and u[2] != u[1]]
+                warn('slider %s: its morphs put the slider at %s (spread %.2f > 0.1): s0 = median %.3f' % (
+                    s_['name'], ', '.join('%s %.3f' % (u[0], v) for u, v in zip(vu, sv)), max(sv) - min(sv), s0))
+        else:
+            s0 = s_['default']
+            warn('slider %s: no current morph values in morphs.txt: s0 = the default %.3f' % (s_['name'], s0))
+        title = s_['name']
+        fname = 'shape.%s.txt' % re.sub(r'[^A-Za-z0-9._-]+', '_', title)
+        log('slider %s: s0 %.3f (default %.3f), morphs %s' % (title, s0, s_['default'], ', '.join('%s %g..%g' % u for u in use)))
+        Dw, dmesh, st = emit(fname, K, {'s0': 0.0, 's=0': -s0, 's=1': 1.0 - s0},
+                             'slider %s: shape = delta of the slider going 0 -> 1, apply (s - s0) * shape on the base morph, s0 = %.4f' % (title, s0))
+        stat_row(title, 'slider', st, stats)
+        sliders.append((title, s0, fname))
+        if title.lower() == 'fitness':
+            render = (title, dmesh, 1.0 - s0)
+    # joint correctives
+    for name in sorted(morphs):
+        if not name.startswith('pJCM'):
+            continue
+        j = jcm_setup(name, canon, bind_pos, Mpose, log, skel_parent)
+        if j is None:
+            continue
+        fname = 'shape.%s.txt' % re.sub(r'[^A-Za-z0-9._-]+', '_', name)
+        Db = morph_db(name)
+        Dw, dmesh, st = emit(fname, Db, {'v=1': 1.0}, 'joint corrective %s: apply value * shape on the base morph, value = clamp((theta - theta0) / angle, 0, 1)' % name)
+        stat_row(name, 'jcm', st, stats)
+        jcm_lines.append((fname, j))
+        log('  jcm %s: %s -> %s, plane normal (parent-local) %s, rest dir %s, theta0 %.1f, angle %g' % (
+            name, j['bone'], j['child'], np.round(j['n'], 3), np.round(j['d'], 3), j['theta0'], j['angle']))
+    if not files:
+        warn('morphs/ has deltas but no slider or joint-corrective shape came out of them')
+        return None
+    # --- checks, one PASS/WARN line per kind ---
+    rows = []
+    bad = [(t, r1, r2) for t, k, st, r1, r2 in stats if not (0.8 <= r1 <= 1.2 and 0.8 <= r2 <= 1.2)]
+    rows.append((not bad, 'shape size, skin |Dw| vs VaM |Db| (limit 20 %%): %d shapes, worst max ratio %.2f, worst mean ratio %.2f%s' % (
+        len(stats), max([r1 for _, _, _, r1, _ in stats], key=lambda x: abs(x - 1)), max([r2 for _, _, _, _, r2 in stats], key=lambda x: abs(x - 1)),
+        '' if not bad else '; outside: ' + ', '.join('%s %.2f/%.2f' % b for b in bad))))
+    lk = [(t, st['leak'], st['leak_at'], st['max_w'], st['dmax']) for t, k, st, _, _ in stats]
+    badl = [x for x in lk if x[1] > max(1e-4, 0.03 * max(x[3], x[4]))]
+    rows.append((not badl, 'shapes nearly zero outside the morph (skin and what lies on it within 5 mm, farther than %.0f cm from any vertex the morph moves; limit 0.1 mm or 3 %% of the shape): worst %.3f mm (%s on %s)%s' % (
+        100 * SUPPORT_R, 1000 * max(x[1] for x in lk), max(lk, key=lambda x: x[1])[0], max(lk, key=lambda x: x[1])[2] or '-',
+        '' if not badl else '; over: ' + ', '.join('%s %.3f mm on %s' % (x[0], 1000 * x[1], x[2]) for x in badl))))
+    badf = [(t, lab, w[1]) for t, k, st, _, _ in stats for lab, w in st['worst_flip'].items() if w[0] > 0]
+    rows.append((not badf, 'flipped triangles unchanged by the shapes at s0, s = 0 and s = 1 (jcm: value 1; limit +0.1%% of its triangles): %d shapes checked%s' % (
+        len(stats), '' if not badf else '; over: ' + ', '.join('%s at %s: %s' % x for x in badf[:6]) + (' ...' if len(badf) > 6 else ''))))
+    rows.append((True, 'shapes: %d sliders (%s), %d joint correctives (%s)' % (len(sliders), ', '.join(s_[0] for s_ in sliders), len(jcm_lines),
+                                                                         ', '.join(sorted(m_[0][6:-4] for m_ in jcm_lines)) or '-')))
+    return dict(files=files, sliders=sliders, jcm=jcm_lines, rows=rows, render=render, stats=stats)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--game', required=True)
@@ -292,6 +748,8 @@ def main():
     ap.add_argument('--proportions', choices=('hers', 'vam'), default='hers',
                     help="hers: the VaM character's surface and face on her own skeleton (limb, finger and shoulder "
                          "proportions stay hers, so her rig and animations fit); vam: also take VaM's proportions")
+    ap.add_argument('--sliders', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sliders.txt'),
+                    help='slider definitions (default: sliders.txt next to this script); used when the VaM export has morphs/')
     a = ap.parse_args()
     chk = os.path.join(a.out, '_check')
     os.makedirs(chk, exist_ok=True)
@@ -485,6 +943,7 @@ def run(a, chk):
     log('stiffer fit on %d vertices (fingers, toes, eyelids); %d eyelid vertices keep her eye opening' % ((stiff > 1).sum(), lids.sum()))
     chest_zone = np.zeros(len(wc), bool)
     eye_off, eye_ratio, fm_her, fm_vam = None, {}, None, None
+    chain = None         # frozen VaM -> her bind chain (proportions hers), for the morph shapes
     eye_open = None      # (apertures, closed) once measured on the VaM skin
     S = None             # mouth similarity (her proportions only): maps her mouth parts to the VaM-sized face
     lid_chk = []         # (eye, nearest fitted lid vertex to the eye centre, eyeball radius) in metres
@@ -550,6 +1009,10 @@ def run(a, chk):
         head_names = [names.index(x) for x in ('torso', 'lipU', 'lipL')]
         w_head = np.where(np.isin(vlab_v, head_names), np.clip((vam_u[:, 1] + t_eye[1] - yN) / (yH - yN), 0, 1), 0.0)
         vam_b = vam_b * (1 - w_head)[:, None] + (vam_u + t_eye) * w_head[:, None]
+        # the same chain, frozen, for the morph deltas (shape files): Av, the TPS (bsrc, bdst), w_head, t_eye, s and the offset
+        chain = make_chain(s, t.copy(), np.linalg.inv(Av), bsrc, bdst, w_head, t_eye)
+        err = np.abs(chain(vam.v) - vam_b).max()
+        log('frozen chain (for the morph shapes) reproduces the fitted VaM body to %.2g mm' % (1000 * err))
         log('head decoupling: VaM head rigid at her eyes, offset %s mm (eye spacing VaM %.1f mm, hers %.1f mm); neck blend between y %.3f and %.3f, %d VaM vertices fully rigid' % (
             np.round(t_eye * 1000, 1), 1000 * np.linalg.norm(eye_v['Eye_L'] - eye_v['Eye_R']),
             1000 * np.linalg.norm(bind_pos['Eye_L'] - bind_pos['Eye_R']), yN, yH, (w_head >= 1).sum()))
@@ -856,37 +1319,18 @@ def run(a, chk):
             nn.append(sfio.vertex_normals(pw, fa, hsign)[cw])
         wn0, wn1 = nn[0][:nw], nn[1][:nw]
         nrm_cap = (nn[0][nw:], nn[1][nw:])
+    # what follow() needs (the main shape and the morph shapes use the same follower logic)
+    fctx = SimpleNamespace(wc=wc, wd=wd, wf=wf, hsign=hsign, nw=nw, widx=widx, fit_off=fit_off, skin_tree=skin_tree, nip=nip,
+                           cap_target=cap_target, S=S, eye_off=eye_off, eye_ratio=eye_ratio, bind_pos=bind_pos, sm_cache={},
+                           sup_tree=None, chain=chain, wn1=wn1, nrm_cap=nrm_cap,
+                           chest=(cw, fa, ncw, ccnt) if (cap_target is not None) else None)
     for m in meshes:
-        d = fit.idw(wc, wd, m.vc, k=8)
-        capped = False
-        if m.name in ATTACH:
-            if m is nip and cap_target is not None:
-                d = cap_d.copy()
-                capped = True   # (the generic untangle below only makes this cap worse)
-            else:
-                d = fit.surface_attach(m.vc, wc, wf, wd, hsign, vn0=wn0, vn1=wn1)
-        elif m.name in PATCH_RIGID:
-            d = fit.patch_rigid(m.vc, m.faces, wc, wd)
-        elif m.name not in RIGID and len(m.fit_idx) < len(m.v):
-            near, _ = skin_tree.query(m.vc)
-            pinned = near < 2e-5
-            pinned[m.fit_idx] = True
-            if S is not None and m.name in ('reika_upperMouth', 'reika_lowerMouth'):
-                d = np.where(pinned[:, None], d, S(m.vc) - m.vc)   # soft target: the shrunk mouth; the seams stay on the skin
-            d = fit.smooth_follow(m.vc, m.faces, d, pinned)
+        k = widx[pos:pos + len(m.fit_idx)]
+        pos += len(m.fit_idx)
+        d, capped = follow(fctx, m, k, wd, wn0, wn1, cap_d=cap_d)
         n_a = n_b = None
-        if len(m.fit_idx):
-            k = widx[pos:pos + len(m.fit_idx)]
-            pos += len(m.fit_idx)
-            d[m.fit_idx] = wd[k]
         if m.name in RIGID:
-            j = RIGID[m.name]
-            if j in eye_off:   # eyeball: moves to VaM's eye centre and takes its size
-                d[:] = eye_off[j] + (eye_ratio.get(j, 1.0) - 1.0) * (m.vc - bind_pos[j])
-            elif S is not None:
-                d[:] = S(m.vc) - m.vc
-            else:
-                d[:] = d.mean(0)
+            pass
         elif len(m.fit_idx) < len(m.v) and not capped:
             free = np.ones(len(m.v), bool); free[m.fit_idx] = False
             d2, b0, b1 = fit.untangle(m.vc, m.faces, d)
@@ -908,6 +1352,7 @@ def run(a, chk):
         m.d = np.einsum('nij,nj->ni', Cinv, d)                # back to the mesh's own space
         m.dn = np.einsum('nij,nj->ni', Cinv, n_new) - m.vn
         m.dc = d
+        m.sgn, m.nfin, m.Cinv = sgn, n_new, Cinv                # (kept for the morph shapes)
         if bindfit:                                          # bind pose (for bake/render)
             m.vp = m.vc
             m.vp1 = m.vc + d
@@ -1035,7 +1480,23 @@ def run(a, chk):
             log('  reika_upperBody_normal flipped triangles: %d in all, %d in the chest (within 12 cm of a nipple)%s' % (
                 fl_.sum(), in_chest.sum(), '' if not fl_.any() else '; at (cm) ' + ' '.join('(%d %d %d)' % tuple(np.round(100 * c)) for c in cf_)))
 
+    # --- morph shapes: sliders and joint correctives from the VaM export's morph deltas -------------------------------
+    shapes = None
+    if chain is None:
+        if os.path.isdir(os.path.join(a.vam, 'morphs')):
+            warn('--proportions vam has no frozen fit chain: the morph deltas are not turned into shapes')
+    else:
+        try:
+            shapes = build_shapes(a, fctx, vam, vam_out, vf, results, canon, bind_pos, M, {b: skel[b]['parent'] for b in skel})
+        except Exception:  # noqa: BLE001
+            log(traceback.format_exc())
+            warn('shapes failed (traceback in report.txt): the base character is written without them')
+            shapes = None
+
     # --- write -------------------------------------------------------------------------------------------
+    for stale in os.listdir(a.out):   # (a previous run's shapes; run.ps1 only clears the .morph.txt files)
+        if (stale.startswith('shape.') and stale.endswith('.txt')) or stale == 'jcm.txt':
+            os.remove(os.path.join(a.out, stale))
     for m in results:
         sfio.write_morph(os.path.join(a.out, m.name + '.morph.txt'), m.name, m.d, m.dn, h=head_w(m.vc[:, 1]))
     with open(os.path.join(a.out, 'joints.txt'), 'w', encoding='utf-8', newline='\n') as f:
@@ -1075,6 +1536,37 @@ def run(a, chk):
             f.write('skin\t%s\n' % n)
         for n in HIDE:  # her anime brows: VaM characters carry their brows in the face texture
             f.write('hide\t%s\n' % n)
+        if shapes:
+            f.write('# slider <name> <s0> <shape file>: the shape is the delta of the slider going 0 -> 1; apply (s - s0) * shape on the base morph\n')
+            for title, s0, fname in shapes['sliders']:
+                f.write('slider\t%s\t%.4f\t%s\n' % (title, s0, fname))
+            f.write(JCM_HEAD)
+            for fname, j in shapes['jcm']:
+                f.write(jcm_line(fname, j))
+    if shapes:
+        for fname, (blocks, skin, note) in shapes['files'].items():
+            sfio.write_shape(os.path.join(a.out, fname), fname[6:-4], blocks, skin, note)
+        if shapes['jcm']:
+            with open(os.path.join(a.out, 'jcm.txt'), 'w', encoding='utf-8', newline='\n') as f:
+                f.write(JCM_HEAD)
+                for fname, j in shapes['jcm']:
+                    f.write(jcm_line(fname, j))
+        log('shapes written: %d files (%d sliders, %d joint correctives)' % (len(shapes['files']), len(shapes['sliders']), len(shapes['jcm'])))
+        if shapes['render']:
+            title, dmesh, fac = shapes['render']
+            rdir = os.path.join(chk, 'render_%s' % re.sub(r'[^A-Za-z0-9]+', '_', title).lower(), '_check')
+            os.makedirs(rdir, exist_ok=True)
+            # stage.npz as blend.py reads it: 'bind' = the base fitted character (s0), 'morph' = the slider at 1
+            np.savez_compressed(os.path.join(rdir, 'stage.npz'),
+                                vam_v=vam_out, vam_f=vam.faces, vam_g=vam.face_group, vam_uv=vam.uv, vam_vn=vam.vn * vsign,
+                                vam_groups=np.array(vam.groups), names=np.array([m.name for m in results]),
+                                **{'%s|%s' % (m.name, k_): v_ for m in results for k_, v_ in (
+                                    ('vc', m.vc + m.dc), ('dc', fac * dmesh.get(m.name, np.zeros_like(m.dc))), ('vp', m.vc + m.dc),
+                                    ('vp1', m.vc + m.dc + fac * dmesh.get(m.name, np.zeros_like(m.dc))), ('faces', m.faces),
+                                    ('face_group', m.face_group), ('uv', m.uv))},
+                                **{'%s|groups' % m.name: np.array(m.groups) for m in results})
+            shapes['rows'].append((True, "%s at 1: before/after render input written to %s (render: blender -b --factory-startup -P blend.py -- --out %s --no-bake)" % (
+                title, os.path.relpath(os.path.join(rdir, 'stage.npz'), a.out), os.path.dirname(rdir))))
     np.savez_compressed(os.path.join(chk, 'stage.npz'),
                         vam_v=vam_out, vam_eyes=vam_eyes, vam_eye_r=np.float64(r_vam if r_vam else np.nan), vam_f=vam.faces, vam_g=vam.face_group, vam_uv=vam.uv, vam_vn=vam.vn * vsign,
                         vam_groups=np.array(vam.groups), names=np.array([m.name for m in results]),
@@ -1083,7 +1575,8 @@ def run(a, chk):
                            for k in ('vc', 'dc', 'vp', 'vp1', 'faces', 'face_group', 'uv')},
                         **{'%s|groups' % m.name: np.array(m.groups) for m in results})
     log('fit stage done in %.0f s' % (time.time() - t0))
-    summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, a.proportions, lid_chk, breast_diff[0] if breast_diff else None, nip_chk)
+    summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, a.proportions, lid_chk, breast_diff[0] if breast_diff else None, nip_chk,
+              shapes['rows'] if shapes else ())
     with open(os.path.join(chk, 'report.txt'), 'w', encoding='utf-8') as f:
         f.write('\n'.join(LOG) + '\n')
     return 0 if rep else 1
@@ -1146,7 +1639,7 @@ def untangle_toward(v, faces, d, target, region, rings=2, step=0.25, iters=60):
     return d, first, int(bad(d).sum())
 
 
-def summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, proportions, lid_chk=(), breast_diff=None, nip_chk=None):
+def summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, proportions, lid_chk=(), breast_diff=None, nip_chk=None, extra=()):
     """PASS/WARN lines for the things that matter, printed and written to _check/summary.txt (the Blender stage
     appends its texture line). Thresholds: eyes open, face metrics within 3 mm of VaM, fit residual mean < 0.5 mm,
     flipped triangles per main skin mesh < 0.5 %, largest offset < 6 cm, joint offsets only on the face."""
@@ -1207,6 +1700,8 @@ def summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, pr
     moved = sorted(b for b, o in joint_off.items() if np.any(o))
     other = [b for b in moved if b not in FACE_JOINTS]
     add(not other, 'joint offsets: %s' % ((', '.join(moved) or 'none') if not other else 'beyond the face: ' + ', '.join(other)))
+    for ok, text in extra:
+        add(ok, text)
     rows += ['WARN  ' + w for w in WARNS]
     npass = sum(r.startswith('PASS') for r in rows); nwarn = len(rows) - npass
     out = ['# %s: %d PASS, %d WARN' % (name, npass, nwarn)] + rows

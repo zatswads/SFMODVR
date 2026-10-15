@@ -97,7 +97,7 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
-## 0.8.0 (contact visuals v2)
+## 0.8.1 (contact visuals v2)
 
 Install `dist/SfMorph.dll` + `dist/sfmorph_shaders` (new kernels; the old bundle logs "bundle has no v2 kernels ... v1 imprint"). Log: per GPU
 renderer `GPU contact: baked <name>: ...` (classes, bend joints, ms), `GPU contact: v2 on (...)`, `first v2 frame` (renderers, dispatches,

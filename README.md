@@ -41,7 +41,7 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
-0.8.0:
+0.8.1:
 - A hand pressed on her (lower belly especially) made jagged, hand-shaped cut-outs with sharp steps and went too deep: the GPU contact moved
   only the vertices inside a hand's capsule, each to the capsule's surface along its own normal, with nothing outside the rim (a wall at
   the rim sampled at ~7 mm vertex spacing), left the shading of the undented skin (the dent read as a hole) and capped the depth at 2-4.5 cm
@@ -67,6 +67,15 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
   the body sliders) and rebuild when one of them moves.
 - Install both dist/SfMorph.dll and dist/sfmorph_shaders (the shader bundle has new kernels; with the old bundle the GPU contact stays the
   0.7.9 one and the log says so).
+
+0.8.0:
+- Characters → Body sliders, like the ispinox Claire VaM scene: Fitness, Body Type, Waist, Hip, Breasts and Breast Under on a
+  converted character, each 0-100 % from that character's own setting; plus Skin Tone (lighter/darker through the tint) and Gloss.
+  The sliders stay greyed until the character has slider data: export the VaM character again with "Export morphs for SF" (the
+  updated tools/vam/SfExport.cs) and re-run tools/pipeline/run.ps1.
+- Joint correctives (VaM's pJCM morphs): the shoulder, collar, elbow, hip and knee bends get the VaM character's corrective shapes
+  as her joints swing, measured from VaM's rest pose. "Joint correctives" toggle under the sliders.
+- Clothes follow the sliders and correctives like they follow the base shape.
 
 0.7.9:
 - Physics hands still stuttered in 0.7.8 (the log: the pull at its limit in 87-99 % of steps in free air, the drawn hand jittering by
