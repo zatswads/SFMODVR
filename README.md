@@ -50,7 +50,8 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
   in a low rim around the dent (Rim bulge), and the skin's shading tilted into the dent (bent normals), so it reads as pressed flesh.
 - Anatomical flesh: how far each part gives follows her anatomy (about 23 mm on the glutes, 24 on the breasts, 18 on the lower belly,
   10-16 on the thighs, 9 on the calf but 4 over the shin, 7-10 on the upper arm, 2-4 over bone at the default 50 % Softness; Dent depth
-  scales it all). A press follows the hand exactly at first, then stiffens smoothly toward that depth instead of stopping at a hard edge;
+  scales it all; approximate on purpose, for look and feel). A press follows the hand exactly at first, then stiffens smoothly toward
+  that depth instead of stopping at a hard edge;
   the soft zones' springs are per part (breasts softest and the most jiggly, glutes deep and soft, belly medium, outer thigh firm), and a
   physics hand meets resistance that rises as the flesh compresses (a fingertip sinks into a glute, stops quickly on a shin).
 - Her own body squashes where it touches: thighs together, a calf against the thigh when kneeling, an arm against her breast and side
@@ -63,6 +64,11 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
   normal map when Body wrinkles are on. Nothing is changed in her textures while no mark is showing.
 - Ripple: an impact (a slap, the partner's pelvis thrusting against her glutes or thighs) sends a damped ring through her flesh from the
   point of impact, and a breast impact also kicks the game's breast physics briefly (Ripple on impact).
+- Overlay meshes lying on her skin (areola caps, tattoo, the vulva rim) move exactly with the skin under them in a dent (they used to get
+  their own dent: the areola could z-fight or a tattoo float). Her own limbs only cost GPU time while they actually touch her.
+- Wrinkles looked like stretch marks: each fold was a thin crease line on flat skin. Now compressed skin rolls into broad rounded ridges
+  between narrow creases. On her face the folds stay subtle: her skin shader's subsurface scattering blurs fine normal-map detail out of
+  the diffuse light (they show mostly in highlights); a darker crease in the skin colour would make them read, planned separately.
 - Character shapes with body-slider morphs: the soft zones now take her rest shape from every non-corrective blendshape (the character and
   the body sliders) and rebuild when one of them moves.
 - Install both dist/SfMorph.dll and dist/sfmorph_shaders (the shader bundle has new kernels; with the old bundle the GPU contact stays the

@@ -111,7 +111,9 @@ inner thighs or her sides; thighs pressed together / kneeling (calf on thigh) / 
 none; (5) slap her butt (Reactions on): reddish mark at the spot fading over ~15 s; a firm 2 s press on a glute leaves a pale print, then
 redness; Marks off clears them; idle ~70 s: "idle, slots restored" and the Characters tab skin toggle still works; (6) a hard slap or the
 partner's pelvis thrusting: a ring travels ~15 cm through the flesh and dies within ~1 s, breasts kick a little on a breast slap; Ripple 0 =
-none; (7) fps with everything on vs GPU contact off (expect < 1 ms at Balanced); Fidelity still playable. Send the log + screenshots.
+none; (7) fps with everything on vs GPU contact off (expect < 1 ms at Balanced); Fidelity still playable; (8) press a breast / the tattoo: the
+areola and tattoo stay on the skin (log: `overlays follow the body under them: ...`); (9) Wrinkles (Debug off): broad soft folds, not thin
+lines. Send the log + screenshots.
 
 ## 0.7.9 (reactions, voice guard)
 
