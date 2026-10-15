@@ -97,6 +97,22 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.8.0 (contact visuals v2)
+
+Install `dist/SfMorph.dll` + `dist/sfmorph_shaders` (new kernels; the old bundle logs "bundle has no v2 kernels ... v1 imprint"). Log: per GPU
+renderer `GPU contact: baked <name>: ...` (classes, bend joints, ms), `GPU contact: v2 on (...)`, `first v2 frame` (renderers, dispatches,
+CPU ms) and the `Tissue: caps at softness ...` line; no "v1" fallback warnings; `Skin marks:` sheet lines (which albedo property on
+reika_body, "normal via Wrinkles" with Body wrinkles on); `Ripple: impact #...`; `Bend:` first bulge per joint. Headset:
+(1) physics hand flat on her lower belly: a soft dimple with a rounded rim, no steps or hand-shaped cut-out, depth ~1.5-2 cm at Softness 50 %,
+the shading darkens into the dent; Dent edge 5 mm = the old hard edge; Shading toggle off = flat-lit dent; (2) fingertip on her shin and
+forearm: a few mm only; on a glute it sinks deeper and the hand meets more resistance as it goes in; (3) standing at rest: no dents on the
+inner thighs or her sides; thighs pressed together / kneeling (calf on thigh) / arm against her breast: both sides flatten, Her own limbs off
+= the old interpenetration; (4) elbow bent ~90 deg: biceps visibly fuller; sitting: thigh tops thicker, a shallow lower-belly fold; Bend 0 =
+none; (5) slap her butt (Reactions on): reddish mark at the spot fading over ~15 s; a firm 2 s press on a glute leaves a pale print, then
+redness; Marks off clears them; idle ~70 s: "idle, slots restored" and the Characters tab skin toggle still works; (6) a hard slap or the
+partner's pelvis thrusting: a ring travels ~15 cm through the flesh and dies within ~1 s, breasts kick a little on a breast slap; Ripple 0 =
+none; (7) fps with everything on vs GPU contact off (expect < 1 ms at Balanced); Fidelity still playable. Send the log + screenshots.
+
 ## 0.7.9 (reactions, voice guard)
 
 Hands first: physics hands idle in free air 20 s: the 10 s line shows "at the cap" free air near 0 %, "follow v err avg" <= 0.15 m/s

@@ -573,7 +573,7 @@ namespace SfMorph
                 if (c.Soft.Contacts.Length > 0) GUILayout.Label(c.Soft.Contacts, _hint);
             }
             GUILayout.Label("Soft points under her skin (springs, like VaM's soft physics) are pushed by your VR hands, the partner's hands and fingers, " +
-                            "her forearms and hands, and her other thigh. Softness: how far the skin gives. Springiness: how much the zones lag " +
+                            "the partner's pelvis and thighs, and her own arms, hands, thighs and calves. Softness: how far the skin gives (each part by its anatomy). Springiness: how much the zones lag " +
                             "and settle as she moves. Works with or without a character shape. Which hands count: VR tab, Contacts.", _hint);
         }
 
