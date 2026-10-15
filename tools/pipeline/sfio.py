@@ -3,6 +3,7 @@
 Everything stays in Unity axes (left-handed, Y up, metres) and in the game's vertex order.
 """
 import os
+import re
 import numpy as np
 
 
@@ -193,3 +194,109 @@ def write_morph(path, name, offsets, dnormals, h=None):
         for i, (o, n) in enumerate(zip(offsets, dnormals)):
             f.write('%.6g %.6g %.6g %.5g %.5g %.5g' % (o[0], o[1], o[2], n[0], n[1], n[2]))
             f.write('\n' if h is None else ' %.4g\n' % h[i])
+
+
+# ---- VaM morph deltas, slider definitions, shape files ------------------------------------------------------------
+def read_morph_delta(path):
+    """morphs/<name>.delta from the VaM export: header lines (name, probe step, vertex count; also accepted with a leading
+    '#', ':' or '=') then sparse 'i dx dy dz' lines (body.obj vertex order, body.obj frame and scale, metres).
+    Returns dict(name, step, count, idx, d). step is the change of the morph value the delta was probed with (None when the
+    header has none), count the header's vertex count (None when absent)."""
+    out = dict(name=None, step=None, count=None)
+    idx, dd = [], []
+    num = re.compile(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?')
+    with open(path, 'r', encoding='utf-8', errors='replace') as f:
+        for line in f:
+            t = line.strip()
+            if not t:
+                continue
+            p = t.split()
+            if len(p) == 4 and p[0].lstrip('+-').isdigit():
+                try:
+                    idx.append(int(p[0])); dd.append((float(p[1]), float(p[2]), float(p[3])))
+                    continue
+                except ValueError:
+                    pass
+            low = t.lstrip('#').strip()
+            ll = low.lower()
+            if ll.startswith('name'):
+                out['name'] = low[4:].lstrip(' :=\t').strip()
+            elif ll.startswith(('probe', 'step')):
+                m = num.findall(low)
+                if m:
+                    out['step'] = float(m[-1])
+            elif ll.startswith(('vert', 'count')):
+                m = re.findall(r'\d+', low)
+                if m:
+                    out['count'] = int(m[0])
+    out['idx'] = np.array(idx, np.int64)
+    out['d'] = np.array(dd, np.float64).reshape(-1, 3)
+    return out
+
+
+def read_morphs_txt(path):
+    """morphs.txt: tab separated name, current value, probe value, isPoseControl, region, found/missing, max mm, nonzero
+    count. Returns {name: dict(cur, probe, pose, region, found, maxmm, nz)}."""
+    rows = {}
+    with open(path, 'r', encoding='utf-8', errors='replace') as f:
+        for line in f.read().splitlines():
+            if not line.strip() or line.startswith('#'):
+                continue
+            t = line.split('\t')
+            if len(t) < 3:
+                continue
+            try:
+                cur, probe = float(t[1]), float(t[2])
+            except ValueError:
+                continue          # a header line
+            g = lambda i, dflt='': t[i].strip() if len(t) > i else dflt
+            flag = lambda s: s.lower() in ('1', 'true', 'yes', 'y')
+            def num(s):
+                try:
+                    return float(s)
+                except ValueError:
+                    return None
+            rows[t[0].strip()] = dict(cur=cur, probe=probe, pose=flag(g(3)), region=g(4),
+                                      found=g(5, 'found').lower() not in ('missing', '0', 'false', 'no', 'n'),
+                                      maxmm=num(g(6)), nz=num(g(7)))
+    return rows
+
+
+def read_sliders(path):
+    """sliders.txt: 'slider<TAB>name<TAB>default s', then 'morph<TAB>name<TAB>start<TAB>end' lines for it. '#' comments.
+    Returns [dict(name, default, morphs=[(morph, start, end)])]."""
+    out = []
+    with open(path, 'r', encoding='utf-8') as f:
+        for n, line in enumerate(f.read().splitlines(), 1):
+            if not line.strip() or line.lstrip().startswith('#'):
+                continue
+            t = [x.strip() for x in line.split('\t') if x.strip()]
+            try:
+                if t[0] == 'slider':
+                    out.append(dict(name=t[1], default=float(t[2]), morphs=[]))
+                elif t[0] == 'morph' and out:
+                    out[-1]['morphs'].append((t[1], float(t[2]), float(t[3])))
+                else:
+                    raise ValueError(line)
+            except (IndexError, ValueError):
+                raise ValueError('%s line %d: cannot read "%s"' % (path, n, line))
+    return out
+
+
+def write_shape(path, title, blocks, skin, note=''):
+    """Shape file (a delta on top of the base morph, to be scaled by the slider / joint angle). blocks: [(mesh name, vertex
+    count, idx, offsets (k,3), normal deltas (k,3))], in the mesh's own space like <mesh>.morph.txt; skin: (welded vertex
+    count, idx, offsets, normal deltas) in skin.txt's space and order. Lines: 'i dx dy dz nx ny nz' (only the vertices that
+    move), after a 'mesh <name> <vertex count>' or 'skin <vertex count>' line."""
+    with open(path, 'w', encoding='utf-8', newline='\n') as f:
+        f.write('# SfMorph shape: sparse per-vertex position and normal deltas (metres) on top of the base morph\n')
+        if note:
+            f.write('# %s\n' % note)
+        f.write('shape %s\n' % title)
+        def block(head, idx, d, n):
+            f.write(head + '\n')
+            for i, o, nn in zip(idx, d, n):
+                f.write('%d %.6g %.6g %.6g %.5g %.5g %.5g\n' % ((int(i),) + tuple(o) + tuple(nn)))
+        for name, cnt, idx, d, n in blocks:
+            block('mesh %s %d' % (name, cnt), idx, d, n)
+        block('skin %d' % skin[0], *skin[1:])
