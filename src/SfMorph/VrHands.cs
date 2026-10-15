@@ -69,18 +69,138 @@ namespace SfMorph
 
         public static void DropSource(CapSource s) { if (s != null) Sources.Remove(s); }
 
-        // Once per frame, before the soft points: Live for every gated source. (Stub until the implementation lands.)
-        public static void UpdateLive() { }
+        // ---- visibility gate ----
+
+        static readonly Camera[] _camBuf = new Camera[16];   // GetAllCameras fills this: no per-refresh array
+        static int _camMask = -1;                            // the culling mask of the camera the user looks through (-1: everything)
+        static float _camNext;
+        static string _camLogged = "";
+        static bool _statusDirty;                            // a source went hidden/drawn: Status is rebuilt at the end of UpdateLive
+        static readonly Predicate<Renderer> NullRend = r => r == null;
+
+        // Once per frame, before the soft points: Live for every gated source = one of its renderers is drawn in the headset.
+        // Only cached renderer lists are read (no scene queries); the camera mask is refreshed every 2 s. Why not Renderer.isVisible:
+        // it is true for shadow-only / off-screen shadow casters and false for frustum-culled bounds of ANY camera set (the desktop
+        // mirror, probes), so "drawn in the headset" is checked explicitly: enabled, active, drawn (not shadows only), on a layer
+        // the headset camera renders.
+        public static void UpdateLive()
+        {
+            float now = Time.unscaledTime;
+            if (now >= _camNext) { _camNext = now + 2f; RefreshCameraMask(); }
+            for (int i = 0; i < Sources.Count; i++)
+            {
+                var s = Sources[i];
+                if (!s.Gated) continue;   // her own capsules and the physics hands (their sources): always live
+                bool live = true;
+                string why = "";
+                if (GateHidden)
+                {
+                    int seen = 0;
+                    live = false;
+                    var rl = s.Rends;
+                    for (int k = 0; k < rl.Count; k++)
+                    {
+                        var r = rl[k];
+                        if (r == null) continue;
+                        seen++;
+                        if (r.enabled && r.gameObject.activeInHierarchy && r.shadowCastingMode != UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly
+                            && !r.forceRenderingOff && ((_camMask >> r.gameObject.layer) & 1) != 0) { live = true; break; }
+                    }
+                    if (seen == 0) { live = true; why = "no renderer found: assumed drawn"; }   // nothing to judge by: stay as before 0.7.7
+                    else if (!live) why = "hidden";
+                }
+                s.Why = why;
+                if (live == s.Live) continue;
+                s.Live = live;
+                _statusDirty = true;
+                Plugin.Log.LogInfo(live ? "VrHands: " + s.Name + " is drawn again"
+                                        : "VrHands: " + s.Name + " is hidden: its " + s.CapCount + " capsules don't touch her");
+            }
+            if (_statusDirty) { _statusDirty = false; BuildStatus(); }
+        }
+
+        // The first enabled stereo camera (the headset), else Camera.main, else no layer filtering.
+        static void RefreshCameraMask()
+        {
+            Camera pick = null;
+            int n = Camera.GetAllCameras(_camBuf);
+            for (int i = 0; i < n && pick == null; i++)
+            {
+                var c = _camBuf[i];
+                if (c != null && c.enabled && c.stereoEnabled && c.gameObject.activeInHierarchy) pick = c;
+            }
+            for (int i = 0; i < _camBuf.Length; i++) _camBuf[i] = null;   // don't keep cameras alive
+            if (pick == null) pick = Camera.main;
+            _camMask = pick != null ? pick.cullingMask : -1;
+            string key = pick != null ? pick.name + "|" + _camMask : "none|-1";
+            if (key == _camLogged) return;
+            _camLogged = key;
+            Plugin.Log.LogInfo("VrHands: visibility against camera '" + (pick != null ? pick.name : "none (no layer filter)") + "' (stereo " + (pick != null && pick.stereoEnabled)
+                               + ", cullingMask 0x" + _camMask.ToString("X8") + ")");
+        }
+
+        // What else the contacts affect (the answer to "why did that move?"); logged once at the first Rebuild, shown under Status.
+        static string _feed;
+        static int _feedMode = -1;
+        public static string ContactsFeed
+        {
+            get
+            {
+                int m = BreastColliders;
+                if (_feed == null || _feedMode != m)
+                {
+                    _feedMode = m;
+                    string chains = m <= 0 ? "off" : m == 1 ? "main chains" : "all breast chains";
+                    _feed = "Contacts feed: soft points (dent, jiggle, resist): your hands, partner, her own forearms/hands/thighs | per-vertex GPU imprint: your hands, partner"
+                            + " | the game's breast physics (" + chains + "): your hands, partner | physics hands' force cap and limb push: your physics hands only"
+                            + " | secondary motion fade: physics hands on her limbs, soft points on thighs/glutes/belly. Hidden hands feed none of these.";
+                }
+                return _feed;
+            }
+        }
 
         // Once per frame, after the soft points: attach/detach the breast DynamicBone mirror colliders whose source changed liveness.
-        public static void MirrorLive() { }
+        // Removing the collider from m_Colliders is what certainly works; Behaviour.enabled is set too (harmless if the game's
+        // DynamicBone version doesn't look at it).
+        public static void MirrorLive()
+        {
+            if (_mirrors.Count == 0) return;
+            _liveLogged.Clear();
+            for (int i = 0; i < _mirrors.Count; i++)
+            {
+                var m = _mirrors[i];
+                if (m.Src == null || !m.Src.Gated || m.Src.Live == m.Attached) continue;
+                m.Attached = m.Src.Live;
+                if (m.Col == null) continue;
+                var beh = m.Col as Behaviour;
+                if (beh != null) beh.enabled = m.Attached;
+                if (m.Attached)
+                {
+                    for (int k = 0; k < _dbLists.Count; k++)
+                        if (!_dbLists[k].Contains(m.Col)) { _dbLists[k].Add(m.Col); _adds.Add(new KeyValuePair<IList, object>(_dbLists[k], m.Col)); }
+                }
+                else
+                {
+                    for (int k = 0; k < _dbLists.Count; k++) { try { _dbLists[k].Remove(m.Col); } catch (Exception) { } }
+                    for (int k = _adds.Count - 1; k >= 0; k--) if (ReferenceEquals(_adds[k].Value, m.Col)) _adds.RemoveAt(k);
+                }
+                if (!_liveLogged.Contains(m.Src))
+                {
+                    _liveLogged.Add(m.Src);
+                    Plugin.Log.LogInfo("VrHands: breast colliders of " + m.Src.Name + (m.Attached ? " attached again (drawn)" : " detached (hidden)"));
+                }
+            }
+        }
+        static readonly List<CapSource> _liveLogged = new List<CapSource>();
 
         const BindingFlags Any = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
         // Sizes (metres): the design's radii.
-        const float VrPalm = 0.035f, VrPalmNoFingers = 0.09f, VrFinger = 0.011f, VrController = 0.045f;
-        const float PartnerPalm = 0.035f, PartnerFinger = 0.010f;
-        const float HerThigh = 0.06f, HerForearm = 0.032f, HerHand = 0.028f;
+        // PalmThick: the capsule radius is half of a 3 cm thick palm (0.7.6's 3.5 cm palms stuck 2 cm out of the hand on both faces).
+        internal const float PalmThick = 0.015f;
+        const float VrFinger = 0.011f, VrController = 0.045f;
+        const float PartnerFinger = 0.010f;
+        const float HerThigh = 0.06f, HerForearm = 0.030f, HerHand = 0.022f;
 
         // ---- game types (Assembly-CSharp isn't referenced) ----
 
@@ -141,15 +261,21 @@ namespace SfMorph
             public readonly List<SoftCapsule> Caps = new List<SoftCapsule>();
             public float NextTry;   // an empty rig (not loaded yet?) is looked at again later, not every call
             public int LoggedCount = -1;
+            public CapSource Src;   // null while it has no capsules
+            public int Skipped;     // hands of a rig nested inside this root (Player/BadGuy under "[Character]") that belong to that rig
+            public string SkippedOwners = "";
+            public bool Dirty;      // a rig appeared inside this root: build again so it stops holding that rig's hands
         }
 
         static readonly List<SoftCapsule> _vrL = new List<SoftCapsule>(), _vrR = new List<SoftCapsule>();
+        static CapSource _srcL, _srcR;
         static string _vrSrcL = "", _vrSrcR = "";   // how each side was found, for Status
         static float _vrNext;
         static readonly List<Partner> _partners = new List<Partner>();
         static readonly List<SoftCapsule> _hers = new List<SoftCapsule>();
+        static CapSource _hersSrc;
         static Transform _hersRoot;
-        static bool _surveyed;
+        static bool _surveyed, _feedLogged;
         static readonly Predicate<SoftCapsule> Dead = c => c.T == null;
 
         // Every 2 s while physics or embody is on: look for hands that appeared, drop what vanished, rebuild Capsules on any change.
@@ -163,6 +289,7 @@ namespace SfMorph
             changed |= RefreshHers(her);
             if (LeftController == null) LeftController = null;     // a destroyed controller reads as null: make it really null
             if (RightController == null) RightController = null;
+            for (int i = 0; i < Sources.Count; i++) if (Sources[i].Gated) Sources[i].Rends.RemoveAll(NullRend);   // renderers destroyed since
             if (changed) Rebuild();
         }
 
@@ -170,13 +297,13 @@ namespace SfMorph
         static bool DropDead()
         {
             bool ch = false;
-            if (_vrL.RemoveAll(Dead) > 0) { _vrL.Clear(); LeftController = null; ch = true; }
-            if (_vrR.RemoveAll(Dead) > 0) { _vrR.Clear(); RightController = null; ch = true; }
-            if (_hers.RemoveAll(Dead) > 0) { _hers.Clear(); _hersRoot = null; ch = true; }
+            if (_vrL.RemoveAll(Dead) > 0) { _vrL.Clear(); LeftController = null; DropSource(_srcL); _srcL = null; ch = true; }
+            if (_vrR.RemoveAll(Dead) > 0) { _vrR.Clear(); RightController = null; DropSource(_srcR); _srcR = null; ch = true; }
+            if (_hers.RemoveAll(Dead) > 0) { _hers.Clear(); _hersRoot = null; DropSource(_hersSrc); _hersSrc = null; ch = true; }
             for (int i = _partners.Count - 1; i >= 0; i--)
             {
                 var p = _partners[i];
-                if (p.Root == null || p.Caps.RemoveAll(Dead) > 0) { _partners.RemoveAt(i); ch = true; }
+                if (p.Root == null || p.Caps.RemoveAll(Dead) > 0) { DropSource(p.Src); _partners.RemoveAt(i); ch = true; }
             }
             return ch;
         }
@@ -186,24 +313,58 @@ namespace SfMorph
             Capsules.Clear();
             Capsules.AddRange(_vrL);
             Capsules.AddRange(_vrR);
+            foreach (var p in _partners) Capsules.AddRange(p.Caps);
+            Capsules.AddRange(_hers);
+            BuildStatus();
+            Version++;
+            Plugin.Log.LogInfo("VrHands: " + Status + " (" + Capsules.Count + " capsules, version " + Version + ")");
+            if (!_feedLogged) { _feedLogged = true; Plugin.Log.LogInfo("VrHands: " + ContactsFeed); }
+        }
+
+        // "your hands: ...; partner: Player 42, BadGuy 42 (hidden), [Character] 36 (4 hands shared with Player/BadGuy skipped); hers 6".
+        // Rebuilt when the capsules change and when a source goes hidden/drawn.
+        static void BuildStatus()
+        {
             var sb = new StringBuilder("your hands: ");
             if (_vrL.Count + _vrR.Count == 0) sb.Append("none found");
             else sb.Append(_vrL.Count == 0 ? _vrSrcR : (_vrR.Count == 0 || _vrSrcL == _vrSrcR ? _vrSrcL : _vrSrcL + " + " + _vrSrcR))
-                   .Append(" (left ").Append(_vrL.Count).Append(" capsules, right ").Append(_vrR.Count).Append(')');
+                   .Append(" (left ").Append(_vrL.Count).Append(" capsules").Append(HiddenNote(_srcL)).Append(", right ").Append(_vrR.Count).Append(HiddenNote(_srcR)).Append(')');
             sb.Append("; partner: ");
             int np = 0;
             foreach (var p in _partners)
             {
-                Capsules.AddRange(p.Caps);
                 if (np++ > 0) sb.Append(", ");
                 sb.Append(p.Root.name).Append(' ').Append(p.Caps.Count);
+                bool hid = p.Src != null && !p.Src.Live;
+                if (hid || p.Skipped > 0)
+                {
+                    sb.Append(" (");
+                    if (hid) sb.Append("hidden");
+                    if (hid && p.Skipped > 0) sb.Append("; ");
+                    if (p.Skipped > 0) sb.Append(p.Skipped).Append(" hands shared with ").Append(p.SkippedOwners).Append(" skipped");
+                    sb.Append(')');
+                }
             }
             if (np == 0) sb.Append("none");
-            Capsules.AddRange(_hers);
             sb.Append("; hers ").Append(_hers.Count);
             Status = sb.ToString();
-            Version++;
-            Plugin.Log.LogInfo("VrHands: " + Status + " (" + Capsules.Count + " capsules, version " + Version + ")");
+        }
+
+        static string HiddenNote(CapSource s) { return s != null && !s.Live ? " hidden" : ""; }
+
+        // Every capsule of a list belongs to `src` (struct copies share the reference); the source remembers how many it has.
+        static void Stamp(List<SoftCapsule> caps, CapSource src)
+        {
+            for (int i = 0; i < caps.Count; i++) { var c = caps[i]; c.Src = src; caps[i] = c; }
+            src.CapCount = caps.Count;
+        }
+
+        // The renderers that show a VR hand: the model's renderers minus line pointers and UI (the same filter as PhysicsHands hiding
+        // the controller models, so the "vr" capsules go dead exactly when the physics hands replace the models) and our own meshes.
+        static void CollectRends(CapSource src, Transform root)
+        {
+            foreach (var r in root.GetComponentsInChildren<Renderer>(true))
+                if (r != null && !(r is LineRenderer) && !IsUi(r.transform) && !UnderSf(r.transform)) src.Rends.Add(r);
         }
 
         // ---- capsule helpers ----
@@ -293,38 +454,71 @@ namespace SfMorph
             }
         }
 
-        // A hand without a humanoid avatar: finger chains found by name under `hand`, the palm from the common ancestor of the
-        // finger roots to the middle finger's root (or their mean); no fingers: the wrist forwards. Returns the finger count.
-        static int NonHumanoidHand(List<SoftCapsule> into, Transform hand, float palmR, float fingerR, string owner, string kind)
+        // A hand without a humanoid avatar: finger chains found by name under `hand`; the palm is up to three PalmThick capsules from
+        // the wrist to the roots of the fingers that span it (the two roots farthest apart, plus the one nearest their midpoint; the
+        // thumb doesn't count), stored on the common ancestor of the finger roots; no fingers: the wrist forwards. Returns the finger count.
+        static int NonHumanoidHand(List<SoftCapsule> into, Transform hand, float fingerR, string owner, string kind)
         {
             var roots = new List<Transform>();
             FingerRoots(hand, roots);
             var segs = new List<KeyValuePair<Transform, Transform>>();
             foreach (var r in roots) ChainSegs(r, segs);
             Transform palm = hand;
-            Vector3 end;
             if (roots.Count > 0)
             {
                 palm = roots[0].parent;
                 foreach (var r in roots) while (palm != null && palm != hand && !r.IsChildOf(palm)) palm = palm.parent;
                 if (palm == null) palm = hand;
-                Vector3 mean = Vector3.zero; Transform middle = null;
-                foreach (var r in roots) { mean += r.position; if (middle == null && Body.Norm(r.name).Contains("middle")) middle = r; }
-                end = middle != null ? middle.position : mean / roots.Count;
+                var four = new List<Transform>();
+                foreach (var r in roots) if (!Body.Norm(r.name).Contains("thumb")) four.Add(r);
+                if (four.Count == 0) four.AddRange(roots);
+                var pick = new List<Transform>();
+                if (four.Count <= 2) pick.AddRange(four);
+                else
+                {
+                    int ia = 0, ib = 1; float far = -1f;
+                    for (int i = 0; i < four.Count; i++)
+                        for (int j = i + 1; j < four.Count; j++)
+                        {
+                            float d = (four[i].position - four[j].position).sqrMagnitude;
+                            if (d > far) { far = d; ia = i; ib = j; }
+                        }
+                    Vector3 mid = (four[ia].position + four[ib].position) * 0.5f;
+                    int ic = -1; float near = float.MaxValue;
+                    for (int i = 0; i < four.Count; i++)
+                    {
+                        if (i == ia || i == ib) continue;
+                        float d = (four[i].position - mid).sqrMagnitude;
+                        if (d < near) { near = d; ic = i; }
+                    }
+                    pick.Add(four[ia]); pick.Add(four[ib]);
+                    if (ic >= 0) pick.Add(four[ic]);
+                }
+                foreach (var r in pick) Add(into, palm, hand.position, r.position, PalmThick, owner, kind);
             }
-            else end = hand.position + hand.rotation * Vector3.up * 0.08f;   // guess: no finger bones to aim at
-            Add(into, palm, palm.position, end, palmR, owner, kind);
+            else Add(into, palm, palm.position, hand.position + hand.rotation * Vector3.up * 0.08f, PalmThick, owner, kind);   // guess: no finger bones to aim at
             SegCaps(into, segs, fingerR, owner, kind);
             return roots.Count;
         }
 
-        // A humanoid avatar's hand: wrist -> middle proximal, and the 15 finger segments (HumanBodyBones thumb..little x 3).
-        static int HumanoidHand(List<SoftCapsule> into, Animator anim, bool left, float palmR, float fingerR, string owner, string kind)
+        static readonly HumanBodyBones[] KnucklesL = { HumanBodyBones.LeftIndexProximal, HumanBodyBones.LeftMiddleProximal, HumanBodyBones.LeftLittleProximal };
+        static readonly HumanBodyBones[] KnucklesR = { HumanBodyBones.RightIndexProximal, HumanBodyBones.RightMiddleProximal, HumanBodyBones.RightLittleProximal };
+
+        // A humanoid avatar's hand: the palm as three PalmThick capsules wrist -> index / middle / little proximal (two would leave a 4 mm
+        // valley along the middle finger on an 8 cm palm), and the 15 finger segments (HumanBodyBones thumb..little x 3).
+        static int HumanoidHand(List<SoftCapsule> into, Animator anim, bool left, float fingerR, string owner, string kind)
         {
             var hand = anim.GetBoneTransform(left ? HumanBodyBones.LeftHand : HumanBodyBones.RightHand);
             if (hand == null) return 0;
-            var middle = anim.GetBoneTransform(left ? HumanBodyBones.LeftMiddleProximal : HumanBodyBones.RightMiddleProximal);
-            Add(into, hand, hand.position, middle != null ? middle.position : hand.position + hand.rotation * Vector3.up * 0.08f, palmR, owner, kind);
+            int palm = 0;
+            foreach (var kb in left ? KnucklesL : KnucklesR)
+            {
+                var k = anim.GetBoneTransform(kb);
+                if (k == null) continue;
+                Add(into, hand, hand.position, k.position, PalmThick, owner, kind);
+                palm++;
+            }
+            if (palm == 0) Add(into, hand, hand.position, hand.position + hand.rotation * Vector3.up * 0.08f, PalmThick, owner, kind);
             var segs = new List<KeyValuePair<Transform, Transform>>();
             int first = (int)(left ? HumanBodyBones.LeftThumbProximal : HumanBodyBones.RightThumbProximal);
             for (int f = 0; f < 5; f++)
@@ -370,7 +564,7 @@ namespace SfMorph
             int fingers;
             if (a.isHuman && a.avatar != null)
             {
-                fingers = HumanoidHand(caps, a, left, VrPalm, VrFinger, owner, "vr");
+                fingers = HumanoidHand(caps, a, left, VrFinger, owner, "vr");
                 how = "humanoid";
             }
             else
@@ -380,7 +574,7 @@ namespace SfMorph
                 FingerRoots(a.transform, roots);
                 if (roots.Count > 0)
                 {
-                    fingers = NonHumanoidHand(caps, a.transform, VrPalm, VrFinger, owner, "vr");
+                    fingers = NonHumanoidHand(caps, a.transform, VrFinger, owner, "vr");
                     how = "finger bones by name";
                 }
                 else
@@ -395,9 +589,13 @@ namespace SfMorph
             var tracked = TrackedAncestor(a.transform, left, out src);
             if (tracked == null) { tracked = a.transform; src = "hand model (offsets may need zeroing)"; }
             if (left) { LeftController = tracked; _vrSrcL = "VR_HandController"; } else { RightController = tracked; _vrSrcR = "VR_HandController"; }
+            var csrc = NewSource("your " + (left ? "left" : "right") + " hand", "vr", true);
+            CollectRends(csrc, a.transform);
+            Stamp(caps, csrc);
+            if (left) { DropSource(_srcL); _srcL = csrc; } else { DropSource(_srcR); _srcR = csrc; }
             Plugin.Log.LogInfo("VrHands: your " + (left ? "left" : "right") + " hand from VR_HandController." + (left ? "controller_left" : "controller_right")
                                + " '" + PathOf(a.transform) + "': " + how + ", " + caps.Count + " capsules (" + fingers + " finger segments); tracked node '"
-                               + PathOf(tracked) + "' [" + src + "]");
+                               + PathOf(tracked) + "' [" + src + "], " + csrc.Rends.Count + " renderers");
             return true;
         }
 
@@ -454,7 +652,7 @@ namespace SfMorph
             var e = bb.extents;
             int axis = e.x >= e.y && e.x >= e.z ? 0 : (e.y >= e.z ? 1 : 2);
             float others = (e.x + e.y + e.z - e[axis]) * 0.5f;   // mean half-size of the two short axes
-            float r0 = Mathf.Clamp(others, 0.03f, VrPalmNoFingers);   // the design's 9 cm, but no fatter than the mesh
+            float r0 = Mathf.Clamp(others, 0.02f, 0.03f);   // 0.7.6 allowed 9 cm: a blob that was never a hand
             var dir = Vector3.zero; dir[axis] = 1f;
             float half = Mathf.Max(e[axis] - r0, 0.005f);
             Add(into, best.transform, bb.center - dir * half, bb.center + dir * half, r0, owner, "vr");
@@ -490,9 +688,13 @@ namespace SfMorph
             Add(caps, t, t.position - fwd * 0.03f, t.position + fwd * 0.09f, VrController, "XR controller", "vr");
             if (caps.Count == 0) return false;
             if (left) { LeftController = t; _vrSrcL = "XR controller"; } else { RightController = t; _vrSrcR = "XR controller"; }
+            var csrc = NewSource("your " + (left ? "left" : "right") + " controller", "vr", true);
+            CollectRends(csrc, t);   // the controller model under the tracked node; none found: assumed drawn
+            Stamp(caps, csrc);
+            if (left) { DropSource(_srcL); _srcL = csrc; } else { DropSource(_srcR); _srcR = csrc; }
             string ty = TrackerType(t);
             Plugin.Log.LogInfo("VrHands: your " + (left ? "left" : "right") + " hand from the XR controller '" + PathOf(t) + "': 1 capsule along its forward (fallback); tracked node ["
-                               + (ty != null ? "tracked node (" + ty + ")" : "named controller") + "]");
+                               + (ty != null ? "tracked node (" + ty + ")" : "named controller") + "], " + csrc.Rends.Count + " renderers");
             return true;
         }
 
@@ -508,31 +710,60 @@ namespace SfMorph
                     if (o != null && o.Root != null && !o.Female && (her == null || o.Root != her.Root) && !roots.Contains(o.Root) && !UnderSf(o.Root)) roots.Add(o.Root);
             // rigs that are gone from the scene
             for (int i = _partners.Count - 1; i >= 0; i--)
-                if (!roots.Contains(_partners[i].Root)) { _partners.RemoveAt(i); ch = true; }
+                if (!roots.Contains(_partners[i].Root))
+                {
+                    DropSource(_partners[i].Src);
+                    _partners.RemoveAt(i);
+                    foreach (var q in _partners) q.Dirty = true;   // it may have been nested in another root, whose hands it held back
+                    ch = true;
+                }
             foreach (var r in roots)
             {
                 if (r == null || (her != null && (r == her.Root || r.IsChildOf(her.Root))) || UnderSf(r)) continue;
                 Partner p = null;
                 foreach (var q in _partners) if (q.Root == r) { p = q; break; }
-                if (p == null) { p = new Partner { Root = r }; _partners.Add(p); ch = true; }
-                else if (p.Caps.Count > 0 || Time.unscaledTime < p.NextTry) continue;
-                BuildPartner(p, her);
+                if (p == null)
+                {
+                    p = new Partner { Root = r };
+                    _partners.Add(p);
+                    foreach (var q in _partners) if (q != p && p.Root.IsChildOf(q.Root)) q.Dirty = true;   // q was built holding p's hands: again, without them
+                    ch = true;
+                }
+                else if (!p.Dirty && (p.Caps.Count > 0 || Time.unscaledTime < p.NextTry)) continue;
+                bool wasDirty = p.Dirty;
+                BuildPartner(p, her, roots);
                 p.NextTry = Time.unscaledTime + 10f;
-                if (p.Caps.Count != p.LoggedCount) { ch = true; p.LoggedCount = p.Caps.Count; }
+                // a rebuilt rig has a new source: the capsules in Capsules still point at the old one
+                if (wasDirty || p.Caps.Count != p.LoggedCount) { ch = true; p.LoggedCount = p.Caps.Count; }
             }
             return ch;
         }
 
+        // The root nested inside `self` (another partner's root: Player/BadGuy under "[Character]") that t belongs to, else null.
+        // A hand under such a root is that rig's: the rig holding the outer root must not build it a second time.
+        static Transform NestedOwner(Transform t, Transform self, List<Transform> roots)
+        {
+            foreach (var q in roots)
+                if (q != null && q != self && q.IsChildOf(self) && t.IsChildOf(q)) return q;
+            return null;
+        }
+
         // Hands and fingers of one rig: a humanoid Animator's hand/finger bones, else AdvancedSkeleton Wrist_L/Wrist_R with their
-        // finger children, else any bones named like hands, wrists, palms.
-        static void BuildPartner(Partner p, Character her)
+        // finger children, else any bones named like hands, wrists, palms. Hands of rigs nested inside this root are skipped
+        // (the scene root "[Character]" holds Player and BadGuy: without this their hands counted twice or more).
+        static void BuildPartner(Partner p, Character her, List<Transform> roots)
         {
             p.Caps.Clear();
+            DropSource(p.Src); p.Src = null;
+            p.Skipped = 0; p.SkippedOwners = ""; p.Dirty = false;
             var root = p.Root;
             string owner = root.name;
-            Animator anim = null;   // not hers, if she happens to live under the same scene root
+            var skipOwners = new List<string>();
+            var handBones = new List<Transform>();   // for the renderers that draw these hands
+            Animator anim = null;   // not hers, if she happens to live under the same scene root; not another rig's
             foreach (var a in root.GetComponentsInChildren<Animator>(true))
-                if (a != null && !UnderSf(a.transform) && (her == null || !a.transform.IsChildOf(her.Root)) && (anim == null || (a.isHuman && !anim.isHuman))) anim = a;
+                if (a != null && !UnderSf(a.transform) && (her == null || !a.transform.IsChildOf(her.Root)) && NestedOwner(a.transform, root, roots) == null
+                    && (anim == null || (a.isHuman && !anim.isHuman))) anim = a;
             string how;
             int hands = 0, segs = 0;
             if (anim != null && anim.isHuman && anim.avatar != null)
@@ -540,8 +771,9 @@ namespace SfMorph
                 how = "humanoid Animator";
                 foreach (var left in new[] { true, false })
                 {
-                    int n = HumanoidHand(p.Caps, anim, left, PartnerPalm, PartnerFinger, owner, "partner");
-                    if (anim.GetBoneTransform(left ? HumanBodyBones.LeftHand : HumanBodyBones.RightHand) != null) hands++;
+                    int n = HumanoidHand(p.Caps, anim, left, PartnerFinger, owner, "partner");
+                    var hb = anim.GetBoneTransform(left ? HumanBodyBones.LeftHand : HumanBodyBones.RightHand);
+                    if (hb != null) { hands++; handBones.Add(hb); }
                     segs += n;
                 }
             }
@@ -552,10 +784,13 @@ namespace SfMorph
                 {
                     if (t.name.StartsWith(SoftZones.Prefix) || UnderSf(t) || (her != null && t.IsChildOf(her.Root)) || IsUi(t)) continue;
                     var n = Body.Norm(t.name);
-                    if (n == "wristl" || n == "wristr") wrists.Add(t);
+                    if (n != "wristl" && n != "wristr") continue;
+                    var nested = NestedOwner(t, root, roots);
+                    if (nested != null) { p.Skipped++; if (!skipOwners.Contains(nested.name)) skipOwners.Add(nested.name); continue; }
+                    wrists.Add(t);
                 }
                 how = "AdvancedSkeleton Wrist_L/R";
-                if (wrists.Count == 0)
+                if (wrists.Count == 0 && p.Skipped == 0)
                 {
                     how = "bones named like hands";
                     foreach (var t in root.GetComponentsInChildren<Transform>(true))
@@ -564,6 +799,7 @@ namespace SfMorph
                         if (t.childCount == 0 || t.name.StartsWith(SoftZones.Prefix) || UnderSf(t) || (her != null && t.IsChildOf(her.Root)) || IsUi(t)
                             || !(n.Contains("hand") || n.Contains("wrist") || n.Contains("palm"))) continue;
                         if (IsFingerName(t.name) || n.Contains("handle") || n.Contains("target") || n.Contains("ik") || n.Contains("twist")) continue;
+                        if (NestedOwner(t, root, roots) != null) continue;
                         bool under = false;
                         foreach (var h in wrists) if (t.IsChildOf(h)) { under = true; break; }
                         if (!under) wrists.Add(t);
@@ -571,11 +807,45 @@ namespace SfMorph
                 }
                 foreach (var w in wrists)
                 {
-                    segs += NonHumanoidHand(p.Caps, w, PartnerPalm, PartnerFinger, owner, "partner");
+                    segs += NonHumanoidHand(p.Caps, w, PartnerFinger, owner, "partner");
                     hands++;
+                    handBones.Add(w);
                 }
             }
-            Plugin.Log.LogInfo("VrHands: partner '" + owner + "': " + how + ", " + hands + " hands, " + segs + " finger segments, " + p.Caps.Count + " capsules");
+            p.SkippedOwners = string.Join("/", skipOwners.ToArray());
+            string rends = "";
+            if (p.Caps.Count > 0)
+            {
+                var src = NewSource(owner, "partner", true);
+                PartnerRends(src, root, handBones, her, roots);
+                Stamp(p.Caps, src);
+                p.Src = src;
+                rends = ", " + src.Rends.Count + " renderers";
+                if (src.Rends.Count == 0) Plugin.Log.LogInfo("VrHands: partner '" + owner + "': no renderer found: assumed drawn (the hidden-hands gate cannot apply)");
+            }
+            Plugin.Log.LogInfo("VrHands: partner '" + owner + "': " + how + ", " + hands + " hands" + (p.Skipped > 0 ? " (" + p.Skipped + " under " + p.SkippedOwners + " skipped)" : "")
+                               + ", " + segs + " finger segments, " + p.Caps.Count + " capsules" + rends);
+        }
+
+        // The skinned meshes that draw a partner's hands: those whose bones include a hand bone or one below it (the body mesh, a
+        // glove mesh); none found: every skinned mesh of the rig; still none: left empty (= assumed drawn).
+        static void PartnerRends(CapSource src, Transform root, List<Transform> handBones, Character her, List<Transform> roots)
+        {
+            var all = new List<SkinnedMeshRenderer>();
+            foreach (var r in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+                if (r != null && !UnderSf(r.transform) && !IsUi(r.transform) && (her == null || !r.transform.IsChildOf(her.Root)) && NestedOwner(r.transform, root, roots) == null) all.Add(r);
+            foreach (var r in all)
+            {
+                var bones = r.bones;
+                bool on = false;
+                for (int i = 0; i < bones.Length && !on; i++)
+                {
+                    if (bones[i] == null) continue;
+                    foreach (var h in handBones) if (bones[i].IsChildOf(h)) { on = true; break; }
+                }
+                if (on) src.Rends.Add(r);
+            }
+            if (src.Rends.Count == 0) foreach (var r in all) src.Rends.Add(r);
         }
 
         // ---- hers ----
@@ -589,13 +859,15 @@ namespace SfMorph
             _hersRoot = her.Root;
             int before = _hers.Count;
             _hers.Clear();
+            DropSource(_hersSrc); _hersSrc = null;
             foreach (var s in new[] { "_L", "_R" })
             {
                 Own(her, _hers, "Hip" + s, "Knee" + s, HerThigh, s == "_L" ? "thighL" : "thighR", 0f);
                 Own(her, _hers, "Elbow" + s, "Wrist" + s, HerForearm, "forearm", 0f);
                 Own(her, _hers, "Wrist" + s, "MiddleFinger1" + s, HerHand, "hand", 0.9f);
             }
-            return _hers.Count != before;
+            if (_hers.Count > 0) { _hersSrc = NewSource("her", "hers", false); Stamp(_hers, _hersSrc); }   // always live: her own limbs
+            return _hers.Count != before || _hers.Count > 0;   // new capsules carry the new source
         }
         static float _hersNext;
 
@@ -608,21 +880,29 @@ namespace SfMorph
 
         // ---- the game's breast physics ----
 
-        sealed class Mirror { public GameObject Go; public Component Col; }
+        // One DynamicBoneCollider per vr/partner capsule, remembering whose it is: Attached = it is in the DynamicBones' m_Colliders
+        // (a hand that isn't drawn must not push the breast physics; MirrorLive moves mirrors in and out as sources go hidden/drawn).
+        sealed class Mirror { public GameObject Go; public Component Col; public CapSource Src; public bool Attached; }
         static readonly List<Mirror> _mirrors = new List<Mirror>();
         static readonly List<KeyValuePair<IList, object>> _adds = new List<KeyValuePair<IList, object>>();
-        static int _attVersion = -1;
+        static readonly List<IList> _dbLists = new List<IList>();   // the m_Colliders lists of the chosen breast DynamicBones (read again every 10 s)
+        static readonly List<string> _namesIn = new List<string>(), _namesOut = new List<string>();
+        static int _attVersion = -1, _attMode = -1;
         static Transform _attHer;
         static float _attNext;
 
-        // The vr and partner capsules as DynamicBoneColliders in the m_Colliders of the game's breast DynamicBones (root name
-        // contains "breast", under `her`). Safe to call every Refresh: the mirrors are rebuilt only when Capsules changed, the
-        // game's DynamicBones are looked at again every 10 s (outfit swaps bring new ones).
+        // The vr and partner capsules (`caps` = Body.Contacts(): with the physics hands on that is THEIR bones, never the controller
+        // models they hide) as DynamicBoneColliders in the m_Colliders of the game's breast DynamicBones under `her`. Which ones:
+        // BreastColliders 1 = the main chains (root name contains "upperbreast"; none: every breast chain, said in the log),
+        // 2 = every DynamicBone whose root has "breast" in its name (shaping-helper chains too: Breast_up/down/in/out, Nipple - they
+        // move the areola and shape on their own), 0 = none. Safe to call every Refresh: the mirrors are rebuilt only when `caps`
+        // changed (Version) or the mode did, the game's DynamicBones are looked at again every 10 s (outfit swaps bring new ones).
         public static void AttachToGameBreasts(Transform her, bool on, List<SoftCapsule> caps)
         {
             Types();
-            if (!on || her == null || _db == null || _dbc == null) { RemoveMirrors(); return; }
-            bool rebuilt = _attVersion != Version || _attHer != her;
+            int mode = BreastColliders < 0 ? 0 : (BreastColliders > 2 ? 2 : BreastColliders);
+            if (!on || mode == 0 || her == null || _db == null || _dbc == null) { RemoveMirrors(); return; }
+            bool rebuilt = _attVersion != Version || _attHer != her || _attMode != mode;
             if (!rebuilt && Time.unscaledTime < _attNext) return;
             _attNext = Time.unscaledTime + 10f;
             if (rebuilt)
@@ -630,28 +910,62 @@ namespace SfMorph
                 RemoveMirrors();
                 _attVersion = Version;
                 _attHer = her;
+                _attMode = mode;
                 foreach (var c in caps ?? Capsules)
                 {
                     if (c.T == null || (c.Kind != "vr" && c.Kind != "partner")) continue;
                     var col = MakeCollider(c);
-                    if (col != null) _mirrors.Add(col);
+                    if (col == null) continue;
+                    col.Src = c.Src;
+                    col.Attached = c.Src == null || !c.Src.Gated || c.Src.Live;
+                    var beh = col.Col as Behaviour;
+                    if (beh != null) beh.enabled = col.Attached;
+                    _mirrors.Add(col);
                 }
             }
-            int dbs = 0, added = 0;
-            foreach (var o in UnityEngine.Object.FindObjectsOfType(_db))
+            var objs = UnityEngine.Object.FindObjectsOfType(_db);
+            bool anyMain = false;
+            if (mode == 1)
+                foreach (var o in objs)
+                {
+                    var root = _fRoot.GetValue(o) as Transform;
+                    if (root != null && root.IsChildOf(her) && Body.Norm(root.name).Contains("upperbreast")) { anyMain = true; break; }
+                }
+            _dbLists.Clear(); _namesIn.Clear(); _namesOut.Clear();
+            int added = 0;
+            foreach (var o in objs)
             {
                 var db = o as Component;
                 if (db == null) continue;
                 var root = _fRoot.GetValue(db) as Transform;
-                if (root == null || !root.IsChildOf(her) || !Body.Norm(root.name).Contains("breast")) continue;
-                dbs++;
+                if (root == null || !root.IsChildOf(her)) continue;
+                var nm = Body.Norm(root.name);
+                if (!nm.Contains("breast")) continue;
+                if (mode == 1 && anyMain && !nm.Contains("upperbreast")) { _namesOut.Add(root.name); continue; }
+                _namesIn.Add(root.name);
                 var list = _fColliders.GetValue(db) as IList;
                 if (list == null) { list = (IList)Activator.CreateInstance(_fColliders.FieldType); _fColliders.SetValue(db, list); }
+                _dbLists.Add(list);
                 foreach (var m in _mirrors)
-                    if (m.Col != null && !list.Contains(m.Col)) { list.Add(m.Col); _adds.Add(new KeyValuePair<IList, object>(list, m.Col)); added++; }
+                    if (m.Attached && m.Col != null && !list.Contains(m.Col)) { list.Add(m.Col); _adds.Add(new KeyValuePair<IList, object>(list, m.Col)); added++; }
             }
             if (rebuilt || added > 0)
-                Plugin.Log.LogInfo("VrHands: " + _mirrors.Count + " hand colliders on " + dbs + " game breast DynamicBones (" + added + " added)");
+            {
+                int detached = 0;
+                foreach (var m in _mirrors) if (!m.Attached) detached++;
+                Plugin.Log.LogInfo("VrHands: " + _mirrors.Count + " hand colliders" + (detached > 0 ? " (" + detached + " of hidden hands detached)" : "") + " on " + _namesIn.Count
+                                   + " breast DynamicBones [" + NameList(_namesIn) + "]" + (_namesOut.Count > 0 ? "; skipped " + _namesOut.Count + " [" + NameList(_namesOut) + "]" : "")
+                                   + (mode == 1 && !anyMain && _namesIn.Count > 0 ? "; no 'UpperBreast' chain found: fell back to every breast chain" : "")
+                                   + " (" + added + " added, mode " + mode + ")");
+            }
+        }
+
+        static string NameList(List<string> names)
+        {
+            var sb = new StringBuilder();
+            for (int i = 0; i < names.Count && i < 8; i++) { if (i > 0) sb.Append(", "); sb.Append(names[i]); }
+            if (names.Count > 8) sb.Append(", ... +").Append(names.Count - 8);
+            return sb.ToString();
         }
 
         // A DynamicBoneCollider capsule between the capsule's world endpoints, on a child of its bone with world scale ~1 (sizes in metres).
@@ -681,15 +995,21 @@ namespace SfMorph
                 try { if (kv.Key != null) kv.Key.Remove(kv.Value); } catch (Exception) { }
             }
             _adds.Clear();
+            _dbLists.Clear();
             foreach (var m in _mirrors) if (m.Go != null) UnityEngine.Object.Destroy(m.Go);
             _mirrors.Clear();
             _attVersion = -1;
+            _attMode = -1;
             _attHer = null;
         }
 
         public static void Release()
         {
             RemoveMirrors();
+            // our sources only: the physics hands drop theirs
+            DropSource(_srcL); DropSource(_srcR); DropSource(_hersSrc);
+            foreach (var p in _partners) DropSource(p.Src);
+            _srcL = _srcR = _hersSrc = null;
             _vrL.Clear(); _vrR.Clear(); _partners.Clear(); _hers.Clear(); _hersRoot = null;
             _vrSrcL = _vrSrcR = "";
             _vrNext = _hersNext = 0f;
@@ -697,6 +1017,8 @@ namespace SfMorph
             Version++;
             LeftController = RightController = null;
             Status = "";
+            _statusDirty = false;
+            _camNext = 0f;
         }
 
         // ---- survey: one log block per session ----

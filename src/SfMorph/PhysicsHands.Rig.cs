@@ -34,6 +34,9 @@ namespace SfMorph
         // ---- tuning (from the design) ----
         const float MassProx = 0.04f, MassFused = 0.03f;
         const float SpringK = 100f, DamperK = 5f, ForceProx = 0.3f, ForceFused = 0.15f;   // slerp drive; maxForce (N*m) is the compliance
+        // 0.7.7: while the hand touches her the fingers give: 0.4 of the free-air compliance, so they splay and bend on her instead of
+        // holding their curl (a 12 N fingertip press at 7 cm is 0.84 N*m, well over either).
+        const float GiveScale = 0.4f, GiveProx = ForceProx * GiveScale, GiveFused = ForceFused * GiveScale;
         const float RangeProxMin = -10f, RangeProxMax = 100f, RangeFusedMin = -5f, RangeFusedMax = 110f;   // curl angle range (degrees, + = toward the palm)
         const float SideLimit = 8f;                                                        // proximal sideways play
         const float ConformReach = 0.016f;                                                 // tip cast length beyond the tip
@@ -58,6 +61,7 @@ namespace SfMorph
             public Vector3 RestPosW;                 // rest offset from the connected body, in its frame
             public float MaxDeg, AMin, AMax;         // curl at full grip; allowed range
             public float CmdFrac = -1f, Cmd, Meas, Swing;
+            public float Force;                      // the slerp drive's maximumForce as last written (changed only when it differs)
             public Quaternion Prev = Quaternion.identity, Cur = Quaternion.identity;   // pose relative to the palm, last two fixed steps
         }
 
@@ -152,6 +156,7 @@ namespace SfMorph
             j.rotationDriveMode = RotationDriveMode.Slerp;
             var drive = new JointDrive();
             drive.positionSpring = SpringK; drive.positionDamper = DamperK; drive.maximumForce = prox ? ForceProx : ForceFused;
+            g.Force = drive.maximumForce;
             j.slerpDrive = drive;
             j.targetRotation = Quaternion.identity;
             j.enableCollision = false;
@@ -309,6 +314,16 @@ namespace SfMorph
             for (int i = 0; i < h.Rig.Count; i++)
             {
                 var g = h.Rig[i];
+                // the give: lower drive force while touching her; the JointDrive struct is reassigned only when the wanted force changes
+                float wantF = g.Joint == 0 ? (touching ? GiveProx : ForceProx) : (touching ? GiveFused : ForceFused);
+                if (Mathf.Abs(wantF - g.Force) > 1e-5f)
+                {
+                    var drv = g.J.slerpDrive;
+                    drv.maximumForce = wantF;
+                    g.J.slerpDrive = drv;
+                    g.Force = wantF;
+                    LogOnce("fingergive", "fingers give on contact: slerp maxForce " + GiveProx.ToString("0.###") + "/" + GiveFused.ToString("0.###") + " N*m while a hand touches her (" + ForceProx.ToString("0.###") + "/" + ForceFused.ToString("0.###") + " otherwise)");
+                }
                 float c = h.FCurl[g.Finger];
                 if (Mathf.Abs(c - g.CmdFrac) < 5e-4f) continue;
                 g.CmdFrac = c;

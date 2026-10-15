@@ -61,7 +61,10 @@ namespace SfMorph
         const float PalmMass = 0.35f;
 
         // Sizes (metres, from the design).
-        const float PalmR = 0.035f, FingerR = 0.011f, ThumbR = 0.0125f, FingerVisR = 0.0095f;
+        // 0.7.7: the soft capsules of the palm are half of the 3 cm physical palm (PalmThick), not the old 3.5 cm radius that stuck 2 cm
+        // out of the hand mesh on both faces; three of them (wrist -> index / middle / pinky root) cover the 8 cm width without a valley.
+        const float PalmThick = 0.015f, FingerR = 0.011f, ThumbR = 0.0125f, FingerVisR = 0.0095f;
+        static readonly int[] PalmFingers = { 1, 2, 4 };
         static readonly float[] FingerMax = { 80f, 90f, 60f };     // curl at full grip, proximal / middle / distal
         static readonly float[] ThumbMax = { 20f, 35f, 45f };
 
@@ -317,7 +320,10 @@ namespace SfMorph
             Quaternion boxRot = Quaternion.LookRotation(fwd, normal);
             sp.Cols.Add(new ShapeSpec { Bone = 0, Box = true, A = centre, B = centre, Rot = boxRot, Size = new Vector3(width + 0.025f, 0.030f, kn.magnitude * u + 0.012f), Tag = "palm" });
             sp.Prims.Add(new ShapeSpec { Bone = 0, Box = true, A = centre, B = centre, Rot = boxRot, Size = new Vector3(width + 0.012f, 0.026f, kn.magnitude * u + 0.006f), Tag = "palm" });
-            sp.Caps.Add(new CapSpec { Bone = 0, A = kn * 0.15f, B = kn * 0.9f, R = PalmR });
+            int palmCaps = 0;
+            foreach (int pf in PalmFingers)
+                if (cnt[pf] >= 1) { sp.Caps.Add(new CapSpec { Bone = 0, A = P[pf][0] * 0.1f, B = P[pf][0], R = PalmThick }); palmCaps++; }
+            if (palmCaps == 0) sp.Caps.Add(new CapSpec { Bone = 0, A = kn * 0.15f, B = kn * 0.9f, R = PalmThick });   // only the ring finger was found
             string[] fn = { "thumb", "index", "middle", "ring", "pinky" };
             for (int f = 0; f < 5; f++)
             {
@@ -720,6 +726,7 @@ namespace SfMorph
             public Vector3[] DirLocal = new Vector3[15];   // per finger*3+joint: the finger's direction in the bone's axes (joint secondary axis)
             public float Curl, AppliedCurl = -1f;
             public int BuiltMesh;
+            public CapSource Src;                          // 0.7.7: who these soft capsules belong to (VrHands.NewSource), made with the first RebuildCaps, dropped with the hand
             // the finger rig (PhysicsHands.Rig.cs)
             public bool RigOn, RigFailed;
             public readonly List<Fing> Rig = new List<Fing>();
@@ -968,9 +975,12 @@ namespace SfMorph
             h.Meshes.Clear(); h.Rends.Clear(); h.Cols.Clear(); h.ColT.Clear(); h.Rig.Clear(); h.RigOn = false;
             foreach (var sec in h.Spec.Sections) if (sec.Mesh != null) UnityEngine.Object.Destroy(sec.Mesh);
             h.PGo = h.VGo = null;
+            VrHands.DropSource(h.Src);
+            h.Src = null;
         }
 
-        // The visual capsules for the soft zones: palm + finger segments on the visual bones, radii palm .035 fingers .011.
+        // The visual capsules for the soft zones: palm (up to three capsules, radius PalmThick) + finger segments on the visual bones.
+        // Every capsule carries the hand's CapSource (never gated: the visual may be hidden while the physics hand still touches her).
         static void RebuildCaps()
         {
             bool had = Capsules.Count > 0;
@@ -980,12 +990,14 @@ namespace SfMorph
             {
                 if (h == null || h.VGo == null) continue;
                 if (h.Left) LeftWrist = h.VBones[0]; else RightWrist = h.VBones[0];
+                if (h.Src == null) h.Src = VrHands.NewSource(h.Left ? "your left physics hand" : "your right physics hand", "vr", false);
                 foreach (var c in h.Spec.Caps)
                 {
                     var bone = h.VBones[c.Bone];
                     Vector3 a = h.VRoot.TransformPoint(c.A), b = h.VRoot.TransformPoint(c.B);
-                    Capsules.Add(new SoftCapsule { T = bone, LocalA = bone.InverseTransformPoint(a), LocalB = bone.InverseTransformPoint(b), Radius = c.R, Owner = "PhysicsHands", Kind = "vr" });
+                    Capsules.Add(new SoftCapsule { T = bone, LocalA = bone.InverseTransformPoint(a), LocalB = bone.InverseTransformPoint(b), Radius = c.R, Owner = "PhysicsHands", Kind = "vr", Src = h.Src });
                 }
+                h.Src.CapCount = h.Spec.Caps.Count;
             }
             if (had || Capsules.Count > 0) Version++;
             Active = _left != null || _right != null;
@@ -1050,16 +1062,25 @@ namespace SfMorph
             public Vector3 LastPos; public bool Placed;
             public GameObject Mark;
             public float TouchT = -100f;           // Time.fixedTime of the last contact with a hand collider (see TouchingHer)
+            public bool Drop;                      // build: a sphere that found too few vertices to be placed (breast): not made
+            // 0.7.7 contact impulses (NoteContact adds during the physics step, StepHer publishes and zeroes at the next fixed step)
+            public Vector3 ImpSum, ImpPt;          // sum of |impulse| * normal-toward-the-hand; sum of contact point * |impulse|
+            public float ImpW, ImpWL, ImpWR;       // sum of |impulse|; the same split by the hand that gave it
+            public Vector3 PushForce, PushPoint;   // published: the force on HER over the last fixed step (N, world) and where it acted
+            public bool PushRight, PushLogged;
         }
 
         sealed class SegDef
         {
-            public string Name, A, B, Owner; public bool Soft, AllDesc; public float Def;
-            public SegDef(string n, string a, string b, string o, bool soft, float def, bool all = false) { Name = n; A = a; B = b; Owner = o; Soft = soft; Def = def; AllDesc = all; }
+            public string Name, A, B, Owner, AAlt; public bool Soft, AllDesc; public float Def, Pct;
+            // alt: the bone to use when A doesn't exist; pct: which percentile of the vertex distances is the skin radius (0.4 keeps
+            // the collider inside the skin; breasts use 0.6 so a hand stops at the visible surface of a round shape)
+            public SegDef(string n, string a, string b, string o, bool soft, float def, bool all = false, string alt = null, float pct = 0.4f)
+            { Name = n; A = a; B = b; Owner = o; Soft = soft; Def = def; AllDesc = all; AAlt = alt; Pct = pct; }
         }
 
         // Her capsule names (what TouchingHer takes): pelvis, spine, chest, neck, head, thigh_L, thigh_R, calf_L, calf_R,
-        // upperarm_L, upperarm_R, forearm_L, forearm_R, butt_L, butt_R (those whose bones were found).
+        // upperarm_L, upperarm_R, forearm_L, forearm_R, butt_L, butt_R, breast_L, breast_R (those whose bones were found).
         static readonly SegDef[] HerDefs =
         {
             new SegDef("pelvis", "Hip_L", "Hip_R", "Root_M", true, 0.10f),
@@ -1077,6 +1098,10 @@ namespace SfMorph
             new SegDef("forearm_R", "Elbow_R", "Wrist_R", "Elbow_R", false, 0.035f),
             new SegDef("butt_L", "Butt_L", null, "Butt_L", true, 0.09f),
             new SegDef("butt_R", "Butt_R", null, "Butt_R", true, 0.09f),
+            // 0.7.7: the breasts, which no other segment owned (hands sank to the chest capsule). The sphere follows the DB-driven
+            // LowerBreast (UpperBreast is the DynamicBone root and never moves); its vertices are everything skinned below UpperBreast.
+            new SegDef("breast_L", "Left_LowerBreast", null, "Left_UpperBreast", true, 0.06f, all: true, alt: "Left_UpperBreast", pct: 0.6f),
+            new SegDef("breast_R", "Right_LowerBreast", null, "Right_UpperBreast", true, 0.06f, all: true, alt: "Right_UpperBreast", pct: 0.6f),
         };
 
         static readonly List<Seg> _segs = new List<Seg>();
@@ -1125,6 +1150,11 @@ namespace SfMorph
             foreach (var d in HerDefs)
             {
                 var a = FindBone(her, d.A);
+                if (a == null && d.AAlt != null)
+                {
+                    a = FindBone(her, d.AAlt);
+                    if (a != null) LogOnce("heralt" + d.Name, "her collider " + d.Name + ": " + d.A + " not found, following " + d.AAlt + " instead");
+                }
                 var b = d.B != null ? FindBone(her, d.B) : null;
                 if (a == null || (d.B != null && b == null)) { LogOnce("hermiss" + d.Name, "her collider " + d.Name + ": bone " + (a == null ? d.A : d.B) + " not found, skipped"); continue; }
                 segs.Add(new Seg { Name = d.Name, Owner = d.Owner, A = a, B = b, Sphere = d.B == null, Soft = d.Soft, RDef = d.Def, RSkin = d.Def });
@@ -1159,7 +1189,8 @@ namespace SfMorph
                 if (owner == null) continue;
                 var set = new HashSet<Transform>();
                 Owned(owner, Stem(owner.name), Array.Find(HerDefs, q => q.Name == segs[i].Name).AllDesc, set);
-                foreach (var t in set) if (!segOf.ContainsKey(t)) segOf[t] = i;
+                bool claim = segs[i].Name.StartsWith("breast_", StringComparison.Ordinal);   // the breast bones are the breast's even if another part's stem matched them
+                foreach (var t in set) if (claim || !segOf.ContainsKey(t)) segOf[t] = i;
             }
             var pts = new List<Vector3>[segs.Count];
             for (int i = 0; i < pts.Length; i++) pts[i] = new List<Vector3>();
@@ -1223,11 +1254,14 @@ namespace SfMorph
                 if (dists.Count >= 12)
                 {
                     dists.Sort();
-                    g.RSkin = dists[(int)(0.4f * (dists.Count - 1))] * _herUnit;
+                    var def = Array.Find(HerDefs, q => q.Name == g.Name);
+                    g.RSkin = dists[(int)((def != null ? def.Pct : 0.4f) * (dists.Count - 1))] * _herUnit;
                 }
+                else if (g.Sphere && g.Name.StartsWith("breast_", StringComparison.Ordinal)) g.Drop = true;   // no vertices: a sphere at the bone's origin would be a guess
                 float inset = Inset(g, s.Softness);
                 g.RBase = Mathf.Max(0.012f, g.RSkin - inset);
-                sbLog.Append("\n  ").Append(g.Name).Append(" (").Append(g.A.name).Append(g.B != null ? "->" + g.B.name : " sphere").Append("): ")
+                if (g.Drop) { sbLog.Append("\n  ").Append(g.Name).Append(" (").Append(g.A.name).Append(" sphere): only ").Append(g.Verts).Append(" verts under ").Append(g.Owner).Append(", not made"); continue; }
+                sbLog.Append("\n  ").Append(g.Name).Append(" (").Append(g.A.name).Append(g.B != null ? "->" + g.B.name : " sphere" + (g.Owner != g.A.name ? ", owner " + g.Owner : "")).Append("): ")
                      .Append(g.Verts).Append(" verts, skin r ").Append(g.RSkin.ToString("0.000")).Append(dists.Count >= 12 ? "" : " (default)")
                      .Append(", inset ").Append(inset.ToString("0.000")).Append(" -> r ").Append(g.RBase.ToString("0.000")).Append(g.Soft ? " [soft zone]" : "");
             }
@@ -1236,6 +1270,7 @@ namespace SfMorph
             _herGo = new GameObject(Pfx + "_her");
             foreach (var g in segs)
             {
+                if (g.Drop) continue;
                 g.BuildScale = Mathf.Max(1e-4f, Mathf.Abs(g.A.lossyScale.x));
                 g.Go = new GameObject(HerPfx + g.Name);
                 g.Go.layer = _layerHer;
@@ -1267,6 +1302,29 @@ namespace SfMorph
             _statusDirty = true;
         }
 
+        // The impulses summed since the last fixed step -> the force on her over that step (the hand's push is the opposite of the
+        // normal that points at the hand), then the sums restart. Kept for PushOn until the next step.
+        static void PublishPush(Seg g)
+        {
+            float dt = Time.fixedDeltaTime;
+            if (g.ImpW > 1e-6f && dt > 0f)
+            {
+                Vector3 f = -g.ImpSum / dt;
+                if (Finite(f))
+                {
+                    g.PushForce = f; g.PushPoint = g.ImpPt / g.ImpW; g.PushRight = g.ImpWR > g.ImpWL;
+                    if (!g.PushLogged && f.sqrMagnitude >= 0.2f * 0.2f)
+                    {
+                        g.PushLogged = true;
+                        Plugin.Log.LogInfo("PhysicsHands: first push on her " + g.Name + ": " + f.magnitude.ToString("0.0") + " N by the " + (g.PushRight ? "right" : "left") + " hand");
+                    }
+                }
+                else g.PushForce = Vector3.zero;
+            }
+            else g.PushForce = Vector3.zero;
+            g.ImpSum = g.ImpPt = Vector3.zero; g.ImpW = g.ImpWL = g.ImpWR = 0f;
+        }
+
         // Her live bones -> the kinematic capsules (MovePosition/MoveRotation so a moving hand feels her motion).
         static void StepHer()
         {
@@ -1274,6 +1332,7 @@ namespace SfMorph
             for (int i = 0; i < _segs.Count; i++)
             {
                 var g = _segs[i];
+                PublishPush(g);
                 if (g.A == null || (!g.Sphere && g.B == null) || g.Go == null) { _herDirty = true; continue; }
                 Vector3 p; Quaternion q = Quaternion.identity; float len = 0f;
                 if (g.Sphere) p = g.A.TransformPoint(g.LocalCenter);
@@ -1420,12 +1479,33 @@ namespace SfMorph
                 float t = Time.fixedTime;
                 g.TouchT = t;
                 _handTouchT[left ? 0 : 1] = t;
+                AddImpulse(g, left, c);
                 if (!enter) return;
                 _enters++;
                 if (_contacts.Add((left ? "L:" : "R:") + g.Name))
                     Plugin.Log.LogInfo("PhysicsHands: first contact " + (left ? "left" : "right") + " hand with her " + g.Name + " (" + c.relativeVelocity.magnitude.ToString("0.00") + " m/s, " + c.contactCount + " points)");
             }
             catch (Exception) { }
+        }
+
+        // 0.7.7: the impulse this contact gave her segment during the last physics step, along the contact normal oriented to point at the
+        // hand (Unity's normal sign convention isn't worth trusting: the hand collider's centre is always on the hand's side of the
+        // contact point), and where it acted. Summed over every hand collider touching the segment; StepHer turns it into PushForce.
+        static void AddImpulse(Seg g, bool left, Collision c)
+        {
+            if (c.contactCount < 1) return;
+            float mag = c.impulse.magnitude;
+            if (!(mag > 0f) || float.IsInfinity(mag)) return;
+            var cp = c.GetContact(0);
+            Vector3 n = cp.normal;
+            var mine = cp.thisCollider;   // the hand collider (the one in c.collider is hers)
+            if (mine == c.collider) mine = cp.otherCollider;   // in case the sides come the other way round
+            if (ReferenceEquals(mine, null) || mine == null) return;
+            if (Vector3.Dot(n, mine.transform.position - cp.point) < 0f) n = -n;
+            g.ImpSum += n * mag;
+            g.ImpPt += cp.point * mag;
+            g.ImpW += mag;
+            if (left) g.ImpWL += mag; else g.ImpWR += mag;
         }
 
         static void Teleport(Hand h, Vector3 p, Quaternion q)
@@ -1449,10 +1529,19 @@ namespace SfMorph
         // Runner.FixedUpdate: the palm follows the target by a force-capped pull and a PD torque, the fingers get their joint
         // targets; her capsules follow her bones. Before the physics step.
         // 0.7.7: the push a physics hand gave one of her segments ("forearm_L", "upperarm_R", ...) over the last fixed step: the force ON
-        // HER (N, world) and where it acted. false when nothing pushed it (or below 0.2 N). (Stub until the implementation lands.)
+        // HER (N, world) and where it acted. false when nothing pushed it (or below 0.2 N).
         public static bool PushOn(string seg, out Vector3 point, out Vector3 forceOnHer)
         {
             point = Vector3.zero; forceOnHer = Vector3.zero;
+            if (seg == null || !_herBuilt) return false;
+            for (int i = 0; i < _segs.Count; i++)
+            {
+                var g = _segs[i];
+                if (!string.Equals(g.Name, seg, StringComparison.Ordinal)) continue;
+                if (g.PushForce.sqrMagnitude < 0.2f * 0.2f) return false;
+                point = g.PushPoint; forceOnHer = g.PushForce;
+                return true;
+            }
             return false;
         }
 

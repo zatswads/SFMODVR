@@ -260,7 +260,7 @@ namespace SfMorph
             catch (Exception e) { Plugin.Log.LogError("GPU contact: SetCapsules failed, turned off: " + e); GoDead("error"); }
         }
 
-        // World-space capsules for this frame's dispatch (T == null and the excluded kinds skipped, at most MaxCaps).
+        // World-space capsules for this frame's dispatch (T == null, the excluded kinds and the capsules of hidden sources (0.7.7) skipped, at most MaxCaps).
         int UploadCapsules()
         {
             int n = 0;
@@ -270,6 +270,7 @@ namespace SfMorph
                 {
                     var c = caps[i];
                     if (c.T == null || c.Kind == "thighL" || c.Kind == "thighR" || c.Kind == "forearm" || c.Kind == "hand") continue;
+                    if (c.Src != null && !c.Src.Live) continue;   // a hidden hand / partner doesn't imprint her
                     Vector3 a = c.T.TransformPoint(c.LocalA), b = c.T.TransformPoint(c.LocalB);
                     _capArr[n].A = new Vector4(a.x, a.y, a.z, c.Radius);
                     _capArr[n].B = new Vector4(b.x, b.y, b.z, 0f);

@@ -91,6 +91,7 @@ namespace SfMorph
         const float Stretch = 1.2649111f;   // sqrt(1.6)
         public const int MaxHelpers = 300;
         static readonly string[] QualityNames = { "Performance", "Balanced", "Fidelity" };
+        const float HardFloor = 0.25f;   // 0.7.7: least GPU contact mask on any vertex of a mapped mesh (x the softness limit: ~8 mm at softness 0.5, like the physics hands' 8 mm hard inset)
 
         // ---- game types (reflection: Assembly-CSharp isn't referenced) ----
         // Only the game's DynamicBone is still looked up: for the chain-bone rule (never add children to a bone its physics re-aims)
@@ -203,6 +204,7 @@ namespace SfMorph
             public Vector3 NormalRef;   // inward, same space
             public int Main = -1;       // its heaviest helper (debug marker, status)
             public int Stamp;           // frame it was last counted as touched
+            public ulong SrcMask;       // 0.7.7: bit = source id that touched it this frame (counted once per source, whichever helper)
         }
 
         class Helper   // S under a bone, standing for one point as that bone carries it
@@ -221,6 +223,7 @@ namespace SfMorph
             public bool Touched, Asleep = true, HasPrev, Bulged;
             public int LastCap;
             public int HandMask;         // physics hands that touched it this frame: 1 left, 2 right
+            public ulong SrcMask;        // 0.7.7: bit = id of each capsule source that touched it this frame (bit 0: a capsule with no source)
 
         }
 
@@ -238,6 +241,7 @@ namespace SfMorph
         int _builtQ = -1;          // the quality the current build was asked for
         int _bq;                   // the quality Build is working with (Read reads it)
         int _subdivN;              // body meshes subdivided by this build
+        bool _nippleNoted;         // the Fidelity note about an unsubdivided nipple mesh was logged (once per session)
         bool _subdivFailed;        // Subdiv threw once: no more subdivision this session (Fidelity drops to Balanced's meshes)
         public string Status = "";
 
@@ -745,10 +749,25 @@ namespace SfMorph
                         for (int j = 0; j < kv.Value.W.Length; j++) sumF += kv.Value.W[j];
                         mask[kv.Key] = Mathf.Min(1f, sumF / fmax);
                     }
+                    // 0.7.7 hard-skin floor: every vertex of the mesh gets at least HardFloor, so a hand presses any skin out of its way (zones
+                    // keep their larger share). GPU only (MaskFor): the soft points (SoftSim) are built from s.F, not from this array.
+                    for (int j = 0; j < mask.Length; j++) if (mask[j] < HardFloor) mask[j] = HardFloor;
                     if (s.S.Mesh != null && s.S.Mesh.vertexCount == mask.Length) { s.S.Mask = mask; GpuRenderers.Add(s.R); }
                     else problems.Add(s.R.name + ": GPU mask size " + mask.Length + " != mesh vertices " + (s.S.Mesh != null ? s.S.Mesh.vertexCount : 0));
                 }
             }
+
+            // 0.7.7 (A1.j): Subdiv only touches meshes named "body", so at Fidelity the PN-curved body rim meets the nipple cap mesh's straight edge
+            if (_bq >= 2 && !_nippleNoted)
+                foreach (var s in mapped)
+                {
+                    if (!s.S.Used || s.S.Undo != null || s.R == null || s.R.sharedMesh == null) continue;
+                    string mn = s.R.sharedMesh.name;
+                    if (mn.IndexOf("nipple", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    _nippleNoted = true;
+                    Plugin.Log.LogInfo("Soft zones: Fidelity: '" + mn + "' is not subdivided; a hairline step at the areola rim is expected");
+                    break;
+                }
 
             _builtMorph = MorphWeight();
             _bindVersion = MorphState.BindVersion;
@@ -764,6 +783,7 @@ namespace SfMorph
               .Append(mpu.ToString("0.####")).Append(" m/unit, morph ").Append(_builtMorph.ToString("0.00"))
               .Append(", built in ").Append(((Time.realtimeSinceStartup - t0) * 1000f).ToString("0")).Append(" ms");
             if (_subdivN > 0) sb.Append("; ").Append(_subdivN).Append(" body meshes subdivided");
+            sb.Append("; GPU mask floor ").Append(HardFloor.ToString("0.00"));
             if (overCap > 0) sb.Append("; ").Append(overCap).Append(" helper slots over the cap of ").Append(MaxHelpers).Append(" dropped");
             if (skippedChain > 0) sb.Append("; ").Append(skippedChain).Append(" bone slots left alone (the game's physics re-aims them)");
             if (missing.Count > 0) sb.Append("\n  zones not placed: ").Append(string.Join(", ", missing.ToArray()));

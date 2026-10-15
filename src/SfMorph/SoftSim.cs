@@ -17,7 +17,10 @@ namespace SfMorph
     {
         const float Step = 1f / 120f;                  // fixed substep: the springs behave the same at any frame rate
         const int MaxSteps = 4;
-        const float PointRadius = 0.012f, Margin = 0.008f;   // the skin point's own size and the give before visible touch
+        // 0.7.7: the reach of a capsule is its radius plus this. The points sit ON the skin (SoftZones picks skin vertices), so a capsule
+        // dents exactly when its surface reaches the skin; the 0.7.6 PointRadius 12 mm + Margin 8 mm made every hand dent from 2 cm away,
+        // fatter than itself, and made the physics hands' force cap fall before visible contact. 3 mm is GpuContact's margin too.
+        const float SkinMargin = 0.003f;
         const int MaxCaps = 256;
         const float MaxCapSpeed = 3f, TeleportSpeed = 8f;    // m/s: faster capsules are clamped, much faster ones jumped
         const float SagOutward = 0.6f;                       // 0.7.3: how far (x limit) the sag may carry a point outward; skin otherwise rises 0.3 limit
@@ -40,12 +43,19 @@ namespace SfMorph
         int[] _cCode = new int[0];     // 0 any zone, 1 her left thigh (only the right inner thigh feels it), 2 her right thigh
         int[] _cHand = new int[0];     // 0 not a physics hand, 1 the left physics hand, 2 the right one (see HandOf)
         bool[] _cOk = new bool[0], _cHit = new bool[0];
+        CapSource[] _cSrc = new CapSource[0];   // 0.7.7: who each capsule belongs to (null = ungated, no source)
+        bool[] _cLive = new bool[0];            // 0.7.7: false = its source is hidden: it moves (velocities stay right when it reappears) but touches nothing
+        int[] _cId = new int[0];                // 0.7.7: its source's Id, 0 = no source
+        string[] _cLabel = new string[0];       // 0.7.7: "Owner/Kind" for a capsule with no source (built when the set changes, not per frame)
         int _cN, _capVersion = -1;
 
         // ---- contacts ----
 
         int[] _zCnt;                   // per zone: points touched this frame
-        bool[] _zSeen;                 // per zone: first contact logged
+        bool[] _zSeen;                 // per zone * MaxSources + source id: first contact logged (once per zone and source per build)
+        readonly int[] _srcCnt = new int[VrHands.MaxSources];            // 0.7.7: points touched this frame per source id (a point two sources touch counts for both)
+        readonly CapSource[] _srcOf = new CapSource[VrHands.MaxSources]; // the source behind each id this frame (names for the status)
+        string _noSrcLabel = "";       // Owner/Kind of the capsules without a source that touched her this frame
         int _stamp, _nContacts;
         long _sig = -1;
         float _nextSummary, _peak;
@@ -57,7 +67,7 @@ namespace SfMorph
         void SimBuilt(int[] zoneH0, int[] zoneH1)
         {
             _zH0 = zoneH0; _zH1 = zoneH1;
-            _zSigma = new float[Zones.Length]; _zBulge = new float[Zones.Length]; _zCnt = new int[Zones.Length]; _zSeen = new bool[Zones.Length];
+            _zSigma = new float[Zones.Length]; _zBulge = new float[Zones.Length]; _zCnt = new int[Zones.Length]; _zSeen = new bool[Zones.Length * VrHands.MaxSources];
             _zSag = new float[Zones.Length]; _zSagV = new Vector3[Zones.Length];
             for (int z = 0; z < Zones.Length; z++) _zSag[z] = SagOf(Zones[z]);
             var pts = new int[Zones.Length];
@@ -88,7 +98,9 @@ namespace SfMorph
         {
             switch (z.Label)
             {
-                case "breast front": case "breast side": return 1f;
+                // 0.7.7: no patch sag on the breast. The game's breast DynamicBone already hangs the whole breast; sliding only the front patch
+                // (the areola) 1.6 cm down, or pressing it in 3 cm when she lies back, read as a distorted areola with nothing touching.
+                case "breast front": case "breast side": return 0f;
                 case "belly": return 0.5f;
                 case "glute": return 0.6f;
                 default: return 0.3f;   // thighs
@@ -101,6 +113,7 @@ namespace SfMorph
             int m = Math.Max(n, Math.Max(16, _cA.Length * 2));
             _cA = new Vector3[m]; _cB = new Vector3[m]; _cPA = new Vector3[m]; _cPB = new Vector3[m]; _cVA = new Vector3[m]; _cVB = new Vector3[m]; _cMid = new Vector3[m];
             _cR = new float[m]; _cReach2 = new float[m]; _cCode = new int[m]; _cHand = new int[m]; _cOk = new bool[m]; _cHit = new bool[m];
+            _cSrc = new CapSource[m]; _cLive = new bool[m]; _cId = new int[m]; _cLabel = new string[m];
             _capVersion = -1;   // the old previous positions are gone
         }
 
@@ -241,12 +254,21 @@ namespace SfMorph
                         if (sbb > MaxCapSpeed * MaxCapSpeed) vb *= MaxCapSpeed / Mathf.Sqrt(sbb);
                     }
                 }
-                if (reset || !_cOk[i]) _cHand[i] = HandOf(cp);
+                if (reset || !_cOk[i])
+                {
+                    _cHand[i] = HandOf(cp);
+                    _cSrc[i] = cp.Src;
+                    _cLabel[i] = cp.Src != null ? null : cp.Owner + "/" + cp.Kind;
+                }
+                // alive unless its source is hidden this frame; a dead capsule is still tracked so its speed is right when it comes back
+                _cLive[i] = cp.Src == null || cp.Src.Live;
+                int sid = cp.Src != null ? cp.Src.Id : 0;
+                _cId[i] = sid > 0 && sid < VrHands.MaxSources ? sid : 0;
                 _cPA[i] = a; _cPB[i] = b; _cOk[i] = true;
                 _cA[i] = a; _cB[i] = b; _cVA[i] = va; _cVB[i] = vb;
                 _cR[i] = cp.Radius;
                 _cMid[i] = (a + b) * 0.5f;
-                float reach = (b - a).magnitude * 0.5f + cp.Radius + PointRadius + Margin;
+                float reach = (b - a).magnitude * 0.5f + cp.Radius + SkinMargin;
                 _cReach2[i] = reach * reach;
                 string kind = cp.Kind;
                 _cCode[i] = kind == "thighL" ? 1 : kind == "thighR" ? 2 : 0;
@@ -256,7 +278,7 @@ namespace SfMorph
             for (int i = 0; i < nh; i++)
             {
                 var h = _helpers[i];
-                h.Touched = false; h.Bulged = false; h.Push = Vector3.zero; h.HandMask = 0;
+                h.Touched = false; h.Bulged = false; h.Push = Vector3.zero; h.HandMask = 0; h.SrcMask = 0UL;
                 if (!_bOk[h.BoneIdx]) continue;
                 var m = _bL2W[h.BoneIdx];
                 var r = m.MultiplyPoint3x4(h.SLocal);
@@ -318,7 +340,7 @@ namespace SfMorph
                 for (int ci = 0; ci < nc; ci++)
                 {
                     float cr = _cR[ci];
-                    if (cr < 0f) continue;
+                    if (cr < 0f || !_cLive[ci]) continue;
                     int code = _cCode[ci];
                     if (code == 1 && !(h.Zone.InnerThigh && h.Zone.Side < 0)) continue;   // a thigh presses the other one's inner side only
                     if (code == 2 && !(h.Zone.InnerThigh && h.Zone.Side > 0)) continue;
@@ -330,7 +352,7 @@ namespace SfMorph
                     float t = len2 > 1e-10f ? Mathf.Clamp01(Vector3.Dot(p - a, ab) / len2) : 0f;
                     Vector3 closest = a + ab * t;
                     Vector3 u = p - closest;
-                    float reach = cr + PointRadius + Margin;
+                    float reach = cr + SkinMargin;
                     float d2 = u.sqrMagnitude;
                     if (d2 >= reach * reach) continue;
                     // Imprint: the point goes along its inward normal to where that line leaves the capsule, so the dent has the capsule's profile.
@@ -353,6 +375,8 @@ namespace SfMorph
                     float vc = Vector3.Dot(_cVA[ci] + (_cVB[ci] - _cVA[ci]) * t, dir) * 0.6f;
                     if (vc > vn) h.Vel += dir * (vc - vn);
                     if (_cHand[ci] != 0) h.HandMask |= _cHand[ci];
+                    h.SrcMask |= 1UL << _cId[ci];
+                    if (_cId[ci] == 0) _noSrcLabel = _cLabel[ci] ?? "";
                     h.Touched = true; h.Asleep = false; h.LastCap = ci;
                     _cHit[ci] = true;
                 }
@@ -414,17 +438,35 @@ namespace SfMorph
             _stamp++;
             _nContacts = 0;
             for (int z = 0; z < _zCnt.Length; z++) _zCnt[z] = 0;
+            for (int s = 0; s < _srcCnt.Length; s++) { _srcCnt[s] = 0; _srcOf[s] = null; }
+            for (int i = 0; i < nc; i++) if (_cSrc[i] != null) _srcOf[_cId[i]] = _cSrc[i];
             for (int i = 0; i < nh; i++)
             {
                 var h = _helpers[i];
                 if (!_bOk[h.BoneIdx]) continue;
-                if (h.Touched && h.Point.Stamp != _stamp)
+                if (h.Touched)
                 {
-                    h.Point.Stamp = _stamp;
-                    _zCnt[h.ZoneIdx]++; _nContacts++;
-                    float depth = h.Disp.magnitude;
-                    if (depth > _peak) _peak = depth;
-                    if (!_zSeen[h.ZoneIdx]) { _zSeen[h.ZoneIdx] = true; LogFirst(h, caps, nc); }
+                    var pt = h.Point;
+                    if (pt.Stamp != _stamp)
+                    {
+                        pt.Stamp = _stamp; pt.SrcMask = 0UL;
+                        _zCnt[h.ZoneIdx]++; _nContacts++;
+                        float depth = h.Disp.magnitude;
+                        if (depth > _peak) _peak = depth;
+                    }
+                    // per source: a point counts once for each source that touched it, whichever of its helpers it was
+                    ulong fresh = h.SrcMask & ~pt.SrcMask;
+                    if (fresh != 0UL)
+                    {
+                        pt.SrcMask |= fresh;
+                        for (int id = 0; fresh != 0UL; id++, fresh >>= 1)
+                        {
+                            if ((fresh & 1UL) == 0UL) continue;
+                            _srcCnt[id]++;
+                            int zi = h.ZoneIdx * VrHands.MaxSources + id;
+                            if (!_zSeen[zi]) { _zSeen[zi] = true; LogFirst(h, id); }
+                        }
+                    }
                 }
                 bool sagging = h.Sag.x != 0f || h.Sag.y != 0f || h.Sag.z != 0f;
                 if (h.Asleep)
@@ -472,18 +514,31 @@ namespace SfMorph
 
         // ---- status and log ----
 
-        void LogFirst(Helper h, List<SoftCapsule> caps, int nc)
+        // once per (zone, source) per build: who touched which zone first, and how far the point was displaced
+        void LogFirst(Helper h, int id)
         {
-            string by = "";
-            if (caps != null && h.LastCap >= 0 && h.LastCap < nc) { var c = caps[h.LastCap]; by = " by " + c.Owner + "/" + c.Kind; }
-            Plugin.Log.LogInfo("Soft zones: first contact in " + h.Zone.Id + by + ", " + h.Disp.magnitude.ToString("0.0##") + " m displaced");
+            string by = id > 0 && _srcOf[id] != null ? _srcOf[id].Name + " (" + _srcOf[id].Kind + ")" : _noSrcLabel;
+            Plugin.Log.LogInfo("Soft zones: first contact in " + h.Zone.Id + " by " + by + ", " + h.Disp.magnitude.ToString("0.0##") + " m displaced");
         }
 
-        // "contacts: 3 (glute_L 2, thighIn_R 1)", rebuilt only when it changes; a summary line to the log every 10 s while contacts happen.
+        // "contacts: 3 (glute_L 2, thighIn_R 1) by your right hand 2, Player 1" (top 3 sources by touched points), rebuilt only when it changes;
+        // a summary line to the log every 10 s while contacts happen (it carries the same text, so "by ..." is in it too).
+        int _t0, _t1, _t2;   // the top 3 source ids this frame (-1 = none)
         void Report()
         {
+            int c0 = 0, c1 = 0, c2 = 0;
+            _t0 = _t1 = _t2 = -1;
+            for (int s = 0; s < _srcCnt.Length; s++)
+            {
+                int c = _srcCnt[s];
+                if (c <= 0) continue;
+                if (c > c0) { c2 = c1; _t2 = _t1; c1 = c0; _t1 = _t0; c0 = c; _t0 = s; }
+                else if (c > c1) { c2 = c1; _t2 = _t1; c1 = c; _t1 = s; }
+                else if (c > c2) { c2 = c; _t2 = s; }
+            }
             long sig = 0;
             for (int z = 0; z < _zCnt.Length; z++) sig = sig * 131 + _zCnt[z];
+            sig = sig * 131 + _t0; sig = sig * 131 + c0; sig = sig * 131 + _t1; sig = sig * 131 + c1; sig = sig * 131 + _t2; sig = sig * 131 + c2;
             if (sig != _sig)
             {
                 _sig = sig;
@@ -500,7 +555,15 @@ namespace SfMorph
                         _sb.Append(Zones[z].Id).Append(' ').Append(_zCnt[z]);
                         first = false;
                     }
-                    Contacts = _sb.Append(')').ToString();
+                    _sb.Append(')');
+                    if (_t0 >= 0)
+                    {
+                        _sb.Append(" by ");
+                        AppendSource(_t0, c0);
+                        if (_t1 >= 0) { _sb.Append(", "); AppendSource(_t1, c1); }
+                        if (_t2 >= 0) { _sb.Append(", "); AppendSource(_t2, c2); }
+                    }
+                    Contacts = _sb.ToString();
                 }
             }
             if (_nContacts > 0 && Time.unscaledTime >= _nextSummary)
@@ -512,13 +575,20 @@ namespace SfMorph
             }
         }
 
+        // a source's name and its touched-point count; id 0 = capsules without a source, named by their Owner/Kind
+        void AppendSource(int id, int count)
+        {
+            var src = _srcOf[id];
+            _sb.Append(id > 0 && src != null ? src.Name : _noSrcLabel.Length > 0 ? _noSrcLabel : "other").Append(' ').Append(count);
+        }
+
         // ---- debug markers: a sphere per point (green at rest, red touched), a capsule per contact capsule ----
 
-        class Marker { public GameObject Go; public Transform Tr; public Renderer R; public bool Red; }
+        class Marker { public GameObject Go; public Transform Tr; public Renderer R; public int State; }   // State: 0 green, 1 red (hit), 2 grey (dead capsule)
 
         bool _dbgOn;
         GameObject _dbgRoot;
-        Material _matRest, _matHit;
+        Material _matRest, _matHit, _matDead;
         readonly List<Marker> _dbgPts = new List<Marker>();
         readonly List<Marker> _dbgCaps = new List<Marker>();
         static readonly string[] ColorProps = { "_UnlitColor", "_BaseColor", "_Color" };
@@ -552,15 +622,15 @@ namespace SfMorph
                 r.receiveShadows = false;
                 if (mat != null) r.sharedMaterial = mat;
             }
-            return new Marker { Go = go, Tr = go.transform, R = r, Red = false };
+            return new Marker { Go = go, Tr = go.transform, R = r, State = 0 };
         }
 
-        static void Paint(Marker mk, bool red, Material rest, Material hit)
+        static void Paint(Marker mk, int state, Material rest, Material hit, Material dead)
         {
-            if (mk.Red == red || mk.R == null) return;
-            var m = red ? hit : rest;
+            if (mk.State == state || mk.R == null) return;
+            var m = state == 2 ? dead : state == 1 ? hit : rest;
             if (m != null) mk.R.sharedMaterial = m;
-            mk.Red = red;
+            mk.State = state;
         }
 
         void DebugDraw(int nc)
@@ -571,6 +641,7 @@ namespace SfMorph
                 _dbgRoot = new GameObject(Prefix + "_debug_markers");
                 _matRest = MakeMaterial(new Color(0.1f, 0.9f, 0.2f, 1f));
                 _matHit = MakeMaterial(new Color(1f, 0.1f, 0.1f, 1f));
+                _matDead = MakeMaterial(new Color(0.5f, 0.5f, 0.5f, 1f));   // 0.7.7: a capsule whose source is hidden touches nothing
             }
             while (_dbgPts.Count < _pts.Count) _dbgPts.Add(null);
             for (int i = 0; i < _pts.Count; i++)
@@ -587,7 +658,7 @@ namespace SfMorph
                     _dbgPts[i] = mk;
                 }
                 mk.Tr.position = h.R + h.Disp;
-                Paint(mk, pt.Stamp == _stamp, _matRest, _matHit);
+                Paint(mk, pt.Stamp == _stamp ? 1 : 0, _matRest, _matHit, _matDead);
             }
             while (_dbgCaps.Count < nc) _dbgCaps.Add(null);
             for (int i = 0; i < _dbgCaps.Count; i++)
@@ -605,7 +676,7 @@ namespace SfMorph
                 mk.Tr.position = _cMid[i];
                 mk.Tr.rotation = len > 1e-5f ? Quaternion.FromToRotation(Vector3.up, ab / len) : Quaternion.identity;
                 mk.Tr.localScale = new Vector3(2f * r, (len + 2f * r) * 0.5f, 2f * r);   // the primitive is 1 m wide and 2 m tall
-                Paint(mk, _cHit[i], _matRest, _matHit);
+                Paint(mk, !_cLive[i] ? 2 : _cHit[i] ? 1 : 0, _matRest, _matHit, _matDead);
             }
         }
 
@@ -615,7 +686,8 @@ namespace SfMorph
             if (_dbgRoot != null) UnityEngine.Object.Destroy(_dbgRoot);
             if (_matRest != null) UnityEngine.Object.Destroy(_matRest);
             if (_matHit != null) UnityEngine.Object.Destroy(_matHit);
-            _dbgRoot = null; _matRest = _matHit = null;
+            if (_matDead != null) UnityEngine.Object.Destroy(_matDead);
+            _dbgRoot = null; _matRest = _matHit = _matDead = null;
             _dbgOn = false;
         }
     }
