@@ -41,6 +41,18 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.7.6:
+- Breasts like the character's: her nipple cap is fitted onto the character's nipple and areola (nipple vertices to the
+  nipple, disc to the skin, rim pinned), the skin around it fitted right up to the rim, her own fold no longer held
+  stiff under the character's rounder underside, upper body and cap shaded as one surface. Nipple protrusion within
+  0.5 mm, breast projection within 0.4 mm, no folded triangles on the chest.
+- Face only without a neck seam: Presets → Export now also saves her original skin textures and tint
+  (readback from the GPU, like her meshes); the pipeline then bakes a face-only face texture that fades into her own
+  skin near the neck (25 mm band), with the character's overall tone shifted to hers and pre-compensated for the
+  game's tint. It is used automatically when the face skin is on and the body skin off.
+- Hooks for the procedural wrinkles (NormalFor; slots owned by the wrinkle pass are never overwritten or saved).
+Export her again (Presets tab) and re-run tools/pipeline/run.ps1 to get the seam blend.
+
 0.7.5:
 - Procedural skin wrinkles (VR tab → Skin wrinkles, off by default): where her skin is compressed (smile lines, brow, around the
   eyes, neck; body optional), fine folds appear across the compression, computed on the GPU from her skinned mesh against her

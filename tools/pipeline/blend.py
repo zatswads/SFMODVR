@@ -81,6 +81,7 @@ def clear():
 
 def her(key, dx, skip=SKIP_RENDER):
     obs = []
+    pair = []   # her upper body and her nipple cap share their rim: one welded object, so the seam shades like the game's joint normals
     for n in NAMES:
         if any(s in n for s in skip):
             continue
@@ -90,7 +91,23 @@ def her(key, dx, skip=SKIP_RENDER):
             v = Z[n + '|vc'] + Z[n + '|dc']
         else:
             v = Z[n + '|' + key]
+        if n in ('reika_upperBody_normal', 'reika_nipple_type_1'):
+            pair.append((n, v))
+            continue
         obs.append(make_obj(n + '_' + key, u2b(v, dx), Z[n + '|faces']))
+    if len(pair) == 2:
+        vv = np.concatenate([p[1] for p in pair])
+        ff = np.concatenate([Z[pair[0][0] + '|faces'], Z[pair[1][0] + '|faces'] + len(pair[0][1])])
+        # weld on the bind positions (the rim coincides there), averaging the positions of merged vertices
+        bind = np.concatenate([Z[p[0] + '|vc'] for p in pair])
+        _, first, inv = np.unique(np.round(bind / 2e-5).astype(np.int64), axis=0, return_index=True, return_inverse=True)
+        inv = inv.ravel()
+        cnt = np.bincount(inv).astype(float)
+        vw = np.zeros((len(cnt), 3)); np.add.at(vw, inv, vv); vw /= cnt[:, None]
+        obs.append(make_obj('chest_' + key, u2b(vw, dx), inv[ff]))
+    else:
+        for n, v in pair:
+            obs.append(make_obj(n + '_' + key, u2b(v, dx), Z[n + '|faces']))
     return obs
 
 
@@ -192,6 +209,13 @@ def closeups():
         cams = {'after': camera('ca', (-x, 6, y), (math.radians(90), 0, math.radians(180)), scale)}
         if side:
             cams['afterside'] = camera('cas', (6, 0, y), (math.radians(90), 0, math.radians(90)), scale)
+        render(os.path.join(CHK, 'close_%s.png' % name), cams, (900, 900))
+        # the VaM-warped surface (stage.npz vam_v) at the same cameras, to compare the fit with its target
+        clear()
+        vam(0)
+        cams = {'vam': camera('cv', (-x, 6, y), (math.radians(90), 0, math.radians(180)), scale)}
+        if side:
+            cams['vamside'] = camera('cvs', (6, 0, y), (math.radians(90), 0, math.radians(90)), scale)
         render(os.path.join(CHK, 'close_%s.png' % name), cams, (900, 900))
 
 

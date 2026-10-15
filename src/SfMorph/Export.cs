@@ -48,9 +48,106 @@ namespace SfMorph
             }
             File.WriteAllText(Path.Combine(dir, "meshes.txt"), index.ToString());
             File.WriteAllText(Path.Combine(dir, "skeleton.txt"), Skeleton(c, bind));
-            var msg = "Exported " + written + " meshes of '" + c.Key + "' to " + dir + (failed.Count > 0 ? "; " + failed.Count + " failed: " + string.Join(", ", failed.ToArray()) : "");
+            string texMsg;
+            try { texMsg = Textures(c, dir); }
+            catch (Exception e) { texMsg = "textures failed: " + e.Message; Plugin.Log.LogWarning("Export textures: " + e); }
+            var msg = "Exported " + written + " meshes of '" + c.Key + "' to " + dir + (failed.Count > 0 ? "; " + failed.Count + " failed: " + string.Join(", ", failed.ToArray()) : "") + "; " + texMsg;
             Plugin.Log.LogInfo(msg);
             return msg;
+        }
+
+        static readonly string[] SkinMaterials = { "reika_face", "reika_body", "reika_foot" };
+        static readonly string[] TexProps = { "_ColorMap", "_NormalMap" };
+        static readonly string[] TintProps = { "_SkinColor", "_BaseColor", "_Color" };
+
+        // Her ORIGINAL skin textures (not the converted character's, which MorphState swaps in) as PNGs, plus textures.txt:
+        //   # material<TAB>property<TAB>file<TAB>texture format (graphics format)<TAB>size      one row per material x property
+        //   # material<TAB>colour property<TAB>r g b a                                          her original tint colours
+        // _ColorMap goes through an sRGB render texture (PNG holds the sRGB values), _NormalMap through a linear one.
+        // One texture at a time (8K readbacks are big), temporaries destroyed at once.
+        static string Textures(Character c, string dir)
+        {
+            var mats = new List<Material>();
+            foreach (var r in c.Renderers)
+            {
+                if (r == null) continue;
+                foreach (var m in r.sharedMaterials)
+                {
+                    if (m == null || mats.Contains(m)) continue;
+                    var n = m.name;
+                    foreach (var k in SkinMaterials) if (n.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0) { mats.Add(m); break; }
+                }
+            }
+            var rows = new StringBuilder("# material\tproperty\tfile\ttexture format (graphics format)\tsize\n");
+            var cols = new StringBuilder("# material\tcolour property\tr g b a (her original value)\n");
+            var files = new Dictionary<Texture, string>();
+            int wrote = 0, skipped = 0;
+            foreach (var m in mats)
+            {
+                var mname = m.name.Replace(" (Instance)", "").Trim();
+                foreach (var prop in TexProps)
+                {
+                    if (!m.HasProperty(prop)) continue;
+                    var tex = c.Morph.OriginalTexture(m, prop);
+                    if (tex == null) { rows.Append(mname).Append('\t').Append(prop).Append("\t-\t-\t-\n"); skipped++; continue; }
+                    string fmt = Describe(tex), size = tex.width + "x" + tex.height;
+                    string file;
+                    if (!files.TryGetValue(tex, out file))
+                    {
+                        file = Store.Safe(mname + "_" + prop.TrimStart('_')) + ".png";
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
+                        string err = SavePng(tex, prop == "_ColorMap", Path.Combine(dir, file));
+                        sw.Stop();
+                        if (err != null) { Plugin.Log.LogWarning("Export texture " + file + " failed: " + err); file = "-"; skipped++; }
+                        else { wrote++; Plugin.Log.LogInfo("Export texture " + file + " (" + tex.name + ", " + fmt + ", " + size + ") in " + (sw.Elapsed.TotalSeconds).ToString("0.0", Inv) + " s"); }
+                        files[tex] = file;
+                    }
+                    rows.Append(mname).Append('\t').Append(prop).Append('\t').Append(file).Append('\t').Append(fmt).Append('\t').Append(size).Append('\n');
+                }
+                foreach (var pn in TintProps)
+                {
+                    if (!m.HasProperty(pn)) continue;
+                    var col = c.Morph.OriginalColor(m, pn);
+                    cols.Append(mname).Append('\t').Append(pn).Append('\t').Append(F(col.r)).Append(' ').Append(F(col.g)).Append(' ').Append(F(col.b)).Append(' ').Append(F(col.a)).Append('\n');
+                }
+            }
+            File.WriteAllText(Path.Combine(dir, "textures.txt"), rows.ToString() + cols.ToString());
+            return wrote + " skin textures written" + (skipped > 0 ? ", " + skipped + " skipped (see the log)" : "") + (mats.Count == 0 ? " (no reika_face/body/foot material found)" : "");
+        }
+
+        static string Describe(Texture t)
+        {
+            var t2 = t as Texture2D;
+            return (t2 != null ? t2.format.ToString() : t.GetType().Name) + " (" + t.graphicsFormat + ")";
+        }
+
+        // Blit to a render texture of the right colour space, read it back and write the PNG; null on success.
+        static string SavePng(Texture src, bool srgb, string path)
+        {
+            RenderTexture rt = null, prev = RenderTexture.active;
+            Texture2D tmp = null;
+            var t2 = src as Texture2D;
+            try
+            {
+                if (t2 != null) { try { t2.requestedMipmapLevel = 0; } catch { } }   // streamed textures: ask for the full size
+                rt = new RenderTexture(src.width, src.height, 0, RenderTextureFormat.ARGB32, srgb ? RenderTextureReadWrite.sRGB : RenderTextureReadWrite.Linear);
+                Graphics.Blit(src, rt);
+                RenderTexture.active = rt;
+                tmp = new Texture2D(src.width, src.height, TextureFormat.RGBA32, false, !srgb);
+                tmp.ReadPixels(new Rect(0, 0, src.width, src.height), 0, 0);
+                RenderTexture.active = prev;
+                File.WriteAllBytes(path, tmp.EncodeToPNG());
+                if (t2 != null && t2.loadedMipmapLevel > 0) Plugin.Log.LogWarning("Export texture " + Path.GetFileName(path) + ": only mip " + t2.loadedMipmapLevel + " was loaded (texture streaming); it may be lower resolution than " + src.width + "x" + src.height);
+                return null;
+            }
+            catch (Exception e) { return e.Message; }
+            finally
+            {
+                if (RenderTexture.active == rt) RenderTexture.active = prev;
+                if (rt != null) { rt.Release(); UnityEngine.Object.Destroy(rt); }
+                if (tmp != null) UnityEngine.Object.Destroy(tmp);
+                if (t2 != null) { try { t2.ClearRequestedMipmapLevel(); } catch { } }
+            }
         }
 
         static string F(float v) { return v.ToString("0.######", Inv); }

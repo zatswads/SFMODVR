@@ -113,12 +113,15 @@ def _zheight(srf, p, k=16):
 
 def nonrigid_icp(x0, faces, normals_fn, surfaces, lab, log, stiff=None, nodata=None,
                  alphas=(40, 20, 10, 5, 2.5, 1.2, 0.6, 0.3, 0.15), inner=3,
-                 dmax=(0.15, 0.10, 0.07, 0.05, 0.035, 0.025, 0.018, 0.013, 0.01), min_dot=0.5):
+                 dmax=(0.15, 0.10, 0.07, 0.05, 0.035, 0.025, 0.018, 0.013, 0.01), min_dot=0.5,
+                 no_side=None, pin=None, pin_pos=None, pin_w=1e4):
     """x0: (n,3) start positions; surfaces[label] = Surface of allowed VaM triangles; lab: (n,) label per vertex.
     Minimises sum w|x - c|^2 + alpha |L (x - x0)|^2, re-finding closest points c each pass.
     min_dot: smallest normal agreement (vertex normal . surface normal) for a match, a scalar or one value per vertex
     (looser on the face, where features such as the nose and the lids are steep). The along-normal test applies
-    only beyond 4 mm."""
+    only beyond 4 mm (no_side: per-vertex bool, True = no such exemption, a match must lie along the normal at any
+    distance: the breast's underside, where a sideways match is how a fold latches on).
+    pin, pin_pos: vertices held at pin_pos[pin] with data weight pin_w (e.g. a rim that must stay on the fitted skin)."""
     n = len(x0)
     L = uniform_laplacian(n, faces)
     LtL = (L.T @ (L if stiff is None else sp.diags(stiff) @ L)).tocsc()
@@ -139,11 +142,16 @@ def nonrigid_icp(x0, faces, normals_fn, surfaces, lab, log, stiff=None, nodata=N
                 off = q - x[sel]
                 along = np.abs(np.einsum('ij,ij->i', off, nrm[sel])) / np.maximum(d, 1e-9)
                 md = min_dot[sel] if np.ndim(min_dot) else min_dot
-                ok = (d < dm) & (dot > md) & ((along > 0.8) | (d < 0.004))
+                near = (d < 0.004) if no_side is None else ((d < 0.004) & ~no_side[sel])
+                ok = (d < dm) & (dot > md) & ((along > 0.8) | near)
                 c[sel] = q; dist[sel] = d
                 w[sel] = np.where(ok, 1.0, 0.0)
             if nodata is not None:
                 w[nodata] = 0
+            matched = w > 0
+            w_match = w.copy()   # (returned: pinned vertices are held, not matched to the surface)
+            if pin is not None:
+                w[pin] = pin_w; c[pin] = pin_pos[pin]
             A = (alpha * LtL + sp.diags(w)).tocsc()
             solve = spla.factorized(A)
             rhs0 = alpha * (LtL @ x0)
@@ -152,11 +160,11 @@ def nonrigid_icp(x0, faces, normals_fn, surfaces, lab, log, stiff=None, nodata=N
                 xn[:, k] = solve(rhs0[:, k] + w * c[:, k])
             step = np.linalg.norm(xn - x, axis=1).max()
             x = xn
-        ok = w > 0
+        ok = matched
         log('  icp alpha %-5g dmax %.3f: %5.1f%% matched, residual mean %.2f mm, p95 %.2f mm, last step %.2f mm' % (
             alpha, dm, 100 * ok.mean(), 1000 * dist[ok].mean() if ok.any() else 0,
             1000 * np.percentile(dist[ok], 95) if ok.any() else 0, 1000 * step))
-    return x, w, dist
+    return x, w_match, dist
 
 
 def idw(src_pts, src_val, pts, k=8, exact=2e-5):
@@ -244,9 +252,9 @@ def patch_rigid(v, faces, skin_pts, skin_d, k=12):
     return out
 
 
-def untangle(v, faces, d, iters=300, rings=3):
+def untangle(v, faces, d, iters=300, rings=3, fixed=None):
     """Relax offsets around flipped triangles (normal reversed between v and v + d) toward their neighbours'
-    average until none are left; returns (d, flipped before, flipped after)."""
+    average until none are left; returns (d, flipped before, flipped after). fixed: vertices that keep their offsets."""
     if len(faces) == 0:
         return d, 0, 0
     n = len(v)
@@ -268,6 +276,8 @@ def untangle(v, faces, d, iters=300, rings=3):
         m = np.zeros(n, bool); m[faces[bf].ravel()] = True
         for _ in range(rings):
             m = m | (A @ m.astype(float) > 0)
+        if fixed is not None:
+            m &= ~fixed
         avg = (A @ d) / deg[:, None]
         d[m] = 0.5 * d[m] + 0.5 * avg[m]
     return d, first, int(bad(d).sum())
@@ -371,7 +381,7 @@ def cap_attach(v, faces, skin_v, skin_d, target, scale=0.008, ramp=0.008, relief
     vw = np.zeros((nw, 3)); np.add.at(vw, widx, v); vw /= cnt[:, None]
     fw = widx[faces]
     fw = fw[(fw[:, 0] != fw[:, 1]) & (fw[:, 1] != fw[:, 2]) & (fw[:, 2] != fw[:, 0])]
-    d = _cap_attach(vw, fw, skin_v, skin_d, target, scale, ramp, relief, reach, log)
+    d = _cap_attach(vw, fw, skin_v, skin_d, target, scale, ramp, relief, reach, log)[0]
     return d[widx] + (vw[widx] - v)
 
 
@@ -447,4 +457,77 @@ def _cap_attach(v, faces, skin_v, skin_d, target, scale, ramp, relief, reach, lo
     if log:
         log('  cap: %d vertices, %d on the border, %d snapped to the VaM surface (mean move %.2f mm), relief %.2f..%.2f mm' % (
             n, border.sum(), (w > 0).sum(), 1000 * np.linalg.norm((q - s1)[w > 0], axis=1).mean() if (w > 0).any() else 0, 1000 * b.min(), 1000 * b.max()))
-    return out - v
+    return out - v, b, border
+
+
+def cap_icp(v, faces, skin_v, skin_d, target, nip_srf, disc_srf, sign, relief=0.0, relief_min=0.001, scale=0.003, ramp=0.025,
+            reach=0.04, alphas=(10, 5, 2.5, 1.2, 0.6, 0.3, 0.15), dmax=(0.02, 0.015, 0.01, 0.008, 0.006, 0.005, 0.004),
+            min_dot=0.2, pin_w=1e4, relax=300, relax_step=0.8, log=None):
+    """Nipple cap (her nipple overlay) fitted to VaM's skin by non-rigid ICP, starting from cap_attach's result.
+    Her nipple vertices (more than relief_min above her own smooth disc, the v - S term of cap_attach) target VaM's
+    'Nipples' faces (nip_srf) only, the areola/disc vertices VaM's Torso faces (disc_srf) only. The rim (the cap's
+    border, on the fitted skin's hole boundary) is pinned to the fitted skin with data weight pin_w. Afterwards the
+    cap is untangled with the rim excluded. sign: winding sign of the cap (cross(b-a, c-a) * sign points outwards).
+    Returns offsets per cap vertex."""
+    widx, nw = weld(v)
+    cnt = np.bincount(widx, minlength=nw).astype(float)
+    vw = np.zeros((nw, 3)); np.add.at(vw, widx, v); vw /= cnt[:, None]
+    fw = widx[faces]
+    fw = fw[(fw[:, 0] != fw[:, 1]) & (fw[:, 1] != fw[:, 2]) & (fw[:, 2] != fw[:, 0])]
+    d0, b, border = _cap_attach(vw, fw, skin_v, skin_d, target, scale, ramp, relief, reach, log)
+    x0 = vw + d0
+    # rim: border vertices on the fitted skin; their fitted positions
+    skin_tree = cKDTree(skin_v)
+    ds, si = skin_tree.query(vw)
+    rim = border & (ds < 2e-5)
+    pin_pos = vw + skin_d[si]
+    lab = np.where(b > relief_min, 0, 1)
+    lab[rim] = 1
+    log_ = log or (lambda s: None)
+    log_('  cap ICP: %d nipple vertices (relief > %.1f mm) -> VaM Nipples, %d disc vertices -> VaM Torso, %d rim vertices pinned (of %d border)' % (
+        (lab == 0).sum() - 0, 1000 * relief_min, (lab == 1).sum(), rim.sum(), border.sum()))
+    nrm = lambda x: _vnormals(x, fw) * sign
+    x, w, dist = nonrigid_icp(x0, fw, nrm, {0: nip_srf, 1: disc_srf}, lab, log_, nodata=None, alphas=alphas, dmax=dmax,
+                              min_dot=min_dot, pin=rim, pin_pos=pin_pos, pin_w=pin_w)
+    if relax:
+        # even out the triangles (rest lengths: her own edge lengths) in the tangent plane, back onto the VaM faces
+        pos = relax_project(x, fw, vw, {0: nip_srf, 1: disc_srf}, lab, nrm, np.ones(len(x), bool), ~rim, iters=relax, step=relax_step, log=log)
+        x = pos
+    d = x - vw
+    d, b0, b1 = untangle(vw, fw, d, iters=300, rings=3, fixed=rim)
+    log_('  cap untangle (rim fixed): %d flipped triangles -> %d' % (b0, b1))
+    return d[widx] + (vw[widx] - v)
+
+
+def bump_tip(v, faces, scale=0.005):
+    """Index (into v) of the tip of the bump on a small patch that faces +z (her nipple cap on one side, VaM's 'Nipples'
+    faces on one side): the vertex that rises most above the patch's own smooth shape (implicit cotangent smoothing at the
+    given scale, border fixed), along the outward normal. The nipple, unlike the patch's front-most vertex (the breast's
+    apex, which is not the nipple on a round breast)."""
+    used = np.unique(faces)
+    remap = -np.ones(len(v), np.int64); remap[used] = np.arange(len(used))
+    vp = v[used]
+    w, nw = weld(vp)
+    cnt = np.bincount(w, minlength=nw).astype(float)
+    vw = np.zeros((nw, 3)); np.add.at(vw, w, vp); vw /= cnt[:, None]
+    fw = w[remap[faces]]
+    fw = fw[(fw[:, 0] != fw[:, 1]) & (fw[:, 1] != fw[:, 2]) & (fw[:, 2] != fw[:, 0])]
+    e = np.sort(np.concatenate([fw[:, [0, 1]], fw[:, [1, 2]], fw[:, [2, 0]]]), axis=1)
+    ue, c = np.unique(e, axis=0, return_counts=True)
+    border = np.zeros(nw, bool); border[ue[c == 1].ravel()] = True
+    Lc, Ma = _cot_laplacian(vw, fw)
+    Ii = np.flatnonzero(~border); Bi = np.flatnonzero(border)
+    S = vw.copy()
+    if len(Ii):
+        A = (sp.diags(Ma[Ii]) + scale ** 2 * Lc[Ii][:, Ii]).tocsc()
+        rhs = Ma[Ii, None] * vw[Ii] - scale ** 2 * (Lc[Ii][:, Bi] @ vw[Bi])
+        solve = spla.factorized(A)
+        for k in range(3):
+            S[Ii, k] = solve(rhs[:, k])
+    n = _vnormals(vw, fw)
+    if n[:, 2].sum() < 0:
+        n = -n
+    b = np.einsum('ij,ij->i', vw - S, n)
+    i = int(np.argmax(b))
+    # back to an index of v: the member of the welded group
+    return int(used[np.flatnonzero(w == i)[0]])

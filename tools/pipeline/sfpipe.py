@@ -50,6 +50,7 @@ HER_BONES = ('Eye_L', 'Eye_R', 'Head_M', 'Neck_M', 'Chest_M', 'Shoulder_L', 'Sho
              'Elbow_L', 'Elbow_R')
 FACE_JOINTS = {'Eye_L', 'Eye_R', 'Jaw_M'}   # the only joints an offset may be written for (--joints face)
 
+CAP_RELIEF = 0.0   # her nipple's own bump added back to the cap when VaM has a Nipples group (0: the VaM data replaces it)
 LOG = []
 WARNS = []     # up-front and skipped-step warnings, repeated as WARN lines in _check/summary.txt
 
@@ -482,6 +483,7 @@ def run(a, chk):
     for e in ('Eye_L', 'Eye_R'):
         lids |= np.linalg.norm(x0 - dst[[i for i, (h, v) in enumerate(lm) if h == e][0]], axis=1) < 0.021
     log('stiffer fit on %d vertices (fingers, toes, eyelids); %d eyelid vertices keep her eye opening' % ((stiff > 1).sum(), lids.sum()))
+    chest_zone = np.zeros(len(wc), bool)
     eye_off, eye_ratio, fm_her, fm_vam = None, {}, None, None
     eye_open = None      # (apertures, closed) once measured on the VaM skin
     S = None             # mouth similarity (her proportions only): maps her mouth parts to the VaM-sized face
@@ -614,6 +616,7 @@ def run(a, chk):
         mouth_in |= ((wc[:, 2] < hm_b[2] - 0.012) & (np.abs(wc[:, 0] - hm_b[0]) < 0.035)
                      & (wc[:, 1] > hm_b[1] - 0.035) & (wc[:, 1] < hm_b[1] + 0.03) & (wc[:, 2] > hm_b[2] - 0.11))
         nodata = mouth_in.copy()
+        fold_zone = np.zeros(nw, bool)
         # VaM exports can catch the lids mid-blink. Measure each eye's opening on the VaM skin (the largest
         # skin-free gap on a vertical line through the eye, in front of the eyeball); if it's mostly closed, her
         # own lids keep their opening (and the report says to re-export with blinking off), else VaM's lids are fitted.
@@ -658,25 +661,52 @@ def run(a, chk):
             n_sh |= r < 0.12
             stiff_b = np.maximum(stiff_b, np.clip(10.0 * (1 - (r - 0.12) / 0.06), 1, 10))
         nodata |= n_sh
-        # her separate nipple overlay replaces VaM's nipple: no data within 15 mm of any overlay vertex (the ICP's
-        # smoothness term interpolates the skin underneath from the rim)
+        # her separate nipple overlay replaces VaM's nipple: no data only on the rim of its hole (within 4 mm of any overlay
+        # vertex); the Torso faces stay the ICP target right up to it (the Nipples faces are dropped, so the rim cannot climb
+        # VaM's bump). The cap itself is fitted separately (fit.cap_icp).
         n_nip = np.zeros(nw, bool)
         nip_c = {}
         if nip is not None:
-            n_nip = cKDTree(nip.vc).query(wc)[0] < 0.015
+            n_nip = cKDTree(nip.vc).query(wc)[0] < 0.004
             nodata |= n_nip
-            # inframammary fold: 55 mm below each nipple centre (bind pose) the fit is stiffer (4 at the centre, 1 at 45 mm)
-            # so the fold keeps its line while the breast above it takes VaM's smaller volume
+            # the breast's underside, 55 mm below each nipple centre (bind pose): within 5 cm of it a match must lie along the
+            # vertex normal (no sideways exemption), so her own fold cannot latch onto VaM's rounder underside
             for sgn in (-1, 1):
                 hm = nip.vc[np.sign(nip.vc[:, 0]) == sgn]
                 if not len(hm):
                     continue
                 nip_c[sgn] = hm.mean(0)
-                pf = wc[np.argmin(np.linalg.norm(wc - (nip_c[sgn] - np.array([0, 0.055, 0])), axis=1))]
-                r = np.linalg.norm(wc - pf, axis=1)
-                stiff_b = np.maximum(stiff_b, np.clip(1 + 3.0 * (1 - r / 0.045), 1, 4))
-            log('%d skin vertices within 15 mm of her nipple overlay keep no VaM data; inframammary stiffness ramp (4 -> 1 over 45 mm) at 55 mm below each nipple; VaM Nipples faces %s as ICP target' % (
-                n_nip.sum(), 'dropped' if feat['Nipples'] else 'absent'))
+                fold_zone |= np.linalg.norm(wc - (nip_c[sgn] - np.array([0, 0.055, 0])), axis=1) < 0.05
+            log('%d skin vertices within 4 mm of her nipple overlay (the rim) keep no VaM data; %d vertices within 5 cm of the inframammary fold points have no sideways matches; VaM Nipples faces %s as ICP target' % (
+                n_nip.sum(), fold_zone.sum(), 'dropped' if feat['Nipples'] else 'absent'))
+        chest_zone = np.zeros(nw, bool)    # within 12 cm (x, y) of a nipple centre: the breasts
+        for c_ in nip_c.values():
+            chest_zone |= np.linalg.norm((wc - c_)[:, :2], axis=1) < 0.12
+        # Her nipple sits where her skin mesh has its hole; VaM's nipple is not where its breast projects furthest (which is
+        # what the proportion warp's nipple landmarks line up: the Nipples group's front-most vertex), but its bump's top,
+        # up to a few cm away. The rim of her hole therefore goes to VaM's nipple, ring for ring: the skin round the hole
+        # starts shifted by the same vector (smooth falloff) and the rim vertices are pinned to the VaM surface there.
+        nip_shift = np.zeros((nw, 3)); rim_pin = np.zeros(nw, bool); rim_pos = np.zeros((nw, 3))
+        if nip is not None and use_nip:
+            all_srf = fit.Surface(vam_b, vf, vfn_b)
+            fN = vam.faces[vam.face_group == vam.groups.index('Nipples')]
+            for sgn in (-1, 1):
+                hi = np.flatnonzero(np.sign(nip.vc[:, 0]) == sgn)
+                hf = nip.faces[np.isin(nip.faces, hi).all(1)]
+                vfs = fN[(np.sign(vam_b[fN][:, :, 0]) == sgn).all(1)]
+                if not len(hf) or not len(vfs):
+                    continue
+                p_h = nip.vc[fit.bump_tip(nip.vc, hf)]; p_v = vam_b[fit.bump_tip(vam_b, vfs)]
+                sh = p_v - p_h
+                side = np.sign(wc[:, 0]) == sgn
+                r = np.linalg.norm(wc - p_h, axis=1)
+                t = np.clip((0.10 - r) / 0.07, 0, 1); wgt = t * t * (3 - 2 * t)
+                nip_shift[side] += (sh * wgt[:, None])[side]
+                rm = n_nip & side
+                rim_pin |= rm
+                rim_pos[rm] = all_srf.nearest(wc[rm] + sh)[0]
+                log('nipple %s: her bump top %s mm, VaM bump top %s mm (bind pose): the hole rim (%d vertices) goes %.1f mm to it' % (
+                    'LR'[sgn > 0], np.round(1000 * p_h, 1), np.round(1000 * p_v, 1), rm.sum(), 1000 * np.linalg.norm(sh)))
         log('%d mouth-interior vertices keep her shape (no data); %d shoulder vertices keep her shape (no data within 12 cm, stiffness ramp to 10 out to 18 cm)' % (mouth_in.sum(), n_sh.sum()))
         # Face pre-alignment: her head (only) is warped onto VaM's face landmarks first, so the ICP starts with the
         # nose, chin, ears and mouth near their targets (its smoothness term anchors to the aligned shape).
@@ -713,14 +743,22 @@ def run(a, chk):
         S_tr = ring_t - (eye_mid_b + s_mouth * (ring_c - eye_mid_b))
         S = lambda p: eye_mid_b + s_mouth * (np.asarray(p) - eye_mid_b) + S_tr
         x_start[mouth_in] = S(wc[mouth_in])
+        x_start = x_start + nip_shift
         log('mouth similarity S: scale %.4f about her eye midpoint (eye spacing %.4f, eye-chin %.4f), her lip ring centroid moves %.1f mm to the pre-aligned ring (%d lip-ring vertices of %d, %d interior vertices)' % (
             s_mouth, fm_vam['spacing'] / fm_her['spacing'] if fm_her is not None and fm_vam is not None else 1.0,
             np.linalg.norm(fm_vam['chin'] - fm_vam['em']) / np.linalg.norm(fm_her['chin'] - fm_her['em']) if fm_her is not None and fm_vam is not None else 1.0,
             1000 * np.linalg.norm(S(ring_c) - ring_c), len(ring_i), len(mouth_w), mouth_in.sum()))
         min_dot = np.where(np.linalg.norm(wc - eye_mid_b, axis=1) < 0.12, 0.2, 0.5)
-        xfit, wmatch, dist = fit.nonrigid_icp(x_start, wf, lambda x: sfio.vertex_normals(x, wf, hsign), surfaces, hlab, log, stiff=stiff_b, nodata=nodata, min_dot=min_dot)
+        xfit, wmatch, dist = fit.nonrigid_icp(x_start, wf, lambda x: sfio.vertex_normals(x, wf, hsign), surfaces, hlab, log, stiff=stiff_b, nodata=nodata, min_dot=min_dot, no_side=fold_zone,
+                                              pin=rim_pin if rim_pin.any() else None, pin_pos=rim_pos, pin_w=10.0)
         movable = (hlab == names.index('torso')) & (wc[:, 1] < bind_pos['Neck_M'][1])
-        xfit = fit.relax_project(xfit, wf, wc, surfaces, hlab, lambda x: sfio.vertex_normals(x, wf, hsign), wmatch > 0, movable, log=log)
+        xfit = fit.relax_project(xfit, wf, wc, surfaces, hlab, lambda x: sfio.vertex_normals(x, wf, hsign), (wmatch > 0) | rim_pin, movable, log=log)
+        if rim_pin.any():
+            # the rim sits on VaM's whole skin there (the Nipples patch is part of its surface; the Torso-only projection of the
+            # relaxation would put rim vertices on the edge of the patch's hole)
+            q_, d_, _ = all_srf.nearest(xfit[rim_pin])
+            log('hole rim: %d vertices put back onto the VaM skin (mean move %.2f mm, max %.2f mm)' % (rim_pin.sum(), 1000 * d_.mean(), 1000 * d_.max()))
+            xfit[rim_pin] = q_
         wd = xfit - wc
         vam_out = vam_b; vam_eyes = np.array([eye_c['Eye_L'], eye_c['Eye_R']]); bindfit = True
     log('fitted skin offsets in bind pose: mean %.1f mm, p99 %.1f mm, max %.1f mm' % (
@@ -728,6 +766,12 @@ def run(a, chk):
 
     wd, b0, b1 = fit.untangle(wc, wf, wd, iters=1000, rings=5)
     log('untangle fitted skin: %d flipped triangles -> %d' % (b0, b1))
+    if bindfit and nip_c:
+        # chest: what the generic relaxation cannot undo are her thin sliver triangles (a vertex almost on the long edge of its
+        # neighbour, a T-junction), turned over by a fraction of a millimetre of differential offset: the sliver's middle
+        # vertex takes the offset interpolated along the long edge (it stays on that edge), pass by pass
+        wd, f0, f1 = untangle_slivers(wc, wf, wd, chest_zone)
+        log('untangle fitted skin, chest (sliver triangles, middle vertex interpolated along the long edge): %d flipped triangles -> %d' % (f0, f1))
     if S is not None:
         # mouth: what the generic relaxation cannot undo (tiny triangles at the lip corners folded by the lip fit) is
         # blended towards the mouth similarity S, which never folds, ring by ring until the mouth has no flipped triangle
@@ -780,12 +824,44 @@ def run(a, chk):
     # her nipple overlay fills a hole in her skin mesh (areola, nipple and the breast tip): it follows the VaM skin there
     # (fit.cap_attach). Without VaM nipples (or in --proportions vam) it is attached like the other overlays.
     cap_target = fit.Surface(vam_out, vf, np.zeros((len(vf), 3))) if bindfit and nip is not None and use_nip else None
+    cap_d = None      # offsets of the nipple cap (fit.cap_icp), computed before the loop: the normals need the whole chest
+    nrm_cap = None    # (cap normals before, after) from the upperBody + cap welded together
+    if cap_target is not None:
+        cap_sgn = sfio.winding_sign(nip.vc, nip.faces, np.einsum('nij,nj->ni', nip.C[:, :3, :3], nip.vn))
+        log('  nipple cap winding sign %g, skin %g' % (cap_sgn, hsign))
+        if feat['Nipples']:
+            ig = vam.groups.index('Nipples'); it = vam.groups.index('Torso')
+            fg = vam.face_group[np.isin(vam.face_group, skin_g)]
+            nip_srf = fit.Surface(vam_out, vf[fg == ig], vfn_b[fg == ig]) if (fg == ig).any() else None
+            # (VaM's 'Nipples' group is the whole areola patch, about as big as her cap, and its Torso has a hole there: the
+            # disc vertices' target is the Torso and the Nipples faces together, the nearest of both)
+            mt = (fg == it) | (fg == ig)
+            disc_srf = fit.Surface(vam_out, vf[mt], vfn_b[mt]) if (fg == it).any() else None
+        else:
+            nip_srf = disc_srf = None
+        if nip_srf is not None and disc_srf is not None:
+            cap_d = fit.cap_icp(nip.vc, nip.faces, wc, wd, cap_target, nip_srf, disc_srf, cap_sgn, relief=CAP_RELIEF, log=log)
+        else:
+            cap_d = fit.cap_attach(nip.vc, nip.faces, wc, wd, cap_target, scale=0.003, ramp=0.025, log=log)
+        # normals: upperBody (the whole welded skin) + cap welded into one mesh, so the seam shades continuously
+        cf = nip.faces if cap_sgn == hsign else nip.faces[:, ::-1]
+        pts0 = np.concatenate([wc, nip.vc]); pts1 = np.concatenate([wc + wd, nip.vc + cap_d])
+        cw, ncw = fit.weld(pts0)
+        fa = cw[np.concatenate([wf, cf + nw])]
+        fa = fa[(fa[:, 0] != fa[:, 1]) & (fa[:, 1] != fa[:, 2]) & (fa[:, 2] != fa[:, 0])]
+        ccnt = np.bincount(cw, minlength=ncw).astype(float)
+        nn = []
+        for pts in (pts0, pts1):
+            pw = np.zeros((ncw, 3)); np.add.at(pw, cw, pts); pw /= ccnt[:, None]
+            nn.append(sfio.vertex_normals(pw, fa, hsign)[cw])
+        wn0, wn1 = nn[0][:nw], nn[1][:nw]
+        nrm_cap = (nn[0][nw:], nn[1][nw:])
     for m in meshes:
         d = fit.idw(wc, wd, m.vc, k=8)
         capped = False
         if m.name in ATTACH:
             if m is nip and cap_target is not None:
-                d = fit.cap_attach(m.vc, m.faces, wc, wd, cap_target, scale=0.003, ramp=0.025, log=log)
+                d = cap_d.copy()
                 capped = True   # (the generic untangle below only makes this cap worse)
             else:
                 d = fit.surface_attach(m.vc, wc, wf, wd, hsign, vn0=wn0, vn1=wn1)
@@ -825,6 +901,8 @@ def run(a, chk):
             n_a[m.fit_idx] = wn0[k]; n_b[m.fit_idx] = wn1[k]
         vn_c = np.einsum('nij,nj->ni', m.C[:, :3, :3], m.vn)
         vn_c /= np.maximum(np.linalg.norm(vn_c, axis=1, keepdims=True), 1e-12)
+        if m is nip and nrm_cap is not None:
+            n_a, n_b = nrm_cap
         n_new = fit.rotate_normals(vn_c, n_a, n_b)
         Cinv = np.linalg.inv(m.C[:, :3, :3])
         m.d = np.einsum('nij,nj->ni', Cinv, d)                # back to the mesh's own space
@@ -855,6 +933,7 @@ def run(a, chk):
 
     # --- verification ------------------------------------------------------------------------------------
     body = None
+    nip_chk = None      # nipple metrics (bind-pose fit with a nipple cap), for the summary
     breast_diff = []    # worst |fitted - VaM-warped| breast projection (m), once measured
     fm_diff = None      # face metric differences fitted - VaM (m), for the summary
     if bindfit:
@@ -921,11 +1000,40 @@ def run(a, chk):
         d2, _ = kd2.query(vam_out[vn_i])
         d1v, _ = kd1.query(vam_out[vn_i])
         # (the nearest vertex of a 5 mm skin mesh is never closer than ~1.5 mm: the distance to the surface is the fair figure)
-        srf_all = fit.Surface(np.concatenate([xfit, nip.vc + nip.dc]), np.concatenate([wf, nip.faces + len(xfit)]), np.zeros((len(wf) + len(nip.faces), 3)))
+        xfin = wc + wd   # (the final skin, after the untangling)
+        srf_all = fit.Surface(np.concatenate([xfin, nip.vc + nip.dc]), np.concatenate([wf, nip.faces + len(xfin)]), np.zeros((len(wf) + len(nip.faces), 3)))
         ds = srf_all.nearest(vam_out[vn_i], k=16)[1]
         log('  VaM Nipples -> her fitted skin incl. her nipple overlay, mean/p95 mm: to the surface %.2f/%.2f, to the nearest vertex %.1f/%.1f '
             '(upperBody vertices alone, hole under the nipple: %.1f/%.1f)' % (
                 1000 * ds.mean(), 1000 * np.percentile(ds, 95), 1000 * d2.mean(), 1000 * np.percentile(d2, 95), 1000 * d1v.mean(), 1000 * np.percentile(d1v, 95)))
+        nip_chk = {'mean': float(ds.mean()), 'prot': []}
+        # nipple protrusion: the tip's height above the plane of the cap's rim (best-fit plane of the rim vertices on the fitted
+        # skin, normal towards the front), the cap's fitted tip against VaM's Nipples tip measured from the same plane
+        rim_all = cKDTree(wc).query(nip.vc)[0] < 2e-5
+        for sgn in (-1, 1):
+            sd_ = np.sign(nip.vc[:, 0]) == sgn
+            rp = (nip.vc + nip.dc)[sd_ & rim_all]
+            vsd = vam_out[vn_i][np.sign(vam_out[vn_i, 0]) == sgn]
+            if len(rp) < 3 or not len(vsd):
+                continue
+            cen_ = rp.mean(0); nrm_ = np.linalg.svd(rp - cen_)[2][2]
+            nrm_ = nrm_ if nrm_[2] > 0 else -nrm_
+            pf_ = float((((nip.vc + nip.dc)[sd_] - cen_) @ nrm_).max())
+            pv_ = float(((vsd - cen_) @ nrm_).max())
+            nip_chk['prot'].append((pf_, pv_))
+        if nip_chk['prot']:
+            log('  nipple protrusion (tip above the plane of the cap rim), fitted / VaM, L and R in mm: ' + '   '.join('%.2f / %.2f' % (1000 * a_, 1000 * b_) for a_, b_ in nip_chk['prot']))
+        # upperBody triangles flipped in the chest (within 12 cm in x, y of a nipple centre)
+        ubm = next((m for m in results if m.name == 'reika_upperBody_normal'), None)
+        if ubm is not None:
+            n0_, a0_ = sfio.face_normals(ubm.vc, ubm.faces); n1_, _ = sfio.face_normals(ubm.vc + ubm.dc, ubm.faces)
+            fl_ = (np.einsum('ij,ij->i', n0_, n1_) < 0) & (a0_ > 1e-12)
+            cf_ = ubm.vc[ubm.faces[fl_]].mean(1)
+            cn_ = np.array([nip.vc[np.sign(nip.vc[:, 0]) == sg].mean(0) for sg in (-1, 1)])
+            in_chest = (np.linalg.norm(cf_[:, None, :2] - cn_[None, :, :2], axis=2) < 0.12).any(1) if len(cf_) else np.zeros(0, bool)
+            nip_chk['flip_chest'] = int(in_chest.sum())
+            log('  reika_upperBody_normal flipped triangles: %d in all, %d in the chest (within 12 cm of a nipple)%s' % (
+                fl_.sum(), in_chest.sum(), '' if not fl_.any() else '; at (cm) ' + ' '.join('(%d %d %d)' % tuple(np.round(100 * c)) for c in cf_)))
 
     # --- write -------------------------------------------------------------------------------------------
     for m in results:
@@ -975,10 +1083,38 @@ def run(a, chk):
                            for k in ('vc', 'dc', 'vp', 'vp1', 'faces', 'face_group', 'uv')},
                         **{'%s|groups' % m.name: np.array(m.groups) for m in results})
     log('fit stage done in %.0f s' % (time.time() - t0))
-    summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, a.proportions, lid_chk, breast_diff[0] if breast_diff else None)
+    summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, a.proportions, lid_chk, breast_diff[0] if breast_diff else None, nip_chk)
     with open(os.path.join(chk, 'report.txt'), 'w', encoding='utf-8') as f:
         f.write('\n'.join(LOG) + '\n')
     return 0 if rep else 1
+
+
+def untangle_slivers(v, faces, d, region, iters=50):
+    """Flipped triangles (normal reversed between v and v + d) touching region that are slivers: the vertex opposite the
+    longest edge gets the offset interpolated along that edge (its projection parameter), repeated until none is left or
+    iters passes. Returns (d, flipped before, flipped after)."""
+    reg = region[faces].any(1)
+
+    def bad(dd):
+        a = np.cross(v[faces[:, 1]] - v[faces[:, 0]], v[faces[:, 2]] - v[faces[:, 0]])
+        w = v + dd
+        b = np.cross(w[faces[:, 1]] - w[faces[:, 0]], w[faces[:, 2]] - w[faces[:, 0]])
+        return (np.einsum('ij,ij->i', a, b) < 0) & (np.linalg.norm(a, axis=1) > 1e-14) & reg
+    d = d.copy()
+    first = int(bad(d).sum())
+    for _ in range(iters):
+        bf = np.flatnonzero(bad(d))
+        if not len(bf):
+            break
+        for fi in bf:
+            t = faces[fi]
+            L = [np.linalg.norm(v[t[(k + 1) % 3]] - v[t[(k + 2) % 3]]) for k in range(3)]   # L[k]: edge opposite vertex k
+            k = int(np.argmax(L))
+            m, p, q = t[k], t[(k + 1) % 3], t[(k + 2) % 3]
+            e = v[q] - v[p]
+            u = float(np.clip(np.dot(v[m] - v[p], e) / max(np.dot(e, e), 1e-30), 0, 1))
+            d[m] = (1 - u) * d[p] + u * d[q]
+    return d, first, int(bad(d).sum())
 
 
 def untangle_toward(v, faces, d, target, region, rings=2, step=0.25, iters=60):
@@ -1010,7 +1146,7 @@ def untangle_toward(v, faces, d, target, region, rings=2, step=0.25, iters=60):
     return d, first, int(bad(d).sum())
 
 
-def summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, proportions, lid_chk=(), breast_diff=None):
+def summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, proportions, lid_chk=(), breast_diff=None, nip_chk=None):
     """PASS/WARN lines for the things that matter, printed and written to _check/summary.txt (the Blender stage
     appends its texture line). Thresholds: eyes open, face metrics within 3 mm of VaM, fit residual mean < 0.5 mm,
     flipped triangles per main skin mesh < 0.5 %, largest offset < 6 cm, joint offsets only on the face."""
@@ -1043,6 +1179,17 @@ def summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, pr
         add(False, 'face metrics vs VaM: not measured (%s)' % ('--proportions vam' if proportions == 'vam' else 'see WARN lines'))
     if breast_diff is not None:
         add(breast_diff < 0.003, 'breast projection vs VaM (limit 3 mm): worst %.1f mm' % (1000 * breast_diff))
+    if nip_chk:
+        add(nip_chk['mean'] < 0.0008, 'VaM nipples vs her fitted skin incl. the nipple cap (limit 0.8 mm): mean distance to the surface %.2f mm' % (1000 * nip_chk['mean']))
+        if nip_chk['prot']:
+            dp = max(abs(a_ - b_) for a_, b_ in nip_chk['prot'])
+            add(dp < 0.001, 'nipple protrusion vs VaM (limit 1 mm): worst difference %.2f mm (fitted %s mm, VaM %s mm)' % (
+                1000 * dp, '/'.join('%.1f' % (1000 * a_) for a_, b_ in nip_chk['prot']), '/'.join('%.1f' % (1000 * b_) for a_, b_ in nip_chk['prot'])))
+        cap_m = next((m for m in results if m.name == 'reika_nipple_type_1'), None)
+        if cap_m is not None:
+            add(cap_m.stats['emax'] <= 1.7, 'nipple cap edge stretch p99.9 %.2f (limit 1.7)' % cap_m.stats['emax'])
+        if 'flip_chest' in nip_chk:
+            add(nip_chk['flip_chest'] == 0, 'upperBody triangles flipped in the chest: %d (limit 0)' % nip_chk['flip_chest'])
     mm = wmatch > 0
     if mm.any():
         r = float(dist[mm].mean())

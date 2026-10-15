@@ -6,8 +6,13 @@ smoothness as emission of VaM's _GlossTex (Non-Color). _SpecTex is skipped: the 
 
 Memory: every target is an 8-bit image (an 8K float image would be 1 GB). The no-hit fill after the bake runs on the
 image saved as a raw BMP, memory-mapped and processed in row chunks, so no full-size float array is ever built.
+
+Face-only variant (the game keeps her body skin and uses only the character's face skin): the face texture fades into
+HER face texture near the neck seam so the seam does not show, and its tone shifts toward hers. Needs her original
+textures, exported by the plugin into the game export folder (SFP_GAME_EXPORT, set by run.ps1).
 """
 import os
+import re
 import time
 
 import bpy
@@ -24,6 +29,15 @@ TARGETS = {
 RES_DIV = {'reika_body': 1, 'reika_face_a': 2, 'reika_foot': 2}
 MARGIN_MUL = {'reika_foot': 2}   # the foot was baked at half the size with the same 24 px margin
 KINDS = ('albedo', 'normal', 'smooth')
+# face-only variant
+FACE_MAT = 'reika_face_a'
+SEAM_NEIGHBOURS = ('reika_neck', 'reika_upperBody_normal')   # her meshes that meet the face at the neck seam
+SEAM_TOL = 5e-5            # m (0.05 mm): a face vertex this close to a neck/body vertex is a seam vertex
+FACE_BAND_MM = 25.0        # width of the fade: w = 0 at the seam (all hers) -> 1 this far inside (all VaM)
+TONE_STRENGTH = 1.0        # 0 = no tone shift, 1 = full per-channel gain (mean_her / mean_vam in the band)
+GAIN_RANGE = (0.6, 1.6)
+BAND_LO, BAND_HI = 0.2, 0.8   # pixels with w in this range are compared for the tone shift
+NO_EXPORT_MSG = 'export her again from the Presets tab to get the face-only seam blend'
 JPEG_QUALITY = 95
 CHUNK_ROWS = 256   # rows per step of the no-hit fill
 # shells and canals that sit off the VaM surface: their rays hit at grazing angles, so they keep a flat normal
@@ -85,21 +99,37 @@ def load_image(path, kind, log):
     return im
 
 
+def normal_layout(px):
+    """Which layout a normal map's pixels (N x 4, 0..1) are in: 'dxt5nm' (X in alpha, Y in green, red 1),
+    'bc5' (X in red, Y in green, blue ~0, alpha ~1) or 'rgb'."""
+    s = px[::101]
+    if s[:, 0].mean() > 0.95 and s[:, 2].mean() < 0.8:
+        return 'dxt5nm'
+    if s[:, 2].mean() < 0.1 and s[:, 3].mean() > 0.95:
+        return 'bc5'
+    return 'rgb'
+
+
 def unswizzle(im, path, log):
     im.colorspace_settings.name = 'Non-Color'
     w, h = im.size
     px = np.empty(w * h * 4, np.float32)
     im.pixels.foreach_get(px)
     px = px.reshape(-1, 4)
-    s = px[::101]
-    if s[:, 0].mean() > 0.95 and s[:, 2].mean() < 0.8:  # DXT5nm as read back from the GPU: X in alpha, Y in green
+    lay = normal_layout(px)
+    if lay == 'dxt5nm':  # as read back from the GPU: X in alpha, Y in green
         x = px[:, 3] * 2 - 1; y = px[:, 1] * 2 - 1
         z = np.sqrt(np.clip(1 - x * x - y * y, 0, 1))
         px[:, 0] = px[:, 3]; px[:, 2] = z * 0.5 + 0.5; px[:, 3] = 1
+    elif lay == 'bc5':  # X in red, Y in green, Z dropped: rebuild it
+        x = px[:, 0] * 2 - 1; y = px[:, 1] * 2 - 1
+        z = np.sqrt(np.clip(1 - x * x - y * y, 0, 1))
+        px[:, 2] = z * 0.5 + 0.5; px[:, 3] = 1
+    if lay != 'rgb':
         im.pixels.foreach_set(px.ravel())
         im.update()
         im.pack()  # keep the fixed pixels (otherwise Cycles reloads the file)
-        log('  %s: unswizzled DXT5nm normal map' % os.path.basename(path))
+        log('  %s: unswizzled %s normal map' % (os.path.basename(path), 'DXT5nm' if lay == 'dxt5nm' else 'BC5'))
     return im
 
 
@@ -272,6 +302,322 @@ def fill_and_save(img, res, kind, fill_rgb, sentinel, path, sc, scratch, log):
     bpy.data.images.remove(im2)
     os.remove(tmp)
     return n_miss / float(res * res)
+
+
+# ---- face-only variant ---------------------------------------------------------------------------------------
+def smoothstep(x):
+    x = np.clip(x, 0.0, 1.0)
+    return x * x * (3.0 - 2.0 * x)
+
+
+def srgb_to_lin(c):
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4).astype(np.float32)
+
+
+def lin_to_srgb(c):
+    c = np.clip(c, 0.0, 1.0)
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1 / 2.4) - 0.055).astype(np.float32)
+
+
+def kdtree():
+    """scipy's cKDTree; Blender's Python does not always see run.ps1's PYTHONPATH, so look in the pipeline's private
+    scipy folder (%LOCALAPPDATA%\SfMorph\pydeps) too."""
+    try:
+        from scipy.spatial import cKDTree
+    except ImportError:
+        import sys
+        sys.path.append(os.path.join(os.environ.get('LOCALAPPDATA', ''), 'SfMorph', 'pydeps'))
+        from scipy.spatial import cKDTree
+    return cKDTree
+
+
+def seam_weights(Z, log):
+    """Per-vertex fade weight of her face mesh. Seam vertices = face vertices that coincide (< SEAM_TOL on the bind
+    positions vc) with a neck / upper-body vertex; the eye, mouth and nostril holes do not touch those meshes, so they
+    are never seam. w = smoothstep(distance to the nearest seam vertex / band). Returns (w, seam vertex indices)."""
+    cKDTree = kdtree()
+    vc = Z[FACE_MAT + '|vc'].astype(np.float64)
+    seam = np.zeros(len(vc), bool)
+    for n in SEAM_NEIGHBOURS:
+        if n + '|vc' in Z.files:
+            d, _ = cKDTree(Z[n + '|vc'].astype(np.float64)).query(vc)
+            seam |= d < SEAM_TOL
+    idx = np.nonzero(seam)[0]
+    if len(idx) == 0:
+        return None, idx
+    d, _ = cKDTree(vc[idx]).query(vc)
+    w = smoothstep(d / (FACE_BAND_MM * 1e-3))
+    log('face-only: %d seam vertices, fade band %.0f mm (%d of %d vertices inside the band)' % (
+        len(idx), FACE_BAND_MM, int(((w > 0) & (w < 1)).sum()), len(vc)))
+    return w.astype(np.float32), idx
+
+
+def read_textures_txt(gdir):
+    """Her exported textures, found only through textures.txt in the game export folder:
+        material <TAB> property <TAB> file <TAB> format <TAB> size        (file/format/size are '-' when missing)
+        # material <TAB> colour property <TAB> r g b a                    (second block: her original tints)
+    Returns ({(material, property): path}, {(material, property): (r, g, b)}); (None, None) without textures.txt."""
+    path = os.path.join(gdir, 'textures.txt') if gdir else ''
+    if not path or not os.path.isfile(path):
+        return None, None
+    tex, tint = {}, {}
+    with open(path, encoding='utf-8') as f:
+        for l in f.read().splitlines():
+            if not l.strip() or l.startswith('#'):
+                continue
+            t = l.split('\t')
+            if len(t) >= 5:   # texture row
+                fn = t[2].strip()
+                if fn and fn != '-':
+                    tex[(t[0].strip(), t[1].strip())] = os.path.join(gdir, fn)
+            elif len(t) >= 3:   # colour row
+                nums = re.findall(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', t[2])
+                if len(nums) >= 3:
+                    tint[(t[0].strip(), t[1].strip())] = tuple(float(x) for x in nums[:3])
+    return tex, tint
+
+
+def face_material_key(tex, tint):
+    """Her face material's name in textures.txt: reika_face_a, else any material containing 'reika_face'."""
+    names = [m for m, _ in list(tex) + list(tint)]
+    if FACE_MAT in names:
+        return FACE_MAT
+    for m in names:
+        if 'reika_face' in m.lower():
+            return m
+    return None
+
+
+def read_pixels(path, res, log):
+    """A texture file as a float32 (res, res, 4) array of its stored values (0..1, no colour management), resampled to
+    res when it has another size."""
+    im = bpy.data.images.load(path, check_existing=False)
+    try:
+        im.colorspace_settings.name = 'Non-Color'
+        try:
+            im.alpha_mode = 'CHANNEL_PACKED'
+        except Exception:  # noqa: BLE001
+            pass
+        w, h = im.size
+        if w == 0 or h == 0:
+            raise ValueError('texture has no pixels')
+        if (w, h) != (res, res):
+            log('  %s: %dx%d resampled to %dx%d' % (os.path.basename(path), w, h, res, res))
+            im.scale(res, res)
+        px = np.empty(res * res * 4, np.float32)
+        im.pixels.foreach_get(px)
+    finally:
+        bpy.data.images.remove(im)
+    return px.reshape(res, res, 4)
+
+
+def write_image(arr, res, path, fmt, quality=None):
+    """arr: float32 (res, res, 3) stored values; written as 8-bit RGB with no colour transform."""
+    img = bpy.data.images.new('sfp_out', res, res, alpha=False, float_buffer=False)
+    try:
+        img.colorspace_settings.name = 'Non-Color'
+        rgba = np.ones((res, res, 4), np.float32)
+        rgba[:, :, :3] = arr
+        img.pixels.foreach_set(rgba.ravel())
+        img.update()
+        img.filepath_raw = path
+        img.file_format = fmt
+        if quality is not None:
+            img.save(filepath=path, quality=quality)
+        else:
+            img.save()
+    finally:
+        bpy.data.images.remove(img)
+
+
+def bake_seam_mask(Z, w, make_obj, u2b, res, sc, scratch, out, log):
+    """Bake the per-vertex fade weight w into her face UV space (colour attribute -> emission -> 8-bit Non-Color
+    image, same no-hit fill and margin as the other maps). Returns the saved mask path."""
+    n = FACE_MAT
+    g = [str(x) for x in Z[n + '|groups']]
+    f = Z[n + '|faces'][Z[n + '|face_group'] == g.index(FACE_MAT)]
+    uv = Z[n + '|uv'].copy()
+    uv -= np.floor(np.median(uv[np.unique(f)], axis=0))
+    tgt = img = tm = None
+    try:
+        tgt = make_obj('tgt_seam', u2b(Z[n + '|vp1']), f, uv)
+        ca = tgt.data.color_attributes.new('sfp_w', 'FLOAT_COLOR', 'POINT')
+        col = np.zeros((len(w), 4), np.float32)
+        col[:, 0] = col[:, 1] = col[:, 2] = w; col[:, 3] = 1.0
+        ca.data.foreach_set('color', col.ravel())
+        img = bpy.data.images.new('seam_mask', res, res, alpha=False, float_buffer=False)
+        img.generated_color = (0.0, 0.0, 0.0, 1.0)
+        img.colorspace_settings.name = 'Non-Color'
+        tm = bpy.data.materials.new('tm_seam')
+        tm.use_nodes = True
+        nt = tm.node_tree
+        for nd in list(nt.nodes):
+            nt.nodes.remove(nd)
+        outn = nt.nodes.new('ShaderNodeOutputMaterial')
+        at = nt.nodes.new('ShaderNodeAttribute'); at.attribute_name = 'sfp_w'; at.attribute_type = 'GEOMETRY'
+        emi = nt.nodes.new('ShaderNodeEmission')
+        nt.links.new(at.outputs['Color'], emi.inputs['Color'])
+        nt.links.new(emi.outputs['Emission'], outn.inputs['Surface'])
+        node = nt.nodes.new('ShaderNodeTexImage'); node.image = img
+        nt.nodes.active = node
+        tgt.data.materials.clear(); tgt.data.materials.append(tm)
+        bpy.ops.object.select_all(action='DESELECT')
+        tgt.select_set(True)
+        bpy.context.view_layer.objects.active = tgt
+        sc.render.bake.use_selected_to_active = False
+        sc.render.bake.margin = max(8, 24 * res // 4096)
+        sc.render.bake.margin_type = 'EXTEND'
+        sc.render.bake.target = 'IMAGE_TEXTURES'
+        sc.render.bake.use_clear = True
+        bpy.ops.object.bake(type='EMIT')
+        sc.render.image_settings.file_format = 'PNG'
+        sc.render.image_settings.color_depth = '8'
+        sc.render.image_settings.color_mode = 'RGB'
+        path = os.path.join(out, 'tex_%s_seam.png' % FACE_MAT)
+        fill_and_save(img, res, 'seam', (0.0, 0.0, 0.0), None, path, sc, scratch, log)   # no-hit = all hers (w = 0)
+        return path
+    finally:
+        if tgt is not None:
+            bpy.data.objects.remove(tgt, do_unlink=True)
+        if img is not None:
+            bpy.data.images.remove(img)
+        if tm is not None:
+            bpy.data.materials.remove(tm)
+
+
+def log_band_width(Z, w, idx, mask, res, log):
+    """How wide the fade is in texture pixels: from the face triangles (UV area per 3D area) and measured on the mask
+    (distance from the seam vertices' UVs to the first pixels with w > 0.97)."""
+    n = FACE_MAT
+    g = [str(x) for x in Z[n + '|groups']]
+    f = Z[n + '|faces'][Z[n + '|face_group'] == g.index(FACE_MAT)]
+    uv = Z[n + '|uv'].astype(np.float64)
+    uv -= np.floor(np.median(uv[np.unique(f)], axis=0))
+    vc = Z[n + '|vc'].astype(np.float64) * 1000.0   # mm
+    wm = w[f].mean(1)
+    sel = (wm > 0.05) & (wm < 0.95)
+    if sel.any():
+        t = f[sel]
+        a3 = 0.5 * np.linalg.norm(np.cross(vc[t[:, 1]] - vc[t[:, 0]], vc[t[:, 2]] - vc[t[:, 0]]), axis=1).sum()
+        e1 = uv[t[:, 1]] - uv[t[:, 0]]; e2 = uv[t[:, 2]] - uv[t[:, 0]]
+        a2 = 0.5 * np.abs(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]).sum() * res * res
+        pxmm = float(np.sqrt(a2 / a3))
+        log('face-only: band %.0f mm = about %.0f px (%.2f px/mm at the seam, %dx%d texture)' % (FACE_BAND_MM, FACE_BAND_MM * pxmm, pxmm, res, res))
+    try:
+        cKDTree = kdtree()
+        ys, xs = np.nonzero(mask[::4, ::4] > 0.97)
+        if len(xs):
+            seam_px = uv[idx] * res
+            d, _ = cKDTree(seam_px).query(np.stack([xs * 4.0, ys * 4.0], 1))
+            log('face-only: on the baked mask w > 0.97 starts %.0f px from the nearest seam vertex' % d.min())
+    except Exception as e:  # noqa: BLE001
+        log('face-only: band width on the mask not measured (%s)' % e)
+
+
+def face_only(Z, names, out, size, make_obj, u2b, log):
+    """Build the face-only albedo/normal. Returns ([(mat, kind, file)], summary row)."""
+    row = 'face-only seam blend: '
+    res = size // RES_DIV[FACE_MAT]
+    gdir = os.environ.get('SFP_GAME_EXPORT', '')
+    tex, tints = read_textures_txt(gdir)
+    fm = face_material_key(tex, tints) if tex is not None else None
+    her_col = tex.get((fm, '_ColorMap')) if fm else None
+    if not her_col or not os.path.isfile(her_col):
+        log('WARN: her original face texture not found (%s): %s' % (
+            'SFP_GAME_EXPORT not set' if not gdir else ('no textures.txt in ' + gdir if tex is None else 'no _ColorMap listed for the face material'),
+            NO_EXPORT_MSG))
+        return [], 'WARN  ' + row + 'her original textures are missing, ' + NO_EXPORT_MSG
+    her_nrm = tex.get((fm, '_NormalMap'))
+    vam_a = os.path.join(out, 'tex_%s_albedo.jpg' % FACE_MAT)
+    vam_n = os.path.join(out, 'tex_%s_normal.png' % FACE_MAT)
+    if not os.path.isfile(vam_a):
+        return [], 'WARN  ' + row + 'the face albedo was not baked, so no face-only variant'
+    if FACE_MAT + '|vc' not in Z.files or not any(n + '|vc' in Z.files for n in SEAM_NEIGHBOURS):
+        return [], 'WARN  ' + row + 'her face / neck meshes are not in the stage data'
+    w, idx = seam_weights(Z, log)
+    if w is None:
+        return [], 'WARN  ' + row + 'no face vertex coincides with the neck or body: no seam found'
+    t0 = time.time()
+    sc = bpy.context.scene
+    scratch = os.path.join(out, '_check')
+    mpath = bake_seam_mask(Z, w, make_obj, u2b, res, sc, scratch, out, log)
+    mask = read_pixels(mpath, res, log)[:, :, 0].copy()
+    log_band_width(Z, w, idx, mask, res, log)
+    tint, tsrc = (1.0, 1.0, 1.0), 'white (no tint listed)'
+    for p in ('_SkinColor', '_BaseColor', '_Color'):
+        if (fm, p) in tints:
+            tint, tsrc = tints[(fm, p)], p
+            break
+    t = np.maximum(np.array(tint, np.float32), 0.02)
+    log('face-only: her face tint %s from %s' % (np.round(tint, 3), tsrc))
+    written = []
+    # --- albedo (linear space) ---
+    her = srgb_to_lin(read_pixels(her_col, res, log)[:, :, :3])
+    vam = srgb_to_lin(read_pixels(vam_a, res, log)[:, :, :3])
+    band = (mask > BAND_LO) & (mask < BAND_HI)
+    nb = int(band.sum())
+    gain = np.ones(3, np.float32)
+    if nb >= 200:
+        mh = her[band].mean(0); mv = vam[band].mean(0)
+        gain = np.clip(mh / np.maximum(mv, 1e-4), *GAIN_RANGE)
+        gain = (gain ** TONE_STRENGTH).astype(np.float32)
+        log('face-only: tone shift over %d band pixels: her mean %s, VaM mean %s -> gain %s' % (
+            nb, np.round(mh, 3), np.round(mv, 3), np.round(gain, 3)))
+    else:
+        log('face-only: only %d band pixels, no tone shift' % nb)
+    for r0 in range(0, res, 512):
+        s = slice(r0, r0 + 512)
+        m = mask[s][:, :, None]
+        her[s] = np.clip(her[s] * (1 - m) + (vam[s] * gain / t) * m, 0.0, 1.0)
+    del vam
+    apath = os.path.join(out, 'tex_%s_albedo_faceonly.jpg' % FACE_MAT)
+    write_image(lin_to_srgb(her), res, apath, 'JPEG', quality=JPEG_QUALITY)
+    written.append((FACE_MAT, 'albedo_faceonly', os.path.basename(apath)))
+    del her
+    # --- normal ---
+    note = ''
+    if her_nrm and os.path.isfile(her_nrm) and os.path.isfile(vam_n):
+        hp = read_pixels(her_nrm, res, log)
+        lay = normal_layout(hp.reshape(-1, 4))
+        if lay == 'dxt5nm':
+            hx = hp[:, :, 3] * 2 - 1; hy = hp[:, :, 1] * 2 - 1
+        else:
+            hx = hp[:, :, 0] * 2 - 1; hy = hp[:, :, 1] * 2 - 1
+        hz = hp[:, :, 2] * 2 - 1 if lay == 'rgb' else np.sqrt(np.clip(1 - hx * hx - hy * hy, 0, 1))
+        del hp
+        vp = read_pixels(vam_n, res, log)[:, :, :3] * 2 - 1
+        out_n = np.empty((res, res, 3), np.float32)
+        for r0 in range(0, res, 512):
+            s = slice(r0, r0 + 512)
+            m = mask[s]
+            nx = hx[s] * (1 - m) + vp[s, :, 0] * m
+            ny = hy[s] * (1 - m) + vp[s, :, 1] * m
+            nz = hz[s] * (1 - m) + vp[s, :, 2] * m
+            ln = np.maximum(np.sqrt(nx * nx + ny * ny + nz * nz), 1e-6)
+            out_n[s, :, 0] = nx / ln * 0.5 + 0.5; out_n[s, :, 1] = ny / ln * 0.5 + 0.5; out_n[s, :, 2] = nz / ln * 0.5 + 0.5
+        npath = os.path.join(out, 'tex_%s_normal_faceonly.png' % FACE_MAT)
+        write_image(out_n, res, npath, 'PNG')
+        written.append((FACE_MAT, 'normal_faceonly', os.path.basename(npath)))
+        log('face-only: her normal map layout %s' % lay)
+    else:
+        note = ' (no normal variant: ' + ('her normal map missing' if not (her_nrm and os.path.isfile(her_nrm)) else 'no baked face normal') + ')'
+        log('face-only:' + note)
+    log('face-only seam blend done in %.1f s' % (time.time() - t0))
+    return written, 'PASS  ' + row + '%d seam vertices, %.0f mm fade, gain %s, tint %s%s' % (
+        len(idx), FACE_BAND_MM, '/'.join('%.2f' % x for x in gain), '/'.join('%.2f' % x for x in tint), note)
+
+
+def add_summary_row(out, row):
+    """Put the face-only row into _check/summary.txt (blend.py's own rows are added after it and keep it)."""
+    path = os.path.join(out, '_check', 'summary.txt')
+    lines = []
+    if os.path.exists(path):
+        with open(path, encoding='utf-8') as f:
+            lines = [l for l in f.read().splitlines() if l and 'face-only seam blend' not in l]
+    if not lines:
+        return
+    with open(path, 'w', encoding='utf-8', newline='\n') as f:
+        f.write('\n'.join(lines + [row]) + '\n')
 
 
 def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
@@ -456,6 +802,14 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
                     bpy.data.images.remove(img)
                 if tm is not None:
                     bpy.data.materials.remove(tm)
+    extra = []   # face-only variant lines (not counted in `written`: blend.py expects the 9 main maps there)
+    if FACE_MAT in names and any(m == FACE_MAT and k == 'albedo' for m, k, _ in written):
+        try:
+            extra, row = face_only(Z, names, out, size, make_obj, u2b, log)
+        except Exception as e:  # noqa: BLE001
+            extra, row = [], 'WARN  face-only seam blend: failed (%s: %s)' % (type(e).__name__, e)
+            log('WARN: ' + row)
+        add_summary_row(out, row)
     # character.txt: replace any texture lines from an earlier bake, then list this one's
     cpath = os.path.join(out, 'character.txt')
     keep_lines = []
@@ -465,6 +819,6 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
     with open(cpath, 'w', encoding='utf-8', newline='\n') as f:
         for l in keep_lines:
             f.write(l + '\n')
-        for mat, kind, fn in written:
+        for mat, kind, fn in written + extra:
             f.write('texture\t%s\t%s\t%s\n' % (mat, kind, fn))
     return written, WARNS

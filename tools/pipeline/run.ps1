@@ -10,7 +10,8 @@ SF Body Morphs character pipeline: a VaM character's shape and skin onto her, fo
 
 Paths are remembered in %LOCALAPPDATA%\SfMorph\pipeline.json (-NoSave: not this time), so later runs need nothing.
 Inputs: the VaM export(s) above and the newest folder in <Game>\BepInEx\config\SfMorphs\export\ (override with
--VamExport / -GameExport). -TextureSize is the body's texture size (default 8192; face and foot get half): albedo, normal and smoothness maps. Output: <Game>\BepInEx\config\SfMorphs\morphs\<Name>\ (the game loads it from there; override
+-VamExport / -GameExport; its textures.txt + PNGs, exported from the Presets tab, give the face-only texture variant
+with a blended neck seam: without them that variant is skipped with a WARN). -TextureSize is the body's texture size (default 8192; face and foot get half): albedo, normal and smoothness maps. Output: <Game>\BepInEx\config\SfMorphs\morphs\<Name>\ (the game loads it from there; override
 the parent with -OutRoot), with _check\summary.txt (PASS/WARN lines), _check\report.txt and before/after renders.
 -All keeps going when a character fails and ends with a table; a failed character has no character.txt, so the game
 ignores it and the next -All tries it again.
@@ -153,6 +154,7 @@ function Convert-Export($exportDir, $charName, $quiet) {
         }
         $args2 = @('-b', '--factory-startup', '--python-exit-code', '1', '-P', (Join-Path $here 'blend.py'), '--', '--out', $out, '--vam', $exportDir, '--size', $TextureSize)
         if ($NoBake) { $args2 += '--no-bake' }
+        $env:SFP_GAME_EXPORT = $GameExport   # bake.py: her original textures (textures.txt) for the face-only seam blend
         & $Blender @args2 2>&1 | ForEach-Object {
             $t = "$_"; Add-Content $runLog $t -Encoding UTF8
             if ($t -match '^\[blend\]' -and (-not $quiet -or $t -match 'WARN|baked|done in')) { Write-Host $t }

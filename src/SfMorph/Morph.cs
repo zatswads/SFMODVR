@@ -94,6 +94,15 @@ namespace SfMorph
 
         public string TexturePath(string file) { return Path.Combine(Dir, file); }
 
+        // 'texture <mat> albedo_faceonly|normal_faceonly <file>': a face texture pre-compensated for the game's tint, for the
+        // face-only mode (face skin on, body skin off). True when this material has one for the kind (albedo/normal) and the file exists.
+        public bool HasFaceOnly(string mat, string kind)
+        {
+            foreach (var t in Textures)
+                if (t[0] == mat && string.Equals(t[1], kind + "_faceonly", StringComparison.OrdinalIgnoreCase) && File.Exists(TexturePath(t[2]))) return true;
+            return false;
+        }
+
         // Her whole fitted skin + bind poses as the pipeline wrote them (skin.txt, binds.txt): what clothes and outfit
         // body variants follow, whichever of her meshes the scene uses. Null for characters made before 0.6.2.
         SkinRef _ref; bool _refTried;
@@ -214,6 +223,7 @@ namespace SfMorph
         readonly Dictionary<string, Texture2D> _tex = new Dictionary<string, Texture2D>();
         readonly HashSet<string> _badTex = new HashSet<string>();
         readonly Dictionary<Material, Dictionary<string, Color>> _savedCol = new Dictionary<Material, Dictionary<string, Color>>();
+        readonly Dictionary<Material, Texture> _normalApplied = new Dictionary<Material, Texture>();   // the baked normal map we put in each material
         readonly List<SkinnedMeshRenderer> _hidden = new List<SkinnedMeshRenderer>();   // renderers we switched off ('hide' lines); only these get switched back on
         static readonly HashSet<string> _loggedProps = new HashSet<string>();
         readonly Dictionary<Transform, Vector3> _jointLocal = new Dictionary<Transform, Vector3>();
@@ -601,9 +611,14 @@ namespace SfMorph
                     {
                         if (((t[0].IndexOf("face", StringComparison.OrdinalIgnoreCase) >= 0) ? 1 : 2) is int part && (key & part) == 0) continue;
                         if (t[0] != mname) continue;
+                        // face-only mode (face skin on, body skin off): the *_faceonly files replace the plain ones where present
+                        bool fo = t[1].EndsWith("_faceonly", StringComparison.OrdinalIgnoreCase);
+                        string baseKind = fo ? t[1].Substring(0, t[1].Length - "_faceonly".Length) : t[1];
+                        if (fo && key != 1) continue;
+                        if (!fo && key == 1 && (baseKind == "albedo" || baseKind == "normal") && set.HasFaceOnly(t[0], baseKind)) continue;
                         if (_loggedMats.Add(mname))
                             Plugin.Log.LogInfo("Material '" + mname + "' (" + mat.shader.name + ") textures: " + string.Join(", ", mat.GetTexturePropertyNames()));
-                        string kind = t[1] == "normal" ? "normal" : t[1] == "smooth" ? "smooth" : "albedo";
+                        string kind = baseKind == "normal" ? "normal" : baseKind == "smooth" ? "smooth" : "albedo";
                         if (kind == "smooth" && !UseSmoothness) continue;
                         bool normal = kind == "normal";
                         string prop = null;
@@ -616,14 +631,25 @@ namespace SfMorph
                         string info;
                         var tex = Load(set, t[2], kind, out info);
                         if (_loggedProps.Add(mname)) LogProps(mname, mat);
-                        if (tex != null && kind == "albedo") WhiteTint(mat);
-                        if (tex == null || mat.GetTexture(prop) == tex) continue;
+                        // the face-only albedo is pre-compensated for the game's tint: keep the tint then (the neck seam matches her tinted body)
+                        if (tex != null && kind == "albedo" && !fo) WhiteTint(mat);
+                        if (tex != null && normal) _normalApplied[mat] = tex;
+                        if (tex == null) continue;
+                        var curTex = mat.GetTexture(prop);
+                        if (curTex == tex) continue;   // already applied
                         Dictionary<string, Saved> sv;
                         if (!_saved.TryGetValue(mat, out sv)) { sv = new Dictionary<string, Saved>(); _saved[mat] = sv; }
+                        if (curTex != null && Wrinkles.Owns(curTex))
+                        {
+                            // the wrinkle pass owns the slot (any kind: its debug view uses the albedo): don't write and never
+                            // save its texture as "the original"; the true original is the base it saw (null = leave it to Wrinkles)
+                            if (!sv.ContainsKey(prop)) sv[prop] = new Saved { Tex = WrinklesBase(mat, prop), Keyword = mat.IsKeywordEnabled("_NORMALMAP") };
+                            continue;
+                        }
                         if (!sv.ContainsKey(prop)) sv[prop] = new Saved { Tex = mat.GetTexture(prop), Keyword = mat.IsKeywordEnabled("_NORMALMAP") };
                         mat.SetTexture(prop, tex);
                         if (normal) mat.EnableKeyword("_NORMALMAP");
-                        done.Add(mname + "." + prop + " [" + kind + "] (" + info + ")");
+                        done.Add(mname + "." + prop + " [" + (fo ? kind + " faceonly" : kind) + "] (" + info + ")");
                     }
                 }
             }
@@ -631,6 +657,20 @@ namespace SfMorph
             if (_loadMs > 3000.0)
                 Plugin.Log.LogInfo("Loading the textures took " + (_loadMs / 1000.0).ToString("0.0", CultureInfo.InvariantCulture)
                                    + " s; the bake size can be lowered with run.ps1 -TextureSize 4096");
+        }
+
+        // Wrinkles.BaseOf(Material, string) when the wrinkle pass provides it (by reflection: it may not exist yet)
+        static System.Reflection.MethodInfo _wrBase; static bool _wrBaseTried;
+        static Texture WrinklesBase(Material m, string prop)
+        {
+            if (!_wrBaseTried)
+            {
+                _wrBaseTried = true;
+                _wrBase = typeof(Wrinkles).GetMethod("BaseOf", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static,
+                                                      null, new[] { typeof(Material), typeof(string) }, null);
+            }
+            try { return _wrBase != null ? _wrBase.Invoke(null, new object[] { m, prop }) as Texture : null; }
+            catch { return null; }
         }
 
         static readonly string[] TintProps = { "_SkinColor", "_BaseColor", "_Color" };
@@ -734,13 +774,39 @@ namespace SfMorph
             return t;
         }
 
+        // The baked normal map this material has in its _NormalMap/_BumpMap slot while the skin textures are on (the face-only
+        // variant when that one is applied); null otherwise.
+        public Texture NormalFor(Material m)
+        {
+            Texture t;
+            return _texOn && m != null && _normalApplied.TryGetValue(m, out t) ? t : null;
+        }
+
+        // Her own texture / colour in a material, whatever the converted character has put there since.
+        internal Texture OriginalTexture(Material m, string prop)
+        {
+            Dictionary<string, Saved> sv; Saved sd;
+            if (m != null && _saved.TryGetValue(m, out sv) && sv.TryGetValue(prop, out sd)) return sd.Tex;
+            return m != null && m.HasProperty(prop) ? m.GetTexture(prop) : null;
+        }
+
+        internal Color OriginalColor(Material m, string prop)
+        {
+            Dictionary<string, Color> sc; Color c;
+            if (_savedCol.TryGetValue(m, out sc) && sc.TryGetValue(prop, out c)) return c;
+            return m.GetColor(prop);
+        }
+
         void RestoreTextures()
         {
+            _normalApplied.Clear();
             foreach (var kv in _saved)
             {
                 if (kv.Key == null) continue;
                 foreach (var p in kv.Value)
                 {
+                    var cur = kv.Key.GetTexture(p.Key);
+                    if (p.Value.Tex == null && cur != null && Wrinkles.Owns(cur)) continue;   // base unknown: the wrinkle pass restores it
                     kv.Key.SetTexture(p.Key, p.Value.Tex);
                     if (p.Key == "_NormalMap" || p.Key == "_BumpMap") { if (p.Value.Keyword) kv.Key.EnableKeyword("_NORMALMAP"); else kv.Key.DisableKeyword("_NORMALMAP"); }
                 }
