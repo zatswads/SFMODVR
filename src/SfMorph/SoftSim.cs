@@ -57,6 +57,13 @@ namespace SfMorph
         readonly CapSource[] _srcOf = new CapSource[VrHands.MaxSources]; // the source behind each id this frame (names for the status)
         string _noSrcLabel = "";       // Owner/Kind of the capsules without a source that touched her this frame
         int _stamp, _nContacts;
+        // 0.8.0 impacts (design 4.1): a fresh fast contact on a soft zone -> Impacts (Ripple.Collect reads them after Simulate)
+        const float ImpactMinSpeed = 0.7f, ImpactGap = 0.3f;     // m/s approach along the skin's inward normal; s between impacts of one source / zone
+        // 0.8.0 Tissue.Zone: per zone stiffness / depth / damping multipliers (set at build) and this frame's values
+        float[] _zKMul, _zLimMul, _zDampMul, _zK, _zLim, _zDamp;
+        ulong[] _hPrevSrc;                                       // per helper: its SrcMask of the previous Simulate (is this source new on it?)
+        float[] _zLastImpact, _zLastApproach;                    // per zone: when and how fast the last impact was
+        readonly float[] _srcLastImpact = new float[VrHands.MaxSources];
         long _sig = -1;
         float _nextSummary, _peak;
         float _rL, _rR, _peakRL, _peakRR, _peakDL, _peakDR;   // smoothed resist per physics hand; peaks (resist, dent in m) since the last log line
@@ -81,6 +88,13 @@ namespace SfMorph
                 _zBulge[z] = Mathf.Min(0.25f, 0.25f * Zones[z].K / Mathf.Max(1, pts[z]));
             }
             _rL = _rR = 0f; _peakRL = _peakRR = _peakDL = _peakDR = 0f;
+            _zKMul = new float[Zones.Length]; _zLimMul = new float[Zones.Length]; _zDampMul = new float[Zones.Length];
+            _zK = new float[Zones.Length]; _zLim = new float[Zones.Length]; _zDamp = new float[Zones.Length];
+            for (int z = 0; z < Zones.Length; z++) Tissue.Zone(Zones[z].Id, out _zKMul[z], out _zLimMul[z], out _zDampMul[z]);
+            _hPrevSrc = new ulong[_helpers.Count]; _zLastImpact = new float[Zones.Length]; _zLastApproach = new float[Zones.Length];
+            for (int z = 0; z < Zones.Length; z++) _zLastImpact[z] = -10f;
+            for (int i = 0; i < _srcLastImpact.Length; i++) _srcLastImpact[i] = -10f;
+            ImpactCount = 0;
             _bL2W = new Matrix4x4[_bones.Count]; _bW2L = new Matrix4x4[_bones.Count]; _bOk = new bool[_bones.Count];
             _acc = 0f; _capVersion = -1; _nContacts = 0; _sig = -1; _stamp = 0; _peak = 0f;
         }
@@ -89,6 +103,8 @@ namespace SfMorph
         {
             DebugOff();
             _bL2W = _bW2L = null; _bOk = null; _zH0 = _zH1 = null; _zSigma = null; _zBulge = null; _zCnt = null; _zSeen = null; _zSag = null; _zSagV = null;
+            _hPrevSrc = null; _zLastImpact = _zLastApproach = null; ImpactCount = 0;
+            _zKMul = _zLimMul = _zDampMul = _zK = _zLim = _zDamp = null;
             _nContacts = 0; _sig = -1;
             _rL = _rR = 0f;
             if (_ownsResist) { LeftResist = RightResist = 0f; _ownsResist = false; }
@@ -227,6 +243,7 @@ namespace SfMorph
         // it. gravity 0 is exactly the 0.7.2 behaviour (Sag is the zero vector everywhere, every Sag term vanishes).
         public void Simulate(float dt, List<SoftCapsule> caps, float softness, float spring, bool debug, int quality = 1, float gravity = 0f)
         {
+            ImpactCount = 0;   // 0.8.0: this frame's impacts are filled by the contact loop below
             int nh = _helpers.Count;
             if (nh == 0 || _bL2W == null) { if (_dbgOn) DebugOff(); if (Contacts.Length > 0) Contacts = ""; return; }
             if (!(dt > 1e-5f)) return;   // paused
@@ -234,12 +251,17 @@ namespace SfMorph
             softness = Mathf.Clamp01(softness); spring = Mathf.Clamp01(spring);
             float k = Mathf.Lerp(400f, 120f, softness);
             float zeta = Mathf.Lerp(1f, 0.45f, spring);
-            float damp = 2f * zeta * Mathf.Sqrt(k);
             float inert = Mathf.Lerp(0f, 0.5f, spring);
             float limit = Mathf.Lerp(0.02f, 0.045f, softness);
             gravity = Mathf.Clamp01(gravity);
             if (gravity < 0.001f) gravity = 0f;
-            for (int z = 0; z < _zSagV.Length; z++) _zSagV[z] = gravity > 0f ? Vector3.down * (_zSag[z] * limit * gravity) : Vector3.zero;
+            // 0.8.0 (Tissue.Zone): each zone has its own stiffness, depth limit and damping: breasts softest and bounciest, outer thighs firm and shallow
+            for (int z = 0; z < _zSagV.Length; z++)
+            {
+                _zK[z] = k * _zKMul[z]; _zLim[z] = limit * _zLimMul[z];
+                _zDamp[z] = 2f * zeta * Mathf.Sqrt(_zK[z]) * _zDampMul[z];
+                _zSagV[z] = gravity > 0f ? Vector3.down * (_zSag[z] * _zLim[z] * gravity) : Vector3.zero;
+            }
 
             // the bones' matrices once (many helpers share a bone), and a destroyed bone silences its helpers
             for (int i = 0; i < _bones.Count; i++)
@@ -284,7 +306,7 @@ namespace SfMorph
                     _cLabel[i] = cp.Src != null ? null : cp.Owner + "/" + cp.Kind;
                 }
                 // alive unless its source is hidden this frame; a dead capsule is still tracked so its speed is right when it comes back
-                _cLive[i] = cp.Src == null || cp.Src.Live;
+                _cLive[i] = (cp.Src == null || cp.Src.Live) && (cp.Kind != "partnerBody" || PartnerBody);   // 0.8.0: his pelvis/thighs only with [Physics] PartnerBody
                 int sid = cp.Src != null ? cp.Src.Id : 0;
                 _cId[i] = sid > 0 && sid < VrHands.MaxSources ? sid : 0;
                 _cPA[i] = a; _cPB[i] = b; _cOk[i] = true;
@@ -301,6 +323,7 @@ namespace SfMorph
             for (int i = 0; i < nh; i++)
             {
                 var h = _helpers[i];
+                _hPrevSrc[i] = h.SrcMask;
                 h.Touched = false; h.Bulged = false; h.Push = Vector3.zero; h.HandMask = 0; h.SrcMask = 0UL;
                 if (!_bOk[h.BoneIdx]) continue;
                 var m = _bL2W[h.BoneIdx];
@@ -312,11 +335,12 @@ namespace SfMorph
                 Vector3 sag = _zSagV[h.ZoneIdx];
                 if (sag.x != 0f || sag.y != 0f || sag.z != 0f)
                 {
-                    float sn = Vector3.Dot(sag, h.N), lo = -SagOutward * limit;
+                    float zl = _zLim[h.ZoneIdx];
+                    float sn = Vector3.Dot(sag, h.N), lo = -SagOutward * zl;
                     if (sn < lo) { sag += h.N * (lo - sn); sn = lo; }
                     // the tangential part too: at most 0.5 limit, so with the clamp's own 0.5 limit of slide around it the total sideways stays <= limit
                     Vector3 stg = sag - h.N * sn;
-                    float tm = stg.sqrMagnitude, tcap = 0.5f * limit;
+                    float tm = stg.sqrMagnitude, tcap = 0.5f * zl;
                     if (tm > tcap * tcap) sag = h.N * sn + stg * (tcap / Mathf.Sqrt(tm));
                 }
                 h.Sag = sag;
@@ -347,7 +371,8 @@ namespace SfMorph
                 {
                     var h = _helpers[i];
                     if (h.Asleep) continue;
-                    h.Vel += ((h.Disp - h.Sag) * -k - h.Vel * damp) * Step;
+                    int zi = h.ZoneIdx;
+                    h.Vel += ((h.Disp - h.Sag) * -_zK[zi] - h.Vel * _zDamp[zi]) * Step;
                     h.Disp += h.Vel * Step;
                 }
                 _acc -= Step; steps++;
@@ -402,6 +427,9 @@ namespace SfMorph
                     if (_cId[ci] == 0) _noSrcLabel = _cLabel[ci] ?? "";
                     h.Touched = true; h.Asleep = false; h.LastCap = ci;
                     _cHit[ci] = true;
+                    Vector3 capVel = _cVA[ci] + (_cVB[ci] - _cVA[ci]) * t;
+                    float approach = Vector3.Dot(capVel, h.N);
+                    if (approach >= ImpactMinSpeed) NoteImpact(h, i, ci, approach, capVel, np);
                 }
                 if (h.Touched) h.Push = h.Disp - before;
             }
@@ -410,24 +438,27 @@ namespace SfMorph
             for (int i = 0; i < nh; i++)
             {
                 var h = _helpers[i];
-                if (!h.Asleep) Clamp(h, limit);
+                if (!h.Asleep) Clamp(h, _zLim[h.ZoneIdx]);
             }
 
             // 5b: how deep each physics hand is into her (the deepest touched point's inward dent, as a share of the limit), smoothed 0.1 s
-            float dentL = 0f, dentR = 0f;
+            // 0.8.0: the resistance a hand feels is Tissue.Resist of the part's own limit: soft parts let it sink first, firm ones push back sooner
+            float dentL = 0f, dentR = 0f, resL = 0f, resR = 0f;
             for (int i = 0; i < nh; i++)
             {
                 var h = _helpers[i];
                 if (!h.Touched || h.HandMask == 0) continue;
+                float zl = _zLim[h.ZoneIdx];
                 float dn = Vector3.Dot(h.Disp - h.Sag, h.N);   // what the hand pushed, not the sag under gravity
-                if (dn > limit) dn = limit;
-                if ((h.HandMask & 1) != 0 && dn > dentL) dentL = dn;
-                if ((h.HandMask & 2) != 0 && dn > dentR) dentR = dn;
+                if (dn > zl) dn = zl;
+                float rs = Tissue.Resist(dn, zl);
+                if ((h.HandMask & 1) != 0) { if (dn > dentL) dentL = dn; if (rs > resL) resL = rs; }
+                if ((h.HandMask & 2) != 0) { if (dn > dentR) dentR = dn; if (rs > resR) resR = rs; }
             }
             {
                 float ka = 1f - Mathf.Exp(-dt / 0.1f);
-                _rL += (Mathf.Clamp01(dentL / limit) - _rL) * ka;
-                _rR += (Mathf.Clamp01(dentR / limit) - _rR) * ka;
+                _rL += (resL - _rL) * ka;
+                _rR += (resR - _rR) * ka;
                 LeftResist = _rL; RightResist = _rR; _ownsResist = true;
                 if (_rL > _peakRL) _peakRL = _rL;
                 if (_rR > _peakRR) _peakRR = _rR;
@@ -454,7 +485,7 @@ namespace SfMorph
             for (int i = 0; i < nh; i++)
             {
                 var h = _helpers[i];
-                if (h.Bulged) Clamp(h, limit);
+                if (h.Bulged) Clamp(h, _zLim[h.ZoneIdx]);
             }
 
             // 7: write S, count the contacts
@@ -507,6 +538,30 @@ namespace SfMorph
 
             Report();
             if (debug) DebugDraw(nc); else if (_dbgOn) DebugOff();
+        }
+
+        // 0.8.0: a capsule touching a helper at `approach` m/s (along the skin's inward normal) is an impact when it is a fresh contact: its source was
+        // not on this helper last frame, or the zone's last impact is 0.3 s old and this one is 1.5x faster; and the source made none in 0.3 s. Her own
+        // capsules never. The four fastest of the frame are kept in Impacts (no allocation).
+        void NoteImpact(Helper h, int hi, int ci, float approach, Vector3 capVel, Vector3 at)
+        {
+            var src = _cSrc[ci];
+            if (src != null && src.Kind == "hers") return;
+            int id = _cId[ci], z = h.ZoneIdx;
+            float now = Time.time;
+            bool fresh = (_hPrevSrc[hi] & (1UL << id)) == 0UL;
+            if (!fresh && now - _zLastImpact[z] >= ImpactGap && approach >= 1.5f * _zLastApproach[z]) fresh = true;
+            if (!fresh || now - _srcLastImpact[id] < ImpactGap) return;
+            int slot;
+            if (ImpactCount < Impacts.Length) slot = ImpactCount++;
+            else
+            {
+                slot = 0;
+                for (int k = 1; k < Impacts.Length; k++) if (Impacts[k].Speed < Impacts[slot].Speed) slot = k;
+                if (approach <= Impacts[slot].Speed) return;
+            }
+            Impacts[slot] = new SoftImpact { P = at, Dir = capVel.normalized, Speed = approach, Bone = h.Bone, Zone = z, SrcId = id, By = src != null ? src.Name : _cLabel[ci] };
+            _zLastImpact[z] = now; _zLastApproach[z] = approach; _srcLastImpact[id] = now;
         }
 
         // sink in (along the inward normal) up to limit, rise up to 0.3 limit, slide up to 0.5 limit. With a sag the same room is left around the

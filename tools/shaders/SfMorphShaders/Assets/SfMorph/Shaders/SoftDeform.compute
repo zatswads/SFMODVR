@@ -3,9 +3,26 @@
 // skinning and before the cameras render: vertices of her soft areas are pressed out of the contact capsules (hands,
 // fingers) the way VaM's postSkinMorphs do, with a per-vertex softness mask and a depth limit. Only the current buffer
 // is written (the one drawn this frame, which Unity keeps as next frame's previous buffer), so HDRP's motion vectors
-// stay consistent. Normals are left alone.
+// stay consistent. Normals are left alone (v1).
+//
+// 0.8.0 contact v2 (kernels Depth ... MarksDecay below): a per-vertex field chain over the welded vertices (canonical id = the first copy's
+// vertex index; field buffers are V long, only canonical entries are meaningful):
+//   Depth -> Dilate x N (distance-decayed skirt over the vertex adjacency) -> Smooth x2 (narrow) -> Smooth x3 from it (wide)
+//   -> Compose (narrow - rim bulge - bend - wave; marks) -> Grad (per canonical: tangential gradient, inward direction; reads CLEAN positions)
+//   -> Apply (all vertices: position along the canonical direction, normal tilted by the gradient, tangent re-orthogonalised).
+// Everything before Apply reads positions that nobody has written yet this frame, and Apply reads only its own vertex and the Grad entry of
+// its canonical id, so there is no race between threads. Distances are in WORLD metres (_ToWorld), the written values go back through _ToLocal.
 #pragma kernel Smoke
 #pragma kernel Imprint
+#pragma kernel Depth
+#pragma kernel Dilate
+#pragma kernel Smooth
+#pragma kernel Compose
+#pragma kernel Grad
+#pragma kernel Apply
+#pragma kernel MarkDisc
+#pragma kernel MarksDecay
+#pragma kernel ApplyMap
 
 RWByteAddressBuffer _Verts;          // skinned output: per vertex _Stride bytes, position at _PosOff, normal at _NrmOff
 uint _Stride, _PosOff, _NrmOff, _Count;
@@ -15,9 +32,11 @@ struct Capsule
 {
     float4 a;                        // xyz endpoint a (world), w radius (m)
     float4 b;                        // xyz endpoint b (world)
+    uint4 c;                         // 0.8.0: x = skip mask (bit k set: a vertex of class k is NOT pressed by this capsule); yzw 0
 };
 StructuredBuffer<Capsule> _Caps;
 uint _CapCount;
+uint _CapOff;                        // 0.8.0: this renderer's capsules are _Caps[_CapOff .. _CapOff + _CapCount)
 StructuredBuffer<float> _Mask;       // per vertex 0..1: how soft the skin is here (0 = rigid, untouched)
 float _Limit;                        // deepest press (m)
 float _Margin;                       // the skin yields this much before visible contact (m)
@@ -116,7 +135,7 @@ void Imprint(uint3 id : SV_DispatchThreadID)
     float depth = 0;
     for (uint c = 0; c < _CapCount; c++)
     {
-        Capsule cap = _Caps[c];
+        Capsule cap = _Caps[_CapOff + c];
         float3 ca = cap.a.xyz;
         float3 ab = cap.b.xyz - ca;
         float len2 = dot(ab, ab);
@@ -136,4 +155,329 @@ void Imprint(uint3 id : SV_DispatchThreadID)
     depth = min(depth, _Limit * m);
     float3 pw = p + nIn * depth;
     StoreF3(a + _PosOff, mul(_ToLocal, float4(pw, 1)).xyz);
+}
+
+// ================================================================ 0.8.0 contact v2 ================================================================
+
+StructuredBuffer<uint> _Canon;       // V: welded representative (a canonical vertex maps to itself)
+StructuredBuffer<uint> _AdjOff;      // V + 1: CSR rows over canonical ids (empty rows for the others)
+StructuredBuffer<uint> _AdjV;        // unique canonical neighbours
+StructuredBuffer<float2> _Tissue;    // x = hard depth (m) of the vertex's bone class(es), y = soft depth (m) at softness 50% (Tissue.cs: SoftMm x max(zone share, floor))
+StructuredBuffer<uint> _Class;       // bone class id (0 = none)
+StructuredBuffer<float4> _Bend;      // (slot, weight, slot, weight); slot < 0 = none, weight < 0 folds inward
+StructuredBuffer<float> _FieldIn;    // the dilate / smooth source, Grad's final field
+RWStructuredBuffer<float> _FieldOut;
+StructuredBuffer<float> _FieldN;     // Compose: narrow (contact) field
+StructuredBuffer<float> _FieldW;     // Compose: wide field (the rim bulge is wide - narrow)
+RWStructuredBuffer<float4> _Marks;   // per canonical vertex: x redness 0..1, y live pressure 0..1, z lingering dent (m)
+RWStructuredBuffer<float4> _Grad;    // 2 per vertex: [2v] = (tangential gradient of the field, world; field value), [2v+1] = (inward direction, world; 1)
+StructuredBuffer<float4> _Waves;     // 2 per wave: (origin xyz world, age s), (A m, c m/s, lambda m, tau s)
+RWStructuredBuffer<uint> _Hits;      // [0]: canonical vertices Depth found pressed (read back: her own limbs run the full chain only while they touch)
+StructuredBuffer<int> _Map;          // ApplyMap: per vertex of an overlay mesh (areola, tattoo...) the body canonical vertex under it, -1 = its own field
+StructuredBuffer<float4> _ParentGrad;// ApplyMap: the body renderer's _Grad of this frame
+uint _WaveCount, _TanOff, _NoField, _MarkOn, _ParentOn, _OwnOn, _CountHits;
+float _SoftScale, _Depth;            // Tissue.SoftScale(softness), ContactSettings.Depth: cap = (hard + soft x _SoftScale) x _Depth
+float _SkirtLen, _Bulge, _BulgeCap, _NormalBend, _Dt, _MarkGain, _MarkFade, _DentFade, _WaveAmt;
+float4 _BendAmt0, _BendAmt1, _BendAmt2;   // 9 slot amplitudes (m): [0..3], [4..7], [8]
+float4 _Disc;                        // MarkDisc: xyz world centre, w radius (m)
+float _DiscAmt;
+
+float3 WorldPos(uint v)
+{
+    return mul(_ToWorld, float4(LoadF3(v * _Stride + _PosOff), 1)).xyz;
+}
+
+// The vertex's outward normal in world space (inverse transpose, like Imprint); zero when degenerate.
+float3 WorldNormal(uint v)
+{
+    float3 nw = mul(LoadF3(v * _Stride + _NrmOff), (float3x3)_ToLocal);
+    float l = dot(nw, nw);
+    return l < 1e-20 ? float3(0, 0, 0) : nw * rsqrt(l);
+}
+
+// The deepest dent of a vertex (m): its anatomical flesh depth (Tissue.cs), softer or firmer with Softness, scaled by the depth setting.
+float TissueCap(float2 t)
+{
+    return (t.x + t.y * _SoftScale) * _Depth;
+}
+
+// Shown depth for a penetration against a cap: exact up to 0.6 cap, then a C1 saturation toward the cap (Tissue.Press).
+float Press(float pen, float cap)
+{
+    float k = 0.6 * cap;
+    if (pen <= k) return pen;
+    float r = cap - k;
+    return k + r * tanh((pen - k) / r);
+}
+
+// Depth: how far each canonical vertex is inside the capsules (exact exit along its inward normal, like Imprint, but never more than 4x the
+// radial penetration: a vertex grazing a capsule does not get a spike), pressed against the tissue cap with a smooth knee so a capped patch has
+// no hard rim of its own. Bony skin (under 3.5 mm of soft depth) ignores a capsule whose axis lies behind it.
+[numthreads(64, 1, 1)]
+void Depth(uint3 id : SV_DispatchThreadID)
+{
+    uint v = id.x;
+    if (v >= _Count) return;
+    if (_Canon[v] != v) return;
+    float3 nOut = WorldNormal(v);
+    if (dot(nOut, nOut) < 0.5) { _FieldOut[v] = 0; return; }
+    float3 nIn = -nOut;
+    float3 p = WorldPos(v);
+    float2 t = _Tissue[v];
+    float cap = TissueCap(t);
+    bool bony = t.y < 0.0035;
+    uint cls = _Class[v];
+    float depth = 0;
+    for (uint c = 0; c < _CapCount; c++)
+    {
+        Capsule cp = _Caps[_CapOff + c];
+        if (((cp.c.x >> cls) & 1u) != 0u) continue;
+        float3 ca = cp.a.xyz;
+        float3 ab = cp.b.xyz - ca;
+        float len2 = dot(ab, ab);
+        float r = cp.a.w + _Margin;
+        float tt = len2 > 1e-10 ? saturate(dot(p - ca, ab) / len2) : 0.0;
+        float3 q = ca + ab * tt;
+        float3 u = p - q;
+        float d2 = dot(u, u);
+        if (d2 >= r * r) continue;
+        if (bony && dot(q - p, nOut) < -0.5 * r) continue;   // the capsule is buried behind bony skin: not pressing it
+        float rad = max(r - sqrt(d2), 0.0);
+        float te;
+        float s;
+        if (RayExit(p, nIn, ca, ab, len2, r, te)) s = min(te + 1e-4, 4.0 * rad + 1e-4);
+        else s = rad;
+        depth = max(depth, s);
+    }
+    _FieldOut[v] = depth > 0.0 && cap > 1e-6 ? Press(depth, cap) : 0.0;
+    if (_CountHits != 0u && depth > 0.0) InterlockedAdd(_Hits[0], 1u);   // only when the count is read back (one address: keep atomics rare)
+}
+
+// Dilate: the skirt. A vertex takes the largest neighbour value decayed by the distance to it, so the dent's edge falls off over _SkirtLen
+// whatever the mesh resolution (the caller runs ceil(3 skirt / edge) passes). Neighbours that cannot beat the current value are skipped without
+// reading their position, so empty regions cost only the field reads.
+[numthreads(64, 1, 1)]
+void Dilate(uint3 id : SV_DispatchThreadID)
+{
+    uint v = id.x;
+    if (v >= _Count) return;
+    if (_Canon[v] != v) return;
+    float m = _FieldIn[v];
+    uint o1 = _AdjOff[v + 1];
+    bool have = false;
+    float3 pv = float3(0, 0, 0);
+    for (uint i = _AdjOff[v]; i < o1; i++)
+    {
+        uint u = _AdjV[i];
+        float fu = _FieldIn[u];
+        if (fu <= m) continue;
+        if (!have) { pv = WorldPos(v); have = true; }
+        float d = length(pv - WorldPos(u));
+        m = max(m, fu * exp(-d / _SkirtLen));
+    }
+    _FieldOut[v] = m;
+}
+
+// Smooth: half the vertex, half the mean of its neighbours (a vertex without neighbours keeps its value).
+[numthreads(64, 1, 1)]
+void Smooth(uint3 id : SV_DispatchThreadID)
+{
+    uint v = id.x;
+    if (v >= _Count) return;
+    if (_Canon[v] != v) return;
+    uint o0 = _AdjOff[v], o1 = _AdjOff[v + 1];
+    float f = _FieldIn[v];
+    if (o1 <= o0) { _FieldOut[v] = f; return; }
+    float s = 0;
+    for (uint i = o0; i < o1; i++) s += _FieldIn[_AdjV[i]];
+    _FieldOut[v] = 0.5 * f + 0.5 * s / (float)(o1 - o0);
+}
+
+float BendAmt(float slot)
+{
+    if (slot < -0.5) return 0.0;
+    int j = (int)(slot + 0.5);
+    if (j < 4) return _BendAmt0[j];
+    if (j < 8) return _BendAmt1[j - 4];
+    return _BendAmt2.x;
+}
+
+// Compose: the final signed field (positive = inward, metres) = narrow contact field - rim bulge (the wide field exceeding the narrow one
+// around the dent, capped) - bend bulges - waves. Marks: redness accumulates with pressure and fades, the live pressure and a lingering dent.
+// _NoField = 1: no contact on this renderer this frame (bend / wave / marks only): the contact fields are not read.
+[numthreads(64, 1, 1)]
+void Compose(uint3 id : SV_DispatchThreadID)
+{
+    uint v = id.x;
+    if (v >= _Count) return;
+    if (_Canon[v] != v) return;
+    float2 t = _Tissue[v];
+    float n = 0, w = 0;
+    if (_NoField == 0u) { n = _FieldN[v]; w = _FieldW[v]; }
+    float bulge = min(_Bulge * max(0.0, w - n), _BulgeCap);
+    float4 bd = _Bend[v];
+    float bend = bd.y * BendAmt(bd.x) + bd.w * BendAmt(bd.z);
+    float wave = 0;
+    if (_WaveCount > 0u)
+    {
+        float3 pw = WorldPos(v);
+        for (uint i = 0; i < _WaveCount; i++)
+        {
+            float4 o = _Waves[2 * i];
+            float4 p = _Waves[2 * i + 1];
+            float r = length(pw - o.xyz);
+            float x = r - p.y * o.w;
+            wave += p.x * exp(-o.w / p.w) * exp(-r / 0.12) * exp(-2.0 * x * x / (p.z * p.z)) * -cos(6.2831853 * x / p.z);   // the impact point dips (a trough at x = 0), the ring rises around it
+        }
+        wave *= _WaveAmt * saturate(t.y / 0.016);   // fleshy skin ripples (breast, glute), bony skin does not
+    }
+    _FieldOut[v] = n - bulge - bend - wave;
+    if (_MarkOn != 0u)
+    {
+        float cap = TissueCap(t);
+        float pressure = cap > 1e-6 ? saturate(n / cap) : 0.0;
+        float4 m = _Marks[v];
+        m.x = min(1.0, m.x * exp(-_Dt / _MarkFade) + _Dt * _MarkGain * pressure);
+        m.y = pressure;
+        m.z = max(m.z * exp(-_Dt / _DentFade), max(n, 0.0));
+        _Marks[v] = m;
+    }
+}
+
+// Grad: per canonical vertex, from the final field (in _FieldIn): the field's tangential gradient (world; estimated from the neighbours, x2 for
+// the 2D average of e e^T / |e|^2) and the inward direction the vertex (and all its welded copies) moves along. Untouched neighbourhoods write zeros.
+[numthreads(64, 1, 1)]
+void Grad(uint3 id : SV_DispatchThreadID)
+{
+    uint v = id.x;
+    if (v >= _Count) return;
+    if (_Canon[v] != v) return;
+    float D = _FieldIn[v];
+    uint o0 = _AdjOff[v], o1 = _AdjOff[v + 1];
+    float mx = abs(D);
+    for (uint i = o0; i < o1; i++) mx = max(mx, abs(_FieldIn[_AdjV[i]]));
+    if (mx < 1e-6)
+    {
+        _Grad[2 * v] = float4(0, 0, 0, 0);
+        _Grad[2 * v + 1] = float4(0, 0, 0, 0);
+        return;
+    }
+    float3 nOut = WorldNormal(v);
+    float3 g = float3(0, 0, 0);
+    if (_NormalBend > 0.0 && o1 > o0 && dot(nOut, nOut) > 0.5)
+    {
+        float3 pc = WorldPos(v);
+        for (uint j = o0; j < o1; j++)
+        {
+            uint u = _AdjV[j];
+            float3 e = WorldPos(u) - pc;
+            float dd = dot(e, e);
+            if (dd < 1e-10) continue;
+            g += (_FieldIn[u] - D) * e / dd;
+        }
+        g *= 2.0 / (float)(o1 - o0);
+        g -= nOut * dot(g, nOut);
+        float gl = length(g);
+        if (gl > 2.0) g *= 2.0 / gl;
+    }
+    _Grad[2 * v] = float4(g, D);
+    _Grad[2 * v + 1] = float4(-nOut, 1);
+}
+
+// Apply: every vertex moves by its canonical's field value along the canonical's inward direction (welded copies stay together), its normal
+// is tilted by the gradient (the surface slopes toward the dent: n + grad D), the tangent re-orthogonalised. Reads only itself and _Grad.
+void ApplyCore(uint v, float4 g0, float4 g1);
+
+[numthreads(64, 1, 1)]
+void Apply(uint3 id : SV_DispatchThreadID)
+{
+    uint v = id.x;
+    if (v >= _Count) return;
+    uint c = _Canon[v];
+    ApplyCore(v, _Grad[2 * c], _Grad[2 * c + 1]);
+}
+
+// ApplyMap: an overlay mesh lying on the body (areola caps, tattoo, the vulva rim) moves exactly like the body vertex under it (its own field
+// would differ: different weld, skirt and bulge -> the decal floats or sinks, the areola rim z-fights); vertices with no body vertex within a few
+// mm use their own chain's Grad. _ParentOn 0: the body did not run this frame (mapped vertices stay); _OwnOn 0: this mesh ran no chain of its own.
+[numthreads(64, 1, 1)]
+void ApplyMap(uint3 id : SV_DispatchThreadID)
+{
+    uint v = id.x;
+    if (v >= _Count) return;
+    int m = _Map[v];
+    if (m >= 0)
+    {
+        if (_ParentOn == 0u) return;
+        ApplyCore(v, _ParentGrad[2 * (uint)m], _ParentGrad[2 * (uint)m + 1]);
+        return;
+    }
+    if (_OwnOn == 0u) return;
+    uint c = _Canon[v];
+    ApplyCore(v, _Grad[2 * c], _Grad[2 * c + 1]);
+}
+
+void ApplyCore(uint v, float4 g0, float4 g1)
+{
+    float D = g0.w;
+    float3 g = g0.xyz;
+    bool moved = abs(D) >= 1e-6;
+    bool tilted = _NormalBend > 0.0 && dot(g, g) >= 1e-8;
+    if (!moved && !tilted) return;
+    uint a = v * _Stride;
+    if (moved)
+    {
+        float3 pw = mul(_ToWorld, float4(LoadF3(a + _PosOff), 1)).xyz + g1.xyz * D;
+        StoreF3(a + _PosOff, mul(_ToLocal, float4(pw, 1)).xyz);
+    }
+    if (tilted)
+    {
+        float3 nw = mul(LoadF3(a + _NrmOff), (float3x3)_ToLocal);
+        float l = dot(nw, nw);
+        if (l < 1e-20) return;
+        float3 n2 = nw * rsqrt(l) + g * _NormalBend;
+        float l2 = dot(n2, n2);
+        if (l2 < 1e-12) return;
+        float3 nl = mul(n2 * rsqrt(l2), (float3x3)_ToWorld);   // back to buffer space: the inverse transpose of the way in
+        float ll = dot(nl, nl);
+        if (ll < 1e-20) return;
+        nl *= rsqrt(ll);
+        StoreF3(a + _NrmOff, nl);
+        if (_TanOff != 0xFFFFFFFFu)
+        {
+            float4 tg = asfloat(_Verts.Load4(a + _TanOff));
+            float3 tv = tg.xyz - nl * dot(nl, tg.xyz);
+            float tl = dot(tv, tv);
+            if (tl > 1e-12) _Verts.Store4(a + _TanOff, asuint(float4(tv * rsqrt(tl), tg.w)));
+        }
+    }
+}
+
+// MarkDisc: a slap mark, added to the redness of the canonical vertices within the disc (_Disc world centre + radius, _DiscAmt peak).
+[numthreads(64, 1, 1)]
+void MarkDisc(uint3 id : SV_DispatchThreadID)
+{
+    uint v = id.x;
+    if (v >= _Count) return;
+    if (_Canon[v] != v) return;
+    float r = length(WorldPos(v) - _Disc.xyz);
+    if (r >= _Disc.w) return;
+    float q = r / _Disc.w;
+    float4 m = _Marks[v];
+    m.x = min(1.0, m.x + _DiscAmt * (1.0 - q * q));
+    _Marks[v] = m;
+}
+
+// MarksDecay: Compose's mark update with nothing pressing, for a renderer that has no other work (marks still fading).
+[numthreads(64, 1, 1)]
+void MarksDecay(uint3 id : SV_DispatchThreadID)
+{
+    uint v = id.x;
+    if (v >= _Count) return;
+    if (_Canon[v] != v) return;
+    float4 m = _Marks[v];
+    m.x *= exp(-_Dt / _MarkFade);
+    m.y = 0.0;
+    m.z *= exp(-_Dt / _DentFade);
+    _Marks[v] = m;
 }

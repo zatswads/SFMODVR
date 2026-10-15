@@ -8,7 +8,8 @@ using UnityEngine;
 namespace SfMorph
 {
     // A contact capsule for the soft zones: endpoints in T's local space (so it follows T), radius in metres.
-    // Kind: "vr" (the user's tracked hands/controllers), "partner" (Player/BadGuy hands), "thighL", "thighR", "forearm", "hand" (hers).
+    // Kind: "vr" (the user's tracked hands/controllers), "partner" (Player/BadGuy hands), "thighL", "thighR", "forearm", "hand", "upperarm", "calf" (hers),
+    // "partnerBody" (0.8.0: the partner's pelvis and thighs; touches her only through the soft points and the GPU contact, gated by [Physics] PartnerBody).
     internal struct SoftCapsule
     {
         public Transform T;
@@ -159,7 +160,7 @@ namespace SfMorph
                 {
                     _feedMode = m;
                     string chains = m <= 0 ? "off" : m == 1 ? "main chains" : "all breast chains";
-                    _feed = "Contacts feed: soft points (dent, jiggle, resist): your hands, partner, her own forearms/hands/thighs | per-vertex GPU imprint: your hands, partner"
+                    _feed = "Contacts feed: soft points (dent, jiggle, resist): your hands, partner (hands, and with Partner body on his pelvis and thighs), her own arms/legs/hands | per-vertex GPU imprint: your hands, partner, partner body, her own limbs (Self contact)"
                             + " | the game's breast physics (" + chains + "): your hands, partner | physics hands' force cap and limb push: your physics hands only"
                             + " | secondary motion fade: physics hands on her limbs, soft points on thighs/glutes/belly. Hidden hands feed none of these.";
                 }
@@ -209,6 +210,8 @@ namespace SfMorph
         const float VrFinger = 0.011f, VrController = 0.045f;
         const float PartnerFinger = 0.010f;
         const float HerThigh = 0.06f, HerForearm = 0.030f, HerHand = 0.022f;
+        // 0.8.0: her upper arms and calves (self-contact: arm on breast, calf on thigh) and the partner's body
+        const float HerUpperArm = 0.040f, HerCalf = 0.050f, PartnerPelvis = 0.085f, PartnerThigh = 0.070f;
 
         // ---- game types (Assembly-CSharp isn't referenced) ----
 
@@ -354,6 +357,9 @@ namespace SfMorph
                 }
             }
             if (np == 0) sb.Append("none");
+            int pb = 0;
+            foreach (var p in _partners) foreach (var c in p.Caps) if (c.Kind == "partnerBody") pb++;
+            if (pb > 0) sb.Append("; partner body ").Append(pb);
             sb.Append("; hers ").Append(_hers.Count);
             Status = sb.ToString();
         }
@@ -823,6 +829,7 @@ namespace SfMorph
                 }
             }
             p.SkippedOwners = string.Join("/", skipOwners.ToArray());
+            string body = BuildPartnerBody(p, anim, her, roots);
             string rends = "";
             if (p.Caps.Count > 0)
             {
@@ -835,7 +842,55 @@ namespace SfMorph
             }
             if (!wasDirty && p.Caps.Count == p.LoggedCount) return;   // a retry that found what the last build found says nothing new
             Plugin.Log.LogInfo("VrHands: partner '" + owner + "': " + how + ", " + hands + " hands" + (p.Skipped > 0 ? " (" + p.Skipped + " under " + p.SkippedOwners + " skipped)" : "")
-                               + ", " + segs + " finger segments, " + p.Caps.Count + " capsules" + rends);
+                               + ", " + segs + " finger segments, " + p.Caps.Count + " capsules" + rends + (body.Length > 0 ? ", " + body : ""));
+        }
+
+        // 0.8.0: the partner's pelvis (one capsule between the hip joints, on the root) and thighs (hip -> knee), kind "partnerBody", for the GPU contact
+        // (his pelvis and thighs press her skin) and the soft points. Humanoid Animator bones, else AdvancedSkeleton Hip_L/R, Knee_L/R, Root_M (the
+        // first of each outside nested rigs, her and our own objects). Returns the log note ("+ pelvis and 2 thighs", or what was missing).
+        static string BuildPartnerBody(Partner p, Animator anim, Character her, List<Transform> roots)
+        {
+            Transform hipL = null, hipR = null, kneeL = null, kneeR = null, pelvis = null;
+            if (anim != null && anim.isHuman && anim.avatar != null)
+            {
+                hipL = anim.GetBoneTransform(HumanBodyBones.LeftUpperLeg); hipR = anim.GetBoneTransform(HumanBodyBones.RightUpperLeg);
+                kneeL = anim.GetBoneTransform(HumanBodyBones.LeftLowerLeg); kneeR = anim.GetBoneTransform(HumanBodyBones.RightLowerLeg);
+                pelvis = anim.GetBoneTransform(HumanBodyBones.Hips);
+            }
+            else
+            {
+                foreach (var t in p.Root.GetComponentsInChildren<Transform>(true))
+                {
+                    string n = t.name;
+                    if (t.name.StartsWith(SoftZones.Prefix) || UnderSf(t) || (her != null && t.IsChildOf(her.Root)) || IsUi(t)) continue;
+                    Transform slot = null;
+                    switch (n)
+                    {
+                        case "Hip_L": if (hipL == null) slot = hipL = t; break;
+                        case "Hip_R": if (hipR == null) slot = hipR = t; break;
+                        case "Knee_L": if (kneeL == null) slot = kneeL = t; break;
+                        case "Knee_R": if (kneeR == null) slot = kneeR = t; break;
+                        case "Root_M": if (pelvis == null) slot = pelvis = t; break;
+                    }
+                    if (slot != null && NestedOwner(t, p.Root, roots) != null)
+                    {
+                        if (slot == hipL) hipL = null; else if (slot == hipR) hipR = null; else if (slot == kneeL) kneeL = null; else if (slot == kneeR) kneeR = null; else pelvis = null;
+                    }
+                }
+            }
+            string owner = p.Root.name;
+            int n0 = p.Caps.Count;
+            string what = "";
+            if (hipL != null && hipR != null)
+            {
+                Add(p.Caps, pelvis != null ? pelvis : hipL, hipL.position, hipR.position, PartnerPelvis, owner, "partnerBody");
+                if (p.Caps.Count > n0) what = "pelvis";
+            }
+            int thighs = 0;
+            if (hipL != null && kneeL != null) { int b = p.Caps.Count; Add(p.Caps, hipL, hipL.position, kneeL.position, PartnerThigh, owner, "partnerBody"); thighs += p.Caps.Count - b; }
+            if (hipR != null && kneeR != null) { int b = p.Caps.Count; Add(p.Caps, hipR, hipR.position, kneeR.position, PartnerThigh, owner, "partnerBody"); thighs += p.Caps.Count - b; }
+            if (what.Length == 0 && thighs == 0) return "no pelvis or thighs found";
+            return "+ " + (what.Length > 0 ? what + (thighs > 0 ? " and " : "") : "") + (thighs > 0 ? thighs + (thighs == 1 ? " thigh" : " thighs") : "");
         }
 
         // The skinned meshes that draw a partner's hands: those whose bones include a hand bone or one below it (the body mesh, a
@@ -876,6 +931,8 @@ namespace SfMorph
                 Own(her, _hers, "Hip" + s, "Knee" + s, HerThigh, s == "_L" ? "thighL" : "thighR", 0f);
                 Own(her, _hers, "Elbow" + s, "Wrist" + s, HerForearm, "forearm", 0f);
                 Own(her, _hers, "Wrist" + s, "MiddleFinger1" + s, HerHand, "hand", 0.9f);
+                Own(her, _hers, "Shoulder" + s, "Elbow" + s, HerUpperArm, "upperarm", 0f);
+                Own(her, _hers, "Knee" + s, "Ankle" + s, HerCalf, "calf", 0f);
             }
             if (_hers.Count > 0) { _hersSrc = NewSource("her", "hers", false); Stamp(_hers, _hersSrc); }   // always live: her own limbs
             return _hers.Count != before || _hers.Count > 0;   // new capsules carry the new source
@@ -897,6 +954,17 @@ namespace SfMorph
         static readonly List<Mirror> _mirrors = new List<Mirror>();
         static readonly List<KeyValuePair<IList, object>> _adds = new List<KeyValuePair<IList, object>>();
         static readonly List<IList> _dbLists = new List<IList>();   // the m_Colliders lists of the chosen breast DynamicBones (read again every 10 s)
+        static readonly List<Component> _dbComps = new List<Component>();   // 0.8.0: those DynamicBones themselves (Ripple's breast pulse)
+
+        // 0.8.0: the breast DynamicBones AttachToGameBreasts chose (main chains in mode 1), refreshed with it every 10 s; empty while
+        // the breast colliders are off. Root names start with Left_/Right_ (her side). DynamicBoneType: the game's DynamicBone type (null if absent).
+        public static void BreastDbs(List<Component> into)
+        {
+            into.Clear();
+            for (int i = 0; i < _dbComps.Count; i++) if (_dbComps[i] != null) into.Add(_dbComps[i]);
+        }
+        public static Type DynamicBoneType { get { Types(); return _db; } }
+        public static Transform DynamicBoneRoot(Component db) { return db != null && _fRoot != null ? _fRoot.GetValue(db) as Transform : null; }
         static readonly List<string> _namesIn = new List<string>(), _namesOut = new List<string>();
         static int _attVersion = -1, _attMode = -1;
         static Transform _attHer;
@@ -942,7 +1010,7 @@ namespace SfMorph
                     var root = _fRoot.GetValue(o) as Transform;
                     if (root != null && root.IsChildOf(her) && Body.Norm(root.name).Contains("upperbreast")) { anyMain = true; break; }
                 }
-            _dbLists.Clear(); _namesIn.Clear(); _namesOut.Clear();
+            _dbLists.Clear(); _dbComps.Clear(); _namesIn.Clear(); _namesOut.Clear();
             int added = 0;
             foreach (var o in objs)
             {
@@ -957,6 +1025,7 @@ namespace SfMorph
                 var list = _fColliders.GetValue(db) as IList;
                 if (list == null) { list = (IList)Activator.CreateInstance(_fColliders.FieldType); _fColliders.SetValue(db, list); }
                 _dbLists.Add(list);
+                _dbComps.Add(db);
                 foreach (var m in _mirrors)
                     if (m.Attached && m.Col != null && !list.Contains(m.Col)) { list.Add(m.Col); _adds.Add(new KeyValuePair<IList, object>(list, m.Col)); added++; }
             }
@@ -1006,7 +1075,7 @@ namespace SfMorph
                 try { if (kv.Key != null) kv.Key.Remove(kv.Value); } catch (Exception) { }
             }
             _adds.Clear();
-            _dbLists.Clear();
+            _dbLists.Clear(); _dbComps.Clear();
             foreach (var m in _mirrors) if (m.Go != null) UnityEngine.Object.Destroy(m.Go);
             _mirrors.Clear();
             _attVersion = -1;

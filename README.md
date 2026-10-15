@@ -41,6 +41,39 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.8.1:
+- A hand pressed on her (lower belly especially) made jagged, hand-shaped cut-outs with sharp steps and went too deep: the GPU contact moved
+  only the vertices inside a hand's capsule, each to the capsule's surface along its own normal, with nothing outside the rim (a wall at
+  the rim sampled at ~7 mm vertex spacing), left the shading of the undented skin (the dent read as a hole) and capped the depth at 2-4.5 cm
+  on every soft vertex on top of what the soft zones already pressed. Now the press is a smooth field over her skin: the depth inside the
+  hand, then a skirt that falls off over ~15 mm around it whatever the mesh resolution (Dent edge), smoothed, with the pressed flesh rising
+  in a low rim around the dent (Rim bulge), and the skin's shading tilted into the dent (bent normals), so it reads as pressed flesh.
+- Anatomical flesh: how far each part gives follows her anatomy (about 23 mm on the glutes, 24 on the breasts, 18 on the lower belly,
+  10-16 on the thighs, 9 on the calf but 4 over the shin, 7-10 on the upper arm, 2-4 over bone at the default 50 % Softness; Dent depth
+  scales it all; approximate on purpose, for look and feel). A press follows the hand exactly at first, then stiffens smoothly toward
+  that depth instead of stopping at a hard edge;
+  the soft zones' springs are per part (breasts softest and the most jiggly, glutes deep and soft, belly medium, outer thigh firm), and a
+  physics hand meets resistance that rises as the flesh compresses (a fingertip sinks into a glute, stops quickly on a shin).
+- Her own body squashes where it touches: thighs together, a calf against the thigh when kneeling, an arm against her breast and side
+  (her upper arms and calves are contacts now; a limb never dents the part it belongs to). The partner's pelvis and thighs press her too,
+  not only his hands (Physics -> "The partner's body presses her too").
+- Bend bulges: her biceps thicken as the elbow bends, the back of the thigh and the calf as the knee bends, the thigh tops when the hip
+  flexes, and a shallow fold forms in the lower belly when she sits (Bend bulges; mm per part in the config file).
+- Marks: a hand pressed on her glutes, thighs, belly or breasts leaves a print (pale for a moment after the hand lifts, then reddish) that
+  fades over ~15 s (Marks fade), and slaps (Reactions on) leave redness at the spot, also on the 0.7.9 per-zone slaps; through Wrinkles'
+  normal map when Body wrinkles are on. Nothing is changed in her textures while no mark is showing.
+- Ripple: an impact (a slap, the partner's pelvis thrusting against her glutes or thighs) sends a damped ring through her flesh from the
+  point of impact, and a breast impact also kicks the game's breast physics briefly (Ripple on impact).
+- Overlay meshes lying on her skin (areola caps, tattoo, the vulva rim) move exactly with the skin under them in a dent (they used to get
+  their own dent: the areola could z-fight or a tattoo float). Her own limbs only cost GPU time while they actually touch her.
+- Wrinkles looked like stretch marks: each fold was a thin crease line on flat skin. Now compressed skin rolls into broad rounded ridges
+  between narrow creases. On her face the folds stay subtle: her skin shader's subsurface scattering blurs fine normal-map detail out of
+  the diffuse light (they show mostly in highlights); a darker crease in the skin colour would make them read, planned separately.
+- Character shapes with body-slider morphs: the soft zones now take her rest shape from every non-corrective blendshape (the character and
+  the body sliders) and rebuild when one of them moves.
+- Install both dist/SfMorph.dll and dist/sfmorph_shaders (the shader bundle has new kernels; with the old bundle the GPU contact stays the
+  0.7.9 one and the log says so).
+
 0.8.0:
 - Characters → Body sliders, like the ispinox Claire VaM scene: Fitness, Body Type, Waist, Hip, Breasts and Breast Under on a
   converted character, each 0-100 % from that character's own setting; plus Skin Tone (lighter/darker through the tint) and Gloss.

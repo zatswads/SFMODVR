@@ -1,15 +1,15 @@
 ManifestFileVersion: 0
-CRC: 3746325012
+CRC: 3708595221
 Hashes:
   AssetFileHash:
     serializedVersion: 2
-    Hash: 48fe604f42ac32841271776a1de181eb
+    Hash: 0fd75dd840044b661efcd0eda2973c56
   TypeTreeHash:
     serializedVersion: 2
     Hash: cc47f627a82a59fd500d95464fa77bad
   IncrementalBuildHash:
     serializedVersion: 2
-    Hash: 48fe604f42ac32841271776a1de181eb
+    Hash: 0fd75dd840044b661efcd0eda2973c56
 HashAppended: 0
 ClassTypes:
 - Class: 48
@@ -18,6 +18,7 @@ ClassTypes:
   Script: {instanceID: 0}
 SerializeReferenceClassIdentifiers: []
 Assets:
+- Assets/SfMorph/Shaders/SkinMarks.shader
 - Assets/SfMorph/Shaders/SoftDeform.compute
 - Assets/SfMorph/Shaders/WrinkleRaster.shader
 - Assets/SfMorph/Shaders/Wrinkles.compute
