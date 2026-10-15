@@ -120,6 +120,10 @@ few mm, axis change small). Headset:
    (`Embody: his left elbow swivels ...`); push her forearm with his hand: it yields (`... by your left hand (Player)`).
 8. Embody + physics hands on: his hand stops where the physics hand stops, fingers copy the conform, no double yield.
 9. Reactions on, slap her thigh: a twitch that settles (no jerk, no ring); 10 s Overlap line `kicks N (max v)`.
+10. Grab with Trigger: the trigger closes the whole hand (physics hands and his), the grip does nothing (the game's menu); Grip/Either.
+11. Embody snap with "Face the view to: His chest": your arms line up with his; View turn/tilt/roll act at once and don't add up.
+12. Strength 2x-4x: bigger trailing, still settles, no pops (planted hands/feet still held).
+13. Palm on her thigh / butt / forearm: the hand stops about at the skin (thigh ~1.4 cm in, butt ~2.3, forearm ~0.4), not 3 cm inside.
 
 ## 0.7.9 (reactions, voice guard)
 

@@ -56,16 +56,24 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
   free swing.
 - Spine at 0 % took the secondary motion of the head and arms with it: they only lagged in their own joint, and what looked like their
   motion was the spine's lag carried down. They now also swing by inertia when the body lurches (thrusts), not only when it turns.
+- Physics → Secondary motion → Strength (1-4x) multiplies the trailing and swings. It scales what is shown, never the springs
+  themselves, so it can't make them unstable; the shown lag is capped at Strength x the part's lag limit (at most 50 deg).
 - Physics hands: the drawn hand is now exactly your controller in free air; the physics offset fades in only on contact (VR → "Drawn
   hand is exactly the controller in free air"). A game camera cut of ~0.4 m made the hand race across the gap (log: jitter up to
   35 cm); smaller rig jumps are now carried along, and a hand that lost its target in free air snaps back. A hand held deep in her
   no longer tumbles (the pull eases off with the distance it is blocked).
 - Fingers close like VaM's DynamicLimbs: each finger's curl sweep is tested against her body from the palm (it can't feed back on
   itself), the finger stops where it touches and sinks in by the part's softness (breast/butt deep, shoulder/forearm barely), idle
-  fingers follow the touching ones, low finger friction so tips slide. Trigger curls the index finger, grip clasps the others, and
-  the hand rests in a relaxed curl (VR → Rest curl).
+  fingers follow the touching ones, low finger friction so tips slide. The hand rests in a relaxed curl (VR → Rest curl).
+- Grab moved to the trigger (VR → Grab with: Trigger / Grip / Either): the grip is the game's menu button. It closes the whole hand,
+  physics hands and his hands alike; the old index-only pointing pose is gone.
+- The hands sank into her before stopping (her soft colliders were inset a flat 2-4.5 cm, deeper than a thigh's flesh, so the hand
+  showed inside her): the inset is now each part's tissue depth (butt/breast ~2.3 cm, belly ~1.8, thigh ~1.4, calf/upper arm ~0.9,
+  forearm/neck ~0.4, head 0.3, scaled by Softness), the same depth Embody's hand may sink before it stops.
 - Embody: his fingers rest in a neutral pose (from his bind pose) instead of the animation's; trigger = index, grip = a clasp that
-  closes around what you hold (her shoulder, her breast) and stops on her skin, deeper on soft parts. With physics hands off his hand
+  closes around what you hold (her shoulder, her breast) and stops on her skin, deeper on soft parts. The view now faces the way his
+  chest faces on a snap (his head is often turned in the animation, which put his arms off to one side of yours; VR → Face the view
+  to), with View turn / tilt / roll sliders for what is left (a change re-snaps at once; tilt/roll never add up). With physics hands off his hand
   now stops at her skin (it passed straight through), and his elbow swings around her instead of his forearm passing through her.
   His wrist offset was rotated by the physics offset (up to 3.5 cm off when blocked): fixed. His animated hand no longer pushes her
   while you embody him (it pushed with the animation's hand, not yours).
