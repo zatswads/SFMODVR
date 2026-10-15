@@ -33,7 +33,8 @@ namespace SfMorph
         bool _hasMoanFn;                   // FacialFunction.MoanFunction itself exists (Moan() works)
         public bool HasLibrary;            // the voice library's Moan clips and the moan source exist (MoanClip() works); banks 0 short, 1 mid, 2 long
         public bool HasBreath;             // an Exhale clip array exists (Breath() works)
-        public bool HasSfx;                // handJob_fast / sex_fast clips and the soundEffect source exist (Slap() works)
+        public bool HasSfx;                // slap clips (sex_fast / sex_normal, else handJob_fast) and the soundEffect source exist (Slap() works)
+        public bool HasEyeReact;           // ReactionFacialEnter_Eye / _Out_Eye and a non-empty DirtyTalk_Facial_Library id array exist (EyeReact() works)
         public bool HasBlush;              // at least one of her materials has _BlushPower (SetBlush() works)
         public bool HasGaze;               // bipedIK.solvers.lookAt.IKPositionWeight found (SetGaze() works)
         public bool HasGauge;              // SexMode_State_System found (Desire is live, FeedDesire() works)
@@ -43,6 +44,7 @@ namespace SfMorph
         public float LastClipLength;       // seconds (at the played pitch) of the last voice clip Moan()/MoanClip()/Breath() started
         public UnityEngine.Object LastClip;       // that clip (for the event log: .name), null before the first
         public UnityEngine.Object LastSlapClip;   // the clip of the last Slap()
+        public string SlapBanks = "";      // which arrays the slap sounds come from (for the log and the bridge line)
         public string BridgeLine = "";     // the one-per-session bridge log line (also logged once)
         public string GuardStatus = "off"; // the dirty-talk guard's status for the panel
         public int FeedCount;              // how many times FeedDesire() actually called the game
@@ -53,7 +55,9 @@ namespace SfMorph
         public bool SfxOn;                 // GameSetting_Function.soundEffectIsOn
         public bool BreakSystemOn;         // GameSetting_Function.dirtyTalkBreakSystemIsOn
         public bool DirtyTalkPlaying;      // LadyVoice_Function.dirtyTalkPlaying || dirtyTalk_audioSource.isPlaying
-        public bool DialoguePlaying;       // dialoguePlaying || kissInteractionPlaying || sexFacialPlaying || dialogue_audioSource.isPlaying
+        public bool DialoguePlaying;       // dialoguePlaying || kissInteractionPlaying || dialogue_audioSource.isPlaying (real scripted speech: a hard block)
+        public string DialogueWhy = "";    // which of those three: "dialogue", "kiss" or "dialogue audio" (empty when none)
+        public bool SexFacialPlaying;      // LadyVoice_Function.sexFacialPlaying (the feeling loops; on for long stretches in sex mode, not a block for slaps)
         public bool DirtyTalkPause;        // LadyVoice_Function.dirtyTalkPause
         public bool FunctionPause;         // FacialFunction.functionPause
         public bool FacialOff;             // FacialFunction.facialLayer == "off"
@@ -132,22 +136,25 @@ namespace SfMorph
         Mem _mLv, _mSnd, _mBp, _mAnim, _mGs, _mSm, _mFPause, _mLayer, _mBiped;
         Mem _mDtPause, _mDialogue, _mKiss, _mSexFacial, _mDtPlaying, _mLvPause, _mLib, _mSfxLib;
         Mem _mDtActive, _mDtList, _mDtVoice, _mDtNum, _mRandSeq, _mDtSpeed, _mDtType;
+        Mem _mSeType, _mSeVoice, _mSeNum, _mCumVoice, _mCumNum, _mFacLib, _mMixer;
         Mem _mSrcMoan, _mSrcDirty, _mSrcDialogue, _mSrcSfx, _mSrcVoice;
         Mem _mVoiceOn, _mSfxOn, _mBreakOn, _mLang;
         Mem _mSexMode, _mForeplay, _mTouchTime, _mDesire;
-        MethodInfo _miMoan, _miBlink, _miDesirePlus;
+        MethodInfo _miMoan, _miBlink, _miDesirePlus, _miEyeIn, _miEyeOut;
         // audio members (AudioSource / AudioClip, reflected)
         PropertyInfo _pPlaying, _pClip, _pPitch, _pVolume, _pBlend, _pRolloff, _pMin, _pMax, _pPlayAwake, _pGroup, _pClipLen;
         MethodInfo _miPlay, _miStop, _miOneShot;
         Func<object, bool> _isPlayingFast;
-        readonly object[] _argOneShot = new object[2];
+        readonly object[] _argOneShot = new object[2], _argInt = new object[1], _argFlt = new object[1];
         // gaze accessors
         Mem _mGazeW; Func<object, float> _gazeGet; Action<object, float> _gazeSet;
         // animator
-        int _hMoan;
+        int _hMoan, _hEyeIn, _hEyeOut; bool _hasEyeTrig;
         // clips
         readonly Bank[] _moanBanks = { new Bank(), new Bank(), new Bank() };
-        readonly Bank _breath = new Bank(), _slap = new Bank();
+        readonly Bank _breath = new Bank(), _slapHard = new Bank(), _slapSoft = new Bank();
+        readonly int[][] _eyeIds = new int[3][];            // DirtyTalk_Facial_Library.public_DT_Lv1..3
+        string _eyeText = "";
         int _bankLang = -1;
         // our sfx source
         GameObject _sfxGo; Behaviour _sfxSrc;
@@ -158,6 +165,9 @@ namespace SfMorph
         int _idBlush;
         // trackers and timers
         bool _trigSet; float _trigT;
+        float _eyeOutAt, _eyeResetAt; int _eyeK;
+        int _gateMask; float _gateLogT = -100f;
+        bool _slapDiag; Type _tListener; string _blushSig = "";
         bool _pitchHold; float _pitchBase, _pitchSet;
         bool _gHold; float _gBase, _gLast;
         float _now, _gateT = -100f, _nextFind, _nextSlow, _nextSet, _lastFeed = -100f, _ownEnd;
@@ -167,8 +177,10 @@ namespace SfMorph
         readonly List<string> _missing = new List<string>();
 
         // ---- guard state ----
-        bool _guardSub, _guardDead, _guardBackoff;
-        volatile bool _voiceErr;
+        bool _guardSub, _guardDead, _guardBackoff, _dtDead;
+        volatile bool _voiceErr, _sfxErr;
+        int _sfxRepairs, _sfxSinceLog, _sfxLogMs, _sfxErrTotal; bool _sfxLoggedFirst;
+        readonly Dictionary<string, Mem[]> _seMems = new Dictionary<string, Mem[]>();
         int _errAfter, _errTotal;
         bool _repaired; int _lastRepairMs, _guardMs, _repairLogMs, _backoffUntilMs, _repairs, _repairsSinceLog;
         bool _guardLoggedFirst;
@@ -337,14 +349,22 @@ namespace SfMorph
         // Whether the facial Animator's controller has a "moan" trigger (at resolve, and again when the controller is swapped).
         void CheckAnim()
         {
-            HasAnim = false; _animCtrl = null;
+            HasAnim = false; _animCtrl = null; _hasEyeTrig = false;
             if (_anim == null || Dead(_anim)) return;
             _hMoan = Animator.StringToHash("moan");
+            _hEyeIn = Animator.StringToHash("reaction_enter_Eye"); _hEyeOut = Animator.StringToHash("reaction_out_Eye");
             try
             {
                 _animCtrl = _anim.runtimeAnimatorController;
+                bool ein = false, eout = false;
                 foreach (var p in _anim.parameters)
-                    if (p.type == AnimatorControllerParameterType.Trigger && p.nameHash == _hMoan) HasAnim = true;
+                {
+                    if (p.type != AnimatorControllerParameterType.Trigger) continue;
+                    if (p.nameHash == _hMoan) HasAnim = true;
+                    else if (p.nameHash == _hEyeIn) ein = true;
+                    else if (p.nameHash == _hEyeOut) eout = true;
+                }
+                _hasEyeTrig = ein && eout;
             }
             catch (Exception e) { LogOnce("animparams", "Animator parameters unreadable: " + e.Message); HasAnim = true; }
             if (!HasAnim) Miss("Animator trigger 'moan'");
@@ -368,6 +388,9 @@ namespace SfMorph
             _mBiped = M(tf, "bipedIK", "FacialFunction.bipedIK");
             _miMoan = Me(tf, "MoanFunction", "FacialFunction.MoanFunction()", Type.EmptyTypes);
             _miBlink = Me(tf, "Blink", "FacialFunction.Blink()", Type.EmptyTypes);
+            _miEyeIn = Me(tf, "ReactionFacialEnter_Eye", "FacialFunction.ReactionFacialEnter_Eye(int)", typeof(int));
+            _miEyeOut = Me(tf, "ReactionFacialOut_Eye", "FacialFunction.ReactionFacialOut_Eye(float)", typeof(float));
+            _mFacLib = M(tf, "dirtyTalk_Facial_Library", "FacialFunction.dirtyTalk_Facial_Library");
             _hasMoanFn = _miMoan != null; HasMoan = _hasMoanFn; HasBlink = _miBlink != null;
 
             _lv = _mLv.Get(_facial); _snd = _mSnd.Get(_facial); _bp = _mBp.Get(_facial); _gs = _mGs.Get(_facial); _sm = _mSm.Get(_facial);
@@ -395,6 +418,12 @@ namespace SfMorph
             _mRandSeq = M(tl, "randomSequence", "LadyVoice_Function.randomSequence");
             _mDtSpeed = M(tl, "dirtyTalkSpeedTime", "LadyVoice_Function.dirtyTalkSpeedTime");
             _mDtType = M(tl, "dirtyTalkType", "LadyVoice_Function.dirtyTalkType");
+            _mSeType = M(tl, "soundEffectType", "LadyVoice_Function.soundEffectType");
+            _mSeVoice = M(tl, "sexSoundEffectVoice", "LadyVoice_Function.sexSoundEffectVoice");
+            _mSeNum = M(tl, "sexSeNum", "LadyVoice_Function.sexSeNum");
+            _mCumVoice = M(tl, "cumSoundEffectVoice", "LadyVoice_Function.cumSoundEffectVoice");
+            _mCumNum = M(tl, "cumSeNum", "LadyVoice_Function.cumSeNum");
+            _seMems.Clear(); _dtDead = false;
 
             // Sound_Function: the sources
             var ts = _snd != null ? _snd.GetType() : Ty("Sound_Function");
@@ -403,6 +432,7 @@ namespace SfMorph
             _mSrcDialogue = M(ts, "dialogue_audioSource", "Sound_Function.dialogue_audioSource");
             _mSrcSfx = M(ts, "soundEffect_audioSource", "Sound_Function.soundEffect_audioSource");
             _mSrcVoice = M(ts, "voice_audioSource", "Sound_Function.voice_audioSource");
+            _mMixer = Q(ts, "audioMixer");
             _srcMoan = _mSrcMoan.Get(_snd) as Behaviour; _srcDirty = _mSrcDirty.Get(_snd) as Behaviour;
             _srcDialogue = _mSrcDialogue.Get(_snd) as Behaviour; _srcSfx = _mSrcSfx.Get(_snd) as Behaviour; _srcVoice = _mSrcVoice.Get(_snd) as Behaviour;
             _tSrc = null;
@@ -424,6 +454,7 @@ namespace SfMorph
             BuildLibrary(Int(_mLang, _gs, 0));
             HasMoan = _hasMoanFn || HasLibrary;
             BuildSfx();
+            BuildEye();
         }
 
         void ResolveAudioMembers()
@@ -556,22 +587,64 @@ namespace SfMorph
             return r;
         }
 
-        // The SFX clip arrays (handJob_fast, else sex_fast) of SoundEffect_Library, not per language.
+        // The slap clips: sex_fast (the skin-on-skin impact of the thrusts) for hard slaps, sex_normal for soft ones, handJob_fast as the
+        // fallback for either (it sounds like hand-job stroking, so it is last). SoundEffect_Library is not per language.
         void BuildSfx()
         {
-            _slap.Clips = null; for (int k = 0; k < 4; k++) _slap.Recent[k] = -1;
-            HasSfx = false;
+            _slapHard.Clips = null; _slapSoft.Clips = null;
+            for (int k = 0; k < 4; k++) { _slapHard.Recent[k] = -1; _slapSoft.Recent[k] = -1; }
+            HasSfx = false; SlapBanks = "";
             if (!_mSfxLib.Ok || _lv == null || _srcSfx == null || _miOneShot == null) { return; }
             try
             {
                 var lib = _mSfxLib.Get(_lv);
                 if (lib == null) { Miss("LadyVoice_Function.soundEffect_Library (null)"); return; }
                 var tl = lib.GetType();
-                var clips = ToClips(M(tl, "handJob_fast", "SoundEffect_Library.handJob_fast").Get(lib) as Array);
-                if (clips == null || clips.Length == 0) clips = ToClips(M(tl, "sex_fast", "SoundEffect_Library.sex_fast").Get(lib) as Array);
-                if (clips != null && clips.Length > 0) { _slap.Clips = clips; HasSfx = true; }
+                var fast = ToClips(Q(tl, "sex_fast").Get(lib) as Array);
+                var normal = ToClips(Q(tl, "sex_normal").Get(lib) as Array);
+                UnityEngine.Object[] hand = null;
+                if (fast == null || fast.Length == 0 || normal == null || normal.Length == 0)
+                {
+                    hand = ToClips(M(tl, "handJob_fast", "SoundEffect_Library.handJob_fast").Get(lib) as Array);
+                    if (hand != null && hand.Length == 0) hand = null;
+                }
+                bool hardOk = fast != null && fast.Length > 0, softOk = normal != null && normal.Length > 0;
+                _slapHard.Clips = hardOk ? fast : hand;
+                _slapSoft.Clips = softOk ? normal : (hardOk ? fast : hand);
+                HasSfx = _slapHard.Count > 0 && _slapSoft.Count > 0;
+                SlapBanks = "hard " + (hardOk ? "sex_fast" : "handJob_fast") + " (" + _slapHard.Count + "), soft "
+                          + (softOk ? "sex_normal" : (hardOk ? "sex_fast" : "handJob_fast")) + " (" + _slapSoft.Count + ")";
+                LogOnce("slapbanks", "slap sound clips: " + SlapBanks);
             }
             catch (Exception e) { LogOnce("buildsfx", "sound effect library unreadable: " + e.Message); }
+        }
+
+        // The game's eye reaction ids (DirtyTalk_Facial_Library.public_DT_Lv1..3, Int32[]): level 1 soft, 2 hard, 3 too hard. Logged once.
+        void BuildEye()
+        {
+            HasEyeReact = false; _eyeIds[0] = _eyeIds[1] = _eyeIds[2] = null; _eyeText = "";
+            if (_miEyeIn == null || _miEyeOut == null || !_mFacLib.Ok) return;
+            try
+            {
+                var lib = _mFacLib.Get(_facial);
+                if (lib == null || Dead(lib)) { LogOnce("eyelibnull", "eye reaction: FacialFunction.dirtyTalk_Facial_Library is null"); return; }
+                var tl = lib.GetType();
+                var sb = new StringBuilder();
+                bool any = false;
+                for (int lv = 0; lv < 3; lv++)
+                {
+                    var arr = Q(tl, "public_DT_Lv" + (lv + 1)).Get(lib) as int[];
+                    _eyeIds[lv] = arr != null && arr.Length > 0 ? arr : null;
+                    if (_eyeIds[lv] != null) any = true;
+                    if (lv > 0) sb.Append(" | ");
+                    sb.Append("Lv").Append(lv + 1).Append(' ');
+                    if (arr == null) sb.Append("null"); else { sb.Append('['); for (int i = 0; i < arr.Length; i++) { if (i > 0) sb.Append(','); sb.Append(arr[i]); } sb.Append(']'); }
+                }
+                _eyeText = sb.ToString();
+                HasEyeReact = any;
+                LogOnce("eyeids", "eye reaction ids (public_DT_Lv1..3): " + _eyeText + (any ? "" : " (none usable: the wince stays)") + (_hasEyeTrig ? "" : "; the Animator has no reaction_enter_Eye/reaction_out_Eye trigger pair"));
+            }
+            catch (Exception e) { LogOnce("buildeye", "eye reaction ids unreadable: " + e.Message); HasEyeReact = false; }
         }
 
         void FindGauge(float now, bool first)
@@ -627,12 +700,20 @@ namespace SfMorph
             if (!same) DiscoverBlush(her);
         }
 
+        // Only her skin: materials whose name contains "body", "face" or "foot" (the game's reika_mouth / teeth / uterus / rectum materials
+        // have the property too and must stay as they are).
+        static bool SkinMaterial(string mn)
+        {
+            return mn.Contains("body") || mn.Contains("face") || mn.Contains("foot");
+        }
+
         void DiscoverBlush(Character her)
         {
             RestoreBlush();
             _bm.Clear(); _bmSrc.Clear(); _bmFirst.Clear();
             BlushFaceCount = BlushBodyCount = 0;
             if (_idBlush == 0) _idBlush = Shader.PropertyToID("_BlushPower");
+            var names = new List<string>();
             try
             {
                 foreach (var r in her.Renderers)
@@ -644,21 +725,28 @@ namespace SfMorph
                     {
                         var m = mats[i];
                         if (m == null || !m.HasProperty(_idBlush)) continue;
+                        string mn = m.name.ToLowerInvariant();
+                        if (!SkinMaterial(mn)) continue;
                         bool dup = false;
                         for (int k = 0; k < _bm.Count; k++) if (_bm[k].M == m) { dup = true; break; }
                         if (dup) continue;
-                        string rn = r.name.ToLowerInvariant(), mn = m.name.ToLowerInvariant();
+                        string rn = r.name.ToLowerInvariant();
                         bool face = rn.Contains("face") || rn.Contains("head") || mn.Contains("face") || mn.Contains("head");
                         var bm = new BMat { M = m, Face = face, Base = m.GetFloat(_idBlush) };
                         bm.Last = bm.Base;
                         _bm.Add(bm);
+                        names.Add(m.name);
                         if (face) BlushFaceCount++; else BlushBodyCount++;
                     }
                 }
             }
             catch (Exception e) { LogOnce("blushscan", "blush materials unreadable: " + e.Message); }
             HasBlush = _bm.Count > 0;
-            if (_bridgeLogged) Log("blush materials re-read: " + BlushText());
+            names.Sort(StringComparer.Ordinal);
+            string sig = string.Join("|", names.ToArray());
+            // logged when the set of materials changed (the order of a re-scan varies and is not a change)
+            if (_bridgeLogged && sig != _blushSig) Log("blush materials re-read: " + BlushText());
+            _blushSig = sig;
         }
 
         string BlushText()
@@ -712,8 +800,9 @@ namespace SfMorph
             sb.Append("; touchReactionTime ").Append(TouchReactionTime.ToString("0.##")).Append("; language ").Append(Language);
             sb.Append("; moan banks [").Append(HasLibrary ? BanksText() : "none").Append("]");
             sb.Append("; breath clips ").Append(_breath.Count);
-            sb.Append("; sfx clips ").Append(_slap.Count).Append(" (handJob_fast, else sex_fast)");
-            sb.Append("; blush ").Append(BlushText());
+            sb.Append("; slap clips ").Append(SlapBanks.Length > 0 ? SlapBanks : "none");
+            sb.Append("; eye reaction ").Append(HasEyeReact ? _eyeText : "none");
+            sb.Append("; blush (skin only) ").Append(BlushText());
             sb.Append("; look-at ").Append(HasGaze ? "found" : "none");
             sb.Append("; missing: ").Append(Missing.Length == 0 ? "none" : Missing);
             BridgeLine = sb.ToString();   // not logged here: Reactions logs it once as "Reactions: " + BridgeLine
@@ -758,7 +847,17 @@ namespace SfMorph
                 if (lang != _bankLang) { BuildLibrary(lang); HasMoan = _hasMoanFn || HasLibrary; }
                 DirtyTalkPause = Bool(_mDtPause, _lv);
                 DirtyTalkPlaying = Bool(_mDtPlaying, _lv) || Playing(_srcDirty);
-                DialoguePlaying = Bool(_mDialogue, _lv) || Bool(_mKiss, _lv) || Bool(_mSexFacial, _lv) || Playing(_srcDialogue);
+                bool dlg = Bool(_mDialogue, _lv), kiss = Bool(_mKiss, _lv), dsrc = Playing(_srcDialogue);
+                SexFacialPlaying = Bool(_mSexFacial, _lv);
+                DialoguePlaying = dlg || kiss || dsrc;
+                DialogueWhy = dlg ? "dialogue" : kiss ? "kiss" : dsrc ? "dialogue audio" : "";
+                int mask = (dlg ? 1 : 0) | (kiss ? 2 : 0) | (dsrc ? 4 : 0) | (SexFacialPlaying ? 8 : 0);
+                if (mask != _gateMask && _now - _gateLogT >= 2f)
+                {
+                    _gateMask = mask; _gateLogT = _now;
+                    Log("voice gates: dialogue " + (dlg ? "on" : "off") + ", kiss " + (kiss ? "on" : "off") + ", dialogue audio " + (dsrc ? "on" : "off")
+                        + " (these block the voice); sexFacial " + (SexFacialPlaying ? "on" : "off") + " (blocks only caresses and grope)");
+                }
                 FunctionPause = _mFPause.Ok ? Bool(_mFPause, _facial) : Bool(_mLvPause, _lv);
                 var layer = _mLayer.Ok ? _mLayer.Get(_facial) as string : null;
                 FacialLayer = layer ?? "";
@@ -790,6 +889,66 @@ namespace SfMorph
         // The "moan" trigger safety: 1 s after any trigger we (or the game's MoanFunction) set, reset it. ReadGates calls it too.
         public void ResetMoan() { TickTrigger(); }
 
+        // Every frame (cheap): the trigger safety and the eye reaction's delayed exit.
+        public void Pump(float now)
+        {
+            _now = now;
+            TickTrigger();
+            TickEye();
+            OwnVoicePlaying = now < _ownEnd;
+        }
+
+        // ---- the game's eye reaction (FacialFunction.ReactionFacialEnter_Eye(k) now, ReactionFacialOut_Eye(k) 0.6-1.0 s later) ----
+        // level 1 soft, 2 hard, 3 too hard; k is a random id from public_DT_Lv<level>. True = the eye reaction is running (this call's or one
+        // already in progress). Both calls only act when the game's facialLayer allows ("on" / "eye").
+        public bool EyeReact(int level, out int k)
+        {
+            k = -1;
+            if (!Found || !HasEyeReact || !_hasEyeTrig || Dead(_facial)) return false;
+            if (_eyeOutAt > 0f) { k = _eyeK; return true; }
+            if (FacialLayer != "on" && FacialLayer != "eye") return false;
+            int[] ids = null;
+            for (int d = 0; d < 3 && ids == null; d++)
+            {
+                int lv = Mathf.Clamp(level - 1 - d, 0, 2);
+                ids = _eyeIds[lv];
+            }
+            for (int lv = 0; lv < 3 && ids == null; lv++) ids = _eyeIds[lv];
+            if (ids == null) return false;
+            try
+            {
+                k = ids[UnityEngine.Random.Range(0, ids.Length)];
+                _argInt[0] = k;
+                _miEyeIn.Invoke(_facial, _argInt);
+                _eyeK = k; _eyeOutAt = _now + 0.6f + UnityEngine.Random.value * 0.4f; _eyeResetAt = 0f;
+                return true;
+            }
+            catch (Exception e) { LogOnce("eyein:" + e.GetType().Name, "ReactionFacialEnter_Eye threw " + (e.InnerException ?? e).Message); HasEyeReact = false; return false; }
+        }
+
+        void TickEye()
+        {
+            if (_eyeOutAt > 0f && (_now >= _eyeOutAt || _eyeOutAt - _now > 5f)) FinishEye();
+            if (_eyeResetAt > 0f && (_now >= _eyeResetAt || _eyeResetAt - _now > 5f))
+            {
+                _eyeResetAt = 0f;
+                try { if (_anim != null && !Dead(_anim) && _hasEyeTrig) { _anim.ResetTrigger(_hEyeIn); _anim.ResetTrigger(_hEyeOut); } }
+                catch (Exception e) { LogOnce("eyereset", "eye trigger reset failed: " + e.Message); }
+            }
+        }
+
+        // The exit of the eye reaction (also when we let go of the game).
+        void FinishEye()
+        {
+            if (_eyeOutAt <= 0f) return;
+            _eyeOutAt = 0f; _eyeResetAt = _now + 0.5f;
+            try
+            {
+                if (_miEyeOut != null && _facial != null && !Dead(_facial)) { _argFlt[0] = (float)_eyeK; _miEyeOut.Invoke(_facial, _argFlt); }
+            }
+            catch (Exception e) { LogOnce("eyeout:" + e.GetType().Name, "ReactionFacialOut_Eye threw " + (e.InnerException ?? e).Message); }
+        }
+
         // The game's own touch reaction: MoanFunction() (Animator "moan" + a Moan clip + the dirty-talk pause). The arbiter is Reactions'.
         public bool Moan()
         {
@@ -820,7 +979,7 @@ namespace SfMorph
 
         // Mode 1: our own pick from bank 0 short / 1 mid / 2 long (draw-and-park 4) on the moan source at `pitch` (AudioSource.pitch, 1 = as
         // recorded), voice loop stopped, "moan" trigger for the mouth. The pitch is restored when the clip ends (ReadGates tick).
-        public bool MoanClip(int bank, float pitch)
+        public bool MoanClip(int bank, float pitch, bool stopDirty)
         {
             if (!Found || !HasLibrary || _srcMoan == null || Dead(_srcMoan)) return false;
             try
@@ -829,6 +988,9 @@ namespace SfMorph
                 var clip = b.Pick();
                 if (clip == null) return false;
                 if (!_pitchHold) _pitchBase = GetPitch(_srcMoan, 1f);
+                // like the game's DirtyTalkMoan: talking stops for the moan; a moan or breath still sounding is cut
+                if (stopDirty && _srcDirty != null && !Dead(_srcDirty) && _miStop != null && Playing(_srcDirty)) _miStop.Invoke(_srcDirty, null);
+                if (_miStop != null && (Playing(_srcMoan) || _now < _ownEnd)) { _miStop.Invoke(_srcMoan, null); _ownEnd = 0f; OwnVoicePlaying = false; }
                 _pClip.SetValue(_srcMoan, clip, null);
                 if (_pPitch != null) _pPitch.SetValue(_srcMoan, pitch, null);
                 _pitchHold = true; _pitchSet = pitch;
@@ -839,6 +1001,14 @@ namespace SfMorph
                 return true;
             }
             catch (Exception e) { LogOnce("moanclip:" + e.GetType().Name, "own moan clip failed: " + e.Message); return false; }
+        }
+
+        // A strong hit cuts the moan or breath that is still sounding (before the game's MoanFunction starts its own).
+        public void StopMoan()
+        {
+            if (!Found || _srcMoan == null || Dead(_srcMoan) || _miStop == null) return;
+            try { _miStop.Invoke(_srcMoan, null); _ownEnd = 0f; OwnVoicePlaying = false; MoanPlaying = false; }
+            catch (Exception e) { LogOnce("stopmoan", "stopping the moan source failed: " + e.Message); }
         }
 
         float GetPitch(Behaviour src, float def)
@@ -937,34 +1107,69 @@ namespace SfMorph
                 _sfxSrc = _sfxGo.AddComponent(_tSrc) as Behaviour;
                 if (_sfxSrc == null) { UnityEngine.Object.Destroy(_sfxGo); _sfxGo = null; return false; }
                 if (_pPlayAwake != null) _pPlayAwake.SetValue(_sfxSrc, false, null);
-                if (_pBlend != null) _pBlend.SetValue(_sfxSrc, 1f, null);
+                if (_pBlend != null) _pBlend.SetValue(_sfxSrc, 0.6f, null);                  // mostly 3D, but not lost at arm's length
                 if (_pRolloff != null) _pRolloff.SetValue(_sfxSrc, Enum.ToObject(_pRolloff.PropertyType, 0), null);   // Logarithmic
-                if (_pMin != null) _pMin.SetValue(_sfxSrc, 0.3f, null);
-                if (_pMax != null) _pMax.SetValue(_sfxSrc, 8f, null);
+                if (_pMin != null) _pMin.SetValue(_sfxSrc, 1.5f, null);
+                if (_pMax != null) _pMax.SetValue(_sfxSrc, 12f, null);
+                if (_pVolume != null) _pVolume.SetValue(_sfxSrc, 1f, null);
                 if (_pGroup != null) _pGroup.SetValue(_sfxSrc, _pGroup.GetValue(_srcSfx, null), null);
                 return true;
             }
             catch (Exception e) { LogOnce("sfxsrc:" + e.GetType().Name, "own sound source failed: " + e.Message); _sfxSrc = null; return false; }
         }
 
-        // A slap clip (handJob_fast, else sex_fast; draw-and-park 4) as a one-shot at `at` with volume scale `vol` and source pitch `pitch`.
-        // Respects the game's sound-effect setting. Never touches the game's shared source or clip.
-        public bool Slap(Vector3 at, float vol, float pitch)
+        // A slap clip (hard: sex_fast, soft: sex_normal, else handJob_fast; draw-and-park 4) as a one-shot at `at` with volume scale `vol`
+        // (may exceed 1) and source pitch `pitch`. Respects the game's sound-effect setting. Never touches the game's shared source or clip.
+        // diag: also log the clip, the listener distance and the mixer level (always done once, on the first slap).
+        public bool Slap(Vector3 at, float vol, float pitch, bool hard, bool diag)
         {
             if (!Found || !HasSfx || !SfxOn) return false;
             if (!EnsureSfx()) return false;
             try
             {
-                var clip = _slap.Pick();
+                var clip = (hard ? _slapHard : _slapSoft).Pick();
                 if (clip == null) return false;
                 _sfxGo.transform.position = at;
                 if (_pPitch != null) _pPitch.SetValue(_sfxSrc, pitch, null);
                 _argOneShot[0] = clip; _argOneShot[1] = Mathf.Max(0f, vol);
                 _miOneShot.Invoke(_sfxSrc, _argOneShot);
                 LastSlapClip = clip;
+                if (diag || !_slapDiag) { _slapDiag = true; SlapDiag(clip, at, vol, hard); }
                 return true;
             }
             catch (Exception e) { LogOnce("slap:" + e.GetType().Name, "slap sound failed: " + e.Message); return false; }
+        }
+
+        // What the slap sounded like on paper: clip name and length, how far the listener is, the mixer group and its level in dB.
+        void SlapDiag(UnityEngine.Object clip, Vector3 at, float vol, bool hard)
+        {
+            try
+            {
+                var sb = new StringBuilder("slap sound: ");
+                sb.Append(hard ? "hard " : "soft ").Append("clip ").Append(clip.name).Append(' ').Append(ClipLen(clip).ToString("0.00")).Append("s, volume scale ").Append(vol.ToString("0.00"));
+                if (_tListener == null && _tSrc != null) _tListener = _tSrc.Assembly.GetType("UnityEngine.AudioListener");
+                var lis = _tListener != null ? UnityEngine.Object.FindObjectOfType(_tListener) as Component : null;
+                sb.Append(", listener ").Append(lis != null ? (lis.transform.position - at).magnitude.ToString("0.00") + " m away (" + lis.name + ")" : "not found");
+                string grp = "?";
+                var g = _pGroup != null ? _pGroup.GetValue(_sfxSrc, null) as UnityEngine.Object : null;
+                grp = g != null ? g.name : "none";
+                sb.Append(", mixer group ").Append(grp);
+                var mixer = _mMixer != null && _mMixer.Ok && _snd != null ? _mMixer.Get(_snd) : null;
+                if (mixer != null)
+                {
+                    var mi = mixer.GetType().GetMethod("GetFloat", new[] { typeof(string), typeof(float).MakeByRefType() });
+                    if (mi != null)
+                    {
+                        var a = new object[] { "soundEffect", 0f };
+                        var r = mi.Invoke(mixer, a);
+                        bool ok = r is bool && (bool)r;
+                        sb.Append(", game 'soundEffect' level ").Append(ok ? ((float)a[1]).ToString("0.0") + " dB" : "not exposed");
+                    }
+                }
+                else sb.Append(", mixer not reachable");
+                Log(sb.ToString());
+            }
+            catch (Exception e) { LogOnce("slapdiag", "slap diagnostics failed: " + e.Message); }
         }
 
         // ======================================================================================================================
@@ -1072,14 +1277,15 @@ namespace SfMorph
         }
 
         // ======================================================================================================================
-        // The dirty-talk guard (LadyVoice_Function.PlayRandomVoice IndexOutOfRange every frame): keep dirtyTalkVoice / dirtyTalkPlayNum
-        // valid for the current dirtyTalkVoiceList. Independent of the reactions toggle; never writes randomSequence or dirtyTalkActive.
+        // The voice guard (LadyVoice_Function.PlayRandomVoice IndexOutOfRange / NullReference): keep dirtyTalkVoice / dirtyTalkPlayNum valid for
+        // the current dirtyTalkVoiceList, and sexSoundEffectVoice / sexSeNum for the sex sound-effect list (GuardSfx below). Independent of the reactions toggle; never writes randomSequence or dirtyTalkActive.
         // ======================================================================================================================
         void OnLog(string condition, string stackTrace, LogType type)
         {
             if (type != LogType.Exception || condition == null || stackTrace == null) return;
-            if (condition.IndexOf("IndexOutOfRange", StringComparison.Ordinal) < 0) return;
+            if (condition.IndexOf("IndexOutOfRange", StringComparison.Ordinal) < 0 && condition.IndexOf("NullReference", StringComparison.Ordinal) < 0) return;
             if (stackTrace.IndexOf("PlayRandomVoice", StringComparison.Ordinal) < 0) return;
+            if (stackTrace.IndexOf("SexSoundEffect", StringComparison.Ordinal) >= 0) { _sfxErr = true; _sfxErrTotal++; return; }   // the sex SFX shuffle, not dirty talk
             _voiceErr = true;
             System.Threading.Interlocked.Increment(ref _errAfter);
             _errTotal++;
@@ -1115,17 +1321,17 @@ namespace SfMorph
                     Log("voice guard: repairs don't stop the error (" + _errAfter + " exceptions within 2 s of a repair), leaving it for 60 s. " + GuardDump("state"));
                     return;
                 }
-                bool err = _voiceErr;
-                if (!err && unchecked(ms - _guardMs) < 200) return;
-                _guardMs = ms; _voiceErr = false;
-                GuardTick(err, ms);
+                bool err = _voiceErr, serr = _sfxErr;
+                if (!err && !serr && unchecked(ms - _guardMs) < 200) return;
+                _guardMs = ms; _voiceErr = false; _sfxErr = false;
+                GuardTick(err, serr, ms);
             }
             catch (Exception e) { LogOnce("guarderr:" + e.GetType().Name, "voice guard failed: " + e.Message); }
         }
 
         void Interlocked0() { System.Threading.Interlocked.Exchange(ref _errAfter, 0); }
 
-        void GuardTick(bool err, int ms)
+        void GuardTick(bool err, bool serr, int ms)
         {
             var lv = _lv;
             if (lv == null || Dead(lv))
@@ -1134,16 +1340,24 @@ namespace SfMorph
                 GuardStatus = "waiting for the game's voice object";
                 return;
             }
+            if (!_dtDead) GuardDirty(err, ms, lv);
+            GuardSfx(serr, ms, lv);
+            if (_sfxRepairs > 0 && !GuardStatus.StartsWith("off")) GuardStatus += "; sound-effect shuffle repaired " + _sfxRepairs + " times";
+        }
+
+        // ---- the dirty-talk shuffle ----
+        void GuardDirty(bool err, int ms, object lv)
+        {
             if (!_mDtActive.Ok || !_mDtList.Ok || !_mDtVoice.Ok || !_mDtNum.Ok || !_mRandSeq.Ok)
             {
-                _guardDead = true; GuardStatus = "off: the game's dirty-talk members were not found";
+                _dtDead = true; GuardStatus = "off: the game's dirty-talk members were not found";
                 LogOnce("guarddead", "voice guard: off (dirty-talk members missing: " + Missing + ")");
                 return;
             }
             int R = Int(_mRandSeq, lv, 0);
             if (R < 1 || R > 64)
             {
-                _guardDead = true; GuardStatus = "off: randomSequence is " + R;
+                _dtDead = true; GuardStatus = "off: randomSequence is " + R;
                 LogOnce("guardR", "voice guard: off (randomSequence " + R + " is outside 1..64)");
                 return;
             }
@@ -1203,6 +1417,124 @@ namespace SfMorph
             catch (Exception) { return why; }
         }
 
+        // ---- the sex sound-effect shuffle ----
+        // LadyVoice_Function.SexSoundEffect(speed) plays a list of SoundEffect_Library chosen by soundEffectType and the speed (< 1 slow,
+        // 1..1.4 normal, above fast) through the same PlayRandomVoice, with the permutation sexSoundEffectVoice and the counter sexSeNum
+        // (cum: cum_soundEffect with cumSoundEffectVoice / cumSeNum). One permutation serves all three speeds, whose lists differ in length;
+        // the game's counter also starts at 0 with no permutation. Repairs only what throws for sure (a permutation index at or past every list,
+        // no permutation at all, a counter past the permutation, a refill window longer than every list); after an exception from this path
+        // it is stricter (the shortest list). A null or empty list cannot be repaired, it is only reported once.
+        static string SfxPrefix(string type)
+        {
+            switch (type)
+            {
+                case "sex": return "sex_";
+                case "handJob": case "footJob": return "handJob_";
+                case "tittyFuck": return "tittyFuck_";
+                case "finger": return "foreplay_finger_";
+                case "sexToy": return "foreplay_sexToy_";
+                case "tongue": return "foreplay_tongue_";
+                case "sixNine": return "foreplay_sixNine_";
+                case "penisMassage": return "foreplay_penisMassage_";
+                case "urethraMassage": return "foreplay_urethraMassage_";
+            }
+            return null;
+        }
+
+        Mem[] SfxLists(Type libType, string type)
+        {
+            Mem[] r;
+            if (_seMems.TryGetValue(type, out r)) return r;
+            if (type == "cum") r = new[] { Q(libType, "cum_soundEffect") };
+            else
+            {
+                string pre = SfxPrefix(type);
+                r = pre == null ? null : new[] { Q(libType, pre + "slow"), Q(libType, pre + "normal"), Q(libType, pre + "fast") };
+            }
+            _seMems[type] = r;
+            return r;
+        }
+
+        void GuardSfx(bool err, int ms, object lv)
+        {
+            if (!_mSeType.Ok || !_mSeVoice.Ok || !_mSeNum.Ok || !_mSfxLib.Ok || !_mRandSeq.Ok) return;
+            int R = Int(_mRandSeq, lv, 0);
+            if (R < 1 || R > 64) return;
+            string type = _mSeType.Get(lv) as string;
+            if (string.IsNullOrEmpty(type)) return;
+            object lib = _mSfxLib.Get(lv);
+            if (lib == null || Dead(lib)) return;
+            var lists = SfxLists(lib.GetType(), type);
+            if (lists == null) return;                      // a type the game plays nothing for
+            bool cum = type == "cum";
+            int minLen = int.MaxValue, maxLen = 0, bad = 0;
+            for (int i = 0; i < lists.Length; i++)
+            {
+                if (lists[i] == null || !lists[i].Ok) continue;
+                var a = lists[i].Get(lib) as Array;
+                int len = a != null ? a.Length : 0;
+                if (len == 0) { bad++; continue; }
+                if (len < minLen) minLen = len;
+                if (len > maxLen) maxLen = len;
+            }
+            if (bad > 0 && err) LogOnce("sfxnull:" + type, "voice guard: " + bad + " of the sound-effect lists for type " + type + " are null or empty, the game throws whenever it plays those (not repairable)");
+            if (maxLen == 0) return;
+            Mem mv = cum ? _mCumVoice : _mSeVoice, mn = cum ? _mCumNum : _mSeNum;
+            if (!mv.Ok || !mn.Ok) return;
+            int n = Int(mn, lv, -1);
+            var seq = mv.Get(lv) as int[];
+            int lim = err ? minLen : maxLen;                // an index at or past lim throws for sure (maxLen) or for some speed (minLen)
+            string why = null;
+            if (n >= 0)
+            {
+                if (seq == null) why = "no sound-effect shuffle (playNum " + n + ")";
+                else if (n >= seq.Length) why = "sound-effect playNum " + n + " beyond a shuffle of " + seq.Length;
+                else for (int i = 0; i <= n; i++) if (seq[i] < 0 || seq[i] >= lim) { why = "stale sound-effect shuffle (index " + i + " -> " + seq[i] + " of a list of " + lim + ")"; break; }
+            }
+            else if (R > lim) why = "sound-effect list of " + lim + " is shorter than the shuffle window " + R;
+            if (why == null)
+            {
+                if (err) LogOnce("sfxvalid", "voice guard: PlayRandomVoice threw from the sound effects but the shuffle looks valid. " + SfxDump(lv, type, lists, lib, R, n, seq, why));
+                return;
+            }
+            string dump = !_sfxLoggedFirst ? SfxDump(lv, type, lists, lib, R, n, seq, why) : null;
+            if (n >= 0 && minLen >= R) mn.Set(lv, -1);   // the counter says "refill": the game rebuilds it for the list it plays
+            else
+            {
+                // the window is longer than a list: a shuffle of our own over the shortest list, valid for every speed
+                var perm = new int[minLen];
+                for (int i = 0; i < minLen; i++) perm[i] = i;
+                var sq = new int[R];
+                int k = minLen;
+                for (int i = 0; i < R; i++)
+                {
+                    if (k >= minLen) { for (int j = minLen - 1; j > 0; j--) { int r = UnityEngine.Random.Range(0, j + 1); int t = perm[j]; perm[j] = perm[r]; perm[r] = t; } k = 0; }
+                    sq[i] = perm[k++];
+                }
+                mv.Set(lv, sq); mn.Set(lv, R - 1);
+            }
+            _sfxRepairs++; _sfxSinceLog++;
+            if (dump != null) { _sfxLoggedFirst = true; _sfxLogMs = ms; _sfxSinceLog = 0; Log("voice guard: " + why + ", repaired. " + dump); }
+            else if (unchecked(ms - _sfxLogMs) >= 10000) { _sfxLogMs = ms; Log("voice guard: " + _sfxSinceLog + " more sound-effect repair(s) in the last 10 s (last: " + why + "), " + _sfxErrTotal + " sound-effect exceptions seen in all"); _sfxSinceLog = 0; }
+        }
+
+        string SfxDump(object lv, string type, Mem[] lists, object lib, int R, int n, int[] seq, string why)
+        {
+            try
+            {
+                var sb = new StringBuilder("soundEffectType ").Append(type).Append(", lists");
+                for (int i = 0; i < lists.Length; i++)
+                {
+                    var a = lists[i] != null && lists[i].Ok ? lists[i].Get(lib) as Array : null;
+                    sb.Append(i == 0 ? " " : "/").Append(a != null ? a.Length.ToString() : "null");
+                }
+                sb.Append(", randomSequence ").Append(R).Append(", playNum ").Append(n).Append(", seq ").Append(seq == null ? "null" : seq.Length + (n >= 0 && n < seq.Length ? " [n]=" + seq[n] : ""))
+                  .Append(" (").Append(why ?? "state").Append(')');
+                return sb.ToString();
+            }
+            catch (Exception) { return why ?? "state"; }
+        }
+
         // ======================================================================================================================
         // Release / Drop
         // ======================================================================================================================
@@ -1212,6 +1544,7 @@ namespace SfMorph
             try { RestoreGaze(); } catch (Exception) { }
             try { RestorePitch(); } catch (Exception) { }
             if (_trigSet) { _trigSet = false; ResetTriggerNow(); }
+            if (_eyeOutAt > 0f) { FinishEye(); _eyeResetAt = 0f; try { if (_anim != null && !Dead(_anim) && _hasEyeTrig) { _anim.ResetTrigger(_hEyeIn); _anim.ResetTrigger(_hEyeOut); } } catch (Exception) { } }
         }
 
         void Drop(string why)
@@ -1235,7 +1568,10 @@ namespace SfMorph
             _isPlayingFast = null; _gazeGet = null; _gazeSet = null; _mGazeW = null;
             _miMoan = _miBlink = _miDesirePlus = null;
             for (int i = 0; i < _moanBanks.Length; i++) _moanBanks[i].Clips = null;
-            _breath.Clips = null; _slap.Clips = null; _bankLang = -1;
+            _breath.Clips = null; _slapHard.Clips = null; _slapSoft.Clips = null; _bankLang = -1;
+            _eyeOutAt = 0f; _eyeResetAt = 0f; _eyeIds[0] = _eyeIds[1] = _eyeIds[2] = null; HasEyeReact = false; _hasEyeTrig = false; _eyeText = "";
+            _miEyeIn = _miEyeOut = null; _mMixer = null; _slapDiag = false; _blushSig = ""; _gateMask = 0; _gateLogT = -100f;
+            DialogueWhy = ""; SexFacialPlaying = false; SlapBanks = "";
             _bm.Clear(); _bmSrc.Clear(); _bmFirst.Clear(); BlushFaceCount = BlushBodyCount = 0;
             _hasMoanFn = false;
             HasMoan = HasLibrary = HasBreath = HasSfx = HasBlush = HasGaze = HasGauge = HasAnim = HasBlink = false;
@@ -1245,7 +1581,7 @@ namespace SfMorph
             _gateT = -100f; _nextFind = 0f; _nextSlow = 0f; _nextSet = 0f; _ownEnd = 0f; _moanFail = 0; _moanOffUntil = 0f;
             _bridgeLogged = false; BridgeLine = "";
             _pitchHold = false; _gHold = false; _trigSet = false;
-            _guardDead = false; _guardBackoff = false; _repaired = false; _voiceErr = false;
+            _guardDead = false; _dtDead = false; _guardBackoff = false; _repaired = false; _voiceErr = false; _sfxErr = false; _seMems.Clear();
             GuardStatus = "off";
         }
     }

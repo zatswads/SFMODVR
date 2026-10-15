@@ -85,7 +85,7 @@ namespace SfMorph
                 if (tfd != feed) _p.ReactFeedDesire.Value = tfd;
             }
             else GUILayout.Label("    off: " + sub, _off);
-            GUILayout.Label("Face: a wince or blink when there is no voice. Gaze away: she looks away for a moment after a hard hit. " +
+            GUILayout.Label("Face: the game's own eye reaction on slaps (a wince or blink when it is not available). Gaze away: she looks away for a moment after a hard hit. " +
                             "Feed: touch also raises the game's own desire gauge.", _hint);
 
             GUI.enabled = sub == null && voice;
@@ -189,7 +189,7 @@ namespace SfMorph
         {
             GUILayout.Label("Game voice", _bold);
             GUI.enabled = whoOff == null;
-            bool g = GUILayout.Toggle(guard, " Repair the game's dirty-talk voice error (IndexOutOfRange every frame)");
+            bool g = GUILayout.Toggle(guard, " Repair the game's voice shuffle errors (dirty talk and sex sound effects)");
             GUI.enabled = true;
             if (whoOff == null && g != guard) _p.VoiceGuard.Value = g;
             if (whoOff != null) { GUILayout.Label("    off: " + whoOff, _off); return; }
