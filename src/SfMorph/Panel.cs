@@ -540,13 +540,13 @@ namespace SfMorph
             v = Slider("    bounce", _p.SpineBounce.Value * 100f, 0f, 100f, "0", 30f, subOff, " %") / 100f;
             if (Mathf.Abs(v - _p.SpineBounce.Value) > 0.0001f) _p.SpineBounce.Value = v;
             GUI.enabled = sub == null;
-            bool planted = GUILayout.Toggle(_p.OverlapPlanted.Value, " Planted hands and feet stay where the animation puts them");
+            bool planted = GUILayout.Toggle(_p.OverlapPlanted.Value, " Planted hands and feet stay where the animation puts them (on her, on him, on the bed; a fast free swing lets go)");
             GUI.enabled = true;
             if (sub == null && planted != _p.OverlapPlanted.Value) _p.OverlapPlanted.Value = planted;
             if (off == null && _body.Overlap.Status.Length > 0) GUILayout.Label(_body.Overlap.Status, _body.Overlap.Status.StartsWith("off") ? _off : _hint);
             GUILayout.Label("Her elbows, wrists, knees, head and spine trail fast animation a little and settle (follow-through). " +
                             "It fades out where a hand or her other leg touches her, so contacts don't slide. " +
-                            "Ripple: motion travels down the chains (a fast turn of the torso swings the head and arms a little later). " +
+                            "Ripple: inertia down the chains (turns and lurches of the torso swing the head and arms a little later, even with Spine at 0). " +
                             "Bounce: how much a part overshoots and settles.", _hint);
         }
 
