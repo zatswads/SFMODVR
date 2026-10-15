@@ -4,10 +4,16 @@ SF Body Morphs character pipeline: a VaM character's shape and skin onto her, fo
   powershell -ExecutionPolicy Bypass -File tools\pipeline\run.ps1 -Name Yin `
       -Game "E:\...\SF\VR" -Vam "E:\...\virt\vam" -Blender "E:\...\Blender\blender.exe"
 
-Paths are remembered in %LOCALAPPDATA%\SfMorph\pipeline.json, so later runs only need -Name (or nothing).
-Inputs: the newest folder in <Vam>\Saves\PluginData\SfExport\ and in <Game>\BepInEx\config\SfMorphs\export\
-(override with -VamExport / -GameExport). Output: <Game>\BepInEx\config\SfMorphs\morphs\<Name>\ (the game
-loads it from there), with _check\report.txt and before/after renders.
+  run.ps1                      newest VaM export -> a character named after it (info.txt), unique ("Name", "Name 2")
+  run.ps1 -All                 every export in <Vam>\Saves\PluginData\SfExport that has no converted folder yet
+  run.ps1 -All -Force          ... all of them again (existing folders are overwritten)
+
+Paths are remembered in %LOCALAPPDATA%\SfMorph\pipeline.json (-NoSave: not this time), so later runs need nothing.
+Inputs: the VaM export(s) above and the newest folder in <Game>\BepInEx\config\SfMorphs\export\ (override with
+-VamExport / -GameExport). Output: <Game>\BepInEx\config\SfMorphs\morphs\<Name>\ (the game loads it from there; override
+the parent with -OutRoot), with _check\summary.txt (PASS/WARN lines), _check\report.txt and before/after renders.
+-All keeps going when a character fails and ends with a table; a failed character has no character.txt, so the game
+ignores it and the next -All tries it again.
 #>
 param(
     [string]$Name,
@@ -16,8 +22,12 @@ param(
     [string]$Blender,
     [string]$VamExport,
     [string]$GameExport,
+    [string]$OutRoot,
     [int]$TextureSize = 4096,
-    [switch]$NoBake
+    [switch]$NoBake,
+    [switch]$All,
+    [switch]$Force,
+    [switch]$NoSave
 )
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -30,7 +40,7 @@ foreach ($k in 'Game', 'Vam', 'Blender') {
     $v = Get-Variable $k -ValueOnly
     if ($v) { $cfg[$k] = $v } elseif (-not $cfg[$k]) { throw "-$k is needed once (then remembered in $cfgPath)" }
 }
-$cfg | ConvertTo-Json | Set-Content $cfgPath -Encoding UTF8
+if (-not $NoSave) { $cfg | ConvertTo-Json | Set-Content $cfgPath -Encoding UTF8 }
 $Game = $cfg.Game; $Vam = $cfg.Vam; $Blender = $cfg.Blender
 if ((Split-Path -Leaf $Blender) -ne 'blender.exe') { $Blender = Join-Path $Blender 'blender.exe' }
 if (-not (Test-Path $Blender)) { throw "Blender not found: $Blender" }
@@ -40,20 +50,16 @@ function Newest($dir) {
     if (-not $d) { throw "no export folders in $dir" }
     $d.FullName
 }
-if (-not $VamExport) { $VamExport = Newest (Join-Path $Vam 'Saves\PluginData\SfExport') }
+$vamRoot = Join-Path $Vam 'Saves\PluginData\SfExport'
 if (-not $GameExport) { $GameExport = Newest (Join-Path $Game 'BepInEx\config\SfMorphs\export') }
 $rows = Get-Content (Join-Path $GameExport 'meshes.txt') | Where-Object { $_ -and -not $_.StartsWith('#') }
 if (-not $rows) { throw "meshes.txt in $GameExport lists no meshes: export her again with SfMorph 0.5.1 or newer" }
-if (-not $Name) {
-    $info = Get-Content (Join-Path $VamExport 'info.txt') | Where-Object { $_ -like 'character*' } | Select-Object -First 1
-    $Name = if ($info) { ($info -split "`t")[1] } else { 'Character' }
-}
-$out = Join-Path $Game "BepInEx\config\SfMorphs\morphs\$Name"
-New-Item -ItemType Directory -Force $out | Out-Null
-Get-ChildItem $out -File -Filter '*.morph.txt' -ErrorAction SilentlyContinue | Remove-Item
+$morphs = if ($OutRoot) { $OutRoot } else { Join-Path $Game 'BepInEx\config\SfMorphs\morphs' }
+New-Item -ItemType Directory -Force $morphs | Out-Null
 
 # Blender's own Python has numpy; scipy goes into a private folder (never into Blender's install)
-$py = Get-ChildItem (Split-Path $Blender) -Recurse -Filter python.exe -Depth 3 | Where-Object { $_.FullName -match '\\python\\bin\\' } | Select-Object -First 1
+$py = Get-ChildItem (Split-Path $Blender) -Recurse -Filter python.exe -Depth 3 | Where-Object { $_.FullName -match '\\python\\bin\\' } |
+    Sort-Object FullName -Descending | Select-Object -First 1
 if (-not $py) { throw "Blender's python.exe not found next to $Blender" }
 $deps = Join-Path $store 'pydeps'
 $env:PYTHONPATH = $deps
@@ -64,13 +70,163 @@ if ($LASTEXITCODE -ne 0) {
     Get-ChildItem $deps -Directory -Filter 'numpy*' | Remove-Item -Recurse -Force  # keep Blender's own numpy
 }
 
-Write-Host "VaM export : $VamExport`nGame export: $GameExport`nOutput     : $out"
-& $py.FullName (Join-Path $here 'sfpipe.py') --game $GameExport --vam $VamExport --out $out --name $Name
-$fitOk = $LASTEXITCODE -eq 0
-$args2 = @('-b', '--factory-startup', '-P', (Join-Path $here 'blend.py'), '--', '--out', $out, '--vam', $VamExport, '--size', $TextureSize)
-if ($NoBake) { $args2 += '--no-bake' }
-& $Blender @args2 | Select-String '^\[blend\]' | ForEach-Object { $_.Line }
-if ($LASTEXITCODE -ne 0) { throw 'Blender stage failed (see output above)' }
-Write-Host ''
-Write-Host ("Done: '$Name' in $out" + $(if ($fitOk) { '' } else { '  (verification flagged rows: see _check\report.txt)' }))
-Write-Host "Renders: $out\_check\*.png"
+# ---- naming ------------------------------------------------------------------------------------------------
+function Get-CharacterName($exportDir) {
+    $f = Join-Path $exportDir 'info.txt'
+    $n = $null
+    if (Test-Path $f) {
+        $line = Get-Content $f | Where-Object { $_ -like 'character*' } | Select-Object -First 1
+        if ($line) { $n = ($line -split "`t")[1] }
+    }
+    if ($n) { $n = ($n -replace '[\\/:*?"<>|]', '_').Trim().TrimEnd('.') }
+    if (-not $n) { $n = (Split-Path -Leaf $exportDir) }
+    $n
+}
+
+function Get-CharMeta($dir) {
+    $m = @{ exists = $false; vamexport = $null; source = $null }
+    $f = Join-Path $dir 'character.txt'
+    if (Test-Path $f) {
+        $m.exists = $true
+        foreach ($l in Get-Content $f) {
+            $t = $l -split "`t"
+            if ($t.Count -ge 2 -and ($t[0] -eq 'vamexport' -or $t[0] -eq 'source')) { $m[$t[0]] = $t[1] }
+        }
+    }
+    $m
+}
+
+# the converted folder of an export: the one whose character.txt names it (vamexport), else (folders made before that
+# line existed) one made from a character of the same name
+function Find-Converted($leaf, $character) {
+    $legacy = $null
+    foreach ($d in Get-ChildItem -Directory $morphs -ErrorAction SilentlyContinue) {
+        $m = Get-CharMeta $d.FullName
+        if (-not $m.exists) { continue }
+        if ($m.vamexport -eq $leaf) { return $d.Name }
+        if (-not $m.vamexport -and $m.source -and $m.source -eq $character) { $legacy = $d.Name }
+    }
+    $legacy
+}
+
+# a free folder name: "Name", else "Name 2", "Name 3" ... (a folder that already holds this export, or nothing, is free)
+function Get-FreeName($base, $leaf, $character) {
+    $i = 1
+    while ($true) {
+        $cand = if ($i -eq 1) { $base } else { "$base $i" }
+        $dir = Join-Path $morphs $cand
+        if (-not (Test-Path $dir)) { return $cand }
+        $m = Get-CharMeta $dir
+        if (-not $m.exists) { return $cand }
+        if ($m.vamexport -eq $leaf) { return $cand }
+        if (-not $m.vamexport -and $m.source -eq $character) { return $cand }
+        $i++
+    }
+}
+
+# ---- one character -----------------------------------------------------------------------------------------
+# quiet: only a progress line instead of the whole fit/bake output (the full text goes to _check\run.log either way)
+function Convert-Export($exportDir, $charName, $quiet) {
+    $res = [pscustomobject]@{ Name = $charName; Export = (Split-Path -Leaf $exportDir); Result = 'FAIL'; Pass = 0; Warn = 0; Note = ''; Out = ''; Flagged = $false }
+    $out = Join-Path $morphs $charName
+    $res.Out = $out
+    try {
+        New-Item -ItemType Directory -Force (Join-Path $out '_check') | Out-Null
+        $runLog = Join-Path $out '_check\run.log'
+        Set-Content $runLog "VaM export : $exportDir`nGame export: $GameExport`nOutput     : $out" -Encoding UTF8
+        Get-ChildItem $out -File -Filter '*.morph.txt' -ErrorAction SilentlyContinue | Remove-Item
+        foreach ($stale in 'summary.txt', 'stage.npz') { Remove-Item (Join-Path $out "_check\$stale") -ErrorAction SilentlyContinue }
+        Write-Host "VaM export : $exportDir`nGame export: $GameExport`nOutput     : $out"
+        $ErrorActionPreference = 'Continue'   # (Windows PowerShell 5.1 turns native stderr into errors otherwise)
+        & $py.FullName (Join-Path $here 'sfpipe.py') --game $GameExport --vam $exportDir --out $out --name $charName 2>&1 | ForEach-Object {
+            $t = "$_"; Add-Content $runLog $t -Encoding UTF8
+            if (-not $quiet -or $t -match '^(ERROR|WARN|fit stage|character )') { Write-Host $t }
+        }
+        $fitCode = $LASTEXITCODE
+        $summary = Join-Path $out '_check\summary.txt'
+        if ($fitCode -ge 2 -or -not (Test-Path (Join-Path $out '_check\stage.npz')) -or -not (Test-Path $summary)) {
+            $msg = ''
+            if (Test-Path $summary) { $msg = ((Get-Content $summary | Select-Object -First 1) -replace '^FAIL\s+', '') }
+            if (-not $msg) { $msg = "fit stage failed (exit $fitCode), see $out\_check\run.log" }
+            $res.Note = $msg
+            return $res
+        }
+        $args2 = @('-b', '--factory-startup', '--python-exit-code', '1', '-P', (Join-Path $here 'blend.py'), '--', '--out', $out, '--vam', $exportDir, '--size', $TextureSize)
+        if ($NoBake) { $args2 += '--no-bake' }
+        & $Blender @args2 2>&1 | ForEach-Object {
+            $t = "$_"; Add-Content $runLog $t -Encoding UTF8
+            if ($t -match '^\[blend\]' -and (-not $quiet -or $t -match 'WARN|baked|done in')) { Write-Host $t }
+        }
+        $blenderCode = $LASTEXITCODE
+        $lines = @(Get-Content $summary | Where-Object { $_ })
+        $res.Pass = @($lines | Where-Object { $_ -like 'PASS*' }).Count
+        $res.Warn = @($lines | Where-Object { $_ -like 'WARN*' }).Count
+        if ($blenderCode -ne 0) {
+            $res.Note = "Blender stage failed (exit $blenderCode), see $out\_check\run.log"
+            return $res
+        }
+        $res.Result = if ($res.Warn -eq 0) { 'OK' } else { 'WARN' }
+        $res.Flagged = $fitCode -ne 0
+        $first = $lines | Where-Object { $_ -like 'WARN*' } | Select-Object -First 1
+        if ($first) { $res.Note = (($first -replace '^WARN\s+', '')); if ($res.Warn -gt 1) { $res.Note += " (+$($res.Warn - 1) more)" } }
+    } catch {
+        $res.Note = "$($_.Exception.Message)"
+    } finally {
+        $ErrorActionPreference = 'Stop'
+    }
+    $res
+}
+
+function Show-Summary($res) {
+    $s = Join-Path $res.Out '_check\summary.txt'
+    Write-Host ''
+    if (Test-Path $s) { Write-Host "--- $($res.Name): _check\summary.txt ---"; Get-Content $s | ForEach-Object { Write-Host $_ } }
+    else { Write-Host "--- $($res.Name): no summary ($($res.Note)) ---" }
+}
+
+# ---- run ---------------------------------------------------------------------------------------------------
+if ($All) {
+    if ($Name) { Write-Host '-Name is ignored with -All (each character is named from its info.txt)' }
+    if (-not (Test-Path $vamRoot)) { throw "no SfExport folder in $vamRoot (export a character from VaM with the SfExport plugin first)" }
+    $exports = @(Get-ChildItem -Directory $vamRoot | Sort-Object LastWriteTime)
+    if (-not $exports) { throw "no export folders in $vamRoot" }
+    $table = @()
+    $n = 0
+    foreach ($e in $exports) {
+        $n++
+        $character = Get-CharacterName $e.FullName
+        $done = Find-Converted $e.Name $character
+        if ($done -and -not $Force) {
+            Write-Host "[$n/$($exports.Count)] $($e.Name): already converted as '$done' (-Force converts it again)"
+            $table += [pscustomobject]@{ Name = $done; Export = $e.Name; Result = 'skipped'; Pass = ''; Warn = ''; Note = '' }
+            continue
+        }
+        $target = if ($done) { $done } else { Get-FreeName $character $e.Name $character }
+        Write-Host ''
+        Write-Host "[$n/$($exports.Count)] $($e.Name) -> '$target'"
+        $res = Convert-Export $e.FullName $target $true
+        Show-Summary $res
+        $table += $res
+    }
+    Write-Host ''
+    $table | Format-Table Name, Export, Result, Pass, Warn, Note -AutoSize -Wrap | Out-String -Width 200 | Write-Host
+    $failed = @($table | Where-Object { $_.Result -eq 'FAIL' }).Count
+    Write-Host ("{0} export(s): {1} converted, {2} skipped, {3} failed. Open F8 > Characters > Rescan in the game." -f $table.Count,
+        @($table | Where-Object { $_.Result -eq 'OK' -or $_.Result -eq 'WARN' }).Count, @($table | Where-Object { $_.Result -like 'skipped*' }).Count, $failed)
+    if ($failed) { exit 1 }
+} else {
+    if (-not $VamExport) { $VamExport = Newest $vamRoot }
+    $character = Get-CharacterName $VamExport
+    $leaf = Split-Path -Leaf $VamExport
+    if (-not $Name) { $Name = Get-FreeName $character $leaf $character }
+    $res = Convert-Export $VamExport $Name $false
+    Show-Summary $res
+    Write-Host ''
+    if ($res.Result -eq 'FAIL') {
+        Write-Host "FAILED: '$Name': $($res.Note)"
+        exit 1
+    }
+    Write-Host ("Done: '$Name' in $($res.Out)" + $(if ($res.Flagged) { '  (verification flagged rows: see _check\report.txt)' } else { '' }))
+    Write-Host "Renders: $($res.Out)\_check\*.png"
+    Write-Host 'In the game: F8 > Characters > Rescan.'
+}

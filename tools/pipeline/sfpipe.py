@@ -8,9 +8,11 @@ stage.npz for the Blender bake/render stage).
 """
 import argparse
 import os
+import re
 import shutil
 import sys
 import time
+import traceback
 
 import numpy as np
 
@@ -39,13 +41,35 @@ ATTACH = ('reika_nipple_type_1', 'reika_nail_normal', 'lewdTattoos_normal', 'pub
 HIDE = ('reika_eyeBrow_a',)  # hidden while a character is on (the baked face texture has its brows)
 VAM_SKIN = {'Legs', 'Nostrils', 'Lips', 'Face', 'Toenails', 'Fingernails', 'Head', 'Hands', 'Shoulders', 'Neck',
             'Hips', 'Torso', 'Nipples', 'Forearms', 'Feet', 'Ears', 'defaultMat'}
+# VaM skin groups the fit cannot do without (a missing one stops the run); the other VAM_SKIN groups are optional
+# (the step that uses them is skipped with a WARN): Nostrils, Lips, Toenails, Fingernails, Nipples, Ears, defaultMat.
+VAM_SKIN_REQUIRED = {'Legs', 'Face', 'Head', 'Hands', 'Shoulders', 'Neck', 'Hips', 'Torso', 'Forearms', 'Feet'}
+VAM_FILES = ('body.obj', 'joints.txt', 'materials.txt')
+# her bones that sfpipe.py reads directly (the rest of her rig is handled by rig.py, which skips what is missing)
+HER_BONES = ('Eye_L', 'Eye_R', 'Head_M', 'Neck_M', 'Chest_M', 'Shoulder_L', 'Shoulder_R', 'Scapula_L', 'Scapula_R',
+             'Elbow_L', 'Elbow_R')
+FACE_JOINTS = {'Eye_L', 'Eye_R', 'Jaw_M'}   # the only joints an offset may be written for (--joints face)
 
 LOG = []
+WARNS = []     # up-front and skipped-step warnings, repeated as WARN lines in _check/summary.txt
+
+
+class Fatal(Exception):
+    """A problem that stops the run with one clear message (no traceback)."""
+
+
+def die(msg):
+    raise Fatal(msg)
 
 
 def log(s):
     print(s, flush=True)
     LOG.append(s)
+
+
+def warn(s):
+    log('WARN: ' + s)
+    WARNS.append(s)
 
 
 FACE_LM = ('nose', 'chin', 'eyeL', 'eyeR', 'mouth', 'earL', 'earR')
@@ -91,6 +115,15 @@ def face_metrics(pts, eL, eR, mouth_pts=None, mouth=None, mesh=None):
     return dict(eL=eL, eR=eR, em=em, mouth=mouth, lip=lip, spacing=np.linalg.norm(eL - eR), eye_mouth=np.linalg.norm(em - mouth),
                 eye_lip=np.linalg.norm(em - lip),
                 nose=nose, chin=chin, width=x1 - x0, lat=lat, mrange=mrange)
+
+
+def safe_metrics(label, fn):
+    """Run a face-metrics measurement; an odd mesh (a window with no points in it) gives a WARN and None, not a crash."""
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001
+        warn('%s metrics could not be measured (%s: %s)' % (label, type(e).__name__, e))
+        return None
 
 
 def log_face_metrics(tag, m, log):
@@ -157,6 +190,80 @@ def body_metrics(sets, names, bind_pos, nip_y, log):
         log(r)
 
 
+def male_reason(vam):
+    """Why this export looks like a male Genesis 2 figure (or None): no 'Nipples' material, a 'Genitals' material
+    (Genesis 2 Male's; the female figure's genitals are 'defaultMat'), or info.txt naming a male figure."""
+    if 'Nipples' not in vam.groups:
+        return "body.obj has no 'Nipples' material group"
+    if 'Genitals' in vam.groups:
+        return "body.obj has a 'Genitals' material group (Genesis 2 Male)"
+    for k, v in vam.info.items():
+        if k.strip().lower() in ('character', 'atom'):   # names the user chose: not evidence
+            continue
+        t = (k + ' ' + v).lower()
+        if re.search(r'(?<![a-z])male(?![a-z])', t) or re.search(r'gender\W+m\b', t):
+            return 'info.txt says male (%s = %s)' % (k, v)
+    return None
+
+
+def has_group(vam, g):
+    """The VaM export has material group g with at least one face."""
+    return g in vam.groups and bool((vam.face_group == vam.groups.index(g)).any())
+
+
+def group_verts(vam, groups):
+    """Vertex indices of the faces of the given material groups (those that exist, with faces)."""
+    gi = [vam.groups.index(g) for g in groups if has_group(vam, g)]
+    if not gi:
+        return np.zeros(0, np.int64)
+    return np.unique(vam.faces[np.isin(vam.face_group, gi)])
+
+
+def validate_vam(vam, vamdir):
+    """Up-front checks of the VaM export. Stops (Fatal) on a male figure or missing required parts; optional pieces
+    that are missing are logged as WARN and their step is skipped. Returns the feature flags the fit branches on."""
+    why = male_reason(vam)
+    if why:
+        die('This VaM export looks like a male figure (%s). The pipeline maps the female Genesis 2 figure onto Reika; '
+            'export a female character.' % why)
+    miss = [j for j in rig.vam_joint_names() if j not in vam.joints]
+    if miss:
+        die('joints.txt lacks %d joint(s) the pipeline uses: %s. Is this a Genesis 2 figure exported by the SfExport '
+            'plugin?' % (len(miss), ', '.join(miss)))
+    if len(vam.faces) == 0 or len(vam.v) < 1000:
+        die('body.obj has no usable mesh (%d vertices, %d faces)' % (len(vam.v), len(vam.faces)))
+    if vam.uv is None or vam.vn is None or len(vam.uv) != len(vam.v) or len(vam.vn) != len(vam.v):
+        die('body.obj lacks UVs or normals per vertex: not an SfExport body.obj')
+    gone = sorted(g for g in VAM_SKIN_REQUIRED if not has_group(vam, g))
+    if gone:
+        die('body.obj lacks the skin material group(s) %s: not a complete Genesis 2 export' % ', '.join(gone))
+    feat = {}
+    for g, what in (('Nipples', "nipple landmarks (her nipples are not matched to the character's)"),
+                    ('Lips', 'mouth landmark (her mouth centre stays where it is; lip labels use her mouth position)'),
+                    ('Ears', 'ear landmarks (the lateral extreme of the head at eye height is used instead)'),
+                    ('Sclera', 'eyeball size and eye opening (eyeballs keep her size, eye opening not measured)'),
+                    ('InnerMouth', 'mouth-opening ring (the lip centre is used for the mouth metrics)'),
+                    ('Nostrils', 'nostril skin in the face metrics'),
+                    ('Toenails', 'toenail skin'), ('Fingernails', 'fingernail skin')):
+        feat[g] = has_group(vam, g)
+        if not feat[g]:
+            warn("VaM export has no '%s' faces: skipped %s" % (g, what))
+    # (texture slots: a missing/unreadable _MainTex or _BumpMap is reported by the bake stage, which falls back to
+    # a flat skin colour / flat normals)
+    return feat
+
+
+def check_game(meshes, canon, missing):
+    got = {m.name for m in meshes}
+    gone = sorted(n for n in FIT if n not in got)
+    if gone:
+        die('her export lacks the mesh(es) %s%s: export her again from SfMorph 0.5.1 or newer'
+            % (', '.join(gone), ' (missing .obj: %s)' % ', '.join(missing) if missing else ''))
+    gone = [b for b in HER_BONES if b not in canon]
+    if gone:
+        die('her skeleton/skin export lacks the bone(s) %s: export her again from SfMorph' % ', '.join(gone))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--game', required=True)
@@ -170,20 +277,46 @@ def main():
                     help="hers: the VaM character's surface and face on her own skeleton (limb, finger and shoulder "
                          "proportions stay hers, so her rig and animations fit); vam: also take VaM's proportions")
     a = ap.parse_args()
-    t0 = time.time()
     chk = os.path.join(a.out, '_check')
     os.makedirs(chk, exist_ok=True)
+    try:
+        return run(a, chk)
+    except Fatal as e:
+        fail(chk, str(e))
+    except Exception:  # noqa: BLE001
+        fail(chk, 'internal error (see the traceback in _check/report.txt)', traceback.format_exc())
+    return 2
 
+
+def fail(chk, msg, detail=None):
+    log('ERROR: ' + msg)
+    if detail:
+        log(detail)
+    with open(os.path.join(chk, 'report.txt'), 'w', encoding='utf-8') as f:
+        f.write('\n'.join(LOG) + '\n')
+    with open(os.path.join(chk, 'summary.txt'), 'w', encoding='utf-8', newline='\n') as f:
+        f.write('FAIL  %s\n' % msg)
+
+
+def run(a, chk):
+    t0 = time.time()
+    for fn in VAM_FILES:
+        if not os.path.isfile(os.path.join(a.vam, fn)):
+            die('VaM export %s lacks %s (is it an SfExport folder? re-export from VaM)' % (a.vam, fn))
     meshes, skel, missing = sfio.read_game_export(a.game)
     if not meshes:
-        raise SystemExit('meshes.txt lists no meshes in ' + a.game)
-    vam = sfio.read_vam_export(a.vam)
+        die('meshes.txt lists no meshes in ' + a.game)
+    try:
+        vam = sfio.read_vam_export(a.vam)
+    except (ValueError, IndexError, OSError) as e:
+        die('cannot read the VaM export %s: %s' % (a.vam, e))
     name = a.name or vam.info.get('character', 'Character')
     log('character %s: VaM export %s, game export %s' % (name, a.vam, a.game))
     log('her meshes: %d (%d missing .obj: %s)' % (len(meshes), len(missing), ', '.join(missing) or '-'))
     for m in meshes:
         if len(m.v) != m.expected:
-            raise SystemExit('%s: obj has %d vertices, meshes.txt says %d' % (m.name, len(m.v), m.expected))
+            die('%s: obj has %d vertices, meshes.txt says %d' % (m.name, len(m.v), m.expected))
+    feat = validate_vam(vam, a.vam)
 
     # --- common bind space -------------------------------------------------------------------------------
     canon = rig.canonical_binds(meshes)
@@ -194,6 +327,7 @@ def main():
         if moved > 1e-4:
             log('  %s: own mesh space differs from the common bind space by up to %.1f mm (placed via bind poses)' % (m.name, moved * 1000))
     bind_pos = {b: np.linalg.inv(canon[b])[:3, 3] for b in canon}
+    check_game(meshes, canon, missing)
 
     # --- VaM scaled to her eye height (keeps her height, so animations and scenes still line up) ---------
     vj = {k: j['pos'] for k, j in vam.joints.items()}
@@ -265,27 +399,33 @@ def main():
     bv = np.unique(ue[ec == 1])
     bv = bv[np.linalg.norm(face.vp[bv] - tc, axis=1) < 0.035]
     her_mouth = face.vp[bv].mean(0)
-    lips_v = vam_v[np.unique(vam.faces[vam.face_group == vam.groups.index('Lips')])]
-    vam_mouth = np.array([lips_v[:, 0].mean(), 0.5 * (lips_v[:, 1].min() + lips_v[:, 1].max()), lips_v[:, 2].max() - 0.008])
     her_mouth[2] = face.vp[bv][:, 2].max() - 0.004
-    log('mouth: hers %s, VaM %s (%d boundary vertices)' % (np.round(her_mouth, 3), np.round(vam_mouth, 3), len(bv)))
+    lips_v = vam_v[group_verts(vam, ['Lips'])]
+    lip_r = 0.03   # radius (y stretched 1.6x) round the mouth centre that is labelled upper/lower lip
+    if feat['Lips']:
+        vam_mouth = np.array([lips_v[:, 0].mean(), 0.5 * (lips_v[:, 1].min() + lips_v[:, 1].max()), lips_v[:, 2].max() - 0.008])
+        # a wide VaM mouth (lips wider than hers, 30 mm radius) gets a proportionally wider lip label
+        lip_r = max(0.03, 0.6 * float(np.ptp(lips_v[:, 0])))
+    else:
+        vam_mouth = her_mouth.copy()   # no VaM lips: her mouth stays where it is (no mouth landmark)
+    log('mouth: hers %s, VaM %s (%d boundary vertices), lip label radius %.1f mm' % (np.round(her_mouth, 3), np.round(vam_mouth, 3), len(bv), 1000 * lip_r))
     names += ['lipU', 'lipL']
     nb['lipU'] = {'lipU', 'torso'}; nb['lipL'] = {'lipL', 'torso'}; nb['torso'] |= {'lipU', 'lipL'}
-    def lip_labels(pts, lab, mc):
+    def lip_labels(pts, lab, mc, rad=0.03):
         r = np.linalg.norm((pts - mc) * np.array([1, 1.6, 1]), axis=1)
-        near = (r < 0.03) & (lab == names.index('torso'))
+        near = (r < rad) & (lab == names.index('torso'))
         lab = lab.copy()
         lab[near & (pts[:, 1] >= mc[1])] = names.index('lipU')
         lab[near & (pts[:, 1] < mc[1])] = names.index('lipL')
         return lab
     vsign = sfio.winding_sign(vam.v, vam.faces, vam.vn)
-    skin_g = [i for i, g in enumerate(vam.groups) if g in VAM_SKIN]
+    skin_g = [i for i, g in enumerate(vam.groups) if g in VAM_SKIN and has_group(vam, g)]
     vf = vam.faces[np.isin(vam.face_group, skin_g)]
     vfn, _ = sfio.face_normals(vam_v, vf)
     vfn *= vsign
     vlab = rig.labels(vam_v[vf].mean(1), vsegs, vj)
     hlab = lip_labels(wp, hlab, her_mouth)
-    vlab = lip_labels(vam_v[vf].mean(1), vlab, vam_mouth)
+    vlab = lip_labels(vam_v[vf].mean(1), vlab, vam_mouth, lip_r)
     surfaces = {}
     for li, n in enumerate(names):
         allowed = [names.index(x) for x in nb[n]]
@@ -297,14 +437,16 @@ def main():
     src = [P[h] for h, v in lm]; dst = [vj[v] for h, v in lm]
     # surface landmarks: nipple tips (her nipple mesh's front-most point per side, VaM's 'Nipples' material)
     nip = next((m for m in meshes if 'nipple' in m.name), None)
-    if nip is not None and 'Nipples' in vam.groups:
-        vn_i = np.unique(vam.faces[vam.face_group == vam.groups.index('Nipples')])
+    use_nip = nip is not None and feat['Nipples']
+    vn_i = group_verts(vam, ['Nipples'])
+    if use_nip:
         for sgn in (-1, 1):
             hm = nip.vp[np.sign(nip.vp[:, 0]) == sgn]; vm = vam_v[vn_i][np.sign(vam_v[vn_i, 0]) == sgn]
             if len(hm) and len(vm):
                 src.append(hm[np.argmax(hm[:, 2])]); dst.append(vm[np.argmax(vm[:, 2])])
                 lm.append(('nipple' + ('L' if sgn < 0 else 'R'), 'Nipples'))
-    src.append(her_mouth); dst.append(vam_mouth); lm.append(('mouth', 'Lips'))
+    if feat['Lips']:
+        src.append(her_mouth); dst.append(vam_mouth); lm.append(('mouth', 'Lips'))
     src = np.array(src); dst = np.array(dst)
     log('landmarks: %d joint centres, mean distance before warp %.1f mm, max %.1f mm (%s)' % (
         len(lm), 1000 * np.linalg.norm(dst - src, axis=1).mean(), 1000 * np.linalg.norm(dst - src, axis=1).max(),
@@ -323,6 +465,9 @@ def main():
         lids |= np.linalg.norm(x0 - dst[[i for i, (h, v) in enumerate(lm) if h == e][0]], axis=1) < 0.021
     log('stiffer fit on %d vertices (fingers, toes, eyelids); %d eyelid vertices keep her eye opening' % ((stiff > 1).sum(), lids.sum()))
     eye_off, eye_ratio, fm_her, fm_vam = None, {}, None, None
+    eye_open = None      # (apertures, closed) once measured on the VaM skin
+    r_vam = None
+    r_her = {}
     if a.proportions == 'vam':
         xfit, wmatch, dist = fit.nonrigid_icp(x0, wf, lambda x: sfio.vertex_normals(x, wf, hsign), surfaces, hlab, log, stiff=stiff, nodata=lids)
         # trunk only: the face's lips and lids and the fingers keep the vertex layout the fit gave them
@@ -339,7 +484,7 @@ def main():
         # shape only, and the joints barely move.
         from scipy.spatial import cKDTree
         vlab_v = rig.labels(vam_v, vsegs, vj)
-        vlab_v = lip_labels(vam_v, vlab_v, vam_mouth)
+        vlab_v = lip_labels(vam_v, vlab_v, vam_mouth, lip_r)
         Av = np.zeros((len(vam_v), 4, 4))
         for li, n in enumerate(names):
             selv = np.where(vlab_v == li)[0]
@@ -358,7 +503,7 @@ def main():
             if h in M and v in vj and h != 'Head_M' and not h.startswith('Eye_'):
                 bsrc.append(rig.apply(np.linalg.inv(M[h])[None], vj[v][None])[0]); bdst.append(bind_pos[h]); bl.append(h)
         # nipples and mouth: the same VaM points, unposed with their own vertex's skinning
-        if nip is not None and 'Nipples' in vam.groups:
+        if use_nip:
             for sgn in (-1, 1):
                 ids = vn_i[np.sign(vam_v[vn_i, 0]) == sgn]
                 hm = nip.vc[np.sign(nip.vc[:, 0]) == sgn]
@@ -390,33 +535,45 @@ def main():
         eye_off = {e: eye_c[e] - bind_pos[e] for e in eye_c}
         vm_a = vm_b + t_eye
         # eyeball radii: VaM's 'Sclera' vertices around their eye (VaM's rest pose, her scale), hers: her sclera meshes
-        scl = vam_v[np.unique(vam.faces[vam.face_group == vam.groups.index('Sclera')])]
-        r_vam = np.mean([np.linalg.norm(scl[np.sign(scl[:, 0]) == sg] - vj[k], axis=1).mean() for sg, k in ((-1, 'lEye'), (1, 'rEye'))])
-        r_her = {}
         for nm, e in (('reika_left_sclera', 'Eye_L'), ('reika_right_sclera', 'Eye_R')):
             ms = next((m for m in meshes if m.name == nm), None)
             if ms is not None:
                 r_her[e] = np.linalg.norm(ms.vc - bind_pos[e], axis=1).mean()
-        eye_ratio = {e: r_vam / r for e, r in r_her.items()}
-        log('eyeball radius: VaM %.2f mm, hers %s mm (scale %s); eye offsets %s mm' % (
-            1000 * r_vam, {e: round(float(1000 * r), 2) for e, r in r_her.items()}, {e: round(float(r), 3) for e, r in eye_ratio.items()},
-            {e: np.round(o * 1000, 1).tolist() for e, o in eye_off.items()}))
+        if feat['Sclera']:
+            scl = vam_v[group_verts(vam, ['Sclera'])]
+            rs = [np.linalg.norm(scl[np.sign(scl[:, 0]) == sg] - vj[k], axis=1).mean() for sg, k in ((-1, 'lEye'), (1, 'rEye'))
+                  if (np.sign(scl[:, 0]) == sg).any()]
+            r_vam = float(np.mean(rs)) if rs else None
+        if r_vam is not None:
+            # an eye-size morph can make the eyeballs very different from hers: keep her eyes within 0.75x..1.35x
+            eye_ratio = {e: float(np.clip(r_vam / r, 0.75, 1.35)) for e, r in r_her.items()}
+            if any(abs(r_vam / r - eye_ratio[e]) > 1e-9 for e, r in r_her.items()):
+                warn("VaM eyeballs are much bigger/smaller than hers (radius %.2f mm vs %.2f mm): eyeball scale limited to %s"
+                     % (1000 * r_vam, 1000 * np.mean(list(r_her.values())), {e: round(r, 3) for e, r in eye_ratio.items()}))
+            log('eyeball radius: VaM %.2f mm, hers %s mm (scale %s); eye offsets %s mm' % (
+                1000 * r_vam, {e: round(float(1000 * r), 2) for e, r in r_her.items()}, {e: round(float(r), 3) for e, r in eye_ratio.items()},
+                {e: np.round(o * 1000, 1).tolist() for e, o in eye_off.items()}))
+        else:
+            log('eyeball radius: no VaM Sclera, her eyeballs keep their size; eye offsets %s mm' % (
+                {e: np.round(o * 1000, 1).tolist() for e, o in eye_off.items()}))
         # face metrics source points: her face mesh (welded), VaM's head skin
         used = face.fit_idx
         face_w = widx[fit_off['reika_face_a'] + np.arange(len(used))]
         mouth_w = widx[fit_off['reika_face_a'] + np.searchsorted(used, bv)]
-        vhead = np.unique(vam.faces[np.isin(vam.face_group, [vam.groups.index(g) for g in ('Face', 'Nostrils', 'Lips', 'Ears', 'Head')])])
-        vears = np.unique(vam.faces[vam.face_group == vam.groups.index('Ears')])
-        fm_her = face_metrics(wc[face_w], bind_pos['Eye_L'], bind_pos['Eye_R'], mouth_pts=wc[mouth_w], mesh=(wc, wf))
+        vhead = group_verts(vam, ['Face', 'Nostrils', 'Lips', 'Ears', 'Head'])
+        vears = group_verts(vam, ['Ears'])
+        fm_her = safe_metrics('her face', lambda: face_metrics(wc[face_w], bind_pos['Eye_L'], bind_pos['Eye_R'], mouth_pts=wc[mouth_w], mesh=(wc, wf)))
         # VaM's mouth opening: its lip vertices that touch the inner mouth (the same kind of ring as her boundary vertices)
-        lip_i = np.unique(vam.faces[vam.face_group == vam.groups.index('Lips')])
-        in_i = np.unique(vam.faces[vam.face_group == vam.groups.index('InnerMouth')])
-        ring = lip_i[cKDTree(vam_b[in_i]).query(vam_b[lip_i])[0] < 0.0015]
+        ring = np.zeros(0, np.int64)
+        if feat['Lips'] and feat['InnerMouth']:
+            lip_i = group_verts(vam, ['Lips'])
+            in_i = group_verts(vam, ['InnerMouth'])
+            ring = lip_i[cKDTree(vam_b[in_i]).query(vam_b[lip_i])[0] < 0.0015]
         if len(ring) >= 10:
             vm_a = vam_b[ring].mean(0); vm_a[2] = vam_b[ring][:, 2].max() - 0.004
         log('VaM mouth opening: %d ring vertices, centre %s mm from the eye midpoint' % (len(ring), np.round(1000 * (vm_a - eye_mid_b), 1)))
-        fm_vam = face_metrics(vam_b[vhead], eye_c['Eye_L'], eye_c['Eye_R'], mouth_pts=vam_b[ring] if len(ring) >= 10 else None,
-                              mouth=None if len(ring) >= 10 else vm_a, mesh=(vam_b, vf))
+        fm_vam = safe_metrics('VaM face', lambda: face_metrics(vam_b[vhead], eye_c['Eye_L'], eye_c['Eye_R'], mouth_pts=vam_b[ring] if len(ring) >= 10 else None,
+                                                               mouth=None if len(ring) >= 10 else vm_a, mesh=(vam_b, vf)))
         vfn_b, _ = sfio.face_normals(vam_b, vf)
         vfn_b *= vsign
         surfaces = {}
@@ -440,21 +597,26 @@ def main():
         # VaM exports can catch the lids mid-blink. Measure each eye's opening on the VaM skin (the largest
         # skin-free gap on a vertical line through the eye, in front of the eyeball); if it's mostly closed, her
         # own lids keep their opening (and the report says to re-export with blinking off), else VaM's lids are fitted.
-        if 'Sclera' in vam.groups:
-            scl = np.unique(vam.faces[vam.face_group == vam.groups.index('Sclera')])
+        if feat['Sclera']:
+            scl = group_verts(vam, ['Sclera'])
             cen_f = vam_b[vf].mean(1)
-            apertures = []
+            apertures, ers = [], []
             for sgn in (-1, 1):
                 sv = vam_b[scl][np.sign(vam_b[scl, 0]) == sgn]
                 if not len(sv):
                     continue
                 ec = sv.mean(0); er = np.linalg.norm(sv - ec, axis=1).mean()
-                m = (np.abs(cen_f[:, 0] - ec[0]) < 0.002) & (cen_f[:, 2] > ec[2] + 0.5 * er) & (np.abs(cen_f[:, 1] - ec[1]) < 0.012)
-                ys = np.sort(np.r_[cen_f[m, 1] - ec[1], -0.012, 0.012])
+                # window sizes are fractions of the VaM eyeball radius er (15.3 mm on the character this was tuned on:
+                # 0.13 er = 2 mm wide line through the eye, 0.78 er = 12 mm up and down)
+                band = 0.78 * er
+                m = (np.abs(cen_f[:, 0] - ec[0]) < 0.13 * er) & (cen_f[:, 2] > ec[2] + 0.5 * er) & (np.abs(cen_f[:, 1] - ec[1]) < band)
+                ys = np.sort(np.r_[cen_f[m, 1] - ec[1], -band, band])
                 gaps = np.diff(ys)
                 apertures.append(float(gaps.max()) if len(gaps) else 0.0)
-            ap = min(apertures) if apertures else 1.0
-            closed = ap < 0.006
+                ers.append(er)
+            ap_min = min(apertures) if apertures else 1.0
+            closed = bool(apertures) and ap_min < 0.4 * float(np.mean(ers))     # 6 mm at er = 15.3 mm
+            eye_open = (apertures, closed) if apertures else None
             log('VaM eye opening: %s mm -> %s' % (', '.join('%.1f' % (1000 * a) for a in apertures),
                 'mostly closed (caught mid-blink?): her own lids keep their opening. Re-export from VaM with the SfExport '
                 'plugin (it turns blinking off) to get the character\'s eye shape too' if closed else 'open: the lids are fitted'))
@@ -474,17 +636,26 @@ def main():
         log('%d mouth-interior vertices keep her shape (no data); %d shoulder vertices stiffer (up to 6, data on)' % (mouth_in.sum(), n_sh.sum()))
         # Face pre-alignment: her head (only) is warped onto VaM's face landmarks first, so the ICP starts with the
         # nose, chin, ears and mouth near their targets (its smoothness term anchors to the aligned shape).
-        lm_her = face_landmarks(fm_her, wc[face_w], ears=None)
-        # her ear landmark is the lateral extreme of the face at eye height, so VaM's is the lateral extreme of its
-        # 'Ears' at eye height too (their centroid sits lower and further in: it squashed her ears by 3 cm)
-        ve = vam_b[vears]; ve = ve[np.abs(ve[:, 1] - eye_mid_b[1]) < 0.01]
-        ears_dst = np.array([ve[np.argmax(np.abs(ve[:, 0]) * (np.sign(ve[:, 0]) == sg))] for sg in (-1, 1)])
-        lm_vam = face_landmarks(fm_vam, vam_b[vhead], ears=ears_dst)
-        lsrc = np.array([lm_her[k] for k in FACE_LM]); ldst = np.array([lm_vam[k] for k in FACE_LM])
-        log('face pre-alignment landmarks, her -> VaM (mm): ' + ', '.join('%s %.1f' % (k, 1000 * np.linalg.norm(lm_vam[k] - lm_her[k])) for k in FACE_LM))
-        pre = fit.tps_warp(wc, lsrc, ldst, smoothing=1e-4)
-        w_her = np.where(np.isin(hlab, head_names), np.clip((wc[:, 1] - yN) / (yH - yN), 0, 1), 0.0)
-        x_start = wc + (pre - wc) * w_her[:, None]
+        if fm_her is not None and fm_vam is not None:
+            lm_her = face_landmarks(fm_her, wc[face_w], ears=None)
+            # her ear landmark is the lateral extreme of the face at eye height, so VaM's is the lateral extreme of its
+            # 'Ears' at eye height too (their centroid sits lower and further in: it squashed her ears by 3 cm)
+            ears_dst = None
+            if len(vears):
+                ve = vam_b[vears]; ve = ve[np.abs(ve[:, 1] - eye_mid_b[1]) < 0.01]
+                if (ve[:, 0] < 0).any() and (ve[:, 0] > 0).any():
+                    ears_dst = np.array([ve[np.argmax(np.abs(ve[:, 0]) * (np.sign(ve[:, 0]) == sg))] for sg in (-1, 1)])
+                else:
+                    warn('VaM Ears have no vertices at eye height on both sides: ear landmarks use the head width instead')
+            lm_vam = face_landmarks(fm_vam, vam_b[vhead], ears=ears_dst)
+            lsrc = np.array([lm_her[k] for k in FACE_LM]); ldst = np.array([lm_vam[k] for k in FACE_LM])
+            log('face pre-alignment landmarks, her -> VaM (mm): ' + ', '.join('%s %.1f' % (k, 1000 * np.linalg.norm(lm_vam[k] - lm_her[k])) for k in FACE_LM))
+            pre = fit.tps_warp(wc, lsrc, ldst, smoothing=1e-4)
+            w_her = np.where(np.isin(hlab, head_names), np.clip((wc[:, 1] - yN) / (yH - yN), 0, 1), 0.0)
+            x_start = wc + (pre - wc) * w_her[:, None]
+        else:
+            warn('face metrics failed: no face pre-alignment (the fit starts from her own face)')
+            x_start = wc.copy()
         min_dot = np.where(np.linalg.norm(wc - eye_mid_b, axis=1) < 0.12, 0.2, 0.5)
         xfit, wmatch, dist = fit.nonrigid_icp(x_start, wf, lambda x: sfio.vertex_normals(x, wf, hsign), surfaces, hlab, log, stiff=stiff_b, nodata=nodata, min_dot=min_dot)
         movable = (hlab == names.index('torso')) & (wc[:, 1] < bind_pos['Neck_M'][1])
@@ -583,27 +754,38 @@ def main():
 
     # --- verification ------------------------------------------------------------------------------------
     body = None
+    fm_diff = None      # face metric differences fitted - VaM (m), for the summary
     if bindfit:
-        fm_fit = face_metrics((wc + wd)[face_w], bind_pos['Eye_L'] + eye_off['Eye_L'], bind_pos['Eye_R'] + eye_off['Eye_R'],
-                              mouth_pts=(wc + wd)[mouth_w], mesh=(wc + wd, wf))
-        log('face metrics (head, eye midpoint at her eyes; positions relative to it):')
-        log_face_metrics('Reika bind face', fm_her, log)
-        log_face_metrics('VaM head (rigid, aligned)', fm_vam, log)
-        log_face_metrics('fitted result', fm_fit, log)
-        dif = lambda k: np.linalg.norm(fm_fit[k] - fm_vam[k]) if np.ndim(fm_fit[k]) else abs(fm_fit[k] - fm_vam[k])
-        log('  fitted - VaM: eye spacing %.1f mm, eye-mouth %.1f mm (lip front %.1f), nose %.1f mm, chin %.1f mm, head width %.1f mm' % (
-            1000 * dif('spacing'), 1000 * dif('eye_mouth'), 1000 * dif('eye_lip'), 1000 * dif('nose'), 1000 * dif('chin'), 1000 * dif('width')))
+        fm_fit = None
+        if fm_her is not None and fm_vam is not None:
+            fm_fit = safe_metrics('fitted face', lambda: face_metrics((wc + wd)[face_w], bind_pos['Eye_L'] + eye_off['Eye_L'], bind_pos['Eye_R'] + eye_off['Eye_R'],
+                                                                     mouth_pts=(wc + wd)[mouth_w], mesh=(wc + wd, wf)))
+        if fm_fit is not None:
+            log('face metrics (head, eye midpoint at her eyes; positions relative to it):')
+            log_face_metrics('Reika bind face', fm_her, log)
+            log_face_metrics('VaM head (rigid, aligned)', fm_vam, log)
+            log_face_metrics('fitted result', fm_fit, log)
+            dif = lambda k: np.linalg.norm(fm_fit[k] - fm_vam[k]) if np.ndim(fm_fit[k]) else abs(fm_fit[k] - fm_vam[k])
+            fm_diff = {k: float(dif(k)) for k in ('spacing', 'eye_mouth', 'eye_lip', 'nose', 'chin', 'width')}
+            log('  fitted - VaM: eye spacing %.1f mm, eye-mouth %.1f mm (lip front %.1f), nose %.1f mm, chin %.1f mm, head width %.1f mm' % (
+                1000 * dif('spacing'), 1000 * dif('eye_mouth'), 1000 * dif('eye_lip'), 1000 * dif('nose'), 1000 * dif('chin'), 1000 * dif('width')))
         nip_y = nip.vc[:, 1].mean() if nip is not None else bind_pos['Chest_M'][1]
         skin_vi = np.unique(vf.ravel())
         vlab_vb = vlab_v
         sets = {'Reika': (wc, hlab), 'fitted': (wc + wd, hlab), 'VaM-warped': (vam_out[skin_vi], vlab_vb[skin_vi])}
-        body = lambda: body_metrics(sets, names, bind_pos, nip_y, log)
+        def body():
+            try:
+                body_metrics(sets, names, bind_pos, nip_y, log)
+            except Exception as e:  # noqa: BLE001  (report only)
+                log('  body cross-sections not measured (%s)' % e)
     rep = verify(results, wmatch, dist, log, body)
     # the other direction: how well her fitted skin covers the VaM skin, per VaM material
     kd1 = cKDTree(xfit); kd0 = cKDTree(wc if bindfit else x0)
     rows = []
     for gi in skin_g:
         vi = np.unique(vam.faces[vam.face_group == gi])
+        if not len(vi):
+            continue
         d1, _ = kd1.query(vam_out[vi]); d0, _ = kd0.query(vam_out[vi])
         rows.append('%s %.1f/%.1f (%.1f)' % (vam.groups[gi], 1000 * d1.mean(), 1000 * np.percentile(d1, 95), 1000 * d0.mean()))
     log('  VaM skin -> nearest fitted vertex, mean/p95 mm (before fit): ' + ', '.join(rows))
@@ -636,6 +818,7 @@ def main():
         f.write('# SfMorph character (made by tools/pipeline)\n')
         f.write('name\t%s\n' % name)
         f.write('source\t%s\n' % vam.info.get('character', '?'))
+        f.write('vamexport\t%s\n' % os.path.basename(os.path.normpath(a.vam)))
         f.write('made\t%s\n' % time.strftime('%Y-%m-%d %H:%M'))
         f.write('scale\t%.5f\n' % s)
         f.write('proportions\t%s\n' % a.proportions)
@@ -646,16 +829,71 @@ def main():
         for n in HIDE:  # her anime brows: VaM characters carry their brows in the face texture
             f.write('hide\t%s\n' % n)
     np.savez_compressed(os.path.join(chk, 'stage.npz'),
-                        vam_v=vam_out, vam_eyes=vam_eyes, vam_f=vam.faces, vam_g=vam.face_group, vam_uv=vam.uv, vam_vn=vam.vn * vsign,
+                        vam_v=vam_out, vam_eyes=vam_eyes, vam_eye_r=np.float64(r_vam if r_vam else np.nan), vam_f=vam.faces, vam_g=vam.face_group, vam_uv=vam.uv, vam_vn=vam.vn * vsign,
                         vam_groups=np.array(vam.groups), names=np.array([m.name for m in results]),
                         dbg_wp=wp, dbg_x0=x0, dbg_xfit=xfit, dbg_wf=wf, dbg_lab=hlab, dbg_match=wmatch,
                         **{'%s|%s' % (m.name, k): getattr(m, k) for m in results
                            for k in ('vc', 'dc', 'vp', 'vp1', 'faces', 'face_group', 'uv')},
                         **{'%s|groups' % m.name: np.array(m.groups) for m in results})
     log('fit stage done in %.0f s' % (time.time() - t0))
+    summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, a.proportions)
     with open(os.path.join(chk, 'report.txt'), 'w', encoding='utf-8') as f:
         f.write('\n'.join(LOG) + '\n')
     return 0 if rep else 1
+
+
+def summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, proportions):
+    """PASS/WARN lines for the things that matter, printed and written to _check/summary.txt (the Blender stage
+    appends its texture line). Thresholds: eyes open, face metrics within 3 mm of VaM, fit residual mean < 0.5 mm,
+    flipped triangles per main skin mesh < 0.5 %, largest offset < 6 cm, joint offsets only on the face."""
+    rows = []
+
+    def add(ok, text):
+        rows.append(('PASS  ' if ok else 'WARN  ') + text)
+
+    if eye_open is not None:
+        ap, closed = eye_open
+        shown = ', '.join('%.1f' % (1000 * x) for x in ap)
+        if closed:
+            add(False, "eye opening: VaM's eyes are closed or half closed (%s mm), so her own lids keep their opening; "
+                       "re-export from VaM (the SfExport plugin turns blinking off)" % shown)
+        else:
+            add(True, "eye opening: open (%s mm), VaM's lids are fitted" % shown)
+    else:
+        add(False, 'eye opening: not measured (%s)' % ('--proportions vam' if proportions == 'vam' else 'no usable VaM Sclera'))
+    if fm_diff is not None:
+        bad = {k: v for k, v in fm_diff.items() if v > 0.003}
+        worst = max(fm_diff, key=fm_diff.get)
+        label = {'spacing': 'eye spacing', 'eye_mouth': 'eye-mouth', 'eye_lip': 'lip front', 'nose': 'nose', 'chin': 'chin', 'width': 'head width'}
+        add(not bad, 'face metrics vs VaM (limit 3 mm): worst %s %.1f mm%s' % (
+            label[worst], 1000 * fm_diff[worst], '' if not bad else '; over: ' + ', '.join('%s %.1f' % (label[k], 1000 * v) for k, v in bad.items())))
+    else:
+        add(False, 'face metrics vs VaM: not measured (%s)' % ('--proportions vam' if proportions == 'vam' else 'see WARN lines'))
+    mm = wmatch > 0
+    if mm.any():
+        r = float(dist[mm].mean())
+        add(r < 0.0005, 'fit residual mean %.2f mm (limit 0.5 mm), p95 %.2f mm, %.1f%% of the skin matched' % (
+            1000 * r, 1000 * np.percentile(dist[mm], 95), 100 * mm.mean()))
+    else:
+        add(False, 'fit residual: nothing matched the VaM surface')
+    skin = [m for m in results if m.name in FIT]
+    over = ['%s %.2f%%' % (m.name, 100.0 * m.stats['flipped'] / max(len(m.faces), 1)) for m in skin
+            if m.stats['flipped'] >= 0.005 * len(m.faces)]
+    fl = max([100.0 * m.stats['flipped'] / max(len(m.faces), 1) for m in skin] or [0.0])
+    add(not over, 'flipped triangles per main skin mesh: worst %.2f%% (limit 0.5%%)%s' % (fl, '; over: ' + ', '.join(over) if over else ''))
+    big = max(results, key=lambda m: m.stats['omax'])
+    add(big.stats['omax'] < 0.06, 'largest offset %.1f mm on %s (limit 60 mm)' % (1000 * big.stats['omax'], big.name))
+    moved = sorted(b for b, o in joint_off.items() if np.any(o))
+    other = [b for b in moved if b not in FACE_JOINTS]
+    add(not other, 'joint offsets: %s' % ((', '.join(moved) or 'none') if not other else 'beyond the face: ' + ', '.join(other)))
+    rows += ['WARN  ' + w for w in WARNS]
+    npass = sum(r.startswith('PASS') for r in rows); nwarn = len(rows) - npass
+    out = ['# %s: %d PASS, %d WARN' % (name, npass, nwarn)] + rows
+    log('summary:')
+    for r in out:
+        log('  ' + r)
+    with open(os.path.join(chk, 'summary.txt'), 'w', encoding='utf-8', newline='\n') as f:
+        f.write('\n'.join(out) + '\n')
 
 
 def verify(meshes, wmatch, dist, log, extra=None):

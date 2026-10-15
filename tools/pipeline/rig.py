@@ -78,6 +78,20 @@ def label_segments():
     return names, her, vam, nb
 
 
+def vam_joint_names():
+    """Every VaM (Genesis 2) joint name the pipeline reads: pose pairs, landmarks, body-part segments, and the eyes
+    that sfpipe uses directly. The up-front check in sfpipe.py requires all of them in joints.txt."""
+    need = {'lEye', 'rEye', 'head'}
+    for prs in pose_pairs().values():
+        for pr in prs:
+            need.update((pr[2], pr[3]))
+    need.update(v for _, v in landmark_pairs())
+    for segs in label_segments()[2]:
+        for a, b in segs:
+            need.update(x.lstrip('+>') for x in (a, b))
+    return sorted(need)
+
+
 def _seg_point(name, pos, frm):
     """'X' = joint, '+X' = 0.12 m above X (top of head), '>X' = extend the segment frm->? away from X."""
     if name.startswith('+'):

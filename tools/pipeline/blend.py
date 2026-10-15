@@ -212,14 +212,43 @@ def debug():
     render(os.path.join(CHK, 'debug.png'), {'front': camera('cf', (0, 6, 1.5), (math.radians(90), 0, math.radians(180)), 0.8)}, (2000, 800))
 
 
+def append_summary(rows):
+    """Add the Blender stage's PASS/WARN rows to _check/summary.txt and refresh its header count."""
+    path = os.path.join(CHK, 'summary.txt')
+    lines = []
+    if os.path.exists(path):
+        with open(path, encoding='utf-8') as f:
+            lines = [l for l in f.read().splitlines() if l]
+    head = lines[0] if lines and lines[0].startswith('#') else '# ' + os.path.basename(os.path.normpath(OUT))
+    body = [l for l in lines if not l.startswith('#')] + rows
+    npass = sum(l.startswith('PASS') for l in body)
+    head = head.split(':')[0] + ': %d PASS, %d WARN' % (npass, len(body) - npass)
+    with open(path, 'w', encoding='utf-8', newline=chr(10)) as f:
+        f.write(chr(10).join([head] + body) + chr(10))
+    for r in rows:
+        log('summary: ' + r)
+
+
 if __name__ == '__main__':
     t0 = time.time()
     if '--posetest' in ARGS:
         posetest(); sys.exit(0)
     if '--debug' in ARGS:
         debug(); closeups(); sys.exit(0)
-    renders()
+    rows = []
+    try:
+        renders()
+    except Exception as e:  # noqa: BLE001
+        log('WARN: renders failed (%s: %s)' % (type(e).__name__, e))
+        rows.append('WARN  renders failed (%s: %s); the morph and textures are not affected' % (type(e).__name__, e))
     if '--no-bake' not in ARGS:
         import bake
-        bake.run(Z, NAMES, OUT, VAMDIR, SIZE, make_obj, u2b, clear, log)
+        try:
+            written, warns = bake.run(Z, NAMES, OUT, VAMDIR, SIZE, make_obj, u2b, clear, log)
+        except Exception as e:  # noqa: BLE001
+            written, warns = [], ['bake stopped (%s: %s)' % (type(e).__name__, e)]
+            log('WARN: ' + warns[0])
+        rows.append(('PASS  ' if len(written) >= 6 else 'WARN  ') + 'textures baked: %d of 6 (albedo and normal for body, face, foot)' % len(written))
+        rows += ['WARN  bake: ' + w for w in warns]
+    append_summary(rows)
     log('done in %.0f s' % (time.time() - t0))

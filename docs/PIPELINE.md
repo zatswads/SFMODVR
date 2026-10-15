@@ -28,11 +28,10 @@ transfer the **shape** and **skin textures** of a VaM character onto her:
 3. **Fit** (`tools/pipeline/`, done in 0.6.0). One command:
 
    ```
-   powershell -ExecutionPolicy Bypass -File tools\pipeline
-un.ps1 -Name Yin -Game "<game>" -Vam "<VaM>" -Blender "<blender.exe>"
+   powershell -ExecutionPolicy Bypass -File tools\pipeline\run.ps1 -Name Yin -Game "<game>" -Vam "<VaM>" -Blender "<blender.exe>"
    ```
 
-   Paths are remembered (`%LOCALAPPDATA%\SfMorph\pipeline.json`); later runs need only `-Name`. It takes the newest
+   Paths are remembered (`%LOCALAPPDATA%\SfMorph\pipeline.json`); later runs need no arguments (`-Name` picks the folder name, otherwise it comes from the export). It takes the newest
    export on each side, installs scipy for Blender's Python once (into `%LOCALAPPDATA%\SfMorph\pydeps`, never into
    Blender), and writes `<game>\BepInEx\config\SfMorphs\morphs\<Name>\` in about a minute and a half:
    - `sfpipe.py` (Blender's Python, numpy/scipy): her meshes into one bind space (the right eye's iris/sclera are
@@ -45,13 +44,34 @@ un.ps1 -Name Yin -Game "<game>" -Vam "<VaM>" -Blender "<blender.exe>"
      unposed with the same blended skin matrices; folds untangled. Everything else follows: overlays (nipple discs,
      nails, decals) stay on the skin surface, lash strands move with their skin patch, eyes/teeth/tongue rigidly,
      the rest (mouth, hair, interior) smoothly. Output: `<mesh>.morph.txt` (position and normal deltas, her vertex
-     order), `joints.txt`, `character.txt`, `thumb.jpg`, `_check
-eport.txt`.
+     order), `joints.txt`, `character.txt`, `thumb.jpg`, `_check\report.txt`.
    - `blend.py` + `bake.py` (Blender, Cycles on the GPU): before/after renders in `_check\` and VaM's skin baked
      onto her UVs (selected to active, albedo as emission, tangent normals; VaM's DXT5nm normal maps unswizzled):
      `tex_reika_body_*`, `tex_reika_face_a_*`, `tex_reika_foot_*`.
-   - Check `_check
-eport.txt`: vertex counts, offsets, flipped triangles and stretch per mesh, fit residual both ways.
+   - Check `_check\summary.txt` first (PASS/WARN lines, below), then `_check\report.txt`: vertex counts, offsets, flipped triangles and stretch per mesh, fit residual both ways.
+
+   Before anything is fitted, `sfpipe.py` checks the VaM export (body.obj, joints.txt, materials.txt; every Genesis 2
+   joint the rig mapping uses; the skin material groups) and stops with one message on a male figure (no `Nipples`
+   group, a `Genitals` group, or a male info.txt) or missing required joints/groups. Missing optional pieces (Nipples,
+   Lips, Ears, Sclera, InnerMouth, a texture or its bump map) only log a WARN and skip their step: no nipple/mouth
+   landmark, eyeballs keep her size, flat skin colour or flat normals in the bake. VaM-side window sizes that depend on
+   the character are relative to the measured VaM eyeball radius (eye opening, the bake's eyelid exclusion) or to the
+   lip width (lip labels); a wildly different eyeball size is limited to 0.75x..1.35x of hers.
+
+   `_check\summary.txt` (printed at the end of `run.ps1`):
+
+   | line | PASS when |
+   |---|---|
+   | eye opening | VaM's lids are open (else her own lids stay and it says to re-export) |
+   | face metrics vs VaM | eye spacing, eye-mouth, lip front, nose, chin, head width all within 3 mm |
+   | fit residual | mean under 0.5 mm |
+   | flipped triangles | under 0.5 % on each main skin mesh (upper/lower body, foot, neck, face) |
+   | largest offset | under 6 cm |
+   | joint offsets | only the face joints (eyes, jaw) |
+   | textures baked | 6 of 6 (body, face, foot; albedo and normal) |
+
+   plus a `WARN` line for each skipped optional piece. `character.txt` records `vamexport` (the export folder), which
+   `run.ps1 -All` uses to know what is already converted.
 
 4. **Load** (SfMorph 0.6.0): Characters tab, see README.
 
@@ -66,6 +86,18 @@ too (longer arms/fingers, raised clavicles: distorts her rig, kept for compariso
 Known limits (`--proportions vam`): the fit runs in VaM's T-pose and is unposed with her linear skinning, so her shoulders in the
 A-pose look a little narrower than VaM's; a few creases remain where her shape differs most (under a bigger
 breast, the navel, between toes). Her eyelid shape stays hers.
+
+## Add a character
+
+1. In VaM, load the female look on a Person (any Genesis 2 female: a look preset, a scene, a FaceGen result), add the
+   SfExport plugin as described above and press "Export character for SF". Blinking is switched off for the snapshot
+   automatically, so the eyes are open.
+2. Run `powershell -ExecutionPolicy Bypass -File tools\pipeline\run.ps1`: the newest export becomes a character named
+   after info.txt (the folder name if it has none; "Name 2" if the name is taken). Or `run.ps1 -All`: every export in
+   `<VaM>\Saves\PluginData\SfExport` that has no converted folder yet (`-Force`: all of them again). `-All` names each
+   one the same way, keeps going when one fails (a male figure, a broken export) and ends with a table: character,
+   export, OK/WARN/FAIL, PASS and WARN counts. Each character's `_check\summary.txt` is printed as it finishes.
+3. In the game: F8 > Characters > Rescan.
 
 ## Face sources
 
