@@ -41,6 +41,32 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.7.7:
+- GPU contact and skin wrinkles actually load now: the shader bundle was built with Unity's AssetBundle module disabled in its
+  project, so it had no AssetBundle object and the game refused it ("not compatible with this newer version of the Unity
+  runtime"). Fixed in the bundle project; tools/shaders/build.ps1 now fails if that happens again. Install the new
+  dist/sfmorph_shaders together with the DLL.
+- Her breast/areola deformed with nothing touching her. Causes and fixes:
+  - Hands nobody sees touched her: the hidden partner rigs (their animation often rests his hands on her breasts), a scene root
+    listing the same hands twice, and controller models the physics hands replace. Now a hand counts only while it is drawn
+    in the headset (Physics → "Hidden hands don't touch her"); nested rigs are counted once.
+  - Contact began 2 cm before the skin (the soft points sit on the skin but the reach added 2 cm), and palms were 7 cm thick
+    capsules. Now contact starts at the skin (3 mm) and a palm is three 3 cm thick capsules (VR hand models, partners,
+    physics hands).
+  - The hands pushed every breast DynamicBone of the game, nipple chains included, and with the physics hands on it was the
+    hidden controller models that pushed. Now the hands you see push only the main breast chains (Physics → "Breast physics
+    colliders": Off / Main chains / All); hidden hands are taken off them.
+  - Gravity slid the 6 cm patch around the nipple (and pressed it in when she lies back); the game's breast physics already
+    hangs the breast, so the breasts no longer get our patch sag (glutes, belly, thighs still do).
+- Who touches her: the contact status names the hands ("contacts: 7 (breastFront_R 7) by your right hand 5, Player 2"), the
+  debug markers show hidden hands' capsules grey, and the VR tab lists what each kind of contact feeds.
+- Physics hands: breasts now have colliders (hands no longer sink into them), fingers give way while touching her, and your
+  physics hands push her arms aside; the pose springs back (Hands → "Push her arms"). Skin outside the soft zones still gives
+  8 mm under a hand (GPU), so fingers don't cut into her.
+- Secondary motion v2: motion ripples down the chains (a fast torso turn swings head and arms a little later: Motion →
+  Ripple), a bounce setting per body part, more head motion, and planted hands and feet stay where the animation puts them
+  while the rest of the limb trails (Motion → Planted).
+
 0.7.6:
 - Breasts like the character's: her nipple cap is fitted onto the character's nipple and areola (nipple vertices to the
   nipple, disc to the skin, rim pinned), the skin around it fitted right up to the rim, her own fold no longer held

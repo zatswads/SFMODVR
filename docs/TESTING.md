@@ -96,3 +96,17 @@ Install `dist/SfMorph.dll` + `dist/sfmorph_shaders` into `BepInEx\plugins`. Log:
 Debug = Activation: red where her face folds in expressions, none at rest; (2) Debug off: smile lines/brow/eyes in the headset, look
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
+
+## 0.7.7 (contacts, Overlap v2, bundle)
+
+Install `dist/SfMorph.dll` + `dist/sfmorph_shaders` into `BepInEx\plugins`. Log: no "not compatible with this newer version" error;
+`GPU contact: ... bundle loaded`, `Wrinkles: loaded`; `VrHands: visibility against camera '...'`; `VrHands: Player is hidden: its N
+capsules don't touch her` (when the partner isn't shown); `partner '[Character]': ... (N under Player/BadGuy skipped)`; `N hand
+colliders ... on M breast DynamicBones [...]; skipped K [...]` (which chains are pushed); `Contacts feed: ...`; `PhysicsHands: her
+colliders ... breast_L (...)`; `Overlap: v2 (ripple, planted lock, push) driving 16 bones`. Headset: (1) controllers idle away from
+her: contacts 0, breast/areola identical to Physics off (compare with the toggle) at any Gravity; (2) Show soft points: hidden
+partner capsules grey; your hand model's capsules turn red only when the mesh touches the skin; (3) Embody on, his hand on her:
+contacts "by Player", breast moves, areola not pushed before touch; (4) physics hands: palm stops on the breast, fingers bend on
+her, a brush on her forearm moves the elbow and it springs back; (5) Overlap: a hand resting on him stays put while the elbow
+trails; after a fast torso turn the head follows a little later; Ripple 0 / Bounce sliders change the feel; Overlap 0 + Push 0 =
+the game's animation; (6) Skin wrinkles on (Debug = Activation): red where her face folds.

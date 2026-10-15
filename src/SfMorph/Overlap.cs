@@ -232,7 +232,11 @@ namespace SfMorph
                 int rg = GroupRegion[b.Group];
                 float wReq = _region[rg];
                 Quaternion cur = tr.localRotation;
-                if (wReq <= 0f && !(b.CanPush && pushable))   // an arm bone that can be pushed keeps running with no lag term (w 0)
+                // An arm bone with a push in progress (or a torque this frame) keeps running at region weight 0: the lag term stays off (w = 0 below,
+                // the written rotation is the animation's target) and only the push offset Qp is added on top. With no push and no lag the bone
+                // is left alone (exactly the game's animation).
+                bool pushWake = wReq <= 0f && b.CanPush && pushable && (b.PushLive || b.TauW.sqrMagnitude > 1e-8f);
+                if (wReq <= 0f && !pushWake)
                 {
                     // Off for this bone: if the animation did not rewrite it, put the animation's rotation back, once.
                     if (b.HasLast && Same(cur, b.LastWrite)) tr.localRotation = b.Target;
@@ -272,7 +276,8 @@ namespace SfMorph
                 b.K = fw * fw; b.C = 2f * _zeta[rg] * fw;
 
                 // Ripple: the parent's world angular acceleration, seen from the parent's frame, kicks this bone's state.
-                if (b.P != null)
+                if (wReq <= 0f) b.PState = 0;      // no ripple without the lag term
+                else if (b.P != null)
                 {
                     Quaternion pw = b.P.rotation;
                     if (n > 0)
@@ -348,7 +353,7 @@ namespace SfMorph
                     o = (_lp >= 0.9999f ? b.Qp : Quaternion.Slerp(Quaternion.identity, b.Qp, _lp)) * o;
                 if (!Same(o, cur)) tr.localRotation = o;
                 b.LastWrite = o; b.HasLast = true;
-                driven++;
+                if (wReq > 0f) driven++;
             }
 
             // Planted correction, after all springs (the chains' lag shows as the elbow/knee moving while the hand/foot stays).
@@ -563,7 +568,19 @@ namespace SfMorph
             long sig = (long)lo | ((long)planted << 32) | ((long)Mathf.RoundToInt(_ripple * 10f) << 36) | ((long)_pushBits << 41);
             if (sig == _sig) return;
             _sig = sig;
-            if (driven == 0) { Status = _bones.Count == 0 ? "off: no chain bones found" : "off (Amount 0)"; return; }
+            if (driven == 0)
+            {
+                Status = _bones.Count == 0 ? "off: no chain bones found" : "off (Amount 0)";
+                if (_pushBits != 0)
+                {
+                    _sb.Length = 0; _sb.Append(Status);
+                    bool f1 = true;
+                    for (int sg = 0; sg < 4; sg++)
+                        if ((_pushBits & (1 << sg)) != 0) { _sb.Append(f1 ? "; pushed: " : ", ").Append(PushSeg[sg]); f1 = false; }
+                    Status = _sb.ToString();
+                }
+                return;
+            }
             _sb.Length = 0;
             _sb.Append("on: ").Append(driven).Append(" bones (arms ").Append(_region[0].ToString("0.0")).Append(", legs ").Append(_region[1].ToString("0.0"))
                .Append(", head ").Append(_region[2].ToString("0.0")).Append(", spine ").Append(_region[3].ToString("0.0")).Append("), ripple ").Append(_ripple.ToString("0.0"));
