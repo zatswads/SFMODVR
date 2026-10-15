@@ -7,24 +7,25 @@ using UnityEngine;
 
 namespace SfMorph
 {
-    // Soft zones (stage 1 of contact deformation, no shaders): her glutes, inner/outer thighs, belly and breasts get
-    // helper bones that the game's own DynamicBone simulates, so hands and limbs push the skin in instead of passing
-    // through it, and the zones lag and settle a little as she moves (springiness).
+    // Soft zones v2 (stage 1 of contact deformation, no shaders): her glutes, inner/outer thighs, belly and breasts get a
+    // few simulated spring points each, so hands and limbs push the skin in instead of passing through it, and the zones
+    // lag and settle a little as she moves (springiness). The points are simulated here in C# (SoftSim.cs), not by the
+    // game's DynamicBone: its pendulum turned pushes into sideways slides and its particles sat under the skin, so
+    // contact began late and the skin never followed the hand.
     //
-    // Per zone a rest point just under the skin (found on her mesh along a body direction). For every bone that
-    // weights the skin there, a helper pair is added under that bone: anchor A (DynamicBone root, never moves) and
-    // soft S (the simulated particle, a pendulum hanging from A along the skin, so it can swing in and out). Skin
-    // weights are split, not moved: a vertex's weight w on bone b becomes w(1-f) on b and w f on S_b (f = smooth
-    // falloff from the zone's centre), so at rest and in every pose without contact she deforms exactly as before;
-    // only S's displacement (collision, inertia) is added. A gets a second, excluded child so DynamicBone never
-    // rotates it (it re-aims a bone only when it has one child); S therefore only translates.
+    // Per zone K points on the skin (the centre found along a body direction, the others on a ring around it). For every
+    // bone that weights the skin near a point (at most two per point) a helper bone S is added directly under that
+    // bone; Simulate moves S. Skin weights are split, not moved: a vertex's weight w on bone b becomes w(1-f) on b and
+    // w f on S, where f is a smooth falloff from the zone's centre shared between the zone's two nearest points. S sits at
+    // its rest place when nothing touches and springiness is 0, so she deforms exactly as without the mod.
     //
     // The meshes: her renderers show readable clones carrying the extra bones. With a converted character on, its
     // clones (MorphState) are extended in place; without one, the game's GPU-only meshes get our own clones (built
     // from the GPU readback) and MorphState treats them as the game's (Original()). Rebuilt when the game or the
     // morph swaps a mesh; everything (bones, meshes, weights, bind poses, the game's DynamicBone lists) is given back
-    // on release. Helper bones are ours only: Body's trackers never write them.
-    internal class SoftZones
+    // on release. Helper bones are ours only: Body's trackers never write them. The contact capsules come from
+    // VrHands; this file builds, SoftSim.cs simulates.
+    internal partial class SoftZones
     {
         const BindingFlags Any = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         public const string Prefix = "SfSoft";
@@ -40,13 +41,14 @@ namespace SfMorph
             public Toward Dir;
             public int Side;                            // +1 her left, -1 her right, 0 middle
             public string[] Region;                     // bones (with "*": and everything under it) the skin must belong to
-            public float Radius, Ball, Lean;            // falloff radius, particle radius (depth under the skin), pendulum length (m)
+            public float Radius;                        // falloff radius of the vertex weights (m); the point ring is 0.55 of it
+            public int K;                               // points: the centre and K-1 on the ring
             public bool InnerThigh;
         }
 
-        static Zone Z(string id, string label, string from, string to, float at, Toward dir, int side, float radius, float ball, float lean, params string[] region)
+        static Zone Z(string id, string label, string from, string to, float at, Toward dir, int side, float radius, int k, params string[] region)
         {
-            return new Zone { Id = id, Label = label, From = from, To = to, At = at, Dir = dir, Side = side, Region = region, Radius = radius, Ball = ball, Lean = lean };
+            return new Zone { Id = id, Label = label, From = from, To = to, At = at, Dir = dir, Side = side, Region = region, Radius = radius, K = k };
         }
 
         static readonly Zone[] Zones = Build();
@@ -57,26 +59,27 @@ namespace SfMorph
             foreach (var s in new[] { 1, -1 })
             {
                 string x = s > 0 ? "_L" : "_R", side = s > 0 ? "Left_" : "Right_";
-                l.Add(Z("glute" + x, "glute", "Butt" + x, "Butt" + x, 0f, Toward.Back, s, 0.09f, 0.035f, 0.045f, "Butt" + x + "*", "Hip" + x, "HipPart1" + x, "Root_M", "Ass_Outer"));
-                l.Add(Z("thighOut" + x, "outer thigh", "Hip" + x, "Knee" + x, 0.35f, Toward.Out, s, 0.08f, 0.03f, 0.04f, "Hip" + x + "*", "Butt" + x + "*"));
-                var inner = Z("thighIn" + x, "inner thigh", "Hip" + x, "Knee" + x, 0.3f, Toward.In, s, 0.07f, 0.03f, 0.04f, "Hip" + x + "*");
+                l.Add(Z("glute" + x, "glute", "Butt" + x, "Butt" + x, 0f, Toward.Back, s, 0.11f, 7, "Butt" + x + "*", "Hip" + x, "HipPart1" + x, "Root_M", "Ass_Outer"));
+                l.Add(Z("thighOut" + x, "outer thigh", "Hip" + x, "Knee" + x, 0.35f, Toward.Out, s, 0.09f, 5, "Hip" + x + "*", "Butt" + x + "*"));
+                var inner = Z("thighIn" + x, "inner thigh", "Hip" + x, "Knee" + x, 0.3f, Toward.In, s, 0.09f, 5, "Hip" + x + "*");
                 inner.InnerThigh = true;
                 l.Add(inner);
-                l.Add(Z("breastFront" + x, "breast front", side + "LowerBreast", side + "LowerBreast", 0f, Toward.Forward, s, 0.05f, 0.025f, 0.03f, side + "UpperBreast*"));
-                l.Add(Z("breastSide" + x, "breast side", side + "LowerBreast", side + "LowerBreast", 0f, Toward.Out, s, 0.05f, 0.025f, 0.03f, side + "UpperBreast*"));
+                l.Add(Z("breastFront" + x, "breast front", side + "LowerBreast", side + "LowerBreast", 0f, Toward.Forward, s, 0.06f, 3, side + "UpperBreast*"));
+                l.Add(Z("breastSide" + x, "breast side", side + "LowerBreast", side + "LowerBreast", 0f, Toward.Out, s, 0.06f, 3, side + "UpperBreast*"));
             }
-            l.Add(Z("belly", "belly", "Root_M", "Chest_M", 0.35f, Toward.Forward, 0, 0.09f, 0.035f, 0.045f, "Root_M", "Spine1_M", "Vaginal_root*"));
+            l.Add(Z("belly", "belly", "Root_M", "Chest_M", 0.35f, Toward.Forward, 0, 0.10f, 5, "Root_M", "Spine1_M", "Vaginal_root*"));
             return l.ToArray();
         }
 
         // ---- game types (reflection: Assembly-CSharp isn't referenced) ----
+        // Only the game's DynamicBone is still looked up: for the chain-bone rule (never add children to a bone its physics re-aims)
+        // and the one-time survey. Our own points need none of it.
 
         static bool _typesLooked, _surveyed;
         static Type _db, _dbc;
         static FieldInfo _fRoot, _fColliders, _fExclusions;
-        static MethodInfo _mUpdateParams, _mSetup;
 
-        public static bool Available { get { Types(); return _db != null && _dbc != null; } }
+        public static bool Available { get { return true; } }
 
         static void Types()
         {
@@ -93,17 +96,7 @@ namespace SfMorph
             _fRoot = _db.GetField("m_Root", Any);
             _fColliders = _db.GetField("m_Colliders", Any);
             _fExclusions = _db.GetField("m_Exclusions", Any);
-            _mUpdateParams = _db.GetMethod("UpdateParameters", Any, null, Type.EmptyTypes, null);
-            _mSetup = _db.GetMethod("SetupParticles", Any, null, Type.EmptyTypes, null);
             if (_fRoot == null || _fColliders == null) _db = null;
-        }
-
-        static void Set(object o, string f, object v)
-        {
-            var fi = o.GetType().GetField(f, Any);
-            if (fi == null) return;
-            if (fi.FieldType.IsEnum && !(v is Enum)) v = Enum.ToObject(fi.FieldType, v);
-            fi.SetValue(o, v);
         }
 
         static object Get(object o, string f)
@@ -125,6 +118,7 @@ namespace SfMorph
         {
             if (_surveyed) return;
             _surveyed = true;
+            if (_db == null) { Plugin.Log.LogInfo("Physics survey: the game has no DynamicBone class"); return; }
             var sb = new StringBuilder("Physics survey: ");
             foreach (var t in new[] { _db, _dbc, _dbc != null ? _dbc.BaseType : null })
             {
@@ -150,15 +144,16 @@ namespace SfMorph
             }
             if (n > 40) sb.Append("\n  ... ").Append(n - 40).Append(" more DynamicBones");
             int m = 0;
-            foreach (var o in UnityEngine.Object.FindObjectsOfType(_dbc))
-            {
-                var c = o as Component;
-                if (c == null || c.name.StartsWith(Prefix)) continue;
-                if (++m > 40) continue;
-                sb.Append("\n  collider ").Append(c.name).Append(" (parent ").Append(c.transform.parent != null ? c.transform.parent.name : "-").Append(") r=")
-                  .Append(Get(c, "m_Radius")).Append(" h=").Append(Get(c, "m_Height")).Append(" dir=").Append(Get(c, "m_Direction")).Append(" bound=").Append(Get(c, "m_Bound"))
-                  .Append(" scale=").Append(c.transform.lossyScale.x.ToString("0.###"));
-            }
+            if (_dbc != null)
+                foreach (var o in UnityEngine.Object.FindObjectsOfType(_dbc))
+                {
+                    var c = o as Component;
+                    if (c == null || c.name.StartsWith(Prefix)) continue;
+                    if (++m > 40) continue;
+                    sb.Append("\n  collider ").Append(c.name).Append(" (parent ").Append(c.transform.parent != null ? c.transform.parent.name : "-").Append(") r=")
+                      .Append(Get(c, "m_Radius")).Append(" h=").Append(Get(c, "m_Height")).Append(" dir=").Append(Get(c, "m_Direction")).Append(" bound=").Append(Get(c, "m_Bound"))
+                      .Append(" scale=").Append(c.transform.lossyScale.x.ToString("0.###"));
+                }
             sb.Append("\n  ").Append(n).Append(" DynamicBones, ").Append(m).Append(" DynamicBoneColliders in the scene");
             Plugin.Log.LogInfo(sb.ToString());
         }
@@ -176,32 +171,42 @@ namespace SfMorph
             public Matrix4x4 ToRef;    // this mesh's bind space -> the reference mesh's
         }
 
-        class Helper
+        class Pt   // a spring point on the skin
         {
-            public Zone Zone;
-            public Transform Bone, A, S;
-            public Component Db;
-            public Vector3 SLocal;       // S in Bone's space (A has no rotation or scale of its own)
-            public Matrix4x4 BindRef;    // S's bind pose in the reference mesh's space
-            public float Total;          // how much skin it carries (vertex weight sum)
+            public Zone Zone; public int ZoneIdx;
+            public Vector3 RestRef;     // in the reference mesh's bind space
+            public Vector3 NormalRef;   // inward, same space
+            public int Main = -1;       // its heaviest helper (debug marker, status)
+            public int Stamp;           // frame it was last counted as touched
         }
 
-        class Col { public Component C; public Transform Owner; public string Kind; }   // Kind: partner, hand, forearm, thighL, thighR
+        class Helper   // S under a bone, standing for one point as that bone carries it
+        {
+            public Zone Zone; public int ZoneIdx;
+            public Pt Point;
+            public Transform Bone, S;
+            public int BoneIdx;          // into _bones
+            public Vector3 SLocal;       // rest place in Bone's space (S has no rotation or scale of its own)
+            public Vector3 NLocal;       // inward normal in Bone's space
+            public Matrix4x4 BindRef;    // S's bind pose in the reference mesh's space
+            public float Total;          // how much skin it carries (vertex weight sum)
+            // simulation (SoftSim.cs): world space
+            public Vector3 Disp, Vel, PrevRest, R, N, Push;
+            public bool Touched, Asleep = true, HasPrev, Bulged;
+            public int LastCap;
+        }
 
         readonly Dictionary<SkinnedMeshRenderer, Rs> _rs = new Dictionary<SkinnedMeshRenderer, Rs>();
+        readonly List<Pt> _pts = new List<Pt>();
         readonly List<Helper> _helpers = new List<Helper>();
-        readonly HashSet<Component> _ours = new HashSet<Component>();
-        readonly List<Col> _cols = new List<Col>();
-        readonly HashSet<Transform> _partnerRoots = new HashSet<Transform>();
+        readonly List<Transform> _bones = new List<Transform>();   // the distinct bones the helpers hang under
         readonly List<KeyValuePair<IList, object>> _gameAdds = new List<KeyValuePair<IList, object>>();  // items we put into the game's DynamicBone lists
         readonly Dictionary<Mesh, MeshData> _data = new Dictionary<Mesh, MeshData>();
         static readonly Dictionary<Mesh, Mesh> _origOf = new Dictionary<Mesh, Mesh>();          // our clone -> the game's mesh
         List<SkinnedMeshRenderer> _builtFor;
         Transform _her;
         float _builtSoft = -1f, _softChangedAt, _lastBuild = -10f, _nextCheck, _builtMorph;
-        float _appliedSpring = -1f, _appliedSoft = -1f;
         int _bindVersion;
-        bool _herCols;
         public string Status = "";
 
         // The game's mesh behind one of our clones (MorphState must clone the game's mesh, not ours).
@@ -214,11 +219,12 @@ namespace SfMorph
         static bool IsMorphClone(Mesh m) { return m != null && m.isReadable && m.name.EndsWith(" (SfMorph)"); }
 
         // Every frame, after MorphState.Update and before Body applies: on = Apply + Physics on + the game's woman.
+        // Builds, rebuilds and maintains the zones; the springs are SoftSim.cs's Simulate.
         public void Update(Character c, bool on, float softness, float spring, List<Character> everyone)
         {
             if (!on || c.Root == null) { Release(); return; }
-            if (!Available) { Status = "off: the game has no DynamicBone class"; return; }
-            softness = Mathf.Clamp01(softness); spring = Mathf.Clamp01(spring);
+            Types();
+            softness = Mathf.Clamp01(softness);
 
             string why = null;
             if (_builtFor == null) why = "physics on";
@@ -237,7 +243,6 @@ namespace SfMorph
             {
                 _nextCheck = Time.unscaledTime + 2f;
                 if (Mathf.Abs(MorphWeight() - _builtMorph) > 0.1f) why = "the character shape's weight changed";
-                else Colliders(c, everyone, false);
             }
             if (why != null)
             {
@@ -245,14 +250,8 @@ namespace SfMorph
                 if (Time.unscaledTime - _lastBuild < 0.5f) return;  // no rebuild storms; try again next frame
                 _lastBuild = Time.unscaledTime;
                 Build(c, softness, everyone, why);
-                _appliedSpring = -1f;
             }
             if (MorphState.BindVersion != _bindVersion) { _bindVersion = MorphState.BindVersion; RefreshBind(); }
-            if (spring != _appliedSpring || softness != _appliedSoft)
-            {
-                foreach (var h in _helpers) if (h.Db != null) Params(h.Db, softness, spring);
-                _appliedSpring = spring; _appliedSoft = softness;
-            }
         }
 
         float MorphWeight()
@@ -271,12 +270,14 @@ namespace SfMorph
 
         // ---- building ----
 
+        class PF { public int[] P; public float[] W; }   // a vertex's share of the zones, per point (points of the zones it lies in)
+
         class Src   // a renderer's mesh as the zones see it (reference bind space)
         {
             public SkinnedMeshRenderer R; public Rs S;
             public Vector3[] P, N; public BoneWeight[] W; public Matrix4x4[] Bind;
             public bool Skin;
-            public Dictionary<int, float[]> F = new Dictionary<int, float[]>();  // vertex -> per-zone fraction
+            public Dictionary<int, PF> F = new Dictionary<int, PF>();  // vertex -> its points and fractions
         }
 
         void Build(Character c, float softness, List<Character> everyone, string why)
@@ -367,82 +368,138 @@ namespace SfMorph
                 mpu = (thl.position - tkl.position).magnitude / (kl.Value - hl.Value).magnitude;
             if (mpu <= 1e-6f || float.IsNaN(mpu)) mpu = 1f;
 
-            // 4. zone rest points on the skin, then each vertex's fraction per zone
-            var zoneQ = new Vector3?[Zones.Length]; var zoneN = new Vector3[Zones.Length];
+            // 4. zone points on the skin, then each vertex's share of them
             var regionOf = new Dictionary<Src, bool[][]>();
             foreach (var s in mapped) regionOf[s] = Regions(c, s.S.Bones);
             var found = new List<string>(); var missing = new List<string>();
-            float fmax = Mathf.Lerp(0.35f, 1f, softness);
+            var zonePt0 = new int[Zones.Length]; var zonePtN = new int[Zones.Length];   // the zone's points in _pts
+            var zoneQ = new Vector3?[Zones.Length];
+            float fmax = Mathf.Lerp(0.6f, 1f, softness);
+
+            // The skin vertex furthest along d within a tube of radius 'lateral' around the ray o + t d (t <= tmax), inside the zone's
+            // body part and on its side.
+            bool Pick(int z, Vector3 o, Vector3 d, float lateral, float tmax, bool bodyOnly, out Vector3 q, out Vector3 qn)
+            {
+                var zone = Zones[z];
+                float bestT = 0f; bool hit = false;
+                q = Vector3.zero; qn = d;
+                foreach (var s in mapped)
+                {
+                    if (bodyOnly && !s.Skin) continue;
+                    var reg = regionOf[s][z];
+                    for (int i = 0; i < s.P.Length; i++)
+                    {
+                        if (RegionWeight(s.W[i], reg) < 0.4f) continue;
+                        var p = s.P[i];
+                        if (zone.Side != 0 && Vector3.Dot(p - center, left) * zone.Side * mpu < 0.005f) continue;
+                        var v = p - o; float t = Vector3.Dot(v, d);
+                        if (t <= bestT || t > tmax || (v - d * t).magnitude > lateral) continue;
+                        bestT = t; q = p; qn = s.N != null ? s.N[i] : d; hit = true;
+                    }
+                }
+                return hit;
+            }
+
             for (int z = 0; z < Zones.Length; z++)
             {
                 var zone = Zones[z];
+                zonePt0[z] = _pts.Count;
                 var a = pos(zone.From); var b = pos(zone.To);
                 if (!a.HasValue || !b.HasValue) { missing.Add(zone.Id + " (no " + zone.From + "/" + zone.To + ")"); continue; }
                 var o = Vector3.Lerp(a.Value, b.Value, zone.At);
                 var d = zone.Dir == Toward.Back ? -fwd : zone.Dir == Toward.Forward ? fwd : zone.Dir == Toward.Out ? left * (zone.Side != 0 ? zone.Side : 1) : -left * (zone.Side != 0 ? zone.Side : 1);
                 Vector3 q = Vector3.zero, qn = d; bool hit = false;
-                foreach (var pass in new[] { 0, 1, 2 })   // body meshes, narrow ray; wider; any mesh
-                {
-                    float lateral = (pass == 0 ? 0.03f : 0.06f) / mpu, bestT = 0f;
-                    foreach (var s in mapped)
-                    {
-                        if (pass < 2 && !s.Skin) continue;
-                        var reg = regionOf[s][z];
-                        for (int i = 0; i < s.P.Length; i++)
-                        {
-                            if (RegionWeight(s.W[i], reg) < 0.4f) continue;
-                            var p = s.P[i];
-                            if (zone.Side != 0 && Vector3.Dot(p - center, left) * zone.Side * mpu < 0.005f) continue;
-                            var v = p - o; float t = Vector3.Dot(v, d);
-                            if (t <= bestT || (v - d * t).magnitude > lateral) continue;
-                            bestT = t; q = p; qn = s.N != null ? s.N[i] : d; hit = true;
-                        }
-                    }
-                    if (hit) break;
-                }
+                for (int pass = 0; pass < 3 && !hit; pass++)   // body meshes, narrow ray; wider; any mesh
+                    hit = Pick(z, o, d, (pass == 0 ? 0.03f : 0.06f) / mpu, float.MaxValue, pass < 2, out q, out qn);
                 if (!hit) { missing.Add(zone.Id + " (no skin found)"); continue; }
-                zoneQ[z] = q; zoneN[z] = (qn + d).normalized;
+                zoneQ[z] = q;
+                var n = (qn + d).normalized;   // outward
+                _pts.Add(new Pt { Zone = zone, ZoneIdx = z, RestRef = q, NormalRef = -n });
+                // the others on a ring around the centre, re-projected onto the skin: a ray from 5 cm under the ring point along n
+                if (zone.K > 1)
+                {
+                    var t1 = up - n * Vector3.Dot(up, n);
+                    if (t1.sqrMagnitude < 1e-8f) t1 = fwd - n * Vector3.Dot(fwd, n);
+                    t1 = t1.normalized;
+                    var t2 = Vector3.Cross(n, t1);
+                    float ringR = 0.55f * zone.Radius / mpu;
+                    int m = zone.K - 1;
+                    for (int i = 0; i < m; i++)
+                    {
+                        float ang = 2f * Mathf.PI * i / m;
+                        var cand = q + (t1 * Mathf.Cos(ang) + t2 * Mathf.Sin(ang)) * ringR;
+                        var ro = cand - n * (0.05f / mpu);
+                        Vector3 pq = Vector3.zero, pn = Vector3.zero; bool ph = false;
+                        for (int pass = 0; pass < 4 && !ph; pass++)   // narrow tube; wider; widest; any mesh
+                            ph = Pick(z, ro, n, (pass == 0 ? 0.02f : pass == 1 ? 0.035f : 0.05f) / mpu, 0.10f / mpu, pass < 3, out pq, out pn);
+                        if (!ph) continue;
+                        bool dup = false;
+                        for (int k = zonePt0[z]; k < _pts.Count; k++) if ((_pts[k].RestRef - pq).magnitude * mpu < 0.006f) { dup = true; break; }
+                        if (dup) continue;
+                        _pts.Add(new Pt { Zone = zone, ZoneIdx = z, RestRef = pq, NormalRef = -(pn + n).normalized });
+                    }
+                }
+                zonePtN[z] = _pts.Count - zonePt0[z];
                 found.Add(zone.Id);
             }
+            var fz = new float[Zones.Length];
+            var plist = new List<int>(); var wlist = new List<float>();
             foreach (var s in mapped)
             {
                 var reg = regionOf[s];
                 for (int i = 0; i < s.P.Length; i++)
                 {
-                    float[] fz = null; float total = 0f;
+                    float total = 0f;
                     for (int z = 0; z < Zones.Length; z++)
                     {
+                        fz[z] = 0f;
                         if (!zoneQ[z].HasValue) continue;
                         var zone = Zones[z];
                         float dist = (s.P[i] - zoneQ[z].Value).magnitude * mpu;
                         if (dist >= zone.Radius) continue;
                         float g = Mathf.Clamp01((RegionWeight(s.W[i], reg[z]) - 0.15f) / 0.35f);
                         if (zone.Side != 0) g *= Mathf.Clamp01(Vector3.Dot(s.P[i] - center, left) * zone.Side * mpu / 0.015f);
-                        if (s.N != null) g *= Mathf.Clamp01(Vector3.Dot(s.N[i], zoneN[z]) * 1.5f + 0.5f);
+                        if (s.N != null) g *= Mathf.Clamp01(Vector3.Dot(s.N[i], -_pts[zonePt0[z]].NormalRef) * 1.5f + 0.5f);
                         float t = 1f - dist / zone.Radius;
                         float f = fmax * t * t * (3f - 2f * t) * g;
                         if (f < 0.005f) continue;
-                        if (fz == null) fz = new float[Zones.Length];
                         fz[z] = f; total += f;
                     }
-                    if (fz == null) continue;
-                    if (total > fmax) for (int z = 0; z < fz.Length; z++) fz[z] *= fmax / total;
-                    s.F[i] = fz;
+                    if (total <= 0f) continue;
+                    float scale = total > fmax ? fmax / total : 1f;
+                    plist.Clear(); wlist.Clear();
+                    for (int z = 0; z < Zones.Length; z++)
+                    {
+                        if (fz[z] <= 0f) continue;
+                        float f = fz[z] * scale;
+                        // shared between the zone's two nearest points, Shepard 1/(d+0.01)^2
+                        int n1 = -1, n2 = -1; float d1 = float.MaxValue, d2 = float.MaxValue;
+                        for (int k = zonePt0[z]; k < zonePt0[z] + zonePtN[z]; k++)
+                        {
+                            float dk = (s.P[i] - _pts[k].RestRef).magnitude * mpu;
+                            if (dk < d1) { n2 = n1; d2 = d1; n1 = k; d1 = dk; } else if (dk < d2) { n2 = k; d2 = dk; }
+                        }
+                        if (n2 < 0) { plist.Add(n1); wlist.Add(f); continue; }
+                        float w1 = 1f / ((d1 + 0.01f) * (d1 + 0.01f)), w2 = 1f / ((d2 + 0.01f) * (d2 + 0.01f));
+                        plist.Add(n1); wlist.Add(f * w1 / (w1 + w2));
+                        plist.Add(n2); wlist.Add(f * w2 / (w1 + w2));
+                    }
+                    s.F[i] = new PF { P = plist.ToArray(), W = wlist.ToArray() };
                 }
             }
 
-            // 5. helpers: per zone, the bones that carry its skin (a bone the game's physics chain re-aims is left alone)
+            // 5. helpers: per point, the (up to two) bones that carry its skin (a bone the game's physics chain re-aims is left alone)
             var gameDbs = GameDbs(c.Root);
             var noSplit = new HashSet<Transform>();
             // DynamicBone re-aims a chain bone only while it has at most one child: a helper under such a bone would
             // freeze its orientation, so only chain bones that already have several children get helpers.
             foreach (var g in gameDbs) foreach (var t in g.Value) if (t.childCount < 2) noSplit.Add(t);
-            var carry = new Dictionary<long, float>();   // zone * 4096 + bone index in bindRef order
+            var carry = new Dictionary<long, float>();   // point * 4096 + bone index in bindRef order
             var boneIds = new Dictionary<Transform, int>(); var boneList = new List<Transform>();
             foreach (var s in mapped)
                 foreach (var kv in s.F)
                 {
-                    var w = s.W[kv.Key];
+                    var w = s.W[kv.Key]; var pf = kv.Value;
                     for (int k = 0; k < 4; k++)
                     {
                         int bi = k == 0 ? w.boneIndex0 : k == 1 ? w.boneIndex1 : k == 2 ? w.boneIndex2 : w.boneIndex3;
@@ -451,34 +508,45 @@ namespace SfMorph
                         var bone = s.S.Bones[bi];
                         int id;
                         if (!boneIds.TryGetValue(bone, out id)) { id = boneList.Count; boneIds[bone] = id; boneList.Add(bone); }
-                        for (int z = 0; z < Zones.Length; z++)
-                            if (kv.Value[z] > 0f) { long key = (long)z * 4096 + id; float cur; carry.TryGetValue(key, out cur); carry[key] = cur + bw * kv.Value[z]; }
+                        for (int j = 0; j < pf.P.Length; j++) { long key = (long)pf.P[j] * 4096 + id; float cur; carry.TryGetValue(key, out cur); carry[key] = cur + bw * pf.W[j]; }
                     }
                 }
             var helperOf = new Dictionary<long, int>();
             int skippedChain = 0;
-            for (int z = 0; z < Zones.Length; z++)
+            var zoneH0 = new int[Zones.Length]; var zoneH1 = new int[Zones.Length];
+            for (int z = 0; z < Zones.Length; z++) { zoneH0[z] = -1; zoneH1[z] = -1; }
+            for (int p = 0; p < _pts.Count; p++)
             {
-                if (!zoneQ[z].HasValue) continue;
                 var cands = new List<KeyValuePair<int, float>>();
-                foreach (var kv in carry) if (kv.Key / 4096 == z && kv.Value >= 1f) cands.Add(new KeyValuePair<int, float>((int)(kv.Key % 4096), kv.Value));
+                foreach (var kv in carry) if (kv.Key / 4096 == p && kv.Value >= 0.5f) cands.Add(new KeyValuePair<int, float>((int)(kv.Key % 4096), kv.Value));
                 cands.Sort((x, y) => y.Value.CompareTo(x.Value));
                 int made = 0;
                 foreach (var cand in cands)
                 {
-                    if (made >= 4) break;
+                    if (made >= 2) break;
                     var bone = boneList[cand.Key];
                     Matrix4x4 bp;
                     if (!bindRef.TryGetValue(bone, out bp)) continue;
                     if (noSplit.Contains(bone)) { skippedChain++; continue; }
-                    var h = MakeHelper(Zones[z], bone, bp, zoneQ[z].Value, zoneN[z], up, fwd, mpu, gameDbs);
-                    if (h == null) continue;
+                    var h = MakeHelper(_pts[p], bone, bp, gameDbs);
                     h.Total = cand.Value;
-                    helperOf[(long)z * 4096 + cand.Key] = _helpers.Count;
+                    if (_pts[p].Main < 0) _pts[p].Main = _helpers.Count;
+                    helperOf[(long)p * 4096 + cand.Key] = _helpers.Count;
                     _helpers.Add(h);
                     made++;
                 }
             }
+            var boneIdx = new Dictionary<Transform, int>();
+            for (int i = 0; i < _helpers.Count; i++)
+            {
+                var h = _helpers[i];
+                int bi;
+                if (!boneIdx.TryGetValue(h.Bone, out bi)) { bi = _bones.Count; boneIdx[h.Bone] = bi; _bones.Add(h.Bone); }
+                h.BoneIdx = bi;
+                if (zoneH0[h.ZoneIdx] < 0) zoneH0[h.ZoneIdx] = i;
+                zoneH1[h.ZoneIdx] = i + 1;
+            }
+            SimBuilt(zoneH0, zoneH1);
 
             // 6. the meshes: split weights onto the helpers, bind poses for them, swap in
             int used = 0;
@@ -490,10 +558,10 @@ namespace SfMorph
                 if (s.F.Count == 0 || _helpers.Count == 0) continue;
                 var nw = (BoneWeight[])s.W.Clone();
                 int changed = 0;
-                var list = new List<KeyValuePair<int, float>>(12);
+                var list = new List<KeyValuePair<int, float>>(24);
                 foreach (var kv in s.F)
                 {
-                    var w = s.W[kv.Key]; list.Clear();
+                    var w = s.W[kv.Key]; var pf = kv.Value; list.Clear();
                     bool any = false;
                     for (int k = 0; k < 4; k++)
                     {
@@ -503,12 +571,12 @@ namespace SfMorph
                         float stay = bw;
                         int id;
                         if (bi < s.S.Bones.Length && s.S.Bones[bi] != null && boneIds.TryGetValue(s.S.Bones[bi], out id))
-                            for (int z = 0; z < Zones.Length; z++)
+                            for (int j = 0; j < pf.P.Length; j++)
                             {
                                 int h;
-                                if (kv.Value[z] <= 0f || !helperOf.TryGetValue((long)z * 4096 + id, out h)) continue;
-                                Add(list, s.S.Bones.Length + h, bw * kv.Value[z]);
-                                stay -= bw * kv.Value[z];
+                                if (!helperOf.TryGetValue((long)pf.P[j] * 4096 + id, out h)) continue;
+                                Add(list, s.S.Bones.Length + h, bw * pf.W[j]);
+                                stay -= bw * pf.W[j];
                                 any = true;
                             }
                         Add(list, bi, stay);
@@ -533,25 +601,26 @@ namespace SfMorph
                 if (s.S.Used) { used++; meshNames.Add(s.R.name + "(" + changed + ")"); }
             }
 
-            Colliders(c, everyone, true);
-            AssignColliders();
             _builtMorph = MorphWeight();
             _bindVersion = MorphState.BindVersion;
-            int partner = 0, own = 0;
-            foreach (var col in _cols) if (col.Kind == "partner") partner++; else own++;
+            int withHelpers = 0;
+            foreach (var pt in _pts) if (pt.Main >= 0) withHelpers++;
             Status = _helpers.Count > 0
-                ? "on: " + found.Count + " zones, " + _helpers.Count + " helper bones on " + used + " meshes; colliders: " + partner + " on partner hands, " + own + " on her arms/thighs"
-                  + (partner == 0 ? " (no partner hands found yet)" : "")
+                ? "on: " + found.Count + " zones, " + _pts.Count + " points, " + _helpers.Count + " helper bones on " + used + " meshes"
                 : "off: no zone found skin to soften (see the log)";
             var sb = new StringBuilder();
-            sb.Append("Soft zones on '").Append(c.Key).Append("' (").Append(why).Append("): ").Append(found.Count).Append(" zones, ").Append(_helpers.Count).Append(" helper bones, ")
-              .Append(used).Append(" meshes [").Append(string.Join(", ", meshNames.ToArray())).Append("], ").Append(partner).Append(" partner colliders, ").Append(own)
-              .Append(" of hers; softness ").Append(softness.ToString("0.00")).Append(", ").Append(mpu.ToString("0.####")).Append(" m/unit, morph ").Append(_builtMorph.ToString("0.00"))
+            sb.Append("Soft zones on '").Append(c.Key).Append("' (").Append(why).Append("): ").Append(found.Count).Append(" zones, ").Append(_pts.Count).Append(" points (")
+              .Append(withHelpers).Append(" with helpers), ").Append(_helpers.Count).Append(" helper bones on ").Append(_bones.Count).Append(" bones, ")
+              .Append(used).Append(" meshes [").Append(string.Join(", ", meshNames.ToArray())).Append("]; softness ").Append(softness.ToString("0.00")).Append(", ")
+              .Append(mpu.ToString("0.####")).Append(" m/unit, morph ").Append(_builtMorph.ToString("0.00"))
               .Append(", built in ").Append(((Time.realtimeSinceStartup - t0) * 1000f).ToString("0")).Append(" ms");
-            if (skippedChain > 0) sb.Append("; ").Append(skippedChain).Append(" bones left alone (the game's physics re-aims them)");
+            if (skippedChain > 0) sb.Append("; ").Append(skippedChain).Append(" bone slots left alone (the game's physics re-aims them)");
             if (missing.Count > 0) sb.Append("\n  zones not placed: ").Append(string.Join(", ", missing.ToArray()));
-            sb.Append("\n  helpers:");
-            foreach (var h in _helpers) sb.Append(' ').Append(h.Zone.Id).Append('@').Append(h.Bone.name).Append('(').Append(h.Total.ToString("0")).Append(')');
+            sb.Append("\n  zones:");
+            for (int z = 0; z < Zones.Length; z++)
+                if (zoneQ[z].HasValue) sb.Append(' ').Append(Zones[z].Id).Append('(').Append(zonePtN[z]).Append(')');
+            sb.Append("\n  helpers (zone#point@bone, skin carried):");
+            foreach (var h in _helpers) sb.Append(' ').Append(h.Zone.Id).Append('#').Append(_pts.IndexOf(h.Point) - zonePt0[h.ZoneIdx]).Append('@').Append(h.Bone.name).Append('(').Append(h.Total.ToString("0.0")).Append(')');
             Plugin.Log.LogInfo(sb.ToString());
             Log(c, null, t0, problems);
         }
@@ -646,10 +715,11 @@ namespace SfMorph
         Dictionary<Component, List<Transform>> GameDbs(Transform her)
         {
             var d = new Dictionary<Component, List<Transform>>();
+            if (_db == null) return d;
             foreach (var o in UnityEngine.Object.FindObjectsOfType(_db))
             {
                 var db = o as Component;
-                if (db == null || _ours.Contains(db)) continue;
+                if (db == null) continue;
                 var root = _fRoot.GetValue(db) as Transform;
                 if (root == null || !root.IsChildOf(her)) continue;
                 d[db] = new List<Transform>(root.GetComponentsInChildren<Transform>(true));
@@ -657,56 +727,20 @@ namespace SfMorph
             return d;
         }
 
-        Helper MakeHelper(Zone z, Transform bone, Matrix4x4 bp, Vector3 q, Vector3 n, Vector3 up, Vector3 fwd, float mpu, Dictionary<Component, List<Transform>> gameDbs)
+        // S directly under the bone at the point's rest place; Simulate moves it. Its bind pose is a translation of the bone's,
+        // so at rest it skins exactly like the bone.
+        Helper MakeHelper(Pt pt, Transform bone, Matrix4x4 bp, Dictionary<Component, List<Transform>> gameDbs)
         {
-            // rest point a particle radius under the skin; the anchor above it along the skin (a pendulum that swings in/out)
-            var s = q - n * (z.Ball / mpu);
-            var tangent = up - n * Vector3.Dot(up, n);
-            if (tangent.sqrMagnitude < 1e-8f) tangent = fwd - n * Vector3.Dot(fwd, n);
-            var a = s + tangent.normalized * (z.Lean / mpu);
-            var sLocal = bp.MultiplyPoint3x4(s); var aLocal = bp.MultiplyPoint3x4(a);
-            var ga = new GameObject(Prefix + "_" + z.Id + "_" + bone.name);
-            ga.transform.SetParent(bone, false);
-            ga.transform.localPosition = aLocal; ga.transform.localRotation = Quaternion.identity; ga.transform.localScale = Vector3.one;
-            var gs = new GameObject(Prefix + "_" + z.Id + "_" + bone.name + "_soft");
-            gs.transform.SetParent(ga.transform, false);
-            gs.transform.localPosition = sLocal - aLocal;
-            var pin = new GameObject(Prefix + "_pin");   // second child: DynamicBone then never re-aims the anchor
-            pin.transform.SetParent(ga.transform, false);
-            var db = ga.AddComponent(_db);
-            _ours.Add(db);
-            _fRoot.SetValue(db, ga.transform);
-            if (_fExclusions != null) ListField(db, _fExclusions).Add(pin.transform);
-            float scale = Mathf.Abs(ga.transform.lossyScale.x); if (scale < 1e-6f) scale = 1f;
-            Set(db, "m_Radius", z.Ball / scale);
-            Set(db, "m_EndLength", 0f); Set(db, "m_EndOffset", Vector3.zero);
-            Set(db, "m_Gravity", Vector3.zero); Set(db, "m_Force", Vector3.zero);
-            Set(db, "m_DistantDisable", false);
-            Set(db, "m_Friction", 0.4f);
-            Set(db, "m_UpdateRate", GameRate(gameDbs));
-            if (_mSetup != null) try { _mSetup.Invoke(db, null); } catch (Exception e) { Plugin.Log.LogWarning("Soft zones: SetupParticles: " + e.Message); }
-            // the game's chains that hold this bone must not pick our helpers up if they ever rebuild
+            var sLocal = bp.MultiplyPoint3x4(pt.RestRef);
+            var nLocal = bp.MultiplyVector(pt.NormalRef).normalized;
+            var gs = new GameObject(Prefix + "_" + pt.Zone.Id + "_" + bone.name);
+            gs.transform.SetParent(bone, false);
+            gs.transform.localPosition = sLocal; gs.transform.localRotation = Quaternion.identity; gs.transform.localScale = Vector3.one;
+            // the game's chains that hold this bone must not pick our helper up if they ever rebuild
             if (_fExclusions != null)
                 foreach (var g in gameDbs)
-                    if (g.Value.Contains(bone)) { var l = ListField(g.Key, _fExclusions); l.Add(ga.transform); _gameAdds.Add(new KeyValuePair<IList, object>(l, ga.transform)); }
-            return new Helper { Zone = z, Bone = bone, A = ga.transform, S = gs.transform, Db = db, SLocal = sLocal, BindRef = Matrix4x4.Translate(-sLocal) * bp };
-        }
-
-        static float GameRate(Dictionary<Component, List<Transform>> gameDbs)
-        {
-            foreach (var g in gameDbs) { var v = Get(g.Key, "m_UpdateRate"); if (v is float && (float)v > 0f) return (float)v; }
-            return 90f;
-        }
-
-        // Softness: how much the skin gives (stiffness, and the share of skin the helpers carry, set when built).
-        // Springiness: secondary motion from her own animation (lag from inertia, slower settling); 0 = none.
-        static void Params(Component db, float soft, float spring)
-        {
-            Set(db, "m_Stiffness", Mathf.Lerp(0.6f, 0.1f, soft));
-            Set(db, "m_Elasticity", Mathf.Lerp(0.22f, 0.05f, spring) * Mathf.Lerp(1.3f, 0.8f, soft));
-            Set(db, "m_Damping", Mathf.Lerp(0.5f, 0.1f, spring));
-            Set(db, "m_Inert", Mathf.Lerp(0.95f, 0.1f, spring));
-            if (_mUpdateParams != null) try { _mUpdateParams.Invoke(db, null); } catch { }
+                    if (g.Value.Contains(bone)) { var l = ListField(g.Key, _fExclusions); l.Add(gs.transform); _gameAdds.Add(new KeyValuePair<IList, object>(l, gs.transform)); }
+            return new Helper { Zone = pt.Zone, ZoneIdx = pt.ZoneIdx, Point = pt, Bone = bone, S = gs.transform, SLocal = sLocal, NLocal = nLocal, BindRef = Matrix4x4.Translate(-sLocal) * bp };
         }
 
         void Augment(Src s, BoneWeight[] nw, Transform[] hb, List<string> problems)
@@ -769,197 +803,9 @@ namespace SfMorph
             }
         }
 
-        // ---- colliders: the partner's hands and fingers, her forearms, hands and thighs ----
-
-        void Colliders(Character c, List<Character> everyone, bool force)
-        {
-            bool changed = false;
-            if (!_herCols)
-            {
-                _herCols = true;
-                foreach (var s in new[] { "_L", "_R" })
-                {
-                    changed |= Own(c, "Hip" + s, "Knee" + s, 0.055f, s == "_L" ? "thighL" : "thighR", 0f);
-                    changed |= Own(c, "Elbow" + s, "Wrist" + s, 0.032f, "forearm", 0f);
-                    changed |= Own(c, "Wrist" + s, "MiddleFinger1" + s, 0.028f, "hand", 0.9f);
-                }
-            }
-            // partner rigs: MovePlayerAndGirl.player / badGuy, and any other character in the scene that isn't her
-            var roots = new HashSet<Transform>();
-            foreach (var go in GameRig.Partners()) if (go != null) roots.Add(go.transform);
-            if (everyone != null) foreach (var o in everyone) if (o != null && o.Root != null && o.Root != c.Root && !o.Female) roots.Add(o.Root);
-            _cols.RemoveAll(x => x.C == null);
-            foreach (var r in new List<Transform>(_partnerRoots))
-                if (r == null || !roots.Contains(r))
-                {
-                    _partnerRoots.Remove(r);
-                    foreach (var x in _cols) if (x.Owner == r && x.C != null) UnityEngine.Object.Destroy(x.C.gameObject);
-                    _cols.RemoveAll(x => x.Owner == r);
-                    changed = true;
-                }
-            foreach (var r in roots)
-            {
-                if (_partnerRoots.Contains(r) || r == c.Root || r.IsChildOf(c.Root)) continue;
-                _partnerRoots.Add(r);
-                int n = Hands(r, c.Root);
-                changed |= n > 0;
-            }
-            if (changed && !force) AssignColliders();
-        }
-
-        bool Own(Character c, string from, string to, float radius, string kind, float extend)
-        {
-            Transform a, b;
-            if (!c.Bones.TryGetValue(from, out a) || !c.Bones.TryGetValue(to, out b) || a == null || b == null) return false;
-            var end = b.position + (b.position - a.position) * extend;
-            var col = Capsule(a, a.position, end, radius, from);
-            if (col == null) return false;
-            _cols.Add(new Col { C = col, Owner = c.Root, Kind = kind });
-            return true;
-        }
-
-        // Hands and fingers of one rig: a humanoid Animator's hand/finger bones, else bones named like hands, wrists, fingers.
-        int Hands(Transform root, Transform her)
-        {
-            var made = new List<string>();
-            Animator anim = null;   // not hers, if she happens to live under the same scene root
-            foreach (var a in root.GetComponentsInChildren<Animator>(true))
-                if (a != null && !a.transform.IsChildOf(her) && (anim == null || (a.isHuman && !anim.isHuman))) anim = a;
-            var segs = new List<KeyValuePair<Transform, Transform>>();   // bone -> next (null: extend from the parent)
-            var palms = new List<KeyValuePair<Transform, Transform>>();
-            if (anim != null && anim.isHuman && anim.avatar != null)
-            {
-                foreach (var side in new[] { true, false })
-                {
-                    var hand = anim.GetBoneTransform(side ? HumanBodyBones.LeftHand : HumanBodyBones.RightHand);
-                    if (hand == null) continue;
-                    var middle = anim.GetBoneTransform(side ? HumanBodyBones.LeftMiddleProximal : HumanBodyBones.RightMiddleProximal);
-                    palms.Add(new KeyValuePair<Transform, Transform>(hand, middle));
-                    int first = (int)(side ? HumanBodyBones.LeftThumbProximal : HumanBodyBones.RightThumbProximal);
-                    for (int f = 0; f < 5; f++)
-                        for (int j = 0; j < 3; j++)
-                        {
-                            var t = anim.GetBoneTransform((HumanBodyBones)(first + f * 3 + j));
-                            var next = j < 2 ? anim.GetBoneTransform((HumanBodyBones)(first + f * 3 + j + 1)) : null;
-                            if (t != null) segs.Add(new KeyValuePair<Transform, Transform>(t, next));
-                        }
-                }
-            }
-            if (palms.Count == 0)
-            {
-                var hands = new List<Transform>();
-                foreach (var t in root.GetComponentsInChildren<Transform>(true))
-                {
-                    var n = Body.Norm(t.name);
-                    if (t.childCount == 0 || t.name.StartsWith(Prefix) || t.IsChildOf(her) || !(n.Contains("hand") || n.Contains("wrist") || n.Contains("palm"))) continue;
-                    if (IsFinger(n) || n.Contains("handle") || n.Contains("target") || n.Contains("ik") || n.Contains("twist")) continue;
-                    bool under = false;
-                    foreach (var h in hands) if (t.IsChildOf(h)) { under = true; break; }
-                    if (!under) hands.Add(t);
-                }
-                foreach (var h in hands)
-                {
-                    Transform best = null; int most = -1;
-                    for (int i = 0; i < h.childCount; i++)
-                    {
-                        var ch = h.GetChild(i);
-                        int cnt = ch.GetComponentsInChildren<Transform>(true).Length;
-                        if (Body.Norm(ch.name).Contains("middle")) { best = ch; break; }
-                        if (cnt > most) { most = cnt; best = ch; }
-                    }
-                    palms.Add(new KeyValuePair<Transform, Transform>(h, best));
-                    int k = 0;
-                    foreach (var t in h.GetComponentsInChildren<Transform>(true))
-                    {
-                        if (t == h || t.name.StartsWith(Prefix) || ++k > 30) continue;
-                        segs.Add(new KeyValuePair<Transform, Transform>(t, t.childCount > 0 ? t.GetChild(0) : null));
-                    }
-                }
-            }
-            foreach (var p in palms)
-            {
-                var end = p.Value != null ? p.Value.position : p.Key.position + p.Key.rotation * Vector3.up * 0.08f;
-                var col = Capsule(p.Key, p.Key.position, end, 0.03f, p.Key.name + "_palm");
-                if (col != null) { _cols.Add(new Col { C = col, Owner = root, Kind = "partner" }); made.Add(p.Key.name); }
-            }
-            foreach (var s in segs)
-            {
-                var t = s.Key;
-                Vector3 a = t.position, b;
-                if (s.Value != null) b = s.Value.position;
-                else if (t.parent != null && (a - t.parent.position).sqrMagnitude > 1e-8f) b = a + (a - t.parent.position) * 0.8f;
-                else continue;
-                if ((b - a).sqrMagnitude > 0.08f * 0.08f) b = a + (b - a).normalized * 0.08f;   // not a finger
-                var col = Capsule(t, a, b, 0.009f, t.name);
-                if (col != null) _cols.Add(new Col { C = col, Owner = root, Kind = "partner" });
-            }
-            Plugin.Log.LogInfo("Soft zones: partner '" + root.name + "': " + (anim != null && anim.isHuman ? "humanoid" : "by bone names") + ", "
-                               + palms.Count + " hands [" + string.Join(", ", made.ToArray()) + "], " + segs.Count + " finger segments");
-            return palms.Count + segs.Count;
-        }
-
-        static bool IsFinger(string n)
-        {
-            foreach (var w in new[] { "finger", "thumb", "index", "middle", "ring", "pinky", "little" }) if (n.Contains(w)) return true;
-            return false;
-        }
-
-        // A DynamicBone capsule between two world points, on a child of the bone with world scale ~1 (sizes in metres).
-        Component Capsule(Transform bone, Vector3 a, Vector3 b, float r, string name)
-        {
-            var go = new GameObject(Prefix + "_col_" + name);
-            go.transform.SetParent(bone, false);
-            var dir = b - a; float len = dir.magnitude;
-            go.transform.position = (a + b) * 0.5f;
-            go.transform.rotation = len > 1e-5f ? Quaternion.FromToRotation(Vector3.up, dir / len) : bone.rotation;
-            float s = Mathf.Abs(bone.lossyScale.x); if (s < 1e-6f) s = 1f;
-            go.transform.localScale = Vector3.one / s;
-            var c = go.AddComponent(_dbc);
-            Set(c, "m_Radius", r);
-            Set(c, "m_Height", len + 2f * r);
-            Set(c, "m_Direction", 1);   // Y
-            Set(c, "m_Center", Vector3.zero);
-            return c;
-        }
-
-        // Which colliders each soft zone feels; the partner's hands also reach the game's own breast physics.
-        void AssignColliders()
-        {
-            foreach (var h in _helpers)
-            {
-                if (h.Db == null) continue;
-                var l = ListField(h.Db, _fColliders);
-                l.Clear();
-                foreach (var col in _cols)
-                {
-                    if (col.C == null) continue;
-                    if (col.Kind == "thighL" && !(h.Zone.InnerThigh && h.Zone.Side < 0)) continue;   // a thigh presses the other one
-                    if (col.Kind == "thighR" && !(h.Zone.InnerThigh && h.Zone.Side > 0)) continue;
-                    l.Add(col.C);
-                }
-            }
-            foreach (var kv in _gameAdds) if (IsCollider(kv.Value)) kv.Key.Remove(kv.Value);
-            _gameAdds.RemoveAll(x => IsCollider(x.Value));
-            if (_her == null) return;
-            foreach (var g in GameDbs(_her))
-            {
-                var root = _fRoot.GetValue(g.Key) as Transform;
-                if (root == null || !Body.Norm(root.name).Contains("breast")) continue;
-                var l = ListField(g.Key, _fColliders);
-                foreach (var col in _cols)
-                    if (col.C != null && col.Kind == "partner" && !l.Contains(col.C)) { l.Add(col.C); _gameAdds.Add(new KeyValuePair<IList, object>(l, col.C)); }
-            }
-        }
-
-        static bool IsCollider(object o) { return o is Component && !(o is Transform); }
-
-        // Every frame after Body applies (bones carry our scales): the soft points' springs and contacts (0.7.0 stub).
-        public void Simulate(float dt, List<SoftCapsule> caps, float softness, float spring, bool debug) { }
-        public string Contacts = "";
-
         // ---- giving everything back ----
 
-        // Meshes, bones, helpers and our entries in the game's lists; colliders too unless keepColliders.
+        // Meshes, bones, helpers and our entries in the game's lists; the per-session caches too when 'all'.
         void Teardown(bool all)
         {
             foreach (var kv in _rs)
@@ -986,22 +832,21 @@ namespace SfMorph
             _rs.Clear();
             foreach (var kv in _gameAdds) if (kv.Key != null) kv.Key.Remove(kv.Value);
             _gameAdds.Clear();
-            foreach (var h in _helpers) if (h.A != null) UnityEngine.Object.Destroy(h.A.gameObject);
+            foreach (var h in _helpers) if (h.S != null) UnityEngine.Object.Destroy(h.S.gameObject);
             _helpers.Clear();
-            _ours.Clear();
+            _pts.Clear();
+            _bones.Clear();
+            SimReset();
             _builtFor = null;
+            Contacts = "";
             if (!all) return;
-            foreach (var col in _cols) if (col.C != null) UnityEngine.Object.Destroy(col.C.gameObject);
-            _cols.Clear();
-            _partnerRoots.Clear();
-            _herCols = false;
             _data.Clear();
             _her = null;
         }
 
         public void Release()
         {
-            if (_builtFor == null && _cols.Count == 0 && _rs.Count == 0) { Status = ""; return; }
+            if (_builtFor == null && _rs.Count == 0) { Status = ""; Contacts = ""; return; }
             Teardown(true);
             _builtSoft = -1f;
             Status = "";

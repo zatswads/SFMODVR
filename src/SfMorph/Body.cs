@@ -436,9 +436,30 @@ namespace SfMorph
 
         // ---- applying (every frame, after animation, before physics/IK) ----
 
+        public readonly Embody Embody = new Embody();
+        readonly EmbodySettings _emb = new EmbodySettings();
+        float _nextHands;
+        bool _handsOn, _embodyOn;
+
         public void ApplyAll()
         {
             _frame++;
+            // The game's woman: the soft zones, the hands that touch her and Embody all revolve around her.
+            Character her = null;
+            foreach (var c in Found) if (her == null && c.Female && !c.IsPlayer && c.Root != null) her = c;
+            bool physics = _p.Apply.Value && _p.Physics.Value && her != null;
+            bool embody = _p.EmbodyOn.Value && her != null;
+            if (physics || embody)
+            {
+                if (Time.unscaledTime >= _nextHands)   // hands/controllers come and go with scenes: every 2 s, cheap when unchanged
+                {
+                    _nextHands = Time.unscaledTime + 2f;
+                    try { VrHands.Survey(her); VrHands.Refresh(her, Found); VrHands.AttachToGameBreasts(her.Root, physics); }
+                    catch (Exception e) { Plugin.Log.LogWarning("Hands for the soft zones: " + e); }
+                }
+                _handsOn = true;
+            }
+            else if (_handsOn) { _handsOn = false; try { VrHands.Release(); } catch { } }
             foreach (var c in Found)
             {
                 try { c.Morph.Update(c, _p.Apply.Value && c.Root != null); }  // before Apply: its joint moves go through the trackers
@@ -448,7 +469,7 @@ namespace SfMorph
                     c.Look.Morph = null; Touch(c);
                     try { c.Morph.Release(); } catch { }
                 }
-                try { c.Soft.Update(c, _p.Apply.Value && _p.Physics.Value && c.Root != null && c.Female && !c.IsPlayer, _p.Softness.Value, _p.Springiness.Value, Found); }
+                try { c.Soft.Update(c, physics && c == her, _p.Softness.Value, _p.Springiness.Value, Found); }
                 catch (Exception e)
                 {
                     Plugin.Log.LogError("Soft zones on '" + c.Key + "' failed, physics turned off: " + e);
@@ -456,8 +477,33 @@ namespace SfMorph
                     try { c.Soft.Release(); } catch { }
                 }
                 if (_p.Apply.Value && !c.Look.Empty && c.Root != null) Apply(c);
+                // the soft points after her bones carry our changes, before the game's physics and IK
+                if (physics && c == her)
+                    try { c.Soft.Simulate(Time.deltaTime, VrHands.Capsules, _p.Softness.Value, _p.Springiness.Value, _p.ShowSoftPoints.Value); }
+                    catch (Exception e)
+                    {
+                        Plugin.Log.LogError("Soft zones on '" + c.Key + "' failed, physics turned off: " + e);
+                        _p.Physics.Value = false;
+                        try { c.Soft.Release(); } catch { }
+                    }
             }
             Release();
+            // Embody last: his head and arms after the animation, the view after everything that moves him
+            if (embody)
+            {
+                _emb.On = true; _emb.Hands = _p.EmbodyHands.Value; _emb.HideHead = _p.EmbodyHideHead.Value; _emb.View = _p.EmbodyView.Value;
+                _emb.Partner = _p.EmbodyPartner.Value;
+                _emb.LeftPos = _p.LeftHandPos.Value; _emb.LeftRot = _p.LeftHandRot.Value; _emb.RightPos = _p.RightHandPos.Value; _emb.RightRot = _p.RightHandRot.Value;
+                try { Embody.Update(her, Found, _emb); _embodyOn = true; }
+                catch (Exception e)
+                {
+                    Plugin.Log.LogError("Embody failed, turned off: " + e);
+                    _p.EmbodyOn.Value = false;
+                    try { Embody.Release(); } catch { }
+                    _embodyOn = false;
+                }
+            }
+            else if (_embodyOn) { _embodyOn = false; try { Embody.Release(); } catch { } }
         }
 
         void Apply(Character c)
@@ -613,6 +659,8 @@ namespace SfMorph
             _frame++;
             Release();
             foreach (var c in Found) { try { c.Soft.Release(); } catch { } try { c.Morph.Release(); } catch { } }
+            try { Embody.Release(); } catch { }
+            try { VrHands.Release(); } catch { }
         }
     }
 }

@@ -23,7 +23,7 @@ namespace SfMorph
         GUIStyle _hint, _bold, _off;
         const int MaxRows = 80; // IMGUI gets slow with hundreds of sliders; the filter narrows it
 
-        static readonly string[] Tabs = { "Body", "Bones", "Presets", "Characters" };
+        static readonly string[] Tabs = { "Body", "Bones", "Presets", "Characters", "VR" };
 
         public Panel(Plugin p, Body body)
         {
@@ -104,7 +104,8 @@ namespace SfMorph
                 case 0: BodyTab(_sel); break;
                 case 1: BoneTab(_sel); break;
                 case 2: PresetTab(_sel); break;
-                default: CharacterTab(_sel); break;
+                case 3: CharacterTab(_sel); break;
+                default: VrTab(_sel); break;
             }
             GUILayout.EndScrollView();
             GUI.DragWindow();
@@ -253,7 +254,43 @@ namespace SfMorph
             if (GUILayout.Button("Rescan the folder", GUILayout.Width(160))) MorphSet.Rescan();
 
             if (had && c.Look.Morph != null) MorphControls(c);  // a pick shows its controls from the next frame on
+        }
+
+        // ---- VR: soft zones (touch) and Embody (his view and hands) ----
+
+        static readonly string[] HandModes = { "None", "Left", "Right", "Both" };
+        static readonly string[] ViewModes = { "Game camera", "Snap to his eyes", "Follow his eyes" };
+        static readonly string[] Partners = { "Player", "Other man" };
+
+        void VrTab(Character c)
+        {
             PhysicsSection(c);
+            GUILayout.Space(10);
+            GUILayout.Label("Embody", _bold);
+            string off = !c.Female || c.IsPlayer ? "only with the game's woman in the scene" : null;
+            GUI.enabled = off == null;
+            bool on = GUILayout.Toggle(_p.EmbodyOn.Value, " Embody him: see through his eyes, his hands on your controllers");
+            GUI.enabled = true;
+            if (off == null && on != _p.EmbodyOn.Value) _p.EmbodyOn.Value = on;
+            if (off != null) { GUILayout.Label("off: " + off, _off); return; }
+            GUI.enabled = _p.EmbodyOn.Value;
+            int partner = GUILayout.Toolbar(_p.EmbodyPartner.Value, Partners);
+            if (partner != _p.EmbodyPartner.Value) _p.EmbodyPartner.Value = partner;
+            GUILayout.Label("View", _hint);
+            GUILayout.BeginHorizontal();
+            int view = GUILayout.Toolbar(_p.EmbodyView.Value, ViewModes);
+            if (view != _p.EmbodyView.Value) _p.EmbodyView.Value = view;
+            if (GUILayout.Button("Re-snap", GUILayout.Width(80))) _body.Embody.SnapView();
+            GUILayout.EndHorizontal();
+            bool hide = GUILayout.Toggle(_p.EmbodyHideHead.Value, " Hide his head");
+            if (hide != _p.EmbodyHideHead.Value) _p.EmbodyHideHead.Value = hide;
+            GUILayout.Label("His hands follow", _hint);
+            int hands = GUILayout.Toolbar(_p.EmbodyHands.Value, HandModes);
+            if (hands != _p.EmbodyHands.Value) _p.EmbodyHands.Value = hands;
+            GUI.enabled = true;
+            if (_p.EmbodyOn.Value && _body.Embody.Status.Length > 0) GUILayout.Label(_body.Embody.Status, _body.Embody.Status.StartsWith("off") ? _off : _hint);
+            GUILayout.Label("The game's own POV camera can end up elsewhere; 'Follow his eyes' keeps your view at his eyes (position only, " +
+                            "you turn your own head). Hand offsets per controller: [Embody] in sfmodvr.sfmorph.cfg.", _hint);
         }
 
         void MorphControls(Character c)
@@ -288,9 +325,18 @@ namespace SfMorph
             if (Mathf.Abs(s - _p.Softness.Value) > 0.0001f) _p.Softness.Value = s;
             float sp = Slider("Springiness", _p.Springiness.Value * 100f, 0f, 100f, "0", 30f, sliderOff == null ? null : "off: " + sliderOff, " %") / 100f;
             if (Mathf.Abs(sp - _p.Springiness.Value) > 0.0001f) _p.Springiness.Value = sp;
+            GUI.enabled = sliderOff == null;
+            bool show = GUILayout.Toggle(_p.ShowSoftPoints.Value, " Show soft points and contact capsules (debug)");
+            if (sliderOff == null && show != _p.ShowSoftPoints.Value) _p.ShowSoftPoints.Value = show;
+            GUI.enabled = true;
             if (off != null) GUILayout.Label("off: " + off, _off);
-            else if (c.Soft.Status.Length > 0) GUILayout.Label(c.Soft.Status, c.Soft.Status.StartsWith("off") ? _off : _hint);
-            GUILayout.Label("Helper bones under her skin, simulated by the game's own DynamicBone, collide with the partner's hands and fingers, " +
+            else
+            {
+                if (c.Soft.Status.Length > 0) GUILayout.Label(c.Soft.Status, c.Soft.Status.StartsWith("off") ? _off : _hint);
+                if (c.Soft.Contacts.Length > 0) GUILayout.Label(c.Soft.Contacts, _hint);
+                if (VrHands.Status.Length > 0) GUILayout.Label(VrHands.Status, _hint);
+            }
+            GUILayout.Label("Soft points under her skin (springs, like VaM's soft physics) are pushed by your VR hands, the partner's hands and fingers, " +
                             "her forearms and hands, and her other thigh. Softness: how far the skin gives. Springiness: how much the zones lag " +
                             "and settle as she moves. Works with or without a character shape.", _hint);
         }

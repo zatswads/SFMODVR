@@ -17,12 +17,14 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.6.3";
+        public const string Version = "0.7.0";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
-        internal ConfigEntry<bool> KeysUnfocused, Apply, Physics;
+        internal ConfigEntry<bool> KeysUnfocused, Apply, Physics, ShowSoftPoints, EmbodyOn, EmbodyHideHead;
         internal ConfigEntry<float> UiScale, Softness, Springiness;
+        internal ConfigEntry<int> EmbodyHands, EmbodyView, EmbodyPartner;
+        internal ConfigEntry<Vector3> LeftHandPos, LeftHandRot, RightHandPos, RightHandRot;
         internal ConfigEntry<string> PanelRect;
         internal ConfigEntry<int> Tab;
 
@@ -38,6 +40,16 @@ namespace SfMorph
             Physics = Config.Bind("Physics", "SoftZones", true, "Hands and limbs press into her glutes, thighs, belly and breasts (helper bones driven by the game's DynamicBone).");
             Softness = Config.Bind("Physics", "Softness", 0.5f, new ConfigDescription("How much the soft zones give (0 firm, 1 soft).", new AcceptableValueRange<float>(0f, 1f)));
             Springiness = Config.Bind("Physics", "Springiness", 0.3f, new ConfigDescription("Secondary motion of the soft zones from her own movement (0 none, 1 a lot).", new AcceptableValueRange<float>(0f, 1f)));
+            ShowSoftPoints = Config.Bind("Physics", "ShowSoftPoints", false, "Small markers on the soft points (green at rest, red touched) and the contact capsules, to see what touches what.");
+            EmbodyOn = Config.Bind("Embody", "On", false, "See through the partner's eyes (VR), his head hidden, his hands on your controllers.");
+            EmbodyHands = Config.Bind("Embody", "Hands", 3, new ConfigDescription("His hands follow the controllers: 0 none, 1 left, 2 right, 3 both.", new AcceptableValueRange<int>(0, 3)));
+            EmbodyHideHead = Config.Bind("Embody", "HideHead", true, "Hide his head so it doesn't block the view.");
+            EmbodyView = Config.Bind("Embody", "View", 2, new ConfigDescription("0 the game's camera, 1 snap to his eyes once, 2 follow his eyes.", new AcceptableValueRange<int>(0, 2)));
+            EmbodyPartner = Config.Bind("Embody", "Partner", 0, new ConfigDescription("0 the player, 1 the other man (badGuy).", new AcceptableValueRange<int>(0, 1)));
+            LeftHandPos = Config.Bind("Embody", "LeftHandOffset", new Vector3(-0.0325f, -0.0379f, -0.1012f), "Controller -> his left hand position offset (m, controller space). Quest Touch default.");
+            LeftHandRot = Config.Bind("Embody", "LeftHandRotation", new Vector3(-90f, 90f, 0f), "Controller -> his left hand rotation (degrees).");
+            RightHandPos = Config.Bind("Embody", "RightHandOffset", new Vector3(0.0325f, -0.0379f, -0.1012f), "Controller -> his right hand position offset (m).");
+            RightHandRot = Config.Bind("Embody", "RightHandRotation", new Vector3(-90f, -90f, 0f), "Controller -> his right hand rotation (degrees).");
             Logger.LogInfo("SF Body Morphs " + Version + ": panel on " + PanelKey.Value + ", looks in " + Store.Dir);
             // The game destroys plugin components; a hidden object of our own keeps running.
             var go = new GameObject("SfMorphRunner") { hideFlags = HideFlags.HideAndDontSave };
