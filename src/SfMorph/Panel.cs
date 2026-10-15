@@ -319,9 +319,19 @@ namespace SfMorph
             bool hide = GUILayout.Toggle(_p.EmbodyHideHead.Value, " Hide his head");
             if (hide != _p.EmbodyHideHead.Value) _p.EmbodyHideHead.Value = hide;
             GUILayout.Label("His hands follow", _hint);
-            int hands = GUILayout.Toolbar(_p.EmbodyHands.Value, HandModes);
+            int handsWas = _p.EmbodyHands.Value;   // read before the controls: the same rows in the Layout pass and the click pass
+            int hands = GUILayout.Toolbar(handsWas, HandModes);
             if (hands != _p.EmbodyHands.Value) _p.EmbodyHands.Value = hands;
+            string handOff = !_p.EmbodyOn.Value ? "Embody is off" : handsWas == 0 ? "his hands don't follow" : null;
+            string elbowOff = handOff ?? (!(_p.Apply.Value && _p.Physics.Value) && !_p.HandsOn.Value ? "her body is not built (soft zones or physics hands)" : null);
+            GUI.enabled = handOff == null;
+            bool nf = GUILayout.Toggle(_p.EmbodyNeutralFingers.Value, " Neutral fingers: trigger = index, grip = clasp that stops on her");
+            if (handOff == null && nf != _p.EmbodyNeutralFingers.Value) _p.EmbodyNeutralFingers.Value = nf;
+            GUI.enabled = elbowOff == null;
+            bool ea = GUILayout.Toggle(_p.EmbodyElbowAvoid.Value, " His elbow swings around her");
+            if (elbowOff == null && ea != _p.EmbodyElbowAvoid.Value) _p.EmbodyElbowAvoid.Value = ea;
             GUI.enabled = true;
+            if (_p.EmbodyOn.Value && elbowOff != null) GUILayout.Label("    off: " + elbowOff, _off);
             if (_p.EmbodyOn.Value && _body.Embody.Status.Length > 0) GUILayout.Label(_body.Embody.Status, _body.Embody.Status.StartsWith("off") ? _off : _hint);
             GUILayout.Label("The game's own POV camera can end up elsewhere; 'Follow his eyes' keeps your view at his eyes (position only, " +
                             "you turn your own head). Hand offsets per controller: [Embody] in sfmodvr.sfmorph.cfg.", _hint);
@@ -431,12 +441,23 @@ namespace SfMorph
             GUI.enabled = handsOn;
             bool jf = GUILayout.Toggle(_p.HandsJointed.Value, " Jointed fingers (simulated finger bodies that bend on her skin; off: posed by the grip only)");
             if (handsOn && jf != _p.HandsJointed.Value) _p.HandsJointed.Value = jf;
+            GUI.enabled = hitOff == null;
+            bool fc = GUILayout.Toggle(_p.HandsFingerConform.Value, " Fingers close on her skin and sink in by softness");
+            if (hitOff == null && fc != _p.HandsFingerConform.Value) _p.HandsFingerConform.Value = fc;
+            GUI.enabled = handsOn;
+            bool dfade = GUILayout.Toggle(_p.HandsDrawnFade.Value, " Drawn hand is exactly the controller in free air (physics offset fades in on contact)");
+            if (handsOn && dfade != _p.HandsDrawnFade.Value) _p.HandsDrawnFade.Value = dfade;
             if (handsOff != null) { GUI.enabled = true; GUILayout.Label("    off: " + handsOff, _off); }
+            else if (hitOff != null) { GUI.enabled = true; GUILayout.Label("    finger conform off: " + hitOff, _off); }
+            string restOff = handsOn || (_p.EmbodyOn.Value && _p.EmbodyHands.Value != 0) ? null : "off: physics hands and Embody hands are both off";
+            float rc = Slider("Rest curl", _p.HandsRestCurl.Value * 100f, 0f, 100f, "0", 25f, restOff, " %") / 100f;
+            if (restOff == null && Mathf.Abs(rc - _p.HandsRestCurl.Value) > 0.0001f) _p.HandsRestCurl.Value = rc;
+            GUI.enabled = handsOn;
             float fr = Slider("Grip friction", _p.HandsFriction.Value * 100f, 0f, 100f, "0", 80f, hitOff == null ? null : "off: " + hitOff, " %") / 100f;
             if (hitOff == null && Mathf.Abs(fr - _p.HandsFriction.Value) > 0.0001f) _p.HandsFriction.Value = fr;
             GUI.enabled = true;
             if (handsOn && PhysicsHands.Status.Length > 0) GUILayout.Label(PhysicsHands.Status, PhysicsHands.Status.StartsWith("off") ? _off : _hint);
-            GUILayout.Label("Grip curls the fingers. Friction: a resting hand is carried along when she moves. " +
+            GUILayout.Label("Trigger curls the index finger, grip the others (they stop on her skin). Rest curl: the hand with nothing pressed. Friction: a resting hand is carried along when she moves. " +
                             "Hand position/rotation offsets per controller: [Embody] Left/RightHandOffset in sfmodvr.sfmorph.cfg.", _hint);
         }
 
@@ -469,7 +490,7 @@ namespace SfMorph
             string off = !_p.Apply.Value ? "'Apply changes' is off" : !c.Female || c.IsPlayer ? "only for the game's woman"
                        : !_p.Physics.Value && !_p.HandsOn.Value ? "soft zones and physics hands are both off (no hand is tracked against her)" : null;
             float push = _p.HandsLimbPush.Value;   // read before the controls: the same rows in the Layout pass and the click pass
-            float lp = Slider("Push her limbs", push * 100f, 0f, 100f, "0", 50f, off == null ? null : "off: " + off, " %") / 100f;
+            float lp = Slider("Her limbs yield to hands", push * 100f, 0f, 100f, "0", 50f, off == null ? null : "off: " + off, " %") / 100f;
             if (off == null && Mathf.Abs(lp - _p.HandsLimbPush.Value) > 0.0001f) _p.HandsLimbPush.Value = lp;
             string byOff = off ?? (push > 0f ? null : "push is 0");
             bool byTouch = _p.HandsPushByTouch.Value;
@@ -477,14 +498,14 @@ namespace SfMorph
             GUI.enabled = byOff == null;
             bool touch = GUILayout.Toggle(byTouch, " Other hands push too (your hand models, the partner you embody), by how deep they are");
             GUI.enabled = partnerOff == null;
-            bool partner = GUILayout.Toggle(_p.HandsPushByPartner.Value, "   ...and the partner's animated hands (his animations often hold her: off keeps her in his grip)");
+            bool partner = GUILayout.Toggle(_p.HandsPushByPartner.Value, "   ...and the partner's animated hands (not the one you embody: his hands are your controllers; off keeps her in his grip)");
             GUI.enabled = true;
             if (byOff == null && touch != _p.HandsPushByTouch.Value) _p.HandsPushByTouch.Value = touch;
             if (partnerOff == null && partner != _p.HandsPushByPartner.Value) _p.HandsPushByPartner.Value = partner;
             if (byOff != null) GUILayout.Label("    off: " + byOff, _off);
             if (off == null && HerBody.Status.Length > 0) GUILayout.Label(HerBody.Status, HerBody.Status.StartsWith("off") ? _off : _hint);
-            GUILayout.Label("Push: a hand that presses into an arm, leg, her head or torso moves it aside and the pose springs back (never past 30/20/15/10 degrees). " +
-                            "Physics hands push by how hard they press; other hands by how deep they are in her.", _hint);
+            GUILayout.Label("A hand that presses into an arm, leg, her head or torso moves it aside; it settles back without bouncing (never past 35/40 deg " +
+                            "at the shoulder/elbow, 20/25 at the hip/knee, 15 head, 8 spine). Measured from where the hand is, not from the blocked physics hand.", _hint);
         }
 
         static readonly string[] Qualities = { "Performance", "Balanced", "Fidelity" };

@@ -289,7 +289,7 @@ namespace SfMorph
                 }
 
                 // grope: pressing hard (or deep) for 0.25 s, once, re-armed after 0.5 s of a light touch
-                bool pressing = force >= 20f * k || g.GeoDepth >= 0.015f * k;
+                bool pressing = force >= 20f * k || g.GeoDepth >= 0.015f * k || g.YieldPen >= 0.015f * k;   // 0.8.0: a yielded limb drops the contact force
                 _r[gi].PressT = pressing ? _r[gi].PressT + dt : 0f;
                 bool low = force < 10f && g.GeoDepth < 0.005f;
                 _r[gi].LowT = low ? _r[gi].LowT + dt : 0f;
@@ -300,7 +300,7 @@ namespace SfMorph
                     _r[gi].Pressed = true; _zGrope[zone] = _now; fired = true;
                     if (ZoneGain[zone][1] > 0f)
                     {
-                        float I = Mathf.Max(Mathf.Clamp01((force - 20f * k) / 40f), Mathf.Clamp01(g.GeoDepth / 0.04f));
+                        float I = Mathf.Max(Mathf.Max(Mathf.Clamp01((force - 20f * k) / 40f), Mathf.Clamp01(g.GeoDepth / 0.04f)), Mathf.Clamp01(g.YieldPen / 0.04f));
                         Fire(zone, g, 2, Mathf.Max(I, 0.1f), g.PhysF.sqrMagnitude >= g.GeoF.sqrMagnitude && g.PhysF.sqrMagnitude > 0f ? g.PhysPt : g.GeoPt,
                             g.PhysF.sqrMagnitude >= g.GeoF.sqrMagnitude ? g.PhysF : g.GeoF, ByOf(g), 0f, force, false);
                     }
