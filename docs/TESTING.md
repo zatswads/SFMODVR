@@ -97,6 +97,30 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.8.0 (limb yield, planted lock, hands, Embody hands)
+
+Install `dist/SfMorph.dll` (+ `dist/sfmorph_shaders` unchanged). Log first: `Grip: left trigger from VR_HandController.activateValue_left`
+(and right); `PhysicsHands: finger conform: fan 8 steps x 2 probes ...`; `PhysicsHands: drawn offset fade on ...`; `Her body: yield sources
+...`; `Overlap: yield v3 ... driving N bones`; with Embody `Embody: neutral finger pose from the bind pose of '<renderer>' ...` (root match a
+few mm, axis change small). Headset:
+1. Free air, physics hands on, 30 s: the drawn hand is glued to the controller. 10 s line: drawn offset raw avg < 3 mm, shown avg 0.0;
+   at the cap free air 0-5 %; flips < 10 %. A scene/POV cut: `rig shifts` counts, no hand racing across the room.
+2. Palm on her thigh, hold 2 s, lift: the hand stops at the skin, the thigh gives a little and settles; on lift it returns without a
+   bounce. `Her body: first yield on thigh_L ...`, `Overlap: first yield on Hip_L ...`, 10 s `settled N`.
+3. Push her forearm sideways and hold, then pull back slowly: the forearm gives at the elbow first, the upper arm follows; held still it
+   stays still (no Newton's cradle, no fulcrum); `contact starts` < 50 per 10 s while holding.
+4. Push her forearm from the front toward her back: the whole arm swings at the shoulder, the elbow never bends backwards
+   (`Overlap: elbow hinge: ...`).
+5. Planted lock on, Legs 0 %, Spine 100 %: her hands resting on her body / on him and her feet on the bed stay put while her torso lags;
+   push a leg: the knee bends, the foot stays. Spine 0 %: head and arms still swing a little on thrusts and turns.
+6. Grip around her upper arm: fingers close until they touch and stop; squeeze fully: they sink a little, not to a fist; on her breast
+   deeper. Trigger only: the index curls; grip only: the others clasp, the thumb opposes; nothing pressed: a relaxed curl (Rest curl).
+7. Embody on, physics hands off: his fingers rest neutral (not the animation's); his hand stops at her skin (`Embody: his left hand stops
+   at her skin ...`); clasp her shoulder: stops on the skin, deeper on her breast; reach across her: the elbow swings around her
+   (`Embody: his left elbow swivels ...`); push her forearm with his hand: it yields (`... by your left hand (Player)`).
+8. Embody + physics hands on: his hand stops where the physics hand stops, fingers copy the conform, no double yield.
+9. Reactions on, slap her thigh: a twitch that settles (no jerk, no ring); 10 s Overlap line `kicks N (max v)`.
+
 ## 0.7.9 (reactions, voice guard)
 
 Hands first: physics hands idle in free air 20 s: the 10 s line shows "at the cap" free air near 0 %, "follow v err avg" <= 0.15 m/s

@@ -41,6 +41,37 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.8.0:
+- Her arm went "crazy like a Newton's cradle" on the slightest push. The push was a force on springs that were far too light (an
+  arm weighed like 1/6 of a real one, under-damped), and it was measured after the limb had already moved: the arm yielded, the
+  push dropped, the arm sprang back into the hand, got pushed again, and the shoulder and elbow each swung on their own spring
+  (the fulcrum look). Now her limbs YIELD instead: how deep a hand is in her limb (measured against the animation's pose, before
+  anything moved it, and from where your controller is, not from the blocked physics hand) sets how far the limb gives; each joint
+  eases there and back with critically damped motion, the forearm first and the upper arm a beat later (overlapping action), so it
+  settles and never rings. Elbows and knees only bend the way they bend; a push that would bend them backwards swings the whole
+  limb at the shoulder or hip. Slaps still kick the limb (with realistic arm/leg/head weights) and it settles.
+- Planted hands and feet slid when her spine or arms trailed the animation, and her feet when a leg was pushed: the lock only ran for
+  regions with secondary motion on and only for hands standing still in the world. Now every hand and foot our motion would move is
+  held at the animation's place (relative to the world, her hips or the partner, whichever it rests on), and lets go only for a fast
+  free swing.
+- Spine at 0 % took the secondary motion of the head and arms with it: they only lagged in their own joint, and what looked like their
+  motion was the spine's lag carried down. They now also swing by inertia when the body lurches (thrusts), not only when it turns.
+- Physics hands: the drawn hand is now exactly your controller in free air; the physics offset fades in only on contact (VR → "Drawn
+  hand is exactly the controller in free air"). A game camera cut of ~0.4 m made the hand race across the gap (log: jitter up to
+  35 cm); smaller rig jumps are now carried along, and a hand that lost its target in free air snaps back. A hand held deep in her
+  no longer tumbles (the pull eases off with the distance it is blocked).
+- Fingers close like VaM's DynamicLimbs: each finger's curl sweep is tested against her body from the palm (it can't feed back on
+  itself), the finger stops where it touches and sinks in by the part's softness (breast/butt deep, shoulder/forearm barely), idle
+  fingers follow the touching ones, low finger friction so tips slide. Trigger curls the index finger, grip clasps the others, and
+  the hand rests in a relaxed curl (VR → Rest curl).
+- Embody: his fingers rest in a neutral pose (from his bind pose) instead of the animation's; trigger = index, grip = a clasp that
+  closes around what you hold (her shoulder, her breast) and stops on her skin, deeper on soft parts. With physics hands off his hand
+  now stops at her skin (it passed straight through), and his elbow swings around her instead of his forearm passing through her.
+  His wrist offset was rotated by the physics offset (up to 3.5 cm off when blocked): fixed. His animated hand no longer pushes her
+  while you embody him (it pushed with the animation's hand, not yours).
+- With the soft zones off, her colliders were still inset for soft skin (2-4.5 cm), so the hands sank into her: the inset now follows
+  the soft zones.
+
 0.7.9:
 - Physics hands still stuttered in 0.7.8 (the log: the pull at its limit in 87-99 % of steps in free air, the drawn hand jittering by
   ~8 mm and ~6 deg): the follow force and turning torque were sized for the whole hand (palm and fingers) but applied to the palm

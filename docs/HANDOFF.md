@@ -1,6 +1,6 @@
 # SF Body Morphs — handoff
 
-State at **0.7.9** (branch `main`). 0.7.9 (reactions and states, Reactions tab, dirty-talk voice guard) and 0.7.8 (physics-hand follow fix,
+State at **0.8.0** (branch `main`). 0.8.0 (limb yield instead of push springs, planted lock for every chain, inertia ripple, drawn physics hand = controller in free air, finger conform fan, trigger/grip fingers, Embody neutral fingers, clasp, hand stop and elbow swivel) built, not run in the game. 0.7.9 ran once (log 2026-10-15 19:40): the follow fix works (free-air flips 0-2 %, at the cap 0 %). 0.7.9 (reactions and states, Reactions tab, dirty-talk voice guard) and 0.7.8 (physics-hand follow fix,
 hull colliders, pushes from any hand on limbs/spine/head, friction, Physics/VR tabs) built, not yet run in the game. 0.7.7 ran once (log 2026-10-15 14:51): GPU contact and wrinkles load and run; the
 physics hands stuttered (fixed in 0.7.8). GPU contact (0.7.3) and wrinkles (0.7.5) never ran before 0.7.7: the bundle lacked its
 AssetBundle object (the bundle project's Packages/manifest.json must list com.unity.modules.assetbundle; build.ps1 checks it).
@@ -60,6 +60,7 @@ commit them). Toolchain: `apt-get update && apt-get install -y mono-mcs mono-dev
 | `VrHands.cs` | `SoftCapsule` + who can touch her (0.7.0): the user's hands via `VR_HandController.controller_left/right`, partner rigs (humanoid or AdvancedSkeleton wrists/fingers, nested rigs counted once at wrist level), her thighs/forearms/hands; palms = three 1.5 cm capsules; one-time `VR rig survey`. Refreshed every 2 s. 0.7.7: every capsule has a `CapSource` (your hand, physics hand, partner rig, her); `UpdateLive` (once per frame) marks gated sources dead while none of their renderers is drawn by the XR camera (hidden partner, controller models replaced by physics hands); the soft points, GPU imprint and breast mirror skip dead sources. Mirrors `Body.Contacts()` into the game's breast DynamicBones (`BreastColliders`: off / main `upperbreast` chains / all), detaching hidden sources (`MirrorLive`). `ContactsFeed` = what each source feeds. |
 | `PhysicsHands.cs` | Physics hands (0.7.0): hand mesh cut from the player's body (or primitives), palm rigidbody following the controller in `Runner.FixedUpdate`, grip curl, two private layers. 0.7.8: the controller pose is sampled once per frame with its linear/angular velocity (`Track`, in HerBody.cs) and extrapolated to `Time.fixedTime` of each step (feed-forward + gap gain 25/s, force cap); a rig jump (the game moving the VR rig) shifts the hand with its offset; the drawn hand = controller ∘ the offset of the last two steps interpolated by (time - fixedTime)/fdt, refreshed in onBeforeRender and again after Embody's view fix (`PreRenderRefresh`). Her colliders: one kinematic body per `HerBody.Seg` (`SegBody`), a convex hull cooked from `Seg.HullPts` (<= 2 per frame, inset toward the axis, 16-gon reduced fallback) or the capsule/sphere; friction materials (`Friction`). |
 | `HerBody.cs` | Her body segments (0.7.8), shared by the physics hands and the pushes: segment defs, fit from her body meshes (bind pose + character morph deltas), hull points (12x16 grid in the segment frame: origin at joint A, Y along A->B, roll from `RollRef` = A or the owner bone for sibling joints such as the pelvis), `SegPose`, contact impulses from the physics hands (`PhysF`, 50 ms filter) and the geometric push from other hands (`GeoPush`: hand model/partner capsules vs her skin capsules, 300 N/m after 1.5 cm of skin give, measured after Overlap so the push fades as the limb yields), `PushOn` merge. |
+| `FingerFan.cs` | 0.8.0: a finger's curl sweep fixed to the palm (tip + last-capsule probes at 8 curl fractions, forward kinematics of the rest pose, built once): `ConformPhysics` (CheckSphere on her layer, enter/stay hysteresis) for the physics hands, `ConformAnalytic` (HerBody.SkinDepth + bisection) for Embody. Open-loop: depends only on the palm pose. |
 | `PhysicsHands.Rig.cs` | Hands v2 (0.7.2): jointed finger rigidbodies (proximal + fused middle/distal, ConfigurableJoint slerp drives with capped force = compliance), curl targets, tip-cast settle, kinematic fallback; palm force-capped follow (`Fcap = lerp(60,12,resist)`) + PD torque. |
 | `Grip.cs` | Controller grip 0..1 per hand (VR_HandController.selectValue_*, Animator param, XR), once per frame; used by physics hands and Embody. |
 | `Subdiv.cs` | Fidelity: one level PN-triangle subdivision in place (same Mesh object, so MorphState's swap check holds), seams welded, weights/blendshapes interpolated, exact Undo. |
@@ -85,6 +86,24 @@ bone's stem: `HipPart1_L` under `Hip_L`) keep it, the next joint gets 1/f (axis-
 safe on a bone whose children rotate (non-uniform skews them), so Stretch is allowed on leaves, or with Keep on
 the spine where children barely rotate. Moves use bind-pose directions: character left = Hip_L - Hip_R, up =
 pelvis → chest, forward = up × left (checked: toes in front of ankles), mapped into the parent's local space.
+
+## 0.8.0 notes (design: design-0.8.0.md incl. addendum 13, in the session notes)
+
+- Frame order: Apply → **HerBody.Update (yield query, before Overlap; Overlap.Unwind first puts the animation's rotation back on bones the
+  animation didn't rewrite)** → Overlap.Update (lag + inertia ripple + yield filters + planted lock) → PhysicsHands.Update → Reactions →
+  Soft.Simulate → Embody.
+- Yield (Overlap, replaces the 0.7.8 push springs): per segment the deepest penetration of any hand source into the ANIMATION-pose skin
+  shape (`Seg.YieldPen/Pt/N/By`) → displacement `n * Dmax * tanh(G * pen / Dmax)` per region → rotation-vector targets by displacement
+  shares along the chain (elbow/knee flexion-only hinges, the rest to shoulder/hip) → exact critically damped filter per bone (attack per
+  bone, release 0.7x), clamped. Sources: hand models, partner capsules (PushByPartner), `PhysicsHands.FillGhost` (the hands at the
+  CONTROLLER pose), `Embody.FillGhost` (his hands at the IK target; his animated capsules are excluded). PhysF/GeoF/Hit* stay for Reactions
+  only; `Overlap.Kick` is a velocity impulse with realistic inertias.
+- Physics hands: drawn offset gated (smoothstep 5-15 mm / 4-10 deg, 1 while touching, attack 40 ms, release 250 ms; lost target > 5-10 cm
+  fades out); finger commands rest curl / trigger → index / grip → others / thumb max(grip, 0.6 trigger); conform per rendered frame on the
+  rigidbody pose, followers 0.5/0.75, give `HerBody.ClaspGive x (0.5 + Softness)`; finger material friction 0.15 Minimum.
+- Embody: neutral finger base from the bindposes (world rotations written top-down), clasp by `FingerFan.ConformAnalytic`, hand stop
+  (3 iterations vs `HerBody.CapsuleDepth` with skin allowance, 12 Hz smoothing) when physics hands are off, elbow swivel (candidate pole
+  angles vs her skin, hysteresis).
 
 ## Her rig (from the 0.2.1 log)
 
@@ -115,6 +134,13 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
 - `LadyCustomiseFunction.HightSetting` moves the woman's root for shoe heels: never scale/move her root.
 
 ## Open items
+
+- 0.8.0 to check in the headset (TESTING.md 0.8.0): hinge sign (a push from the front must not bend the elbow backwards: else flip `vh` in
+  Overlap.AddYield), contact starts < 50 per 10 s while holding a limb (else lower Elbow/Knee attack), his bind pose is an open hand (log
+  line root match / axis change), the swivel direction, Reactions KickNs vs the new inertias (owned by the reactions work).
+- Follow-ups: SoftSim/GPU contact still read the embodied partner's capsules at the animation pose (proxies for Embody's ghost); his
+  forearm/upper arm can still pass through her when the controller is behind her (swivel only); per-segment collider inset from Tissue.cs
+  (contact-visuals) instead of the softness rule; hand-to-hand collisions (rejected for now).
 
 - 0.7.8 to check in the headset: free-air "at the cap" near 0 % and low drawn-hand jitter (if not: Jointed fingers off to isolate the
   finger joints); hull frames line up with the markers in a flexed-leg pose (pelvis roll from Root_M); "cooked a reduced set" lines
