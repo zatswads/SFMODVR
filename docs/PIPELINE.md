@@ -28,7 +28,8 @@ transfer the **shape** and **skin textures** of a VaM character onto her:
 3. **Fit** (`tools/pipeline/`, done in 0.6.0). One command:
 
    ```
-   powershell -ExecutionPolicy Bypass -File tools\pipelineun.ps1 -Name Yin -Game "<game>" -Vam "<VaM>" -Blender "<blender.exe>"
+   powershell -ExecutionPolicy Bypass -File tools\pipeline
+un.ps1 -Name Yin -Game "<game>" -Vam "<VaM>" -Blender "<blender.exe>"
    ```
 
    Paths are remembered (`%LOCALAPPDATA%\SfMorph\pipeline.json`); later runs need only `-Name`. It takes the newest
@@ -44,15 +45,25 @@ transfer the **shape** and **skin textures** of a VaM character onto her:
      unposed with the same blended skin matrices; folds untangled. Everything else follows: overlays (nipple discs,
      nails, decals) stay on the skin surface, lash strands move with their skin patch, eyes/teeth/tongue rigidly,
      the rest (mouth, hair, interior) smoothly. Output: `<mesh>.morph.txt` (position and normal deltas, her vertex
-     order), `joints.txt`, `character.txt`, `thumb.jpg`, `_checkeport.txt`.
+     order), `joints.txt`, `character.txt`, `thumb.jpg`, `_check
+eport.txt`.
    - `blend.py` + `bake.py` (Blender, Cycles on the GPU): before/after renders in `_check\` and VaM's skin baked
      onto her UVs (selected to active, albedo as emission, tangent normals; VaM's DXT5nm normal maps unswizzled):
      `tex_reika_body_*`, `tex_reika_face_a_*`, `tex_reika_foot_*`.
-   - Check `_checkeport.txt`: vertex counts, offsets, flipped triangles and stretch per mesh, fit residual both ways.
+   - Check `_check
+eport.txt`: vertex counts, offsets, flipped triangles and stretch per mesh, fit residual both ways.
 
 4. **Load** (SfMorph 0.6.0): Characters tab, see README.
 
-Known limits: the fit runs in VaM's T-pose and is unposed with her linear skinning, so her shoulders in the
+Proportions (default `--proportions hers`): the VaM body is unposed into her A-pose bind pose with her own skinning
+(each VaM vertex borrows the blended bone matrices of the nearest vertex of her skin, same body part), warped so its
+joint centres, nipples and mouth sit on hers, and her bind-pose skin is fitted straight onto it. The result is the
+character's surface and face on her skeleton: her limb, finger and shoulder proportions, joints barely move, her rig
+and animations fit. Her shoulders/clavicles keep their own shape (VaM's come from a T-pose and stay bunched up when the
+arms come down), and the inside of her mouth follows instead of matching. `--proportions vam` takes VaM's proportions
+too (longer arms/fingers, raised clavicles: distorts her rig, kept for comparison).
+
+Known limits (`--proportions vam`): the fit runs in VaM's T-pose and is unposed with her linear skinning, so her shoulders in the
 A-pose look a little narrower than VaM's; a few creases remain where her shape differs most (under a bigger
 breast, the navel, between toes). Her eyelid shape stays hers.
 

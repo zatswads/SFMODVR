@@ -53,6 +53,9 @@ def main():
     ap.add_argument('--vam', required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--name', default=None)
+    ap.add_argument('--proportions', choices=('hers', 'vam'), default='hers',
+                    help="hers: the VaM character's surface and face on her own skeleton (limb, finger and shoulder "
+                         "proportions stay hers, so her rig and animations fit); vam: also take VaM's proportions")
     a = ap.parse_args()
     t0 = time.time()
     chk = os.path.join(a.out, '_check')
@@ -204,14 +207,92 @@ def main():
     for e in ('Eye_L', 'Eye_R'):
         lids |= np.linalg.norm(x0 - dst[[i for i, (h, v) in enumerate(lm) if h == e][0]], axis=1) < 0.021
     log('stiffer fit on %d vertices (fingers, toes, eyelids); %d eyelid vertices keep her eye opening' % ((stiff > 1).sum(), lids.sum()))
-    xfit, wmatch, dist = fit.nonrigid_icp(x0, wf, lambda x: sfio.vertex_normals(x, wf, hsign), surfaces, hlab, log, stiff=stiff, nodata=lids)
-
-    # trunk only: the face's lips and lids and the fingers keep the vertex layout the fit gave them
-    movable = (hlab == names.index('torso')) & (wp[:, 1] < P['Neck_M'][1])
-    xfit = fit.relax_project(xfit, wf, x0, surfaces, hlab, lambda x: sfio.vertex_normals(x, wf, hsign), wmatch > 0, movable, log=log)
-
-    # --- back to her bind pose ---------------------------------------------------------------------------
-    wd = rig.apply(np.linalg.inv(wA), xfit) - wc
+    if a.proportions == 'vam':
+        xfit, wmatch, dist = fit.nonrigid_icp(x0, wf, lambda x: sfio.vertex_normals(x, wf, hsign), surfaces, hlab, log, stiff=stiff, nodata=lids)
+        # trunk only: the face's lips and lids and the fingers keep the vertex layout the fit gave them
+        movable = (hlab == names.index('torso')) & (wp[:, 1] < P['Neck_M'][1])
+        xfit = fit.relax_project(xfit, wf, x0, surfaces, hlab, lambda x: sfio.vertex_normals(x, wf, hsign), wmatch > 0, movable, log=log)
+        wd = rig.apply(np.linalg.inv(wA), xfit) - wc   # back to her bind pose
+        vam_out = vam_v; vam_eyes = np.array([vj['lEye'], vj['rEye']]); bindfit = False
+    else:
+        # Her proportions: the VaM body is brought onto HER skeleton instead. 1) Each VaM vertex borrows her skinning
+        # (blended bone matrices of the nearest vertex of her warped, posed skin, same body part) and is unposed
+        # into her A-pose bind pose: no T-pose fit pushed back through her rig (that raised the clavicles).
+        # 2) A thin-plate warp moves VaM's joint centres, nipples and mouth onto hers: limb, finger and shoulder
+        # proportions become hers. 3) Her bind-pose skin is fitted straight onto that: the offsets are surface
+        # shape only, and the joints barely move.
+        from scipy.spatial import cKDTree
+        vlab_v = rig.labels(vam_v, vsegs, vj)
+        vlab_v = lip_labels(vam_v, vlab_v, vam_mouth)
+        Av = np.zeros((len(vam_v), 4, 4))
+        for li, n in enumerate(names):
+            selv = np.where(vlab_v == li)[0]
+            if not len(selv):
+                continue
+            allowed = np.isin(hlab, [names.index(x) for x in nb[n]])
+            hi = np.where(allowed)[0]
+            if not len(hi):
+                hi = np.arange(nw)
+            d, k = cKDTree(x0[hi]).query(vam_v[selv], k=4)
+            w = 1.0 / (d + 1e-4) ** 2; w /= w.sum(1, keepdims=True)
+            Av[selv] = np.einsum('nk,nkij->nij', w, wA[hi][k])
+        vam_u = rig.apply(np.linalg.inv(Av), vam_v)
+        bsrc, bdst, bl = [], [], []
+        for (h, v), sp in zip(lm, src):
+            if h in M and v in vj:
+                bsrc.append(rig.apply(np.linalg.inv(M[h])[None], vj[v][None])[0]); bdst.append(bind_pos[h]); bl.append(h)
+        # nipples and mouth: the same VaM points, unposed with their own vertex's skinning
+        if nip is not None and 'Nipples' in vam.groups:
+            for sgn in (-1, 1):
+                ids = vn_i[np.sign(vam_v[vn_i, 0]) == sgn]
+                hm = nip.vc[np.sign(nip.vc[:, 0]) == sgn]
+                if len(ids) and len(hm):
+                    j = ids[np.argmax(vam_v[ids, 2])]
+                    bsrc.append(vam_u[j]); bdst.append(hm[np.argmax(hm[:, 2])]); bl.append('nipple')
+        hm_b = face.vc[bv].mean(0); hm_b[2] = face.vc[bv][:, 2].max() - 0.004
+        vm_b = rig.apply(np.linalg.inv(M['Head_M'])[None], vam_mouth[None])[0]
+        bsrc.append(vm_b); bdst.append(hm_b); bl.append('mouth')
+        bsrc = np.array(bsrc); bdst = np.array(bdst)
+        dd = np.linalg.norm(bdst - bsrc, axis=1)
+        log('her proportions: VaM unposed into her bind pose; %d landmarks, mean %.1f mm, max %.1f mm (%s) before the warp' % (
+            len(bl), 1000 * dd.mean(), 1000 * dd.max(), bl[int(np.argmax(dd))]))
+        vam_b = fit.tps_warp(vam_u, bsrc, bdst, smoothing=1e-4)
+        vfn_b, _ = sfio.face_normals(vam_b, vf)
+        vfn_b *= vsign
+        surfaces = {}
+        for li, n in enumerate(names):
+            mm = np.isin(vlab, [names.index(x) for x in nb[n]])
+            surfaces[li] = fit.Surface(vam_b, vf[mm], vfn_b[mm]) if mm.any() else None
+        stiff_b = np.ones(nw)
+        stiff_b[np.isin(hlab, [i for i, n in enumerate(names) if n.startswith(('hand', 'fIndex', 'fMiddle', 'fRing', 'fPinky', 'fThumb', 'foot'))])] = 8.0
+        lids = np.zeros(nw, bool)
+        for e in ('Eye_L', 'Eye_R'):
+            r = np.linalg.norm(wc - bind_pos[e], axis=1)
+            stiff_b = np.maximum(stiff_b, np.clip(12.0 * (1 - (r - 0.016) / 0.012), 1, 12))
+            lids |= r < 0.021
+        # her mouth's inside (the face mesh continues behind the lips): faces down like the underside of a chin
+        # (inside, normals face the head's centre line; the chin's skin faces away from it)
+        wn_b = sfio.vertex_normals(wc, wf, hsign)
+        axis = np.c_[np.zeros(nw), wc[:, 1], np.full(nw, hm_b[2] - 0.035)]
+        mouth_in = (np.linalg.norm(wc - hm_b, axis=1) < 0.07) & (np.einsum('ij,ij->i', wn_b, wc - axis) < 0) & (wc[:, 2] < hm_b[2])
+        # and the whole bag behind the lips, down towards the throat (the chin's skin is lower or further forward)
+        mouth_in |= ((wc[:, 2] < hm_b[2] - 0.012) & (np.abs(wc[:, 0] - hm_b[0]) < 0.035)
+                     & (wc[:, 1] > hm_b[1] - 0.035) & (wc[:, 1] < hm_b[1] + 0.03) & (wc[:, 2] > hm_b[2] - 0.11))
+        lids |= mouth_in
+        # VaM's shoulders come from a T-pose (trapezius bunched up with the arms raised) and don't come down with
+        # the arms: her own clavicle/shoulder shape stays, VaM's takes over smoothly around it
+        shoulder = np.zeros(nw, bool)
+        for sdn in ('Shoulder_L', 'Shoulder_R', 'Scapula_L', 'Scapula_R'):
+            r = np.linalg.norm(wc - bind_pos[sdn], axis=1)
+            shoulder |= r < 0.11
+            stiff_b = np.maximum(stiff_b, np.clip(10.0 * (1 - (r - 0.11) / 0.06), 1, 10))
+        lids |= shoulder
+        log('%d mouth-interior and %d shoulder vertices keep her shape' % (mouth_in.sum(), shoulder.sum()))
+        xfit, wmatch, dist = fit.nonrigid_icp(wc.copy(), wf, lambda x: sfio.vertex_normals(x, wf, hsign), surfaces, hlab, log, stiff=stiff_b, nodata=lids)
+        movable = (hlab == names.index('torso')) & (wc[:, 1] < bind_pos['Neck_M'][1])
+        xfit = fit.relax_project(xfit, wf, wc, surfaces, hlab, lambda x: sfio.vertex_normals(x, wf, hsign), wmatch > 0, movable, log=log)
+        wd = xfit - wc
+        vam_out = vam_b; vam_eyes = np.array([bind_pos['Eye_L'], bind_pos['Eye_R']]); bindfit = True
     log('fitted skin offsets in bind pose: mean %.1f mm, p99 %.1f mm, max %.1f mm' % (
         1000 * np.linalg.norm(wd, axis=1).mean(), 1000 * np.percentile(np.linalg.norm(wd, axis=1), 99), 1000 * np.linalg.norm(wd, axis=1).max()))
 
@@ -270,19 +351,23 @@ def main():
         m.d = np.einsum('nij,nj->ni', Cinv, d)                # back to the mesh's own space
         m.dn = np.einsum('nij,nj->ni', Cinv, n_new) - m.vn
         m.dc = d
-        m.vp1 = rig.apply(m.A, m.vc + d)                     # posed, morphed (for bake/render)
-        if len(m.fit_idx):
-            m.vp1[m.fit_idx] = xfit[widx[pos - len(m.fit_idx):pos]]
+        if bindfit:                                          # bind pose (for bake/render)
+            m.vp = m.vc
+            m.vp1 = m.vc + d
+        else:                                                # VaM's rest pose
+            m.vp1 = rig.apply(m.A, m.vc + d)
+            if len(m.fit_idx):
+                m.vp1[m.fit_idx] = xfit[widx[pos - len(m.fit_idx):pos]]
         results.append(m)
 
     # --- verification ------------------------------------------------------------------------------------
     rep = verify(results, wmatch, dist, log)
     # the other direction: how well her fitted skin covers the VaM skin, per VaM material
-    kd1 = cKDTree(xfit); kd0 = cKDTree(x0)
+    kd1 = cKDTree(xfit); kd0 = cKDTree(wc if bindfit else x0)
     rows = []
     for gi in skin_g:
         vi = np.unique(vam.faces[vam.face_group == gi])
-        d1, _ = kd1.query(vam_v[vi]); d0, _ = kd0.query(vam_v[vi])
+        d1, _ = kd1.query(vam_out[vi]); d0, _ = kd0.query(vam_out[vi])
         rows.append('%s %.1f/%.1f (%.1f)' % (vam.groups[gi], 1000 * d1.mean(), 1000 * np.percentile(d1, 95), 1000 * d0.mean()))
     log('  VaM skin -> nearest fitted vertex, mean/p95 mm (before fit): ' + ', '.join(rows))
 
@@ -316,12 +401,13 @@ def main():
         f.write('source\t%s\n' % vam.info.get('character', '?'))
         f.write('made\t%s\n' % time.strftime('%Y-%m-%d %H:%M'))
         f.write('scale\t%.5f\n' % s)
+        f.write('proportions\t%s\n' % a.proportions)
         for m in results:
             f.write('mesh\t%s\t%d\n' % (m.name, len(m.v)))
         for n in FIT:  # her skin: clothes follow the nearest of these vertices in the game
             f.write('skin\t%s\n' % n)
     np.savez_compressed(os.path.join(chk, 'stage.npz'),
-                        vam_v=vam_v, vam_eyes=np.array([vj['lEye'], vj['rEye']]), vam_f=vam.faces, vam_g=vam.face_group, vam_uv=vam.uv, vam_vn=vam.vn * vsign,
+                        vam_v=vam_out, vam_eyes=vam_eyes, vam_f=vam.faces, vam_g=vam.face_group, vam_uv=vam.uv, vam_vn=vam.vn * vsign,
                         vam_groups=np.array(vam.groups), names=np.array([m.name for m in results]),
                         dbg_wp=wp, dbg_x0=x0, dbg_xfit=xfit, dbg_wf=wf, dbg_lab=hlab, dbg_match=wmatch,
                         **{'%s|%s' % (m.name, k): getattr(m, k) for m in results
