@@ -25,10 +25,8 @@ namespace SfMorph
         // Why the last TryLoad returned null (same wording as Status).
         public static string LastStatus = "";
         // 0.7.4: raised once per frame right after the frame guard, before Imprint writes the skinned buffers (wrinkle strain
-        // must read the clean skinning result). (Stub: raised by the implementation.)
-#pragma warning disable 67
+        // must read the clean skinning result).
         public static event System.Action<int> BeforeImprint;
-#pragma warning restore 67
 
         [StructLayout(LayoutKind.Sequential)]
         struct CapData { public Vector4 A, B; }   // a.xyz + radius, b.xyz  (stride 32, mirrors the compute shader's Capsule)
@@ -45,7 +43,7 @@ namespace SfMorph
             public SkinnedMeshRenderer R;
             public string Name;
             public bool Alive = true;
-            public bool WeSetRaw;                 // we turned Raw on, so we turn it off again
+            public bool RawHeld;                  // we hold a RawTarget reference (released when the renderer is dropped)
             public Mesh Mesh;
             public int Count;
             public int Layout;                    // 0 = not checked against a vertex buffer yet, 1 = ok, -1 = skipped
@@ -65,7 +63,7 @@ namespace SfMorph
 
         static readonly string[] SpaceNames = { "pending", "rootBone", "transform", "identity", "rootBone (unscaled)" };
 
-        AssetBundle _bundle;
+        bool _bundleHeld;                     // we hold a ShaderBundle reference
         ComputeShader _cs;
         int _kSmoke, _kImprint;
         ComputeBuffer _capBuf;
@@ -95,12 +93,11 @@ namespace SfMorph
                 bool cs = SystemInfo.supportsComputeShaders;
                 Plugin.Log.LogInfo("GPU contact: supportsComputeShaders=" + cs + ", device " + SystemInfo.graphicsDeviceType + " " + SystemInfo.graphicsDeviceName);
                 if (!cs) { Fail("no compute shaders"); return null; }
-                string path = Path.Combine(dir ?? "", "sfmorph_shaders");
-                if (!File.Exists(path)) { Fail("bundle (not found: " + path + ")"); return null; }
+                string err;
+                if (!ShaderBundle.Acquire(dir, out err)) { Fail("bundle (" + err + ")"); return null; }
                 var g = new GpuContact();
-                g._bundle = AssetBundle.LoadFromFile(path);
-                if (g._bundle == null) { Fail("bundle (could not load " + path + ")"); return null; }
-                g._cs = g._bundle.LoadAsset<ComputeShader>("SoftDeform");
+                g._bundleHeld = true;
+                g._cs = ShaderBundle.Load<ComputeShader>("SoftDeform");
                 if (g._cs == null) { Fail("bundle (no SoftDeform compute shader inside)"); g.Dispose(); return null; }
                 g._kSmoke = g._cs.FindKernel("Smoke");
                 g._kImprint = g._cs.FindKernel("Imprint");
@@ -168,19 +165,16 @@ namespace SfMorph
 
         static void EnableRaw(RendState s)
         {
-            var t = s.R.vertexBufferTarget;
-            if ((t & GraphicsBuffer.Target.Raw) == 0)
-            {
-                s.R.vertexBufferTarget = t | GraphicsBuffer.Target.Raw;   // Unity recreates the skinned buffers once
-                s.WeSetRaw = true;
-            }
+            if (s.RawHeld) return;
+            RawTarget.Acquire(s.R);   // ref-counted: Unity recreates the skinned buffers once; the flag only comes off if nobody set it before
+            s.RawHeld = true;
         }
 
         static void RestoreRaw(RendState s)
         {
-            if (!s.WeSetRaw) return;
-            s.WeSetRaw = false;
-            if (s.R != null) s.R.vertexBufferTarget = s.R.vertexBufferTarget & ~GraphicsBuffer.Target.Raw;
+            if (!s.RawHeld) return;
+            s.RawHeld = false;
+            RawTarget.Release(s.R);
         }
 
         // Mesh-dependent state: layout from the mesh, the mask buffer. The skinned-buffer check (stride/count) follows on the first frame.
@@ -203,7 +197,7 @@ namespace SfMorph
             s.Mask = new GraphicsBuffer(GraphicsBuffer.Target.Structured, s.Count, 4);
             s.Mask.SetData(mask);
             Plugin.Log.LogInfo("GPU contact: renderer " + s.Name + " mesh " + m.name + " count " + s.Count + " stride " + s.Stride + " posOff " + s.PosOff + " nrmOff " + s.NrmOff
-                + " (Raw set by us: " + s.WeSetRaw + ")" + (s.Space > 0 ? ", space " + SpaceNames[s.Space] + " (kept)" : ""));
+                + " (Raw set by us: " + RawTarget.SetByUs(s.R) + ")" + (s.Space > 0 ? ", space " + SpaceNames[s.Space] + " (kept)" : ""));
         }
 
         // Position and Normal Float32x3 on stream 0 (the layout the shader assumes); null = fine, else the reason.
@@ -347,6 +341,11 @@ namespace SfMorph
                 if (frame == _lastFrame) return;   // Imprint is not idempotent
                 _lastFrame = frame;
                 _evSeen = true;
+                // before anything of ours writes the skinned buffers: the wrinkle strain must read the clean skinning result
+                var before = BeforeImprint;
+                if (before != null)
+                    try { before(frame); }
+                    catch (Exception e) { Plugin.Log.LogWarning("GPU contact: BeforeImprint handler failed: " + e.Message); }
                 if (_rs.Count == 0) return;
                 float now = Time.realtimeSinceStartup;
                 float smokeT = _smokeDur > 0f ? (now - _smokeStart) / _smokeDur : 2f;
@@ -643,7 +642,7 @@ namespace SfMorph
         {
             if (_capBuf != null) { _capBuf.Release(); _capBuf = null; }
             _cs = null;
-            if (_bundle != null) { _bundle.Unload(true); _bundle = null; }
+            if (_bundleHeld) { _bundleHeld = false; ShaderBundle.Release(); }
         }
 
         public void Release()

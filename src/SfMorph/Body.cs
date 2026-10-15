@@ -181,7 +181,29 @@ namespace SfMorph
         readonly List<Transform> _drop = new List<Transform>();
         readonly HashSet<Transform> _posTargets = new HashSet<Transform>();
 
-        public Body(Plugin p) { _p = p; }
+        public Body(Plugin p) { _p = p; Current = this; }
+
+        // The running Body (one per plugin), for the CPU wrinkle bake's bone-scale lookup.
+        public static Body Current;
+
+        // The scale our body sliders put on t relative to its rest (the game's own) scale; identity when t isn't one we scale.
+        public Vector3 ScaleFactor(Transform t)
+        {
+            ScaleTrack tr;
+            if (t == null || !_scales.TryGetValue(t, out tr)) return Vector3.one;
+            Vector3 r = tr.Rest, s = t.localScale;
+            return new Vector3(Mathf.Abs(r.x) > 1e-6f ? s.x / r.x : 1f, Mathf.Abs(r.y) > 1e-6f ? s.y / r.y : 1f, Mathf.Abs(r.z) > 1e-6f ? s.z / r.z : 1f);
+        }
+
+        // ScaleFactor compounded along the chain from t up to (not including) stop (her root): what a skinning bone's scale is relative to rest.
+        public static Vector3 ScaleOf(Transform t, Transform stop)
+        {
+            var b = Current;
+            if (b == null) return Vector3.one;
+            Vector3 f = Vector3.one;
+            for (int i = 0; t != null && t != stop && i < 64; i++, t = t.parent) f = Vector3.Scale(f, b.ScaleFactor(t));
+            return f;
+        }
 
         public static string Norm(string s)
         {
@@ -446,6 +468,14 @@ namespace SfMorph
         public GpuContact Gpu;              // null until loaded (the shader bundle next to the DLL)
         bool _gpuTried, _gpuOn;
         public string GpuStatus { get { return Gpu != null ? Gpu.Status : _gpuTried ? (GpuContact.LastStatus.Length > 0 ? GpuContact.LastStatus : "GPU contact: off: shader bundle not loaded (see the log)") : ""; } }
+        // 0.7.4 procedural skin wrinkles: loaded once from the DLL's folder when switched on; independent of the Physics toggle.
+        public Wrinkles Wrink;              // null until loaded
+        bool _wrTried, _wrOn, _wrRecapture;
+        string _wrFail = "";
+        readonly WrinkleSettings _wset = new WrinkleSettings();
+        public string WrinkleStatus { get { return Wrink != null ? Wrink.Status : _wrTried ? (_wrFail.Length > 0 ? _wrFail : "Wrinkles: off: shader bundle not loaded (see the log)") : ""; } }
+        // The panel's Recapture button: re-reads the neutral pose (settings.Recapture is true for exactly one Update after this).
+        public void RequestWrinkleRecapture() { _wrRecapture = true; }
         readonly OverlapSettings _ovs = new OverlapSettings();
         bool _overlapOn;
         readonly List<SoftCapsule> _caps = new List<SoftCapsule>();
@@ -537,6 +567,7 @@ namespace SfMorph
                         try { c.Soft.Release(); } catch { }
                     }
             }
+            WrinkleStep(her);
             Release();
             if ((her == null || !_p.Apply.Value) && _overlapOn) { _overlapOn = false; try { Overlap.Release(); } catch { } }
             if ((!physics || her == null) && _gpuOn) { _gpuOn = false; try { if (Gpu != null) Gpu.Release(); } catch { } Gpu = null; _gpuTried = false; }
@@ -591,6 +622,57 @@ namespace SfMorph
                 try { Gpu.Release(); } catch { }
                 Gpu = null; _gpuOn = false;
             }
+        }
+
+        // Procedural skin wrinkles: its own toggle (not the Physics one); the system does its per-frame work in its own render hooks,
+        // this feeds it the settings and the character every frame.
+        void WrinkleStep(Character her)
+        {
+            if (!_p.Apply.Value || !_p.WrinkOn.Value || her == null) { WrinkleOff(); return; }
+            if (Wrink == null && !_wrTried)
+            {
+                _wrTried = true;
+                _wrFail = "";
+                try { Wrink = Wrinkles.TryLoad(System.IO.Path.GetDirectoryName(typeof(Plugin).Assembly.Location)); }
+                catch (Exception e) { Plugin.Log.LogWarning("Wrinkles: " + e.Message); _wrFail = "Wrinkles: off: " + e.Message; }
+            }
+            if (Wrink == null) return;
+            if (Wrink.Status.Contains("off:"))   // it switched itself off after an error: drop it (the toggle reloads it)
+            {
+                _wrFail = Wrink.Status;
+                try { Wrink.Release(); } catch { }
+                Wrink = null; _wrOn = false;
+                return;
+            }
+            _wrOn = true;
+            try
+            {
+                var s = _wset;
+                s.On = true;
+                s.Face = _p.WrinkFace.Value; s.Neck = _p.WrinkNeck.Value; s.BodyOn = _p.WrinkBody.Value;
+                s.Strength = _p.WrinkStrength.Value; s.Threshold = _p.WrinkThreshold.Value; s.Debug = _p.WrinkDebug.Value;
+                s.Attack = _p.WrinkAttack.Value; s.Release = _p.WrinkRelease.Value;
+                s.SpacingFace = _p.WrinkSpacingFace.Value; s.SpacingBody = _p.WrinkSpacingBody.Value;
+                s.CullDistance = _p.WrinkCullDistance.Value; s.Resolution = _p.WrinkResolution.Value;
+                s.Recapture = _wrRecapture; _wrRecapture = false;
+                WrinkleBake.SpacingFace = s.SpacingFace; WrinkleBake.SpacingBody = s.SpacingBody;
+                Wrink.Update(her, s);
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogError("Wrinkles failed, turned off: " + e);
+                _p.WrinkOn.Value = false;
+                _wrFail = "Wrinkles: off: " + e.Message;
+                try { Wrink.Release(); } catch { }
+                Wrink = null; _wrOn = false;
+            }
+        }
+
+        // Off, or she's gone (scene change): give her skin texture back.
+        void WrinkleOff()
+        {
+            if (Wrink != null || _wrOn) { try { if (Wrink != null) Wrink.Release(); } catch { } }
+            Wrink = null; _wrOn = false; _wrTried = false; _wrFail = ""; _wrRecapture = false;
         }
 
         // What can touch her: VrHands' capsules, with the physics hands in place of the controllers while they're on.
@@ -769,6 +851,7 @@ namespace SfMorph
             try { Overlap.Release(); } catch { }
             try { if (Gpu != null) Gpu.Release(); } catch { }
             Gpu = null; _gpuOn = false; _gpuTried = false;
+            WrinkleOff();
             try { PhysicsHands.Release(); } catch { }
             try { VrHands.Release(); } catch { }
         }

@@ -41,6 +41,14 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.7.5:
+- Procedural skin wrinkles (VR tab → Skin wrinkles, off by default): where her skin is compressed (smile lines, brow, around the
+  eyes, neck; body optional), fine folds appear across the compression, computed on the GPU from her skinned mesh against her
+  neutral shape (character shape and bone sliders included, so they don't read as wrinkles) and drawn into her skin's normal map
+  (her mesh isn't changed: motion vectors and DLSS are unaffected). Folds fade in/out smoothly and keep their direction; eyelids
+  are left out (no blink flicker). Strength, threshold, face/neck/body, a debug view (red where folds are active), Recapture.
+  Needs dist/sfmorph_shaders next to the DLL. Method reimplemented from a description (no code from the VaM plugin that inspired it).
+
 0.7.4:
 - Breasts follow the character: her nipple mesh is a cap over a hole in her upper body; it is now fitted as a cap
   (harmonic from the fitted rim, snapped to the character's skin, her nipple relief kept) instead of being glued to

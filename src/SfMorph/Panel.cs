@@ -278,6 +278,8 @@ namespace SfMorph
         {
             PhysicsSection(c);
             GUILayout.Space(10);
+            WrinklesSection(c);
+            GUILayout.Space(10);
             MotionSection(c);
             GUILayout.Space(10);
             HandsSection(c);
@@ -328,6 +330,13 @@ namespace SfMorph
             bool skb = GUILayout.Toggle(c.Look.MorphSkinBody, " Body skin texture");
             if (skb != c.Look.MorphSkinBody) { c.Look.MorphSkinBody = skb; _body.Touch(c); }
             GUILayout.EndHorizontal();
+            // presets, applied after the row so the Layout and click passes draw the same controls
+            GUILayout.BeginHorizontal();
+            bool faceOnly = GUILayout.Button("Face only (body stays hers)");
+            bool full = GUILayout.Button("Full character");
+            GUILayout.EndHorizontal();
+            if (faceOnly) { c.Look.MorphFace = 1f; c.Look.MorphBody = 0f; c.Look.MorphSkin = true; c.Look.MorphSkinBody = false; _body.Touch(c); }
+            else if (full) { c.Look.MorphFace = 1f; c.Look.MorphBody = 1f; c.Look.MorphSkin = true; c.Look.MorphSkinBody = true; _body.Touch(c); }
             GUILayout.Label("Facial likeness only: Body 0 %, Face 100 %, face skin on, body skin off.", _hint);
             if (!_p.Apply.Value) GUILayout.Label("off: 'Apply changes' is off", _off);
             else if (c.Morph.Status.Length > 0) GUILayout.Label(c.Morph.Status, c.Morph.Status.StartsWith("off") ? _off : _hint);
@@ -420,6 +429,52 @@ namespace SfMorph
             GUILayout.Label("Soft points under her skin (springs, like VaM's soft physics) are pushed by your VR hands, the partner's hands and fingers, " +
                             "her forearms and hands, and her other thigh. Softness: how far the skin gives. Springiness: how much the zones lag " +
                             "and settle as she moves. Works with or without a character shape.", _hint);
+        }
+
+        static readonly string[] WrinkleDebugs = { "Off", "Activation", "Axis" };
+
+        void WrinklesSection(Character c)
+        {
+            GUILayout.Space(10);
+            GUILayout.Label("Skin wrinkles", _bold);
+            string off = !_p.Apply.Value ? "'Apply changes' is off"
+                       : !c.Female || c.IsPlayer ? "only for the game's woman" : null;
+            GUI.enabled = off == null;
+            bool on = GUILayout.Toggle(_p.WrinkOn.Value, " Wrinkles: folds in her skin where it compresses (expressions, bending)");
+            GUI.enabled = true;
+            if (off == null && on != _p.WrinkOn.Value) _p.WrinkOn.Value = on;
+            string sliderOff = off ?? (_p.WrinkOn.Value ? null : "wrinkles are off");
+            string why = sliderOff == null ? null : "off: " + sliderOff;
+            float st = Slider("Strength", _p.WrinkStrength.Value, 0f, 2f, "0.00", 1f, why);
+            if (Mathf.Abs(st - _p.WrinkStrength.Value) > 0.0001f) _p.WrinkStrength.Value = st;
+            float th = Slider("Threshold", _p.WrinkThreshold.Value, 0.01f, 0.06f, "0.000", 0.025f, why);
+            if (Mathf.Abs(th - _p.WrinkThreshold.Value) > 0.00001f) _p.WrinkThreshold.Value = th;
+            GUI.enabled = sliderOff == null;
+            GUILayout.BeginHorizontal();
+            bool face = GUILayout.Toggle(_p.WrinkFace.Value, " Face", GUILayout.Width(90));
+            bool neck = GUILayout.Toggle(_p.WrinkNeck.Value, " Neck", GUILayout.Width(90));
+            bool body = GUILayout.Toggle(_p.WrinkBody.Value, " Body (slower to build)");
+            GUILayout.EndHorizontal();
+            if (sliderOff == null)
+            {
+                if (face != _p.WrinkFace.Value) _p.WrinkFace.Value = face;
+                if (neck != _p.WrinkNeck.Value) _p.WrinkNeck.Value = neck;
+                if (body != _p.WrinkBody.Value) _p.WrinkBody.Value = body;
+            }
+            GUILayout.Label("Debug view", _hint);
+            int dbg = GUILayout.Toolbar(Mathf.Clamp(_p.WrinkDebug.Value, 0, 2), WrinkleDebugs);
+            if (sliderOff == null && dbg != _p.WrinkDebug.Value) _p.WrinkDebug.Value = dbg;
+            GUI.enabled = sliderOff == null && _body.Wrink != null;
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Recapture", GUILayout.Width(110))) _body.RequestWrinkleRecapture();
+            GUILayout.Label("re-reads her resting skin (after changing a body slider or shape)", _hint);
+            GUILayout.EndHorizontal();
+            GUI.enabled = true;
+            if (off != null) GUILayout.Label("off: " + off, _off);
+            else if (_p.WrinkOn.Value && _body.WrinkleStatus.Length > 0) GUILayout.Label(_body.WrinkleStatus, _body.WrinkleStatus.Contains("off:") ? _off : _hint);
+            GUILayout.Label("Where her skin compresses (a smile, a frown, bending) fine folds appear in the skin's normal map, computed on the GPU. " +
+                            "Threshold: how much it has to compress first. Debug: Activation tints compressed skin red, Axis shows the fold direction. " +
+                            "Spacing, speed and texture size are in the config file ([Wrinkles]).", _hint);
         }
 
         bool Card(Texture2D thumb, string name, bool on, float size)

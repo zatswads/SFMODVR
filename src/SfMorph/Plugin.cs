@@ -17,13 +17,17 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.7.4";
+        public const string Version = "0.7.5";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
         internal ConfigEntry<bool> KeysUnfocused, Apply, Physics, ShowSoftPoints, EmbodyOn, EmbodyHideHead, HandsOn, HandsCollide, GpuContactOn;
         internal ConfigEntry<float> UiScale, Softness, Springiness, Gravity, OverlapAmount, OverlapArms, OverlapLegs, OverlapHead, OverlapSpine;
         internal ConfigEntry<int> EmbodyHands, EmbodyView, EmbodyPartner, HandsMesh, Quality;
+        // 0.7.4 procedural skin wrinkles
+        internal ConfigEntry<bool> WrinkOn, WrinkFace, WrinkNeck, WrinkBody;
+        internal ConfigEntry<float> WrinkStrength, WrinkThreshold, WrinkAttack, WrinkRelease, WrinkSpacingFace, WrinkSpacingBody, WrinkCullDistance;
+        internal ConfigEntry<int> WrinkDebug, WrinkResolution;
         internal ConfigEntry<Vector3> LeftHandPos, LeftHandRot, RightHandPos, RightHandRot;
         internal ConfigEntry<string> PanelRect;
         internal ConfigEntry<int> Tab;
@@ -49,6 +53,19 @@ namespace SfMorph
             Gravity = Config.Bind("Physics", "Gravity", 0.5f, new ConfigDescription("Soft zones settle toward the floor as she moves (breasts most, thighs least): they hang when she stands, flatten on her back, drop when she bends over. 0 off.", new AcceptableValueRange<float>(0f, 1f)));
             GpuContactOn = Config.Bind("Physics", "GpuContact", true, "Per-vertex contact on the GPU (shader bundle sfmorph_shaders next to the DLL): her skin is pressed exactly around hands and fingers.");
             ShowSoftPoints = Config.Bind("Physics", "ShowSoftPoints", false, "Small markers on the soft points (green at rest, red touched) and the contact capsules, to see what touches what.");
+            WrinkOn = Config.Bind("Wrinkles", "On", false, "Procedural skin wrinkles: folds appear in her skin's normal map where the skin compresses (expressions, bending), computed on the GPU (shader bundle sfmorph_shaders next to the DLL).");
+            WrinkStrength = Config.Bind("Wrinkles", "Strength", 1f, new ConfigDescription("How deep the folds look (0 none, 2 strong).", new AcceptableValueRange<float>(0f, 2f)));
+            WrinkThreshold = Config.Bind("Wrinkles", "Threshold", 0.025f, new ConfigDescription("How much the skin has to compress before a fold shows (lower = more folds).", new AcceptableValueRange<float>(0.01f, 0.06f)));
+            WrinkFace = Config.Bind("Wrinkles", "Face", true, "Wrinkles on her face skin.");
+            WrinkNeck = Config.Bind("Wrinkles", "Neck", true, "Wrinkles on her neck.");
+            WrinkBody = Config.Bind("Wrinkles", "Body", false, "Wrinkles on the rest of her body skin (a bigger skin texture to rebuild).");
+            WrinkDebug = Config.Bind("Wrinkles", "Debug", 0, new ConfigDescription("0 off, 1 show where skin compresses (red tint), 2 show the fold direction.", new AcceptableValueRange<int>(0, 2)));
+            WrinkAttack = Config.Bind("Wrinkles", "Attack", 0.12f, new ConfigDescription("Seconds for a fold to appear.", new AcceptableValueRange<float>(0.01f, 1f)));
+            WrinkRelease = Config.Bind("Wrinkles", "Release", 0.3f, new ConfigDescription("Seconds for a fold to fade away.", new AcceptableValueRange<float>(0.01f, 2f)));
+            WrinkSpacingFace = Config.Bind("Wrinkles", "SpacingFace", 0.004f, new ConfigDescription("Distance between folds on the face in metres (applies at the next rebuild).", new AcceptableValueRange<float>(0.001f, 0.02f)));
+            WrinkSpacingBody = Config.Bind("Wrinkles", "SpacingBody", 0.008f, new ConfigDescription("Distance between folds on the neck and body in metres (applies at the next rebuild).", new AcceptableValueRange<float>(0.002f, 0.04f)));
+            WrinkResolution = Config.Bind("Wrinkles", "Resolution", 0, new ConfigDescription("Wrinkle texture size: 0 the skin texture's size (at most 4096), 1 at most 2048, 2 at most 1024.", new AcceptableValueRange<int>(0, 2)));
+            WrinkCullDistance = Config.Bind("Wrinkles", "CullDistance", 3f, new ConfigDescription("No wrinkle updates while her head is farther than this from your headset (metres).", new AcceptableValueRange<float>(0.5f, 20f)));
             EmbodyOn = Config.Bind("Embody", "On", false, "See through the partner's eyes (VR), his head hidden, his hands on your controllers.");
             EmbodyHands = Config.Bind("Embody", "Hands", 3, new ConfigDescription("His hands follow the controllers: 0 none, 1 left, 2 right, 3 both.", new AcceptableValueRange<int>(0, 3)));
             EmbodyHideHead = Config.Bind("Embody", "HideHead", true, "Hide his head so it doesn't block the view.");

@@ -1,6 +1,6 @@
 # SF Body Morphs — handoff
 
-State at **0.7.3** (branch `main`). 0.7.3 (GPU per-vertex contact, pose-dependent sag) built, not yet run in the game; 0.7.2 not yet reported on.
+State at **0.7.5** (branch `main`). 0.7.5 (procedural skin wrinkles) built, not yet run in the game; 0.7.2-0.7.4 not yet reported on.
 
 ## What this is
 
@@ -61,6 +61,7 @@ commit them). Toolchain: `apt-get update && apt-get install -y mono-mcs mono-dev
 | `Subdiv.cs` | Fidelity: one level PN-triangle subdivision in place (same Mesh object, so MorphState's swap check holds), seams welded, weights/blendshapes interpolated, exact Undo. |
 | `Overlap.cs` | Secondary motion: second-order spring follow of her limb/head/spine local rotations after the animation, faded on contact, reset on cuts. |
 | `GpuContact.cs` | GPU contact (0.7.3): loads `sfmorph_shaders` (tools/shaders, built with Unity 2022.3.9f1 by build.ps1), sets `vertexBufferTarget |= Raw` on her soft renderers, dispatches `SoftDeform.compute` Imprint (exact ray-capsule exit along the inward normal, <= limit x mask) on the CURRENT skinned buffer once per frame after skinning (PlayerLoop step after UpdateAllSkinnedMeshes, SRP beginContextRendering fallback); skinning space calibrated by AsyncGPUReadback vs CPU skinning; never writes the previous buffer (motion vectors stay right). |
+| `Wrinkles.cs` / `WrinkleBake.cs` | Skin wrinkles (0.7.5): CPU bake per renderer (neutral = bind pose + blendshapes + bone scale, weld groups, CSR adjacency, rest frames, UV Jacobians, patches) → `Wrinkles.compute` (TriStrain from live skinned edges, VertexGather with attack/release + axis hysteresis) before GpuContact's Imprint (BeforeImprint / own PlayerLoop step) → `WrinkleRaster.shader` (UV-space slope raster, blend into a copy of her `_NormalMap`, debug tint, _FlipY self-test). `ShaderBundle.cs`/`RawTarget.cs` are shared ref counts. |
 | `Embody.cs` | Embody (0.7.0): partner rig (Player/BadGuy), view snap/follow by moving the XR rig root (undone exactly), head hidden (scale 0.001, tracker), two-bone arm IK to the controllers with automatic hand frame, override detection in `Application.onBeforeRender`. |
 | `SoftZones.cs` | Physics (0.6.3): per zone (glutes, thighs in/out, belly, breast front/side) a rest point under her skin, helper pairs (anchor = DynamicBone root with an excluded second child so it is never re-aimed, soft = simulated particle hanging along the skin) under each bone that weights the zone, weights split w → w(1-f) + w f, bind poses appended (follow `MorphState.BindVersion`); readable clones of the game's meshes when no character is on, MorphState's clones extended in place otherwise (`SoftZones.Original` keeps MorphState cloning the game's mesh); DynamicBoneCollider capsules on partner hands (humanoid Animator or bone names), her forearms/hands/thighs; never adds children to game DynamicBone chain bones with < 2 children. |
 | `Panel.cs` | F8 window: character buttons, tabs Body (collapsible groups) / Bones / Presets / Characters, filter + 80-row cap, greyed rows with reasons. |

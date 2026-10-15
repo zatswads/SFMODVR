@@ -87,3 +87,12 @@ Install: copy both `dist/SfMorph.dll` and `dist/sfmorph_shaders` to `BepInEx\plu
 wrong buffer; explosion: layout); (3) with physics hands, press a thigh with one finger: a sharp finger-shaped dent inside the broad
 dent, nothing elsewhere; toggle "Per-vertex contact on the GPU" to compare; (4) Gravity 0 → 100 %: breasts hang/flatten with her
 pose, settle without jitter.
+
+## 0.7.5 (skin wrinkles)
+
+Install `dist/SfMorph.dll` + `dist/sfmorph_shaders` into `BepInEx\plugins`. Log: `Wrinkles: loaded ... kernels`, `_FlipY self-test`
+(consistent or flipped once), per renderer classification (face/neck/body/not skin), `sheet '<mat>' base ... baked in .. ms`,
+`memory:`, `skinned buffer ok`, scale check ~1.0, `first raster of sheet`, idle/awake lines. Headset: (1) VR tab → Skin wrinkles on,
+Debug = Activation: red where her face folds in expressions, none at rest; (2) Debug off: smile lines/brow/eyes in the headset, look
+for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
+(4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
