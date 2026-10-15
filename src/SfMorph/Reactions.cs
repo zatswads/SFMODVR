@@ -56,7 +56,8 @@ namespace SfMorph
             new[] { 0.008f, 0.01f, 0.01f, 0.01f },    // Neck
         };
         static readonly float[] TierFactor = { 0f, 1f, 1f, 1f, 0.5f, 0f };                        // by event tier 0..5
-        static readonly float[] KickNs = { 0.4f, 0.6f, 0.6f, 0f, 1.2f, 1.0f, 0.6f, 0.6f, 0.5f, 0.4f };
+        // 0.8.0: sized for Overlap.Kick's realistic inertias and critically damped settle (arm ~4 deg at the elbow, thigh ~1.5, head ~3, chest ~1 at I = 1)
+        static readonly float[] KickNs = { 0.8f, 1.5f, 1.5f, 0f, 2.4f, 2.0f, 1.2f, 3.5f, 1.0f, 0.8f };
         static readonly bool[] SoftKick = { true, false, true, true, true, true, false, false, false, false };
         static readonly float[] ArrCool = { 0.4f, 0.4f, 0.4f, 0.4f, 0.3f, 0.4f, 0.4f, 0.4f, 0.4f, 0.4f };
         static readonly int[] HitFrom = { 0, 0, 0, 0, 1, 2, 2, 2, 3, 0 };                          // 0 front, 1 behind, 2 outside, 3 side
