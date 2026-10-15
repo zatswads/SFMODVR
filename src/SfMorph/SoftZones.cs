@@ -339,7 +339,7 @@ namespace SfMorph
             if (why == null && Time.unscaledTime >= _nextCheck)
             {
                 _nextCheck = Time.unscaledTime + 2f;
-                if (Mathf.Abs(MorphWeight() - _builtMorph) > 0.1f) why = "the character shape's weight changed";
+                if (Mathf.Abs(MorphWeight() - _builtMorph) > 0.1f || ShapesMoved()) why = "the character shape's weight changed";
             }
             if (why != null)
             {
@@ -351,11 +351,38 @@ namespace SfMorph
             if (MorphState.BindVersion != _bindVersion) { _bindVersion = MorphState.BindVersion; RefreshBind(); }
         }
 
+        // The rest shape's morph weight: on MorphState's clones the sum of every shape that changes the rest shape (character body/face and the
+        // body sliders' +/- shapes; never the joint correctives, which follow the pose); else shape 0 (0.6.x clones).
         float MorphWeight()
         {
             foreach (var kv in _rs)
-                if (kv.Key != null && kv.Value.Used && kv.Value.Base != null && kv.Value.Base.blendShapeCount > 0) return kv.Key.GetBlendShapeWeight(0) / 100f;
+                if (kv.Key != null && kv.Value.Used && kv.Value.Base != null && kv.Value.Base.blendShapeCount > 0)
+                    return IsMorphClone(kv.Key.sharedMesh) && MorphState.ShapeLayout(kv.Key.sharedMesh).Count > 0 ? MorphState.NonJcmSum(kv.Key) : kv.Key.GetBlendShapeWeight(0) / 100f;
             return 0f;
+        }
+
+        // The rest-shape (non-corrective) blendshape weights of every used clone, in _rs order. Built with the zones; compared every 2 s:
+        // one slider moving by > 0.1 rebuilds, even when another moved the other way (the sum alone would miss that).
+        readonly List<float> _builtShapes = new List<float>(), _shapesNow = new List<float>();
+
+        void ShapeWeights(List<float> into)
+        {
+            into.Clear();
+            foreach (var kv in _rs)
+            {
+                if (kv.Key == null || !kv.Value.Used || !IsMorphClone(kv.Key.sharedMesh)) continue;
+                var shapes = MorphState.ShapeLayout(kv.Key.sharedMesh);
+                for (int i = 0; i < shapes.Count; i++)
+                    if (shapes[i].Kind != ShapeKind.Jcm) into.Add(MorphState.ShapeWeight(kv.Key, shapes[i]));
+            }
+        }
+
+        bool ShapesMoved()
+        {
+            ShapeWeights(_shapesNow);
+            if (_shapesNow.Count != _builtShapes.Count) return true;
+            for (int i = 0; i < _shapesNow.Count; i++) if (Mathf.Abs(_shapesNow[i] - _builtShapes[i]) > 0.1f) return true;
+            return false;
         }
 
         static bool SameList(List<SkinnedMeshRenderer> a, List<SkinnedMeshRenderer> b)
@@ -806,6 +833,7 @@ namespace SfMorph
                 }
 
             _builtMorph = MorphWeight();
+            ShapeWeights(_builtShapes);
             _bindVersion = MorphState.BindVersion;
             int withHelpers = 0;
             foreach (var pt in _pts) if (pt.Main >= 0) withHelpers++;
@@ -860,13 +888,25 @@ namespace SfMorph
                 if (s.N != null && s.N.Length != s.P.Length) s.N = null;
                 if (m.blendShapeCount > 0)
                 {
-                    float w = r.GetBlendShapeWeight(0) / 100f;
-                    if (w > 0f)
+                    // the rest shape: every non-corrective shape at its current weight (MorphState's layout; 0.6.x clones: shape 0 only);
+                    // normals accumulated, normalised once
+                    var shapes = MorphState.ShapeLayout(m);
+                    int ns = shapes.Count > 0 ? shapes.Count : 1;
+                    Vector3[] dv = null, dn = null;
+                    bool moved = false;
+                    for (int k = 0; k < ns; k++)
                     {
-                        var dv = new Vector3[s.P.Length]; var dn = new Vector3[s.P.Length];
-                        m.GetBlendShapeFrameVertices(0, m.GetBlendShapeFrameCount(0) - 1, dv, dn, null);
-                        for (int i = 0; i < s.P.Length; i++) { s.P[i] += dv[i] * w; if (s.N != null) s.N[i] = (s.N[i] + dn[i] * w).normalized; }
+                        int idx = shapes.Count > 0 ? shapes[k].Index : 0;
+                        if (shapes.Count > 0 && shapes[k].Kind == ShapeKind.Jcm) continue;
+                        if (idx < 0 || idx >= m.blendShapeCount) continue;
+                        float w = r.GetBlendShapeWeight(idx) / 100f;
+                        if (!(w > 0f)) continue;
+                        if (dv == null) { dv = new Vector3[s.P.Length]; dn = new Vector3[s.P.Length]; }
+                        m.GetBlendShapeFrameVertices(idx, m.GetBlendShapeFrameCount(idx) - 1, dv, dn, null);
+                        for (int i = 0; i < s.P.Length; i++) { s.P[i] += dv[i] * w; if (s.N != null) s.N[i] += dn[i] * w; }
+                        moved = true;
                     }
+                    if (moved && s.N != null) for (int i = 0; i < s.N.Length; i++) s.N[i] = s.N[i].normalized;
                 }
             }
             else
