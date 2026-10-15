@@ -953,6 +953,10 @@ namespace SfMorph
 
         static bool IsCollider(object o) { return o is Component && !(o is Transform); }
 
+        // Every frame after Body applies (bones carry our scales): the soft points' springs and contacts (0.7.0 stub).
+        public void Simulate(float dt, List<SoftCapsule> caps, float softness, float spring, bool debug) { }
+        public string Contacts = "";
+
         // ---- giving everything back ----
 
         // Meshes, bones, helpers and our entries in the game's lists; colliders too unless keepColliders.
