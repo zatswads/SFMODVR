@@ -10,15 +10,34 @@ namespace SfMorph
     // braking (0.7.8 package A uses it for the palms and for her kinematic segments; unused in the interfaces package).
     internal struct Track
     {
-        public Vector3 P, V; public Quaternion Q; public float T; public bool Ok;
+        public Vector3 P, V, W; public Quaternion Q; public float T; public bool Ok;   // W: angular velocity (rad/s, world axis)
         public void Sample(Vector3 p, Quaternion q, float now, float frameDt, float maxV)
         {
-            if (Ok && frameDt > 1e-4f) { var raw = (p - P) / frameDt; float m2 = raw.sqrMagnitude; if (m2 > maxV * maxV) raw *= maxV / Mathf.Sqrt(m2); V = Vector3.Lerp(V, raw, 0.5f); }
-            else V = Vector3.zero;
+            if (Ok && frameDt > 1e-4f)
+            {
+                var raw = (p - P) / frameDt; float m2 = raw.sqrMagnitude; if (m2 > maxV * maxV) raw *= maxV / Mathf.Sqrt(m2); V = Vector3.Lerp(V, raw, 0.5f);
+                // angular velocity from the shortest rotation Q -> q (world axis), low-passed like V and clamped
+                Quaternion dq = q * Quaternion.Inverse(Q);
+                if (dq.w < 0f) { dq.x = -dq.x; dq.y = -dq.y; dq.z = -dq.z; dq.w = -dq.w; }
+                float ang; Vector3 ax;
+                dq.ToAngleAxis(out ang, out ax);
+                if (ang > 180f) ang -= 360f;
+                Vector3 w = float.IsNaN(ax.x) || float.IsInfinity(ax.x) || ang < 1e-3f ? Vector3.zero : ax * (ang * Mathf.Deg2Rad / frameDt);
+                float wm = w.magnitude; if (wm > MaxW) w *= MaxW / wm;
+                W = Vector3.Lerp(W, w, 0.5f);
+            }
+            else { V = Vector3.zero; W = Vector3.zero; }
             P = p; Q = q; T = now; Ok = true;
         }
+        public const float MaxW = 20f;   // rad/s
         public Vector3 At(float t, float maxLead) { return P + V * Mathf.Clamp(t - T, 0f, maxLead); }
-        public void Reset() { Ok = false; V = Vector3.zero; }
+        // the sampled rotation turned on at W for the same lead (the target of the hands' rotation follow)
+        public Quaternion QAt(float t, float maxLead)
+        {
+            float lead = Mathf.Clamp(t - T, 0f, maxLead), a = W.magnitude * lead;
+            return a > 1e-5f ? Quaternion.AngleAxis(a * Mathf.Rad2Deg, W / W.magnitude) * Q : Q;
+        }
+        public void Reset() { Ok = false; V = Vector3.zero; W = Vector3.zero; }
     }
 
     // What the integrator hands HerBody every frame (Body fills it from the config).
@@ -82,6 +101,7 @@ namespace SfMorph
             public SegDef Def;
             public string Name, Owner;
             public Transform A, B;                  // B null: a sphere around LocalCenter (in A's space)
+            public Transform RollRef;               // the bone whose axes give the hull its roll and whose scale is rr: A, or the Owner bone when B is not below A (the pelvis: Hip_L/Hip_R are siblings, Root_M is the pelvis)
             public bool Soft, Sphere, Hull, Drop;   // Drop: a sphere that found too few vertices to be placed (breast): not kept
             public int Space, RollAxis;
             public Vector3 LocalCenter;
@@ -122,6 +142,7 @@ namespace SfMorph
         // hull grids (design 1.2): axis segments NAlong x NAround + 2 poles = 194 points, bone-space ones NLat x NLon + 2 = 130 (PhysX convex
         // hulls take at most 255 vertices)
         const int NAlong = 12, NAround = 16, NLat = 8, NLon = 16;
+        internal const int HullCols = NAround;   // both grids are row-major with this many columns (rows along Y / from south to north), then pole0 (below row 0), pole1 (above the last row)
         // geometric push (3.2)
         // 300 N/m: 3 cm deep gives 9 N (~14 deg at the elbow); 150 gave 4.5 N, barely visible. The skin gives SkinGive first (the soft zones dent).
         const float SkinGive = 0.015f;
@@ -152,7 +173,7 @@ namespace SfMorph
                     else if (Mathf.Abs(MorphWeight(her) - _builtMorph) > 0.1f) why = "the character shape's weight changed";
                     else
                         for (int i = 0; i < Segs.Count; i++)
-                            if (Segs[i].A == null || (!Segs[i].Sphere && Segs[i].B == null)) { why = "a bone is gone"; break; }
+                            if (Segs[i].A == null || Segs[i].RollRef == null || (!Segs[i].Sphere && Segs[i].B == null)) { why = "a bone is gone"; break; }
                 }
                 if (why != null) { Plugin.Log.LogInfo("Her body: rebuilding (" + why + ")"); Rebuild(her, s, now); }
             }
@@ -177,6 +198,15 @@ namespace SfMorph
                 _next = now + 10f;
             }
             _nextCheck = now + 2f;
+        }
+
+        // Update threw after a successful build (GeoPush / Tally): give everything back and don't rebuild for 10 s, so a persistent
+        // failure doesn't rebuild every frame (build, throw, release, build ...).
+        public static void Fail()
+        {
+            Release();
+            _next = Time.unscaledTime + 10f;
+            Note = "her: update failed, retrying in 10 s";
         }
 
         // A bone the segments follow was destroyed (PhysicsHands noticed while stepping): rebuild at the next Update.
@@ -272,7 +302,14 @@ namespace SfMorph
                 }
                 var b = d.B != null ? FindBone(her, d.B) : null;
                 if (a == null || (d.B != null && b == null)) { LogOnce("hermiss" + d.Name, "collider " + d.Name + ": bone " + (a == null ? d.A : d.B) + " not found, skipped"); continue; }
-                segs.Add(new Seg { Index = di, Def = d, Name = d.Name, Owner = d.Owner, A = a, B = b, Sphere = d.B == null, Soft = d.Soft, Hull = d.Hull, Space = d.Space, RDef = d.Def, RSkin = d.Def });
+                // roll reference: A, unless B is not a descendant of A (hip to hip), then the owner bone (Root_M); that one doesn't flex with a thigh
+                Transform rollRef = a;
+                if (b != null && !b.IsChildOf(a))
+                {
+                    var o = FindBone(her, d.Owner);
+                    if (o != null) rollRef = o;
+                }
+                segs.Add(new Seg { Index = di, Def = d, Name = d.Name, Owner = d.Owner, A = a, B = b, RollRef = rollRef, Sphere = d.B == null, Soft = d.Soft, Hull = d.Hull, Space = d.Space, RDef = d.Def, RSkin = d.Def });
             }
             if (segs.Count < 4)
             {
@@ -290,7 +327,7 @@ namespace SfMorph
             {
                 var g = segs[i];
                 if (!g.Hull) continue;
-                g.BuildScale = Mathf.Max(1e-4f, Mathf.Abs(g.A.lossyScale.x));
+                g.BuildScale = Mathf.Max(1e-4f, Mathf.Abs(g.RollRef.lossyScale.x));
                 Vector3 fp; Quaternion fq;
                 if (g.Space == 1) { fp = g.A.position; fq = g.A.rotation; if (!Finite(fp)) fp = Vector3.zero; }
                 else
@@ -454,7 +491,7 @@ namespace SfMorph
             foreach (var g in segs)
             {
                 if (g.Drop) continue;
-                g.BuildScale = Mathf.Max(1e-4f, Mathf.Abs(g.A.lossyScale.x));
+                g.BuildScale = Mathf.Max(1e-4f, Mathf.Abs(g.RollRef.lossyScale.x));
                 if (!g.Sphere) { g.Len0 = Mathf.Max(1e-4f, (g.B.position - g.A.position).magnitude); g.HullLen = g.Len0; }
                 Segs.Add(g);
                 _byIndex[g.Index] = g;
@@ -641,7 +678,7 @@ namespace SfMorph
 
         // The cylinder/sphere grid (rows x cols points, row-major, rows run in +Y) with a fan at each end: pole0 = index rows*cols (below row 0),
         // pole1 = the next one. Unity's winding (cross(b - a, c - a) points out): outward for the canonical frame (checked numerically). 384 / 256 triangles.
-        static int[] MakeTris(int rows, int cols)
+        internal static int[] MakeTris(int rows, int cols)
         {
             var t = new int[(rows - 1) * cols * 6 + 2 * cols * 3];
             int n = 0, pole0 = rows * cols, pole1 = pole0 + 1;
@@ -722,13 +759,16 @@ namespace SfMorph
 
         // ================= live pose =================
 
-        // The roll about the axis follows A's local X (its Z when X lies along the axis): remembered at build so it never switches at run time.
+        // How much her bone (RollRef) is scaled since the build: the skin got fatter or thinner by that much (shared with PhysicsHands' cook).
+        public static float RollScale(Seg g) { return Mathf.Abs((g.RollRef != null ? g.RollRef : g.A).lossyScale.x) / g.BuildScale; }
+
+        // The roll about the axis follows RollRef's local X (its Z when X lies along the axis): remembered at build so it never switches at run time.
         static void ChooseRoll(Seg g)
         {
             g.RollAxis = 0;
             Vector3 d = g.B.position - g.A.position;
             if (!(d.sqrMagnitude > 1e-8f)) return;
-            Vector3 y = d.normalized, x = g.A.right;
+            Vector3 y = d.normalized, x = g.RollRef.right;
             if ((x - y * Vector3.Dot(x, y)).magnitude < 0.1f) g.RollAxis = 2;
         }
 
@@ -739,7 +779,7 @@ namespace SfMorph
             return m > 1e-4f ? x / m : Vector3.zero;
         }
 
-        // The axis segments' frame (origin at joint A, Y along A -> B, X from A's local X or Z): the one place both the build and SegPose use.
+        // The axis segments' frame (origin at joint A, Y along A -> B, X from RollRef's local X or Z): the one place both the build and SegPose use.
         static bool AxisPose(Seg g, out Vector3 a, out Quaternion q, out float len)
         {
             q = Quaternion.identity;
@@ -749,8 +789,8 @@ namespace SfMorph
             if (!(len > 1e-4f) || !Finite(d) || !Finite(a)) return false;
             Vector3 y = d / len;
             bool z = g.RollAxis == 2;
-            Vector3 x = Perp(z ? g.A.forward : g.A.right, y);
-            if (!(x.sqrMagnitude > 0.5f)) x = Perp(z ? g.A.right : g.A.forward, y);   // the roll axis lies along the segment right now: the other one
+            Vector3 x = Perp(z ? g.RollRef.forward : g.RollRef.right, y);
+            if (!(x.sqrMagnitude > 0.5f)) x = Perp(z ? g.RollRef.right : g.RollRef.forward, y);   // the roll axis lies along the segment right now: the other one
             if (!(x.sqrMagnitude > 0.5f)) return false;
             q = Quaternion.LookRotation(Vector3.Cross(x, y), y);   // right = x, up = y, forward = x cross y
             return true;
@@ -759,14 +799,14 @@ namespace SfMorph
         // Where a segment's collision shape stands now, in the frame its HullPts are in (design section 11), false when a bone is gone or the
         // pose isn't usable. scale = (rr, rl, rr): rr how much her bone was scaled since the build (the skin got fatter or thinner), rl the live
         // length of A -> B against Len0 (Length sliders stretch along Y only).
-        //   axis (Space 0): p = A.position, Y = A -> B, X from A's local X (RollAxis 2: Z), scale (rr, rl, rr)
+        //   axis (Space 0): p = A.position, Y = A -> B, X from RollRef's local X (RollAxis 2: Z; RollRef = A, or the owner bone for the pelvis), scale (rr, rl, rr)
         //   sphere: p = A.TransformPoint(LocalCenter), q = A.rotation, scale (rr, rr, rr) / one
         //   bone space (Space 1, the head): p = A.position, q = A.rotation, scale (rr, rr, rr); the shape's centre is FrameCenter in that frame
         public static bool SegPose(Seg g, out Vector3 p, out Quaternion q, out Vector3 scale)
         {
             p = Vector3.zero; q = Quaternion.identity; scale = Vector3.one;
-            if (g.A == null || (!g.Sphere && g.B == null)) return false;
-            float rr = Mathf.Abs(g.A.lossyScale.x) / g.BuildScale;
+            if (g.A == null || g.RollRef == null || (!g.Sphere && g.B == null)) return false;
+            float rr = RollScale(g);
             if (g.Space == 1)
             {
                 p = g.A.position; q = g.A.rotation;
@@ -925,7 +965,7 @@ namespace SfMorph
                 int k = g.Index;
                 _sOk[k] = false;
                 if (g.A == null || (!g.Sphere && g.B == null)) continue;
-                float rr = Mathf.Abs(g.A.lossyScale.x) / g.BuildScale;
+                float rr = RollScale(g);
                 if (g.Sphere) { _sa[k] = _sb[k] = g.A.TransformPoint(g.LocalCenter); }
                 else { _sa[k] = g.A.position; _sb[k] = g.B.position; }
                 _sr[k] = g.RSkin * rr - Mathf.Min(SkinGive, Inset(g, s.Softness));   // the skin gives a little before the limb moves

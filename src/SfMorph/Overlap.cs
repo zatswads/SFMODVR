@@ -278,7 +278,9 @@ namespace SfMorph
                 // A bone with a push in progress (or a torque this frame) keeps running at region weight 0: the lag term stays off (w = 0 below,
                 // the written rotation is the animation's target) and only the push offset Qp is added on top. With no push and no lag the bone
                 // is left alone (exactly the game's animation).
-                bool pushWake = wReq <= 0f && b.CanPush && pushable && (b.PushLive || b.TauW.sqrMagnitude > 1e-8f);
+                // not gated on `pushable`: when the push source disappears (hand lifted, physics hands off) the offset must decay through its spring
+                // below instead of snapping to identity here; the off path is only reached once PushLive has cleared (pa < 0.05 deg, at rest)
+                bool pushWake = wReq <= 0f && b.CanPush && (b.PushLive || b.TauW.sqrMagnitude > 1e-8f);
                 if (wReq <= 0f && !pushWake)
                 {
                     // Off for this bone: if the animation did not rewrite it, put the animation's rotation back, once.

@@ -554,7 +554,7 @@ namespace SfMorph
                 {
                     _hb.On = true; _hb.PushByTouch = _p.HandsPushByTouch.Value; _hb.Softness = _p.Softness.Value; _hb.Caps = Contacts();
                     try { HerBody.Update(c, _hb); }
-                    catch (Exception e) { Plugin.Log.LogError("Her body failed, rebuilding: " + e); try { HerBody.Release(); } catch { } }
+                    catch (Exception e) { Plugin.Log.LogError("Her body failed, retrying in 10 s: " + e); try { HerBody.Fail(); } catch { } }
                 }
                 // the physics hands' visual pose for this frame (the soft points read their capsules)
                 if (c == her)

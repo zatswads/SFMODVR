@@ -16,7 +16,7 @@ namespace SfMorph
         // 0.7.8 (plumbed from the config, used by the hull / friction / finger packages): convex-hull body colliders instead of capsules,
         // how much her skin grips the hands (0..1), simulated finger bodies on joints
         public bool HullColliders = true, JointedFingers = true;
-        public float Friction = 0.8f;
+        public float Friction = 0.5f;
         // Controller -> wrist (m, degrees), in the controller's axes, shared with Embody: the position is where the wrist sits
         // relative to the tracked pose; the rotation is added on top of an automatic alignment (fingers along the controller's
         // forward, thumb along its up, palm toward the body's midline), so zero is the natural grip.
@@ -705,14 +705,15 @@ namespace SfMorph
             for (int k = 0; k < 32; k++) Physics.IgnoreLayerCollision(_layerHer, k, k != _layerHand);
             _layersApplied = true; _taken = true;
             Plugin.Log.LogInfo("PhysicsHands: layers " + _layerHand + " (hands) and " + _layerHer + " (her body): each collides only with the other; the earlier matrix is restored on release");
-            MakeMaterials(_s != null ? _s.Friction : 0.8f);
+            MakeMaterials(_s != null ? _s.Friction : 0.5f);
             return null;
         }
 
         // ---- friction (0.7.8) ----
         // PhysX's default material (0.6 / 0.6) slid a resting hand off her moving thigh. One material for every hand collider and one for
-        // every collider of hers, the same numbers, combine Average: dynamic 0.75 x f, static f, f = [Hands] Friction. The slider writes the
-        // fields in place (the shapes sharing the material follow), nothing is recreated.
+        // every collider of hers, the same numbers, combine Average: static = dynamic = 0.75 x f, f = [Hands] Friction (default 0.5). No stick
+        // threshold above the sliding friction (a higher static value made a hand cling then break loose = stick-slip jitter under the follow
+        // force). The slider writes the fields in place (the shapes sharing the material follow), nothing is recreated.
         static PhysicMaterial _handMat, _herMat;
         static float _matF = -1f;
 
@@ -722,14 +723,14 @@ namespace SfMorph
             if (_handMat == null) _handMat = new PhysicMaterial(Pfx + "_hand") { frictionCombine = PhysicMaterialCombine.Average, bounciness = 0f, bounceCombine = PhysicMaterialCombine.Minimum };
             if (_herMat == null) _herMat = new PhysicMaterial(Pfx + "_her") { frictionCombine = PhysicMaterialCombine.Average, bounciness = 0f, bounceCombine = PhysicMaterialCombine.Minimum };
             SetFriction(f);
-            LogOnce("friction", "friction " + (0.75f * f).ToString("0.00") + " dynamic / " + f.ToString("0.00") + " static (Average) on the hands and her colliders");
+            LogOnce("friction", "friction " + (0.75f * f).ToString("0.00") + " static = dynamic (Average, no stick threshold) on the hands and her colliders");
         }
 
         static void SetFriction(float f)
         {
             _matF = f;
-            if (_handMat != null) { _handMat.dynamicFriction = 0.75f * f; _handMat.staticFriction = f; }
-            if (_herMat != null) { _herMat.dynamicFriction = 0.75f * f; _herMat.staticFriction = f; }
+            if (_handMat != null) { _handMat.dynamicFriction = 0.75f * f; _handMat.staticFriction = 0.75f * f; }
+            if (_herMat != null) { _herMat.dynamicFriction = 0.75f * f; _herMat.staticFriction = 0.75f * f; }
         }
 
         static void RestoreLayers()
@@ -786,11 +787,11 @@ namespace SfMorph
             public Track Trk;
             public int StepsDone, OffSeen, VisFrame = -1;
             public bool OffValid, VisHave, JointWas = true;
-            public Vector3 Off0P, Off1P, VisP, VisPrev;
+            public Vector3 Off0P, Off1P, VisP, VisPrev; public Quaternion VisPrevQ = Quaternion.identity;
             public Quaternion Off0Q = Quaternion.identity, Off1Q = Quaternion.identity, VisQ = Quaternion.identity;
             // 10 s diagnostics: steps at the force cap in free air / touching her, the gap there, and the visual offset's frame-to-frame change
             public int CapFreeN, CapTouchN, CapSatFree, CapSatTouch, JitN;
-            public float GapAtCapSum, JitSum, JitMax;
+            public float GapAtCapSum, JitSum, JitMax, JitQSum, JitQMax;   // JitQ*: the same for the offset's rotation (degrees)
         }
 
         static Hand _left, _right;
@@ -1234,7 +1235,7 @@ namespace SfMorph
             b.HullTried = true; b.CookedInset = inset;
             var src = g.HullPts; var tris = g.HullTris;
             if (src == null || tris == null || src.Length < 4 || tris.Length < 12) return;
-            float rr = g.A != null ? Mathf.Clamp(Mathf.Abs(g.A.lossyScale.x) / g.BuildScale, 0.25f, 4f) : 1f;
+            float rr = g.RollRef != null ? Mathf.Clamp(HerBody.RollScale(g), 0.25f, 4f) : 1f;
             float ins = inset / rr, floor = 0.012f / rr;
             bool bone = g.Space == 1;
             Vector3 centre = Vector3.zero;
@@ -1248,17 +1249,22 @@ namespace SfMorph
                 pts[i] = r < 1e-5f ? src[i] : ax + rad * (Mathf.Max(floor, r - ins) / r);   // a pole on the axis stays there
             }
             string fail = CookInto(b, pts, tris);
-            if (fail != null && pts.Length > 64)
+            int cols = HerBody.HullCols, grid = pts.Length - 2;
+            if (fail != null && grid > 2 * cols && grid % cols == 0)
             {
-                // PhysX refuses a hull of more than 255 polygons: a rough grid of 190 points can split into 380 triangles. Retry with every
-                // other point (the last one, a pole, kept) and a fan as the triangle list (a convex shape only needs the points).
-                var sub = new List<Vector3>(pts.Length / 2 + 2);
-                for (int i = 0; i < pts.Length; i += 2) sub.Add(pts[i]);
-                if ((pts.Length - 1) % 2 != 0) sub.Add(pts[pts.Length - 1]);
-                var ft = new int[(sub.Count - 2) * 3];
-                for (int i = 0; i + 2 < sub.Count; i++) { ft[i * 3] = 0; ft[i * 3 + 1] = i + 1; ft[i * 3 + 2] = i + 2; }
-                string f2 = CookInto(b, sub.ToArray(), ft);
-                if (f2 == null) { LogOnce("hullreduce" + g.Name, "her " + g.Name + ": convex hull cooking failed (" + fail + "), cooked a reduced set of " + sub.Count + " of " + pts.Length + " points"); fail = null; }
+                // PhysX refuses a hull of more than 255 polygons: a rough 12 x 16 grid can split into ~380 triangles. Retry with every other ROW of
+                // the grid (rows run along the axis, so the cross-section stays a 16-gon; the first and last rows are kept) and both poles, with
+                // the triangle list rebuilt for the smaller grid (HerBody.MakeTris, the same winding).
+                int rows = grid / cols;
+                var pick = new List<int>();
+                for (int r = 0; r < rows; r += 2) pick.Add(r);
+                if (pick[pick.Count - 1] != rows - 1) pick[pick.Count - 1] = rows - 1;
+                var sub = new Vector3[pick.Count * cols + 2];
+                for (int k = 0; k < pick.Count; k++)
+                    for (int c = 0; c < cols; c++) sub[k * cols + c] = pts[pick[k] * cols + c];
+                sub[pick.Count * cols] = pts[grid]; sub[pick.Count * cols + 1] = pts[grid + 1];
+                string f2 = CookInto(b, sub, HerBody.MakeTris(pick.Count, cols));
+                if (f2 == null) { LogOnce("hullreduce" + g.Name, "her " + g.Name + ": convex hull cooking failed (" + fail + "), cooked every other row: " + pick.Count + " x " + cols + " + 2 of " + rows + " x " + cols + " + 2 points"); fail = null; }
             }
             if (fail != null)
             {
@@ -1340,7 +1346,10 @@ namespace SfMorph
             float fdt = Time.fixedDeltaTime;
             bool sample = Time.frameCount != _herSampleFrame;
             _herSampleFrame = Time.frameCount;
-            float tEnd = Time.fixedTime + fdt;
+            // Inside FixedUpdate Time.fixedTime is already the time this step simulates TO (it counts 0.02 s at the first step), so the end of the
+            // step is fixedTime itself, not fixedTime + fdt. (Outside the fixed loop it is the end of the last step, so the visual's
+            // (Time.time - fixedTime) / fdt in UpdateHand is how far past that state the frame falls, in [0, 1): consistent with this.)
+            float tEnd = Time.fixedTime;
             for (int i = 0; i < _bodies.Count; i++)
             {
                 var b = _bodies[i];
@@ -1355,7 +1364,7 @@ namespace SfMorph
                     g.Trk.Sample(p, q, _frameT, g.Trk.Ok ? _frameT - g.Trk.T : 0f, HerMaxV);
                 }
                 Vector3 tp = p; Quaternion tq = q;
-                if (g.Trk.Ok) { tp = g.Trk.At(tEnd, MaxLead); tq = g.Trk.Q; }
+                if (g.Trk.Ok) { tp = g.Trk.At(tEnd, MaxLead); tq = g.Trk.QAt(tEnd, MaxLead); }
 
                 float ratio = sc.x;
                 if (Mathf.Abs(ratio - b.Ratio) > 0.01f) b.Ratio = ratio;   // her bones were scaled: the skin got fatter or thinner
@@ -1371,6 +1380,8 @@ namespace SfMorph
                     float h = Mathf.Max(2f * r, len + 2f * r);
                     // the head (bone space) is a sphere around its skin's centre, not around the neck joint where its frame starts
                     Vector3 ctr = g.Space == 1 ? g.FrameCenter * sc.x : new Vector3(0f, len * 0.5f, 0f);
+                    // no hull points were collected (FrameCenter zero) but the sphere has a centre in A's space: put it there (the same point A.TransformPoint(LocalCenter) as SegPose's sphere branch)
+                    if (g.Space == 1 && g.FrameCenter == Vector3.zero && g.LocalCenter != Vector3.zero) ctr = g.LocalCenter * Mathf.Abs(g.A.lossyScale.x);   // the frame is A's rotation at A's position (its scale rr is on the object for a hull only)
                     if (Mathf.Abs(r - b.Cap.radius) > 1e-4f || Mathf.Abs(h - b.H) > 1e-3f || !((ctr - b.Center).sqrMagnitude < 1e-6f))
                     {
                         b.Cap.radius = r; b.Cap.height = h; b.Cap.center = ctr; b.H = h; b.Center = ctr;
@@ -1664,12 +1675,12 @@ namespace SfMorph
                                + (h.CapSat > 0 ? ", gap at the cap avg " + (100f * h.GapAtCapSum / h.CapSat).ToString("0.0") + " cm" : ""));
             if (_stepFrames > 0) sb.Append("; fixed steps/frame avg ").Append(((float)_stepSum / _stepFrames).ToString("0.0")).Append(" max ").Append(_stepMax);
             sb.Append("; rig shifts ").Append(_rigShifts);
-            if (h.JitN > 0) sb.Append("; visual offset jitter avg ").Append((h.JitSum / h.JitN).ToString("0.0")).Append(" mm max ").Append(h.JitMax.ToString("0.0")).Append(" mm");
+            if (h.JitN > 0) sb.Append("; visual offset jitter avg ").Append((h.JitSum / h.JitN).ToString("0.0")).Append(" mm max ").Append(h.JitMax.ToString("0.0")).Append(" mm, rotation avg ").Append((h.JitQSum / h.JitN).ToString("0.00")).Append(" deg max ").Append(h.JitQMax.ToString("0.00")).Append(" deg");
             if (!h.RigOn) sb.Append("; fingers ").Append(_s != null && !_s.JointedFingers ? "kinematic (switched off)" : h.RigFailed ? "kinematic (fallback)" : "kinematic");
             Plugin.Log.LogInfo(sb.ToString());
             h.CapSum = 0f; h.CapN = 0; h.CapSat = 0; h.ResistMax = 0f;
             h.CapFreeN = h.CapTouchN = h.CapSatFree = h.CapSatTouch = 0; h.GapAtCapSum = 0f;
-            h.JitSum = 0f; h.JitMax = 0f; h.JitN = 0;
+            h.JitSum = 0f; h.JitMax = 0f; h.JitN = 0; h.JitQSum = 0f; h.JitQMax = 0f;
         }
 
         static string Pct(int n, int of) { return of > 0 ? (100f * n / of).ToString("0") + "%" : "-"; }
@@ -1692,7 +1703,7 @@ namespace SfMorph
             }
             CaptureOffset(h);   // what the previous step did, against the target it aimed at (before FixedPos is replaced below)
             Vector3 tp; Quaternion tq;
-            if (h.Trk.Ok) { tp = h.Trk.At(Time.fixedTime + dt, MaxLead); tq = h.Trk.Q; }
+            if (h.Trk.Ok) { tp = h.Trk.At(Time.fixedTime, MaxLead); tq = h.Trk.QAt(Time.fixedTime, MaxLead); }   // fixedTime = the end of this step (see StepHer)
             else Target(ctl, off, rot, h.Spec.Align, out tp, out tq);
             if (!Finite(tp) || !Finite(tq))
             {
@@ -1749,7 +1760,9 @@ namespace SfMorph
             dq.ToAngleAxis(out ang, out axis);
             if (ang > 180f) ang -= 360f;
             float kp = Mathf.Min(900f, 0.5f / (dt * dt)), kd = Mathf.Min(45f, 1.2f / dt);
-            Vector3 alpha = (Finite(axis) ? axis * (ang * Mathf.Deg2Rad) * kp : Vector3.zero) - kd * rb.angularVelocity;
+            // feed-forward: the damping acts on the angular velocity relative to the target's (Trk.W), so a steadily turning controller
+            // is followed without the lag a pure PD has
+            Vector3 alpha = (Finite(axis) ? axis * (ang * Mathf.Deg2Rad) * kp : Vector3.zero) - kd * (rb.angularVelocity - h.Trk.W);
             Quaternion ir = rq * rb.inertiaTensorRotation;
             Vector3 tau = ir * Vector3.Scale(Quaternion.Inverse(ir) * alpha, rb.inertiaTensor);
             Vector3 com = rb.worldCenterOfMass;
@@ -2031,8 +2044,14 @@ namespace SfMorph
                     vp += dp; vq = dq * tq;
                     SetDisp(h.Left, dp, dq);
                     h.VisP = dp; h.VisQ = dq;
-                    if (h.VisHave) { float d = (dp - h.VisPrev).magnitude * 1000f; h.JitSum += d; h.JitN++; if (d > h.JitMax) h.JitMax = d; }
-                    h.VisPrev = dp; h.VisHave = true;
+                    if (h.VisHave)
+                    {
+                        float d = (dp - h.VisPrev).magnitude * 1000f, da = Quaternion.Angle(h.VisPrevQ, dq);
+                        h.JitSum += d; h.JitQSum += da; h.JitN++;
+                        if (d > h.JitMax) h.JitMax = d;
+                        if (da > h.JitQMax) h.JitQMax = da;
+                    }
+                    h.VisPrev = dp; h.VisPrevQ = dq; h.VisHave = true;
                 }
                 else h.VisHave = false;
             }
@@ -2074,7 +2093,11 @@ namespace SfMorph
         // physics offset on the controller's pose as it is now, and pose the simulated fingers against the moved root again.
         static bool _brSub;
 
-        static void BeforeRender()
+        static void BeforeRender() { PreRenderRefresh(); }
+
+        // The refresh itself: writes an absolute pose (controller + the offset of this frame), so calling it twice in a frame is harmless.
+        // Embody calls it again after correcting the view / arms in its own onBeforeRender (the controllers move with the rig it shifts).
+        internal static void PreRenderRefresh()
         {
             if (_s == null) return;
             try { RefreshVisual(_left); RefreshVisual(_right); }

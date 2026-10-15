@@ -269,6 +269,8 @@ namespace SfMorph
                 }
                 Late(_rig.L, _cur.Hands == 1 || _cur.Hands == 3, VrHands.LeftController, _cur.LeftPos, _cur.LeftRot, frame, corrected);
                 Late(_rig.R, _cur.Hands == 2 || _cur.Hands == 3, VrHands.RightController, _cur.RightPos, _cur.RightRot, frame, corrected);
+                // the view fix moved the rig the controllers ride on after the physics hands placed themselves: draw them from the corrected rig
+                PhysicsHands.PreRenderRefresh();
             }
             catch (Exception e)
             {
