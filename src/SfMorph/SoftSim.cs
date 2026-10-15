@@ -20,6 +20,7 @@ namespace SfMorph
         const float PointRadius = 0.012f, Margin = 0.008f;   // the skin point's own size and the give before visible touch
         const int MaxCaps = 256;
         const float MaxCapSpeed = 3f, TeleportSpeed = 8f;    // m/s: faster capsules are clamped, much faster ones jumped
+        const float SagOutward = 0.6f;                       // 0.7.3: how far (x limit) the sag may carry a point outward; skin otherwise rises 0.3 limit
 
         // ---- state of the current build ----
 
@@ -28,6 +29,8 @@ namespace SfMorph
         int[] _zH0, _zH1;              // per zone: its helpers [H0, H1) in _helpers (they are built zone by zone), -1 = none
         float[] _zSigma;               // per zone: spacing of its points (m), the reach of a hit
         float[] _zBulge;               // per zone: how much of a push its other points get (0.25 at Performance; less with more points)
+        float[] _zSag;                 // 0.7.3 per zone: how much gravity pulls it (x limit x gravity): breast 1, belly 0.5, glute 0.6, thigh 0.3
+        Vector3[] _zSagV;              // per zone, this frame: the world-space sag (down * _zSag * limit * gravity)
         float _acc;                    // fixed-step accumulator
 
         // ---- the capsules this frame ----
@@ -55,6 +58,8 @@ namespace SfMorph
         {
             _zH0 = zoneH0; _zH1 = zoneH1;
             _zSigma = new float[Zones.Length]; _zBulge = new float[Zones.Length]; _zCnt = new int[Zones.Length]; _zSeen = new bool[Zones.Length];
+            _zSag = new float[Zones.Length]; _zSagV = new Vector3[Zones.Length];
+            for (int z = 0; z < Zones.Length; z++) _zSag[z] = SagOf(Zones[z]);
             var pts = new int[Zones.Length];
             foreach (var p in _pts) pts[p.ZoneIdx]++;
             for (int z = 0; z < Zones.Length; z++)
@@ -73,10 +78,21 @@ namespace SfMorph
         void SimReset()
         {
             DebugOff();
-            _bL2W = _bW2L = null; _bOk = null; _zH0 = _zH1 = null; _zSigma = null; _zBulge = null; _zCnt = null; _zSeen = null;
+            _bL2W = _bW2L = null; _bOk = null; _zH0 = _zH1 = null; _zSigma = null; _zBulge = null; _zCnt = null; _zSeen = null; _zSag = null; _zSagV = null;
             _nContacts = 0; _sig = -1;
             _rL = _rR = 0f;
             if (_ownsResist) { LeftResist = RightResist = 0f; _ownsResist = false; }
+        }
+
+        static float SagOf(Zone z)
+        {
+            switch (z.Label)
+            {
+                case "breast front": case "breast side": return 1f;
+                case "belly": return 0.5f;
+                case "glute": return 0.6f;
+                default: return 0.3f;   // thighs
+            }
         }
 
         void EnsureCaps(int n)
@@ -170,6 +186,9 @@ namespace SfMorph
         // Every frame after Body applies (bones carry our scales), inside the apply step: the soft points' springs and contacts.
         // softness 0..1 (stiff..soft), spring 0..1 (0 = settles at once and doesn't lag her motion). quality (0..2) is accepted so the
         // caller can pass its setting along; the build's own quality (Update) decides the points, so nothing here depends on it.
+        // gravity 0..1 (0.7.3): how much each zone sags toward the floor. Every helper's spring rests at Sag = down * zoneSag * limit * gravity
+        // (world space, see Helper.Sag) instead of at zero, so the skin hangs / flattens with her pose and the springiness oscillates around
+        // it. gravity 0 is exactly the 0.7.2 behaviour (Sag is the zero vector everywhere, every Sag term vanishes).
         public void Simulate(float dt, List<SoftCapsule> caps, float softness, float spring, bool debug, int quality = 1, float gravity = 0f)
         {
             int nh = _helpers.Count;
@@ -182,6 +201,9 @@ namespace SfMorph
             float damp = 2f * zeta * Mathf.Sqrt(k);
             float inert = Mathf.Lerp(0f, 0.5f, spring);
             float limit = Mathf.Lerp(0.02f, 0.045f, softness);
+            gravity = Mathf.Clamp01(gravity);
+            if (gravity < 0.001f) gravity = 0f;
+            for (int z = 0; z < _zSagV.Length; z++) _zSagV[z] = gravity > 0f ? Vector3.down * (_zSag[z] * limit * gravity) : Vector3.zero;
 
             // the bones' matrices once (many helpers share a bone), and a destroyed bone silences its helpers
             for (int i = 0; i < _bones.Count; i++)
@@ -240,13 +262,31 @@ namespace SfMorph
                 var r = m.MultiplyPoint3x4(h.SLocal);
                 h.R = r;
                 h.N = m.MultiplyVector(h.NLocal).normalized;
+                // the sag: gravity's pull, but never further outward along the normal than SagOutward * limit (the clamp below leaves the
+                // spring's equilibrium reachable: skin that rises more than that is not a sag any more)
+                Vector3 sag = _zSagV[h.ZoneIdx];
+                if (sag.x != 0f || sag.y != 0f || sag.z != 0f)
+                {
+                    float sn = Vector3.Dot(sag, h.N), lo = -SagOutward * limit;
+                    if (sn < lo) { sag += h.N * (lo - sn); sn = lo; }
+                    // the tangential part too: at most 0.5 limit, so with the clamp's own 0.5 limit of slide around it the total sideways stays <= limit
+                    Vector3 stg = sag - h.N * sn;
+                    float tm = stg.sqrMagnitude, tcap = 0.5f * limit;
+                    if (tm > tcap * tcap) sag = h.N * sn + stg * (tcap / Mathf.Sqrt(tm));
+                }
+                h.Sag = sag;
+                if (h.Asleep)
+                {
+                    // asleep means resting at its equilibrium: follow a Sag that drifted less than 0.1 mm, wake for a bigger change (pose change)
+                    if ((h.Disp - sag).sqrMagnitude < 1e-8f) h.Disp = sag; else h.Asleep = false;
+                }
                 if (h.HasPrev)
                 {
                     var d = r - h.PrevRest;
                     float d2 = d.sqrMagnitude;
                     if (d2 > 0.04f)   // moved 20 cm in a frame: an animation cut or teleport, not motion to lag behind
                     {
-                        if (!h.Asleep || h.Disp.sqrMagnitude > 0f) { h.Disp = Vector3.zero; h.Vel = Vector3.zero; h.Asleep = false; }
+                        if (!h.Asleep || (h.Disp - sag).sqrMagnitude > 0f) { h.Disp = sag; h.Vel = Vector3.zero; h.Asleep = false; }
                     }
                     else if (inert > 0f && d2 > 1e-10f) { h.Disp -= d * inert; h.Asleep = false; }
                 }
@@ -262,7 +302,7 @@ namespace SfMorph
                 {
                     var h = _helpers[i];
                     if (h.Asleep) continue;
-                    h.Vel += (h.Disp * -k - h.Vel * damp) * Step;
+                    h.Vel += ((h.Disp - h.Sag) * -k - h.Vel * damp) * Step;
                     h.Disp += h.Vel * Step;
                 }
                 _acc -= Step; steps++;
@@ -332,7 +372,7 @@ namespace SfMorph
             {
                 var h = _helpers[i];
                 if (!h.Touched || h.HandMask == 0) continue;
-                float dn = Vector3.Dot(h.Disp, h.N);
+                float dn = Vector3.Dot(h.Disp - h.Sag, h.N);   // what the hand pushed, not the sag under gravity
                 if (dn > limit) dn = limit;
                 if ((h.HandMask & 1) != 0 && dn > dentL) dentL = dn;
                 if ((h.HandMask & 2) != 0 && dn > dentR) dentR = dn;
@@ -386,12 +426,16 @@ namespace SfMorph
                     if (depth > _peak) _peak = depth;
                     if (!_zSeen[h.ZoneIdx]) { _zSeen[h.ZoneIdx] = true; LogFirst(h, caps, nc); }
                 }
-                if (h.Asleep) continue;
-                if (!h.Touched && h.Disp.sqrMagnitude < 1e-8f && h.Vel.sqrMagnitude < 1e-6f)
+                bool sagging = h.Sag.x != 0f || h.Sag.y != 0f || h.Sag.z != 0f;
+                if (h.Asleep)
                 {
-                    h.Disp = Vector3.zero; h.Vel = Vector3.zero; h.Asleep = true;
-                    h.S.localPosition = h.SLocal;   // exactly its rest place, not a round trip through world space
+                    if (sagging) h.S.localPosition = _bW2L[h.BoneIdx].MultiplyPoint3x4(h.R + h.Disp);   // the bone may have turned: Sag is a world offset
                     continue;
+                }
+                if (!h.Touched && (h.Disp - h.Sag).sqrMagnitude < 1e-8f && h.Vel.sqrMagnitude < 1e-6f)
+                {
+                    h.Disp = h.Sag; h.Vel = Vector3.zero; h.Asleep = true;
+                    if (!sagging) { h.S.localPosition = h.SLocal; continue; }   // exactly its rest place, not a round trip through world space
                 }
                 h.S.localPosition = _bW2L[h.BoneIdx].MultiplyPoint3x4(h.R + h.Disp);
             }
@@ -400,9 +444,24 @@ namespace SfMorph
             if (debug) DebugDraw(nc); else if (_dbgOn) DebugOff();
         }
 
-        // sink in (along the inward normal) up to limit, rise up to 0.3 limit, slide up to 0.5 limit
+        // sink in (along the inward normal) up to limit, rise up to 0.3 limit, slide up to 0.5 limit. With a sag the same room is left around the
+        // equilibrium: the slide is limited relative to the sag's tangential part, and the rise to 0.3 limit or the sag's own outward normal
+        // part if that is more (Simulate caps that at SagOutward * limit). Sag zero: exactly the 0.7.2 clamp.
         static void Clamp(Helper h, float limit)
         {
+            if (h.Sag.x != 0f || h.Sag.y != 0f || h.Sag.z != 0f)
+            {
+                float sn = Vector3.Dot(h.Sag, h.N);
+                Vector3 st = h.Sag - h.N * sn;
+                float dn2 = Vector3.Dot(h.Disp, h.N);
+                Vector3 tan2 = h.Disp - h.N * dn2 - st;
+                float tl2 = 0.5f * limit, tm22 = tan2.sqrMagnitude;
+                if (tm22 > tl2 * tl2) tan2 *= tl2 / Mathf.Sqrt(tm22);
+                float lo = Mathf.Min(-0.3f * limit, sn);
+                if (dn2 > limit) dn2 = limit; else if (dn2 < lo) dn2 = lo;
+                h.Disp = st + tan2 + h.N * dn2;
+                return;
+            }
             float dn = Vector3.Dot(h.Disp, h.N);
             Vector3 tan = h.Disp - h.N * dn;
             float tl = 0.5f * limit, tm2 = tan.sqrMagnitude;

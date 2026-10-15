@@ -41,6 +41,15 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.7.3:
+- Per-vertex contact on the GPU: a compute shader (dist/sfmorph_shaders, copy it next to SfMorph.dll) presses her skinned
+  vertices out of your hands, fingers and the partner's hands right after Unity skins her and before anything renders, so the
+  dent follows the exact shape at any mesh density (the soft points still give the broad dent and the jiggle). Her own limbs are
+  left out. The skinning space is checked once per mesh with a GPU readback before the real deformer runs; "Smoke test (3 s)"
+  inflates her by 1 cm and back to check the GPU path and DLSS motion vectors safely.
+- Gravity (Physics, default 50 %): the soft zones settle toward the floor, depending on her pose: breasts hang when she stands,
+  flatten on her back, drop when she bends over (breasts most, thighs least).
+
 0.7.2:
 - Hands felt rigid (0.7.0): the physics hand was velocity-driven (infinitely stiff) and the fingers only posed from grip. Now
   the palm follows the controller with a capped force and a PD torque (60 N in the air, down to 12 N as her skin compresses,

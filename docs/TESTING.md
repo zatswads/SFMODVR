@@ -77,3 +77,13 @@ his fingers curl with grip, his arm trails a fast swing; both on: his hand stops
 Performance → Balanced → Fidelity: smoother silhouette and dents in Fidelity, note frame time; toggle a character in Fidelity
 (no stuck mesh); (6) Overlap 0 → 50 %: elbows/knees trail and settle, no pops; 0 = the game's animation; (7) the VrHands log line
 no longer lists SfPhys_*_visual as a partner.
+
+## 0.7.3
+
+Install: copy both `dist/SfMorph.dll` and `dist/sfmorph_shaders` to `BepInEx\plugins\`. Log: `GPU contact: supportsComputeShaders=True`,
+`bundle loaded, kernels Smoke=0 Imprint=1`, per renderer `... skinned buffer ok`, `space rootBone (... mm)` (best < 20 mm, others
+> 100 mm). Headset: (1) Physics section shows "GPU contact: on, N renderers, space rootBone"; (2) Smoke test (3 s): she inflates
+~1 cm and returns, move your head/hands meanwhile with DLSS on: no ghost outline (nothing visible: CPU skinning or timing; flicker:
+wrong buffer; explosion: layout); (3) with physics hands, press a thigh with one finger: a sharp finger-shaped dent inside the broad
+dent, nothing elsewhere; toggle "Per-vertex contact on the GPU" to compare; (4) Gravity 0 → 100 %: breasts hang/flatten with her
+pose, settle without jitter.

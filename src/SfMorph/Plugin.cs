@@ -17,12 +17,12 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.7.2";
+        public const string Version = "0.7.3";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
-        internal ConfigEntry<bool> KeysUnfocused, Apply, Physics, ShowSoftPoints, EmbodyOn, EmbodyHideHead, HandsOn, HandsCollide;
-        internal ConfigEntry<float> UiScale, Softness, Springiness, OverlapAmount, OverlapArms, OverlapLegs, OverlapHead, OverlapSpine;
+        internal ConfigEntry<bool> KeysUnfocused, Apply, Physics, ShowSoftPoints, EmbodyOn, EmbodyHideHead, HandsOn, HandsCollide, GpuContactOn;
+        internal ConfigEntry<float> UiScale, Softness, Springiness, Gravity, OverlapAmount, OverlapArms, OverlapLegs, OverlapHead, OverlapSpine;
         internal ConfigEntry<int> EmbodyHands, EmbodyView, EmbodyPartner, HandsMesh, Quality;
         internal ConfigEntry<Vector3> LeftHandPos, LeftHandRot, RightHandPos, RightHandRot;
         internal ConfigEntry<string> PanelRect;
@@ -46,6 +46,8 @@ namespace SfMorph
             OverlapLegs = Config.Bind("Motion", "Legs", 1f, new ConfigDescription("Overlap amount on the legs.", new AcceptableValueRange<float>(0f, 1f)));
             OverlapHead = Config.Bind("Motion", "Head", 1f, new ConfigDescription("Overlap amount on the neck and head.", new AcceptableValueRange<float>(0f, 1f)));
             OverlapSpine = Config.Bind("Motion", "Spine", 1f, new ConfigDescription("Overlap amount on the spine.", new AcceptableValueRange<float>(0f, 1f)));
+            Gravity = Config.Bind("Physics", "Gravity", 0.5f, new ConfigDescription("Soft zones settle toward the floor as she moves (breasts most, thighs least): they hang when she stands, flatten on her back, drop when she bends over. 0 off.", new AcceptableValueRange<float>(0f, 1f)));
+            GpuContactOn = Config.Bind("Physics", "GpuContact", true, "Per-vertex contact on the GPU (shader bundle sfmorph_shaders next to the DLL): her skin is pressed exactly around hands and fingers.");
             ShowSoftPoints = Config.Bind("Physics", "ShowSoftPoints", false, "Small markers on the soft points (green at rest, red touched) and the contact capsules, to see what touches what.");
             EmbodyOn = Config.Bind("Embody", "On", false, "See through the partner's eyes (VR), his head hidden, his hands on your controllers.");
             EmbodyHands = Config.Bind("Embody", "Hands", 3, new ConfigDescription("His hands follow the controllers: 0 none, 1 left, 2 right, 3 both.", new AcceptableValueRange<int>(0, 3)));

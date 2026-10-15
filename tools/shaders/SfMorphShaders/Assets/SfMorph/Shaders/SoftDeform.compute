@@ -1,9 +1,9 @@
 // SfMorph post-skinning soft contact deformer (0.7.3).
 // Runs on a SkinnedMeshRenderer's skinned vertex buffer (vertexBufferTarget |= Raw, GetVertexBuffer) after Unity's
 // skinning and before the cameras render: vertices of her soft areas are pressed out of the contact capsules (hands,
-// fingers, limbs) the way VaM's postSkinMorphs do, with a per-vertex softness mask and a depth limit. The same
-// displacement is applied to the previous-frame buffer (GetPreviousVertexBuffer) by the caller so HDRP's motion vectors
-// (and DLSS) stay right.
+// fingers) the way VaM's postSkinMorphs do, with a per-vertex softness mask and a depth limit. Only the current buffer
+// is written (the one drawn this frame, which Unity keeps as next frame's previous buffer), so HDRP's motion vectors
+// stay consistent. Normals are left alone.
 #pragma kernel Smoke
 #pragma kernel Imprint
 
@@ -11,8 +11,12 @@ RWByteAddressBuffer _Verts;          // skinned output: per vertex _Stride bytes
 uint _Stride, _PosOff, _NrmOff, _Count;
 float4x4 _ToWorld, _ToLocal;          // buffer space <-> world (the caller passes the renderer's skinning space)
 
-StructuredBuffer<float4> _CapA;      // xyz endpoint a (world), w radius (m)
-StructuredBuffer<float4> _CapB;      // xyz endpoint b (world)
+struct Capsule
+{
+    float4 a;                        // xyz endpoint a (world), w radius (m)
+    float4 b;                        // xyz endpoint b (world)
+};
+StructuredBuffer<Capsule> _Caps;
 uint _CapCount;
 StructuredBuffer<float> _Mask;       // per vertex 0..1: how soft the skin is here (0 = rigid, untouched)
 float _Limit;                        // deepest press (m)
@@ -30,12 +34,68 @@ void Smoke(uint3 id : SV_DispatchThreadID)
     if (i >= _Count) return;
     uint a = i * _Stride;
     float3 p = LoadF3(a + _PosOff);
-    float3 n = normalize(LoadF3(a + _NrmOff));
-    StoreF3(a + _PosOff, p + n * _SmokeOffset);
+    float3 n = LoadF3(a + _NrmOff);
+    float nn = dot(n, n);
+    if (nn < 1e-12) return;
+    StoreF3(a + _PosOff, p + n * (rsqrt(nn) * _SmokeOffset));
 }
 
-// Imprint: a vertex inside a capsule (plus margin) moves inward along its own normal to the capsule's surface, at
-// most _Limit * mask deep; the capsule's profile becomes the dent's profile.
+// Port of SoftSim.RayExit: ray p + t d (d unit) against the capsule a, a+ab with radius r, p inside it: the largest t >= 0 where
+// the ray leaves it. The capsule is convex, so the ray meets it in one interval, the union of its pieces' intervals (the
+// cylinder between the end planes, the two end spheres): the exit is the largest exit among them.
+bool RayExit(float3 p, float3 d, float3 a, float3 ab, float len2, float r, out float tExit)
+{
+    tExit = -1.0;
+    bool any = false;
+    float r2 = r * r;
+    for (uint k = 0; k < 2; k++)
+    {
+        float3 oc = p - (k == 0 ? a : a + ab);
+        float b = dot(oc, d);
+        float disc = b * b - (dot(oc, oc) - r2);
+        if (disc < 0.0) continue;
+        float t1 = -b + sqrt(disc);
+        if (t1 >= 0.0 && (!any || t1 > tExit)) { tExit = t1; any = true; }
+    }
+    if (len2 > 1e-10)
+    {
+        float len = sqrt(len2);
+        float3 u = ab / len;
+        float3 w = p - a;
+        float dd = dot(d, u);
+        float wu = dot(w, u);
+        float3 wp = w - u * wu;
+        float3 dp = d - u * dd;
+        float A = dot(dp, dp);
+        float B = dot(wp, dp);
+        float C = dot(wp, wp) - r2;
+        float lo = -3.0e38, hi = 3.0e38;
+        bool ok = true;
+        if (A > 1e-8)
+        {
+            float disc = B * B - A * C;
+            if (disc < 0.0) ok = false;
+            else { float sq = sqrt(disc); lo = (-B - sq) / A; hi = (-B + sq) / A; }
+        }
+        else if (C > 0.0) ok = false;           // parallel to the axis and outside the tube
+        if (ok)
+        {
+            if (abs(dd) > 1e-6)
+            {
+                float s0 = -wu / dd, s1 = (len - wu) / dd;   // the end planes
+                if (s0 > s1) { float x = s0; s0 = s1; s1 = x; }
+                if (s0 > lo) lo = s0;
+                if (s1 < hi) hi = s1;
+            }
+            else if (wu < 0.0 || wu > len) ok = false;
+            if (ok && hi >= lo && hi >= 0.0 && (!any || hi > tExit)) { tExit = hi; any = true; }
+        }
+    }
+    return any;
+}
+
+// Imprint: a vertex inside a capsule (plus margin) moves inward along its own normal to where that line leaves the capsule,
+// at most _Limit * mask deep; the capsule's profile becomes the dent's profile (same math as SoftSim's soft points).
 [numthreads(64, 1, 1)]
 void Imprint(uint3 id : SV_DispatchThreadID)
 {
@@ -44,26 +104,32 @@ void Imprint(uint3 id : SV_DispatchThreadID)
     float m = _Mask[i];
     if (m <= 0.0) return;
     uint a = i * _Stride;
-    float3 pl = LoadF3(a + _PosOff);
     float3 nl = LoadF3(a + _NrmOff);
+    if (dot(nl, nl) < 1e-12) return;
+    float3 pl = LoadF3(a + _PosOff);
     float3 p = mul(_ToWorld, float4(pl, 1)).xyz;
-    float3 nIn = -normalize(mul((float3x3)_ToWorld, nl));   // into the body
+    // normal into world space with the inverse transpose (row-vector multiply by _ToLocal's 3x3), then flipped: into the body
+    float3 nw = mul(nl, (float3x3)_ToLocal);
+    float nwl = dot(nw, nw);
+    if (nwl < 1e-20) return;
+    float3 nIn = -nw * rsqrt(nwl);
     float depth = 0;
     for (uint c = 0; c < _CapCount; c++)
     {
-        float4 A = _CapA[c]; float3 b = _CapB[c].xyz;
-        float r = A.w + _Margin;
-        float3 ab = b - A.xyz;
-        float t = saturate(dot(p - A.xyz, ab) / max(dot(ab, ab), 1e-8));
-        float3 q = A.xyz + ab * t;
+        Capsule cap = _Caps[c];
+        float3 ca = cap.a.xyz;
+        float3 ab = cap.b.xyz - ca;
+        float len2 = dot(ab, ab);
+        float r = cap.a.w + _Margin;
+        float t = len2 > 1e-10 ? saturate(dot(p - ca, ab) / len2) : 0.0;
+        float3 q = ca + ab * t;
         float3 u = p - q;
         float d2 = dot(u, u);
         if (d2 >= r * r) continue;
-        // distance to travel along nIn until the point leaves the sphere around q (good locally for a capsule)
-        float bq = dot(u, nIn);
-        float cq = d2 - r * r;
-        float disc = bq * bq - cq;
-        float s = disc > 0 ? -bq + sqrt(disc) : 0;
+        float te;
+        float s;
+        if (RayExit(p, nIn, ca, ab, len2, r, te)) s = te + 1e-4;
+        else s = max(r - sqrt(d2), 0.0);         // no exit found: radial push out of the capsule
         depth = max(depth, s);
     }
     if (depth <= 0) return;

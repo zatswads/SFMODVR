@@ -443,6 +443,9 @@ namespace SfMorph
         readonly EmbodySettings _emb = new EmbodySettings();
         readonly HandsSettings _hands = new HandsSettings();
         public readonly Overlap Overlap = new Overlap();
+        public GpuContact Gpu;              // null until loaded (the shader bundle next to the DLL)
+        bool _gpuTried, _gpuOn;
+        public string GpuStatus { get { return Gpu != null ? Gpu.Status : _gpuTried ? (GpuContact.LastStatus.Length > 0 ? GpuContact.LastStatus : "GPU contact: off: shader bundle not loaded (see the log)") : ""; } }
         readonly OverlapSettings _ovs = new OverlapSettings();
         bool _overlapOn;
         readonly List<SoftCapsule> _caps = new List<SoftCapsule>();
@@ -522,7 +525,11 @@ namespace SfMorph
                 }
                 // the soft points after her bones carry our changes, before the game's physics and IK
                 if (physics && c == her)
-                    try { c.Soft.Simulate(Time.deltaTime, Contacts(), _p.Softness.Value, _p.Springiness.Value, _p.ShowSoftPoints.Value, quality); }
+                    try
+                    {
+                        c.Soft.Simulate(Time.deltaTime, Contacts(), _p.Softness.Value, _p.Springiness.Value, _p.ShowSoftPoints.Value, quality, _p.Gravity.Value);
+                        GpuStep(c);
+                    }
                     catch (Exception e)
                     {
                         Plugin.Log.LogError("Soft zones on '" + c.Key + "' failed, physics turned off: " + e);
@@ -532,6 +539,7 @@ namespace SfMorph
             }
             Release();
             if ((her == null || !_p.Apply.Value) && _overlapOn) { _overlapOn = false; try { Overlap.Release(); } catch { } }
+            if ((!physics || her == null) && _gpuOn) { _gpuOn = false; try { if (Gpu != null) Gpu.Release(); } catch { } Gpu = null; _gpuTried = false; }
             // off, or she's gone (scene change): give the controllers, layers and her capsules back
             if (!physHands && _physHandsOn) { _physHandsOn = false; try { PhysicsHands.Release(); } catch { } }
             // Embody last: his head and arms after the animation, the view after everything that moves him
@@ -550,6 +558,39 @@ namespace SfMorph
                 }
             }
             else if (_embodyOn) { _embodyOn = false; try { Embody.Release(); } catch { } }
+        }
+
+        // The GPU contact deformer: loaded once from the DLL's folder; follows the soft zones' build and this frame's capsules.
+        void GpuStep(Character her)
+        {
+            if (!_p.GpuContactOn.Value) { if (_gpuOn) { _gpuOn = false; try { if (Gpu != null) Gpu.Release(); } catch { } Gpu = null; _gpuTried = false; } return; }
+            if (Gpu == null && !_gpuTried)
+            {
+                _gpuTried = true;
+                try { Gpu = GpuContact.TryLoad(System.IO.Path.GetDirectoryName(typeof(Plugin).Assembly.Location)); }
+                catch (Exception e) { Plugin.Log.LogWarning("GPU contact: " + e.Message); }
+            }
+            if (Gpu == null) return;
+            if (Gpu.Status.Contains("off:"))   // it switched itself off after an error: drop it (the toggle reloads it)
+            {
+                GpuContact.LastStatus = Gpu.Status;
+                try { Gpu.Release(); } catch { }
+                Gpu = null; _gpuOn = false;
+                return;
+            }
+            _gpuOn = true;
+            try
+            {
+                Gpu.Sync(her.Soft);
+                Gpu.SetCapsules(Contacts(), Mathf.Lerp(0.02f, 0.045f, _p.Softness.Value), 0.003f);
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogError("GPU contact failed, turned off: " + e);
+                _p.GpuContactOn.Value = false;
+                try { Gpu.Release(); } catch { }
+                Gpu = null; _gpuOn = false;
+            }
         }
 
         // What can touch her: VrHands' capsules, with the physics hands in place of the controllers while they're on.
@@ -726,6 +767,8 @@ namespace SfMorph
             foreach (var c in Found) { try { c.Soft.Release(); } catch { } try { c.Morph.Release(); } catch { } }
             try { Embody.Release(); } catch { }
             try { Overlap.Release(); } catch { }
+            try { if (Gpu != null) Gpu.Release(); } catch { }
+            Gpu = null; _gpuOn = false; _gpuTried = false;
             try { PhysicsHands.Release(); } catch { }
             try { VrHands.Release(); } catch { }
         }

@@ -193,6 +193,7 @@ namespace SfMorph
             public Subdiv.Undo Undo;   // Fidelity: the subdivision of Mesh (in place), given back exactly in Teardown
             public Mesh Orig;          // OwnMesh: the game's mesh behind our readable (subdivided) clone Mesh
             public bool OwnMesh;       // Mesh is our own clone made for the subdivision (destroyed in Teardown)
+            public float[] Mask;       // 0.7.3: per vertex of Mesh, 0..1 share of the zones (GPU contact deformer); null when not augmented
         }
 
         class Pt   // a spring point on the skin
@@ -216,6 +217,7 @@ namespace SfMorph
             public float Total;          // how much skin it carries (vertex weight sum)
             // simulation (SoftSim.cs): world space
             public Vector3 Disp, Vel, PrevRest, R, N, Push;
+            public Vector3 Sag;          // 0.7.3: the spring's equilibrium offset from R (world): gravity's pull on the zone, zero without gravity
             public bool Touched, Asleep = true, HasPrev, Bulged;
             public int LastCap;
             public int HandMask;         // physics hands that touched it this frame: 1 left, 2 right
@@ -243,10 +245,19 @@ namespace SfMorph
         // 0.7.2: how deep each physics hand is into her skin (0..1 of the limit), for the hands' force cap; per zone contact.
         // Smoothed (0.1 s) from the deepest dent each SfPhys* hand makes (SoftSim.cs); 0 when that hand touches nothing or the zones are off.
         public static float LeftResist, RightResist;
-        // 0.7.3 (stubs): the GPU contact deformer's view of a build: bumped on every Build/Teardown; per renderer vertex masks.
+        // 0.7.3: the GPU contact deformer's view of a build. BuildVersion is bumped on every Build and Teardown (a consumer re-syncs when it
+        // changes). MaskFor(r): per vertex of the mesh r shows now (our augmented / subdivided clone, in its vertex order) the share 0..1 of the
+        // zones, min(1, sum of the vertex's zone fractions / fmax); 0 outside the zones; null when r isn't one of ours or isn't augmented.
+        // GpuRenderers: her augmented renderers that have a mask (body meshes and clothes alike; the consumer filters by vertex layout).
         public int BuildVersion;
-        public float[] MaskFor(UnityEngine.SkinnedMeshRenderer r) { return null; }
-        public List<UnityEngine.SkinnedMeshRenderer> GpuRenderers = new List<UnityEngine.SkinnedMeshRenderer>();
+        public List<SkinnedMeshRenderer> GpuRenderers = new List<SkinnedMeshRenderer>();
+
+        public float[] MaskFor(SkinnedMeshRenderer r)
+        {
+            Rs rs;
+            if (r == null || !_rs.TryGetValue(r, out rs) || !rs.Used || rs.Mask == null || r.sharedMesh != rs.Mesh) return null;
+            return rs.Mask;
+        }
 
         // True while any point of a zone whose Id starts with the prefix (e.g. "thighOut_L", "glute", "thigh") is touched by anything.
         // Per frame state from the last Simulate; allocation-free.
@@ -340,6 +351,8 @@ namespace SfMorph
         void Build(Character c, float softness, List<Character> everyone, string why, int quality)
         {
             var t0 = Time.realtimeSinceStartup;
+            BuildVersion++;
+            GpuRenderers.Clear();
             _builtQ = quality; _bq = quality; _subdivN = 0;
             int qual = quality;   // 0 Performance, 1 Balanced, 2 Fidelity (the points are the same for 1 and 2)
             _her = c.Root;
@@ -721,7 +734,20 @@ namespace SfMorph
                 }
                 if (changed == 0) continue;
                 Augment(s, nw, hb, problems);
-                if (s.S.Used) { used++; meshNames.Add(s.R.name + "(" + changed + ")"); }
+                if (s.S.Used)
+                {
+                    used++; meshNames.Add(s.R.name + "(" + changed + ")");
+                    // the GPU mask: each vertex's zone fractions (s.F is keyed by this mesh's own vertex order, subdivision included)
+                    var mask = new float[s.P.Length];
+                    foreach (var kv in s.F)
+                    {
+                        float sumF = 0f;
+                        for (int j = 0; j < kv.Value.W.Length; j++) sumF += kv.Value.W[j];
+                        mask[kv.Key] = Mathf.Min(1f, sumF / fmax);
+                    }
+                    if (s.S.Mesh != null && s.S.Mesh.vertexCount == mask.Length) { s.S.Mask = mask; GpuRenderers.Add(s.R); }
+                    else problems.Add(s.R.name + ": GPU mask size " + mask.Length + " != mesh vertices " + (s.S.Mesh != null ? s.S.Mesh.vertexCount : 0));
+                }
             }
 
             _builtMorph = MorphWeight();
@@ -988,9 +1014,12 @@ namespace SfMorph
         // Meshes, bones, helpers and our entries in the game's lists; the per-session caches too when 'all'.
         void Teardown(bool all)
         {
+            BuildVersion++;
+            GpuRenderers.Clear();
             foreach (var kv in _rs)
             {
                 var r = kv.Key; var rs = kv.Value;
+                rs.Mask = null;
                 try
                 {
                 if (rs.Used && r != null) r.bones = rs.Bones;
