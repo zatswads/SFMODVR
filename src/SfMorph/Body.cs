@@ -539,7 +539,7 @@ namespace SfMorph
                 if (c == her && (physics || physHands))
                 {
                     if (_overlapOn) Overlap.Unwind();
-                    _hb.On = true; _hb.PushByTouch = _p.HandsPushByTouch.Value; _hb.PushByPartner = _p.HandsPushByPartner.Value; _hb.Embodied = embody && Embody != null ? Embody.PartnerRoot : null; _hb.Softness = _p.Softness.Value; _hb.Caps = Contacts();
+                    _hb.On = true; _hb.PushByTouch = _p.HandsPushByTouch.Value; _hb.PushByPartner = _p.HandsPushByPartner.Value; _hb.Embodied = embody && Embody != null ? Embody.PartnerRoot : null; _hb.Softness = _p.Softness.Value; _hb.SoftZonesOn = physics; _hb.Caps = Contacts();
                     try { HerBody.Update(c, _hb); }
                     catch (Exception e) { Plugin.Log.LogError("Her body failed, retrying in 10 s: " + e); try { HerBody.Fail(); } catch { } }
                 }
@@ -567,7 +567,7 @@ namespace SfMorph
                         _hands.On = true; _hands.Collide = _p.HandsCollide.Value; _hands.Mesh = _p.HandsMesh.Value;
                         _hands.ShowColliders = _p.ShowSoftPoints.Value; _hands.Softness = _p.Softness.Value;
                         _hands.HullColliders = _p.HandsHull.Value; _hands.Friction = _p.HandsFriction.Value; _hands.JointedFingers = _p.HandsJointed.Value;
-                        _hands.DrawnOffsetFade = _p.HandsDrawnFade.Value; _hands.FingerConform = _p.HandsFingerConform.Value; _hands.RestCurl = _p.HandsRestCurl.Value;
+                        _hands.DrawnOffsetFade = _p.HandsDrawnFade.Value; _hands.FingerConform = _p.HandsFingerConform.Value; _hands.RestCurl = _p.HandsRestCurl.Value; _hands.SoftZonesOn = physics;
                         _hands.HideVisual = _p.EmbodyOn.Value && _p.EmbodyHands.Value != 0;   // his own hands are shown then
                         _hands.LeftPos = _p.LeftHandPos.Value; _hands.LeftRot = _p.LeftHandRot.Value; _hands.RightPos = _p.RightHandPos.Value; _hands.RightRot = _p.RightHandRot.Value;
                         try { PhysicsHands.Update(c, _hands); _physHandsOn = true; }
