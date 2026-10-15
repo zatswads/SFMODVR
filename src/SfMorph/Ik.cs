@@ -7,7 +7,10 @@ namespace SfMorph
     // the lag of the chain shows as the elbow/knee swinging while the hand/foot stays where the animation put it.
     internal static class Ik
     {
-        const float ReachClamp = 0.98f;   // as Embody: never fully straighten (the acos is ill-conditioned there)
+        // 1, not Embody's 0.98: the target is the animation's own end position with the animation's own bone lengths, so it is always
+        // reachable; a 0.98 clamp bent every planted near-straight leg/arm (knee 8 cm off the line) with nothing touching her. The law of
+        // cosines below is clamped to [-1, 1], so a fully straight chain is safe.
+        const float ReachClamp = 1f;
 
         // Rotates root and mid (world rotations, slerped by w from what they are now toward the solved ones) so that `end` reaches
         // `target`, and slerps end.rotation toward endRot by w. w 0 = untouched, 1 = exact (up to ReachClamp). false = nothing done.
@@ -22,7 +25,7 @@ namespace SfMorph
 
             var toT = target - A;
             float dist = toT.magnitude;
-            float d = Mathf.Clamp(dist, Mathf.Abs(l1 - l2) * 1.02f + 0.01f, (l1 + l2) * ReachClamp);
+            float d = Mathf.Clamp(dist, Mathf.Max(Mathf.Abs(l1 - l2), 1e-4f), (l1 + l2) * ReachClamp);
             var dir = dist > 1e-5f ? toT / dist : (C - A).normalized;
             var Tc = A + dir * d;
 

@@ -1236,6 +1236,18 @@ namespace SfMorph
                     foreach (var p in list) c += p;
                     if (list.Count > 0) c /= list.Count;
                     Matrix4x4 bind;
+                    // LowerBreast may move with the breast physics yet carry no skin weights (no bind pose): then follow the fallback bone
+                    // (UpperBreast, the chain root: placed right, just without the jiggle) instead of dropping the breast collider
+                    if (list.Count >= 8 && !bindOfBone.ContainsKey(g.A))
+                    {
+                        var sd = Array.Find(HerDefs, q => q.Name == g.Name);
+                        var alt = sd != null && sd.AAlt != null ? FindBone(her, sd.AAlt) : null;
+                        if (alt != null && bindOfBone.ContainsKey(alt))
+                        {
+                            LogOnce("herbind" + g.Name, "her collider " + g.Name + ": " + g.A.name + " has no bind pose, following " + alt.name + " instead");
+                            g.A = alt;
+                        }
+                    }
                     if (list.Count >= 8 && bindOfBone.TryGetValue(g.A, out bind))
                     {
                         g.LocalCenter = bind.MultiplyPoint3x4(c);

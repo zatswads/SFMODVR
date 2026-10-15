@@ -112,6 +112,12 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
 
 ## Open items
 
+- 0.7.7 GPU mask floor (SoftZones.HardFloor 0.25): every vertex of a zone mesh yields up to 0.25 x limit (~8 mm) under a hand; thin parts
+  and back faces in those meshes (nipple cap edge, cloth edges) can be pushed through by that much. If the headset shows it, add a
+  normal-facing guard in SoftDeform.compute Imprint or lower the floor.
+- 0.7.7 contact-review leftovers (low): a partner root with only nested hands rebuilds every 10 s; breast mirrors stay up to 2 s after
+  Physics off; AddImpulse's sign test uses the hand collider's transform position.
+
 - 0.3.0 untested in game: jitter gone? which helper sliders visibly do something (helper bones may carry few
   skin weights); check the `sliders:` line for each slider's bones, parents and child counts.
 - 0.4.0 face sliders untested: which visibly work, whether moves fight the expression animation.

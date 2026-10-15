@@ -38,6 +38,8 @@ namespace SfMorph
 
         // ---- per renderer ----
 
+        const int NullVbMax = 300;
+
         class RendState
         {
             public SkinnedMeshRenderer R;
@@ -52,6 +54,7 @@ namespace SfMorph
             public int Space;                     // 0 = unknown, 1 = rootBone, 2 = transform, 3 = identity, -1 = calibration failed
             public int CalibState;                // 0 = idle, 1 = readback pending
             public int CalibTries, CalibNextFrame;
+            public int NullVb;                    // 0.7.7: frames in a row without a skinned vertex buffer (gives up after NullVbMax)
             public bool Ok { get { return Layout >= 0 && Mask != null && R != null; } }
         }
 
@@ -363,7 +366,17 @@ namespace SfMorph
                     if (!needCalib && !doImprint && smoke == 0f) continue;
                     using (var vb = s.R.GetVertexBuffer())
                     {
-                        if (vb == null) continue;
+                        if (vb == null)
+                        {
+                            // a few frames without one are normal after the Raw target is set; for good it means no GPU skinning here: say so once, stop
+                            if (++s.NullVb == NullVbMax)
+                            {
+                                Plugin.Log.LogWarning("GPU contact: '" + s.Name + "' has had no skinned vertex buffer for " + NullVbMax + " frames (GPU skinning off for it?); skipped");
+                                s.Layout = -1;
+                            }
+                            continue;
+                        }
+                        s.NullVb = 0;
                         if (s.Layout == 0 && !CheckBuffer(s, vb)) continue;
                         if (s.Layout < 0) continue;
                         if (needCalib) { RequestCalibration(s, vb); continue; }   // read the untouched skinning result first

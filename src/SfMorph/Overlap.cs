@@ -341,7 +341,7 @@ namespace SfMorph
                 if (b.PushLive)
                 {
                     float pa = Quaternion.Angle(Quaternion.identity, b.Qp);
-                    if (pa > PushClampDeg) b.Qp = Quaternion.RotateTowards(Quaternion.identity, b.Qp, PushClampDeg);
+                    if (pa > PushClampDeg) { b.Qp = Quaternion.RotateTowards(Quaternion.identity, b.Qp, PushClampDeg); b.OmegaP = Vector3.zero; }   // no wind-up against the clamp
                     else if (pa < 0.05f && b.OmegaP.sqrMagnitude < 1e-4f) { b.Qp = Quaternion.identity; b.OmegaP = Vector3.zero; b.PushLive = false; }
                 }
                 if (float.IsNaN(b.PW.x) || float.IsNaN(b.POmega.x)) { b.PW = Quaternion.identity; b.POmega = Vector3.zero; b.PState = 0; }

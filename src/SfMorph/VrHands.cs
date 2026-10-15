@@ -71,7 +71,7 @@ namespace SfMorph
 
         // ---- visibility gate ----
 
-        static readonly Camera[] _camBuf = new Camera[16];   // GetAllCameras fills this: no per-refresh array
+        static Camera[] _camBuf = new Camera[32];   // GetAllCameras fills this: grown only when there are more cameras
         static int _camMask = -1;                            // the culling mask of the camera the user looks through (-1: everything)
         static float _camNext;
         static string _camLogged = "";
@@ -119,24 +119,32 @@ namespace SfMorph
             if (_statusDirty) { _statusDirty = false; BuildStatus(); }
         }
 
-        // The first enabled stereo camera (the headset), else Camera.main, else no layer filtering.
+        // The layers the headset draws: the union of the cullingMasks of every enabled stereo camera (the eye cameras; an overlay/UI stereo
+        // camera or a second camera drawing the hands on their own layer only adds layers, so a union can never call a drawn hand hidden),
+        // plus Camera.main; no camera found = no layer filtering. Refreshed every 2 s.
         static void RefreshCameraMask()
         {
-            Camera pick = null;
+            int count = Camera.allCamerasCount;
+            if (_camBuf.Length < count) _camBuf = new Camera[Mathf.Max(count, _camBuf.Length * 2)];   // GetAllCameras throws on a short buffer
             int n = Camera.GetAllCameras(_camBuf);
-            for (int i = 0; i < n && pick == null; i++)
+            int mask = 0, stereo = 0;
+            string first = null;
+            for (int i = 0; i < n; i++)
             {
                 var c = _camBuf[i];
-                if (c != null && c.enabled && c.stereoEnabled && c.gameObject.activeInHierarchy) pick = c;
+                if (c == null || !c.enabled || !c.stereoEnabled || !c.gameObject.activeInHierarchy) continue;
+                mask |= c.cullingMask; stereo++;
+                if (first == null) first = c.name;
             }
             for (int i = 0; i < _camBuf.Length; i++) _camBuf[i] = null;   // don't keep cameras alive
-            if (pick == null) pick = Camera.main;
-            _camMask = pick != null ? pick.cullingMask : -1;
-            string key = pick != null ? pick.name + "|" + _camMask : "none|-1";
+            var main = Camera.main;
+            if (main != null) { mask |= main.cullingMask; if (first == null) first = main.name; }
+            _camMask = first != null ? mask : -1;
+            string key = (first ?? "none") + "|" + stereo + "|" + _camMask;
             if (key == _camLogged) return;
             _camLogged = key;
-            Plugin.Log.LogInfo("VrHands: visibility against camera '" + (pick != null ? pick.name : "none (no layer filter)") + "' (stereo " + (pick != null && pick.stereoEnabled)
-                               + ", cullingMask 0x" + _camMask.ToString("X8") + ")");
+            Plugin.Log.LogInfo("VrHands: visibility against " + (first == null ? "no camera (no layer filter)" : stereo + " stereo camera(s) + main, first '" + first + "'")
+                               + " (cullingMask 0x" + _camMask.ToString("X8") + ")");
         }
 
         // What else the contacts affect (the answer to "why did that move?"); logged once at the first Rebuild, shown under Status.
