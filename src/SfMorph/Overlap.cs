@@ -59,13 +59,15 @@ namespace SfMorph
         const float PlantDist = 0.08f, StillSpeed = 0.04f, StillHold = 0.08f, PlantFade = 0.15f;
 
         // limb push: per region {arms, legs, head, spine} inertia (kg*m^2 equivalent) and hard-stop angle; torque cap and rate cap are common
-        const float PushTauMax = 6f, PushOmegaMax = 20f;
+        // torque cap per region: legs and spine are heavier (a press of 40 N at 25 cm on the chest is 10 N*m), the head lighter
+        static readonly float[] PushTauMaxR = { 6f, 10f, 3f, 10f };
+        const float PushOmegaMax = 20f;
         static readonly float[] PushInertiaR = { 0.01f, 0.03f, 0.015f, 0.06f };
         static readonly float[] PushClampDegR = { 30f, 20f, 15f, 10f };
         // Knee: the push spring is  alpha = tau/I - K*theta - C*omega  (the kick adds tau/I*dt to OmegaP, SpringStep adds -K*theta), so
         // the resting angle under a steady torque is theta = tau/(I*K). The torque is run through knee*tanh(tau/knee) with
         // knee = 0.8 * clamp[rad] * I * K, which makes theta = 0.8*clamp*tanh(tau/knee): linear for small pushes, asymptote 0.8 clamp,
-        // never the hard stop. Arm (I 0.01, K 392 at Elbow_X defaults): knee 1.64 N*m; 60 N on a forearm (torque capped at PushTauMax 6)
+        // never the hard stop. Arm (I 0.01, K 392 at Elbow_X defaults): knee 1.64 N*m; 60 N on a forearm (torque capped at PushTauMaxR 6)
         // -> tanh(3.7) = 1.00 -> 24 deg of 30; a 5 N brush (0.75 N*m at 0.15 m) -> tanh(0.46) = 0.43 -> 10 deg.
         const float KneeFrac = 0.8f;
 
@@ -574,8 +576,8 @@ namespace SfMorph
         static void AddTau(B b, Vector3 tau)
         {
             b.TauW += tau;
-            float m = b.TauW.magnitude;
-            if (m > PushTauMax) b.TauW *= PushTauMax / m;
+            float m = b.TauW.magnitude, cap = PushTauMaxR[GroupRegion[b.Group]];
+            if (m > cap) b.TauW *= cap / m;
         }
 
         void NotePush(int seg, float nm, string by)

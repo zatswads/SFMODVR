@@ -531,13 +531,6 @@ namespace SfMorph
                     try { c.Soft.Release(); } catch { }
                 }
                 if (_p.Apply.Value && !c.Look.Empty && c.Root != null) Apply(c);
-                // her segments (shared by the physics hands and the pushes): after our bone changes, before Overlap reads the pushes
-                if (c == her && (physics || physHands))
-                {
-                    _hb.On = true; _hb.PushByTouch = _p.HandsPushByTouch.Value; _hb.Softness = _p.Softness.Value; _hb.Caps = Contacts();
-                    try { HerBody.Update(c, _hb); }
-                    catch (Exception e) { Plugin.Log.LogError("Her body failed, rebuilding: " + e); try { HerBody.Release(); } catch { } }
-                }
                 // her secondary motion after our bone changes, before the soft points read her bones
                 if (c == her && _p.Apply.Value)
                 {
@@ -553,6 +546,15 @@ namespace SfMorph
                         _p.OverlapAmount.Value = 0f;
                         try { Overlap.Release(); } catch { }
                     }
+                }
+                // her segments (shared by the physics hands and the pushes): AFTER Overlap wrote her bones, so a hand's depth is measured
+                // against the limb where it is (already pushed aside): the push falls off as the limb yields and it settles where the hand
+                // just touches, instead of pushing on forever against the animation's pose. Overlap uses these pushes next frame.
+                if (c == her && (physics || physHands))
+                {
+                    _hb.On = true; _hb.PushByTouch = _p.HandsPushByTouch.Value; _hb.Softness = _p.Softness.Value; _hb.Caps = Contacts();
+                    try { HerBody.Update(c, _hb); }
+                    catch (Exception e) { Plugin.Log.LogError("Her body failed, rebuilding: " + e); try { HerBody.Release(); } catch { } }
                 }
                 // the physics hands' visual pose for this frame (the soft points read their capsules)
                 if (c == her)

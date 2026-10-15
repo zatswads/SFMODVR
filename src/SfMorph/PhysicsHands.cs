@@ -1109,7 +1109,8 @@ namespace SfMorph
             public GameObject Go; public Transform T; public Rigidbody Rb; public CapsuleCollider Cap;
             public MeshCollider Hull; public Mesh HullMesh;
             public bool HullOk, HullTried, UsingHull, Queued; public float CookedInset;
-            public float RBase, Ratio = 1f, H = -1f, CenterY;   // capsule radius at the current softness; her bone's scale since the build; capsule height and centre written
+            public float RBase, Ratio = 1f, H = -1f;   // capsule radius at the current softness; her bone's scale since the build; capsule height written
+            public Vector3 Center = new Vector3(float.NaN, 0f, 0f);   // capsule centre written
             public Vector3 ScaleWritten = Vector3.one, LastPos; public bool Placed;
             public GameObject Mark, HMark;
         }
@@ -1368,10 +1369,11 @@ namespace SfMorph
                     float len = g.Sphere ? 0f : sc.y * g.Len0;
                     float r = b.RBase * b.Ratio;
                     float h = Mathf.Max(2f * r, len + 2f * r);
-                    float cy = len * 0.5f;
-                    if (Mathf.Abs(r - b.Cap.radius) > 1e-4f || Mathf.Abs(h - b.H) > 1e-3f || Mathf.Abs(cy - b.CenterY) > 1e-3f)
+                    // the head (bone space) is a sphere around its skin's centre, not around the neck joint where its frame starts
+                    Vector3 ctr = g.Space == 1 ? g.FrameCenter * sc.x : new Vector3(0f, len * 0.5f, 0f);
+                    if (Mathf.Abs(r - b.Cap.radius) > 1e-4f || Mathf.Abs(h - b.H) > 1e-3f || !((ctr - b.Center).sqrMagnitude < 1e-6f))
                     {
-                        b.Cap.radius = r; b.Cap.height = h; b.Cap.center = new Vector3(0f, cy, 0f); b.H = h; b.CenterY = cy;
+                        b.Cap.radius = r; b.Cap.height = h; b.Cap.center = ctr; b.H = h; b.Center = ctr;
                         PlaceCapMark(b);
                     }
                 }

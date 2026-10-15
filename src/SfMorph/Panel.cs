@@ -428,7 +428,9 @@ namespace SfMorph
         void PushesSection(Character c)
         {
             GUILayout.Label("Pushes", _bold);
-            string off = !_p.Apply.Value ? "'Apply changes' is off" : !c.Female || c.IsPlayer ? "only for the game's woman" : null;
+            // her body segments are only built while soft zones or the physics hands are on (Body.ApplyAll): without them nothing can push
+            string off = !_p.Apply.Value ? "'Apply changes' is off" : !c.Female || c.IsPlayer ? "only for the game's woman"
+                       : !_p.Physics.Value && !_p.HandsOn.Value ? "soft zones and physics hands are both off (no hand is tracked against her)" : null;
             float push = _p.HandsLimbPush.Value;   // read before the controls: the same rows in the Layout pass and the click pass
             float lp = Slider("Push her limbs", push * 100f, 0f, 100f, "0", 50f, off == null ? null : "off: " + off, " %") / 100f;
             if (off == null && Mathf.Abs(lp - _p.HandsLimbPush.Value) > 0.0001f) _p.HandsLimbPush.Value = lp;

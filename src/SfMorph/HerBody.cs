@@ -123,7 +123,9 @@ namespace SfMorph
         // hulls take at most 255 vertices)
         const int NAlong = 12, NAround = 16, NLat = 8, NLon = 16;
         // geometric push (3.2)
-        const float PushStiffness = 150f, PushDamp = 4f, PushCapPerHand = 20f, PushCapPerSeg = 40f, PushMinN = 0.2f;
+        // 300 N/m: 3 cm deep gives 9 N (~14 deg at the elbow); 150 gave 4.5 N, barely visible. The skin gives SkinGive first (the soft zones dent).
+        const float SkinGive = 0.015f;
+        const float PushStiffness = 300f, PushDamp = 4f, PushCapPerHand = 20f, PushCapPerSeg = 40f, PushMinN = 0.2f;
         const float MaxCapSpeed = 3f, TeleportSpeed = 8f;   // m/s, the same rules as SoftSim
 
         static void LogOnce(string key, string msg) { if (_once.Add(key)) Plugin.Log.LogInfo("Her body: " + msg); }
@@ -926,7 +928,7 @@ namespace SfMorph
                 float rr = Mathf.Abs(g.A.lossyScale.x) / g.BuildScale;
                 if (g.Sphere) { _sa[k] = _sb[k] = g.A.TransformPoint(g.LocalCenter); }
                 else { _sa[k] = g.A.position; _sb[k] = g.B.position; }
-                _sr[k] = g.RSkin * rr;
+                _sr[k] = g.RSkin * rr - Mathf.Min(SkinGive, Inset(g, s.Softness));   // the skin gives a little before the limb moves
                 _sOk[k] = Finite(_sa[k]) && Finite(_sb[k]) && _sr[k] > 0.001f;
             }
 
