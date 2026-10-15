@@ -739,8 +739,10 @@ namespace SfMorph
                 }
                 else if (!p.Dirty && (p.Caps.Count > 0 || Time.unscaledTime < p.NextTry)) continue;
                 bool wasDirty = p.Dirty;
-                BuildPartner(p, her, roots);
-                p.NextTry = Time.unscaledTime + 10f;
+                BuildPartner(p, her, roots, wasDirty);
+                // an empty rig (not loaded yet, or only hands that belong to a nested rig) is looked at again later, not every 10 s:
+                // each look walks the rig's whole hierarchy
+                p.NextTry = Time.unscaledTime + (p.Skipped > 0 ? 60f : 30f);
                 // a rebuilt rig has a new source: the capsules in Capsules still point at the old one
                 if (wasDirty || p.Caps.Count != p.LoggedCount) { ch = true; p.LoggedCount = p.Caps.Count; }
             }
@@ -759,7 +761,7 @@ namespace SfMorph
         // Hands and fingers of one rig: a humanoid Animator's hand/finger bones, else AdvancedSkeleton Wrist_L/Wrist_R with their
         // finger children, else any bones named like hands, wrists, palms. Hands of rigs nested inside this root are skipped
         // (the scene root "[Character]" holds Player and BadGuy: without this their hands counted twice or more).
-        static void BuildPartner(Partner p, Character her, List<Transform> roots)
+        static void BuildPartner(Partner p, Character her, List<Transform> roots, bool wasDirty)
         {
             p.Caps.Clear();
             DropSource(p.Src); p.Src = null;
@@ -831,6 +833,7 @@ namespace SfMorph
                 rends = ", " + src.Rends.Count + " renderers";
                 if (src.Rends.Count == 0) Plugin.Log.LogInfo("VrHands: partner '" + owner + "': no renderer found: assumed drawn (the hidden-hands gate cannot apply)");
             }
+            if (!wasDirty && p.Caps.Count == p.LoggedCount) return;   // a retry that found what the last build found says nothing new
             Plugin.Log.LogInfo("VrHands: partner '" + owner + "': " + how + ", " + hands + " hands" + (p.Skipped > 0 ? " (" + p.Skipped + " under " + p.SkippedOwners + " skipped)" : "")
                                + ", " + segs + " finger segments, " + p.Caps.Count + " capsules" + rends);
         }

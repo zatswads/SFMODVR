@@ -482,7 +482,7 @@ namespace SfMorph
         readonly List<SoftCapsule> _caps = new List<SoftCapsule>();
         int _capsVr = -1, _capsPh = -1;
         float _nextHands;
-        bool _handsOn, _embodyOn, _physHandsOn, _capsPhWas;
+        bool _handsOn, _embodyOn, _physHandsOn, _capsPhWas, _physicsWas;
 
         public void ApplyAll()
         {
@@ -494,6 +494,12 @@ namespace SfMorph
             bool embody = _p.EmbodyOn.Value && her != null;
             bool physHands = _p.HandsOn.Value && her != null;
             VrHands.GateHidden = _p.GateHidden.Value; VrHands.BreastColliders = _p.BreastColliders.Value;
+            // Physics just went off: take our colliders out of the game's breast DynamicBones now, not at the next 2 s refresh
+            // (and when nothing else needs the hands, the refresh below never runs again)
+            if (_physicsWas && !physics)
+                try { VrHands.AttachToGameBreasts(her != null ? her.Root : null, false, null); }
+                catch (Exception e) { Plugin.Log.LogWarning("Breast colliders: " + e.Message); }
+            _physicsWas = physics;
             if (physics || embody || physHands)
             {
                 if (Time.unscaledTime >= _nextHands)   // hands/controllers come and go with scenes: every 2 s, cheap when unchanged

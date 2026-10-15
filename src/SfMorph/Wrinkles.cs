@@ -393,8 +393,11 @@ namespace SfMorph
                     float med = ratios[ratios.Count / 2];
                     if (med > 0.01f && med < 100f) r.ScaleFix = med;   // the strain kernel divides C by med^2
                     string msg = "Wrinkles: scale check " + name + ": median live/rest vertex distance " + med.ToString("0.000") + " over " + ratios.Count + " pairs";
-                    if (med < 0.9f || med > 1.1f) Plugin.Log.LogWarning(msg + " (expected ~1; the skinning space may be scaled: folds will read as strain)");
-                    else Plugin.Log.LogInfo(msg);
+                    // ScaleFix divides the strain by med^2, so a moderately scaled skinning space (the breast-size scale on a root bone) is
+                    // handled: say so. Far from 1 the ratio itself is doubtful (wrong buffer layout, a stretched mesh): that one warns.
+                    if (med >= 0.9f && med <= 1.1f) Plugin.Log.LogInfo(msg);
+                    else if (med >= 0.5f && med <= 2f) Plugin.Log.LogInfo(msg + " (scaled skinning space, compensated)");
+                    else Plugin.Log.LogWarning(msg + " (expected ~1" + (r.ScaleFix == med ? "; compensated, but check the folds" : "; not compensated: folds will read as strain") + ")");
                 }
                 catch (Exception e) { Plugin.Log.LogWarning("Wrinkles: scale check failed: " + e.Message); }
             });

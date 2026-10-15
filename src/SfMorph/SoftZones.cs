@@ -749,9 +749,12 @@ namespace SfMorph
                         for (int j = 0; j < kv.Value.W.Length; j++) sumF += kv.Value.W[j];
                         mask[kv.Key] = Mathf.Min(1f, sumF / fmax);
                     }
-                    // 0.7.7 hard-skin floor: every vertex of the mesh gets at least HardFloor, so a hand presses any skin out of its way (zones
-                    // keep their larger share). GPU only (MaskFor): the soft points (SoftSim) are built from s.F, not from this array.
-                    for (int j = 0; j < mask.Length; j++) if (mask[j] < HardFloor) mask[j] = HardFloor;
+                    // 0.7.7 hard-skin floor: every vertex of a BODY mesh gets at least HardFloor, so a hand presses any skin out of its way
+                    // (zones keep their larger share). GPU only (MaskFor): the soft points (SoftSim) are built from s.F, not from this array.
+                    // Body meshes only (0.7.8): thin parts like the nipple caps would be pushed through at their rim. s.Skin is the "body" test on the
+                    // mesh name as Read saw it; MorphState's and our own clones keep the game's name plus a suffix, so it holds with a character on.
+                    if (s.Skin)
+                        for (int j = 0; j < mask.Length; j++) if (mask[j] < HardFloor) mask[j] = HardFloor;
                     if (s.S.Mesh != null && s.S.Mesh.vertexCount == mask.Length) { s.S.Mask = mask; GpuRenderers.Add(s.R); }
                     else problems.Add(s.R.name + ": GPU mask size " + mask.Length + " != mesh vertices " + (s.S.Mesh != null ? s.S.Mesh.vertexCount : 0));
                 }
@@ -783,7 +786,7 @@ namespace SfMorph
               .Append(mpu.ToString("0.####")).Append(" m/unit, morph ").Append(_builtMorph.ToString("0.00"))
               .Append(", built in ").Append(((Time.realtimeSinceStartup - t0) * 1000f).ToString("0")).Append(" ms");
             if (_subdivN > 0) sb.Append("; ").Append(_subdivN).Append(" body meshes subdivided");
-            sb.Append("; GPU mask floor ").Append(HardFloor.ToString("0.00"));
+            sb.Append("; GPU mask floor ").Append(HardFloor.ToString("0.00")).Append(" (body meshes only)");
             if (overCap > 0) sb.Append("; ").Append(overCap).Append(" helper slots over the cap of ").Append(MaxHelpers).Append(" dropped");
             if (skippedChain > 0) sb.Append("; ").Append(skippedChain).Append(" bone slots left alone (the game's physics re-aims them)");
             if (missing.Count > 0) sb.Append("\n  zones not placed: ").Append(string.Join(", ", missing.ToArray()));
