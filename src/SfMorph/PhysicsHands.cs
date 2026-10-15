@@ -19,6 +19,9 @@ namespace SfMorph
         public float Friction = 0.5f;
         // 0.8.0: the drawn hand is the controller in free air (offset faded in on contact), fingers conform to her skin, the rest curl
         public bool DrawnOffsetFade = true, FingerConform = true;
+        // 0.8.0 (13.3b): the soft zones run (Body fills it from the physics switch). Her colliders are inset from the skin so the soft zones
+        // dent first; with them off nothing dents, so the soft segments use the firm inset (HerBody.Inset)
+        public bool SoftZonesOn = true;
         public float RestCurl = 0.25f;
         // Controller -> wrist (m, degrees), in the controller's axes, shared with Embody: the position is where the wrist sits
         // relative to the tracked pose; the rotation is added on top of an automatic alignment (fingers along the controller's
@@ -116,16 +119,15 @@ namespace SfMorph
         // forward) and closes the remaining gap at GapGain per second; the sample is extrapolated by at most MaxLead seconds to the fixed
         // step. MaxFf caps the sampled speed, MaxGapV the speed the gap term may add. A target that moves more than JumpBase + JumpSpeed *
         // frame time in one frame is the game moving the rig the controllers hang under (a POV cut), not the hand: the hand is carried along.
-        const float GapGain = 25f, MaxLead = 0.06f, MaxFf = 4f, MaxGapV = 3f, JumpBase = 0.12f, JumpSpeed = 8f;
+        const float GapGain = 25f, MaxLead = 0.06f, MaxFf = 4f, MaxGapV = 3f, JumpBase = 0.06f, JumpSpeed = 3f;   // 0.8.0: 0.12 / 8 let a 0.4 m scene cut slip under the threshold (13.4)
         // 0.7.9 velocity-level follow: the fraction of the velocity error removed per step (< 1 so it can never overshoot into a
         // step-to-step oscillation), the rotation gap gain (1/s) and its cap (rad/s), and the torque cap (N*m) turned into a per-step
         // angular velocity cap through the hand's inertia
         const float FollowGain = 0.7f, TurnGain = 0.6f, RotGapGain = 25f, MaxGapW = 10f, TorqueCap = 4f;
-        // 0.8.0: while the hand touches her the torque cap drops (N*m): the palm flattens on her instead of holding the controller's exact
-        // roll; the difference shows as the drawn rotation offset, which is the contact feel
-        const float TouchTorqueCap = 1.5f;
         // 0.8.0 drawn-offset gate (section 4): the raw offset below the first number shows as nothing, above the second as itself
         const float GateMmLo = 0.005f, GateMmHi = 0.015f, GateDegLo = 4f, GateDegHi = 10f, GateAttack = 0.04f, GateRelease = 0.25f;
+        // 13.4: a free-air offset above LostLo..LostHi (m) fades to nothing (a lost target; counted above LostMm), the shown rotation is capped at ShownRotMax degrees
+        const float LostLo = 0.05f, LostHi = 0.10f, LostMm = 100f, ShownRotMax = 45f;
         const float HerMaxV = 4f;                  // sampled speed cap of her kinematic segments (m/s)
         const int CookPerFrame = 2;                // convex hulls cooked per rendered frame (the capsule collides until then)
 
@@ -844,7 +846,7 @@ namespace SfMorph
             public int[] GhostBone = new int[0]; public Vector3[] GhostA = new Vector3[0], GhostB = new Vector3[0]; public float[] GhostR = new float[0]; public int GhostN;
             // the drawn-offset gate (section 4): weight of the raw offset that is shown, and the 10 s statistics raw against shown
             public float VisW;
-            public int OffN, FreeN; public float RawMmSum, RawDegSum, ShownMmSum, ShownDegSum, FreeMaxMm, FreeMaxDeg;
+            public int OffN, FreeN, LostN; public float RawMmSum, RawDegSum, ShownMmSum, ShownDegSum, FreeMaxMm, FreeMaxDeg;
             public float JitRawSum, JitRawMax, JitRawQSum, JitRawQMax; public Vector3 RawPrev; public Quaternion RawPrevQ = Quaternion.identity;
             public float TotalMass = 0.35f, BadT, StuckT, SeenFixed = -1f, CapSum, ResistMax;
             // 10 s diagnostics of the follow loops: velocity errors and how often they flip sign step to step (an oscillation at the
@@ -1195,7 +1197,7 @@ namespace SfMorph
         static GameObject _herGo;
         static bool _herBuilt;                    // the bodies exist (HerBody has the geometry)
         static int _herVersion = -1;              // HerBody.BuildVersion the bodies were made from
-        static float _herNext, _herSoftness = -1f;
+        static float _herNext, _herSoftness = -1f; static bool _herSoftZones = true;
         static string _herNote = "";
         static bool _herBuiltSeen; static string _herNoteSeen = "";   // what the status line last said about HerBody
         static bool _hullWant;                    // HullColliders as last applied
@@ -1213,7 +1215,7 @@ namespace SfMorph
             foreach (var g in HerBody.Segs)
             {
                 var b = new SegBody { S = g };
-                b.RBase = Mathf.Max(0.012f, g.RSkin - HerBody.Inset(g, s.Softness));
+                b.RBase = Mathf.Max(0.012f, g.RSkin - HerBody.Inset(g, s.Softness, s.SoftZonesOn));
                 b.Go = new GameObject(HerPfx + g.Name);
                 b.Go.layer = _layerHer;
                 b.T = b.Go.transform;
@@ -1228,7 +1230,7 @@ namespace SfMorph
                 _segOfCol[b.Cap] = b;
             }
             _herBuilt = true;
-            _herSoftness = s.Softness;
+            _herSoftness = s.Softness; _herSoftZones = s.SoftZonesOn;
             _herNote = "";
             _statusDirty = true;
             _hullWant = s.HullColliders;
@@ -1266,7 +1268,7 @@ namespace SfMorph
             {
                 var b = _bodies[i];
                 if (b.Queued || b.Go == null || !b.S.Hull || b.S.HullPts == null || b.S.HullTris == null) continue;
-                if (b.HullTried && Mathf.Abs(b.CookedInset - HerBody.Inset(b.S, s.Softness)) <= 0.002f) continue;
+                if (b.HullTried && Mathf.Abs(b.CookedInset - HerBody.Inset(b.S, s.Softness, s.SoftZonesOn)) <= 0.002f) continue;
                 b.Queued = true;
                 _cookQueue.Enqueue(b);
             }
@@ -1303,7 +1305,7 @@ namespace SfMorph
         static void CookHull(SegBody b, HandsSettings s)
         {
             var g = b.S;
-            float inset = HerBody.Inset(g, s.Softness);
+            float inset = HerBody.Inset(g, s.Softness, s.SoftZonesOn);
             b.HullTried = true; b.CookedInset = inset;
             var src = g.HullPts; var tris = g.HullTris;
             if (src == null || tris == null || src.Length < 4 || tris.Length < 12) return;
@@ -1766,7 +1768,7 @@ namespace SfMorph
             {
                 float n = h.OffN;
                 sb.Append("; drawn offset raw avg ").Append((h.RawMmSum / n).ToString("0.0")).Append(" mm / ").Append((h.RawDegSum / n).ToString("0.0")).Append(" deg (free air ").Append(h.FreeN)
-                  .Append(" frames: max ").Append(h.FreeMaxMm.ToString("0.0")).Append(" mm / ").Append(h.FreeMaxDeg.ToString("0.0")).Append(" deg), shown avg ")
+                  .Append(" frames: max ").Append(h.FreeMaxMm.ToString("0.0")).Append(" mm / ").Append(h.FreeMaxDeg.ToString("0.0")).Append(" deg; lost target (free air, gap > 0.1 m) ").Append(h.LostN).Append("), shown avg ")
                   .Append((h.ShownMmSum / n).ToString("0.0")).Append(" mm / ").Append((h.ShownDegSum / n).ToString("0.0")).Append(" deg");
                 if (h.JitN > 0)
                     sb.Append("; jitter raw avg ").Append((h.JitRawSum / h.JitN).ToString("0.0")).Append(" mm max ").Append(h.JitRawMax.ToString("0.0")).Append(" mm / ").Append((h.JitRawQSum / h.JitN).ToString("0.00")).Append(" deg max ").Append(h.JitRawQMax.ToString("0.00"))
@@ -1785,7 +1787,7 @@ namespace SfMorph
             h.CapFreeN = h.CapTouchN = h.CapSatFree = h.CapSatTouch = 0; h.GapAtCapSum = 0f;
             h.JitSum = 0f; h.JitMax = 0f; h.JitN = 0; h.JitQSum = 0f; h.JitQMax = 0f;
             h.JitRawSum = h.JitRawMax = h.JitRawQSum = h.JitRawQMax = 0f;
-            h.OffN = h.FreeN = 0; h.RawMmSum = h.RawDegSum = h.ShownMmSum = h.ShownDegSum = h.FreeMaxMm = h.FreeMaxDeg = 0f;
+            h.OffN = h.FreeN = h.LostN = 0; h.RawMmSum = h.RawDegSum = h.ShownMmSum = h.ShownDegSum = h.FreeMaxMm = h.FreeMaxDeg = 0f;
             for (int f = 0; f < 5; f++) h.FHeldN[f] = 0;
             h.FContactN = h.FGiveN = h.FFlipN = 0; h.FContactSum = h.FGiveSum = 0f;
             h.VErrSum = h.VErrMax = h.WErrSum = h.WErrMax = 0f; h.VFlipN = h.WFlipN = 0;
@@ -1833,10 +1835,15 @@ namespace SfMorph
             if (h.HaveLast && (tp - h.LastTarget).sqrMagnitude > 1f) { _tpJump++; Teleport(h, tp, tq); h.LastTarget = tp; return; }
             h.LastTarget = tp; h.HaveLast = true;
             Vector3 gap = tp - pos;
-            if (gap.sqrMagnitude > 0.35f * 0.35f)
+            // 0.8.0 (13.4): not touching her, a hand more than 12 cm from its target for 0.15 s is a lost target (a scene cut smaller than the
+            // jump threshold, a hitch), never a block: teleport it. While touching the old 0.35 m / 0.25 s rule stays (a blocked hand may
+            // stand far from the controller).
+            bool touching = Time.fixedTime - _handTouchT[h.Left ? 0 : 1] < 0.3f;   // same window as FingerStep
+            float farD = touching ? 0.35f : 0.12f, farT = touching ? 0.25f : 0.15f;
+            if (gap.sqrMagnitude > farD * farD)
             {
                 h.FarTime += dt;
-                if (h.FarTime > 0.25f) { _tpFar++; Teleport(h, tp, tq); return; }
+                if (h.FarTime > farT) { _tpFar++; Teleport(h, tp, tq); return; }
             }
             else h.FarTime = 0f;
 
@@ -1850,6 +1857,9 @@ namespace SfMorph
             // (60 N, down to 12 N as her skin under the hand resists: SoftZones.LeftResist/RightResist), so a pressed hand still stops.
             float resist = Mathf.Clamp01(h.Left ? SoftZones.LeftResist : SoftZones.RightResist);
             float fcap = Mathf.Lerp(60f, 12f, resist);
+            // 0.8.0 (13.4): a hand blocked far from its target (a pelvis is a wall) stops pulling at full force: the pull reacts through
+            // the contact 3-8 cm from the wrist and tumbled the hand. 60 N at <= 8 cm of block, 18 N at 27 cm.
+            if (touching) fcap *= Mathf.Clamp01(0.08f / Mathf.Max(gap.magnitude, 0.08f));
             Vector3 vGap = gap * GapGain;
             if (vGap.sqrMagnitude > MaxGapV * MaxGapV) vGap = vGap.normalized * MaxGapV;
             Vector3 vDes = h.Trk.V + vGap;
@@ -1860,14 +1870,13 @@ namespace SfMorph
             float dvm = dv.magnitude;
             bool capped = dvm > dvCap;
             if (capped) dv *= dvCap / dvm;
-            bool touching = Time.fixedTime - _handTouchT[h.Left ? 0 : 1] < 0.3f;   // same window as FingerStep
             h.CapSum += fcap; h.CapN++;
             if (touching) h.CapTouchN++; else h.CapFreeN++;
             if (capped) { h.CapSat++; h.GapAtCapSum += gap.magnitude; if (touching) h.CapSatTouch++; else h.CapSatFree++; }
             if (resist > h.ResistMax) h.ResistMax = resist;
 
             // Rotation: the same loop. Target spin = the controller's (Trk.W, feed-forward) plus the angle closed at RotGapGain per second;
-            // the per-step change is capped by TorqueCap (TouchTorqueCap while she is touched) through the hand's inertia about the axis of
+            // the per-step change is capped by TorqueCap through the hand's inertia about the axis of
             // the change (palm + fingers).
             Quaternion dq = tq * Quaternion.Inverse(rq);
             if (dq.w < 0f) dq = new Quaternion(-dq.x, -dq.y, -dq.z, -dq.w);
@@ -1894,7 +1903,7 @@ namespace SfMorph
                     float rn = Vector3.Dot(r, n);
                     I += g.Rb.mass * (r.sqrMagnitude - rn * rn);
                 }
-                float dwCap = (touching ? TouchTorqueCap : TorqueCap) * dt / Mathf.Max(I, 1e-5f);
+                float dwCap = TorqueCap * dt / Mathf.Max(I, 1e-5f);
                 if (dwm > dwCap) dw *= dwCap / dwm;
             }
             if (!Finite(dv)) dv = Vector3.zero;
@@ -2006,10 +2015,10 @@ namespace SfMorph
                         _herNext = now + 10f;
                     }
                 }
-                if (_herBuilt && Mathf.Abs(s.Softness - _herSoftness) > 0.02f)
+                if (_herBuilt && (Mathf.Abs(s.Softness - _herSoftness) > 0.02f || s.SoftZonesOn != _herSoftZones))
                 {
-                    _herSoftness = s.Softness;   // the soft zones' inset follows the softness setting: capsules at once, hulls re-cooked
-                    foreach (var b in _bodies) b.RBase = Mathf.Max(0.012f, b.S.RSkin - HerBody.Inset(b.S, s.Softness));
+                    _herSoftness = s.Softness; _herSoftZones = s.SoftZonesOn;   // the soft zones' inset follows the softness setting: capsules at once, hulls re-cooked
+                    foreach (var b in _bodies) b.RBase = Mathf.Max(0.012f, b.S.RSkin - HerBody.Inset(b.S, s.Softness, s.SoftZonesOn));
                     QueueHulls(s);
                 }
                 if (_herBuilt)
@@ -2193,6 +2202,9 @@ namespace SfMorph
                     if (s.DrawnOffsetFade)
                     {
                         float wRaw = touchingHand ? 1f : Mathf.Max(Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(GateMmLo, GateMmHi, dp.magnitude)), Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(GateDegLo, GateDegHi, rawDeg)));
+                        // a free-air offset of 5-10 cm or more is a lost target (a scene cut under the jump threshold), never a contact:
+                        // it fades to nothing instead of showing a hand 30 cm from the controller while the teleport catches up
+                        if (!touchingHand) wRaw *= 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(LostLo, LostHi, dp.magnitude));
                         float tau = wRaw > h.VisW ? GateAttack : GateRelease;
                         h.VisW += (wRaw - h.VisW) * (1f - Mathf.Exp(-Mathf.Min(dt, 0.1f) / tau));
                         if (!_fadeLogged)
@@ -2205,6 +2217,9 @@ namespace SfMorph
                     else h.VisW = 1f;   // [Hands] DrawnOffsetFade off: the raw physics pose, for comparing in the headset
                     Vector3 dpS = h.VisW >= 0.999f ? dp : dp * h.VisW;
                     Quaternion dqS = h.VisW >= 0.999f ? dq : Quaternion.Slerp(Quaternion.identity, dq, h.VisW);
+                    // a residual tumble of a blocked hand never draws it twisted off the wrist (13.4)
+                    if (s.DrawnOffsetFade) dqS = Quaternion.RotateTowards(Quaternion.identity, dqS, ShownRotMax);
+                    if (!touchingHand && rawMm > LostMm) h.LostN++;
                     vp += dpS; vq = dqS * tq;
                     SetDisp(h.Left, dpS, dqS);
                     h.VisP = dpS; h.VisQ = dqS;
