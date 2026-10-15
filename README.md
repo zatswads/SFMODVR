@@ -41,6 +41,13 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.8.5:
+- With Embody on, the soft zones dented her and pushed her breasts where the game's animation had his hand, not where you held it: the soft
+  points read his hand capsules before Embody moved his arms to your controllers (the game's animation rewrites his arms every frame,
+  Embody puts them back at the end of our step). The soft points now run after Embody, so his hand dents her under your controller,
+  including where his hand stops at her skin. GPU contact read his hands after Embody already (it runs after skinning); her limbs yield
+  to your controller since 0.8.3. A hidden partner still touches nothing. Only SfMorph.dll changed (the shader bundle is the 0.8.4 one).
+
 0.8.4:
 - Wrinkles on her face didn't show in the headset although the Activation debug view was red there: the folds were written only into her
   skin's normal map, and her skin shader's subsurface scattering blurs fine normal-map detail out of the diffuse light (the face most of

@@ -607,22 +607,6 @@ namespace SfMorph
                         _reactOn = false;
                     }
                 }
-                // the soft points after her bones carry our changes, before the game's physics and IK
-                if (physics && c == her)
-                    try
-                    {
-                        c.Soft.Simulate(Time.deltaTime, Contacts(), _p.Softness.Value, _p.Springiness.Value, _p.ShowSoftPoints.Value, quality, _p.Gravity.Value);
-                        RippleStep(c);
-                        GpuStep(c);
-                        MarksStep(c);
-                        VrHands.MirrorLive();
-                    }
-                    catch (Exception e)
-                    {
-                        Plugin.Log.LogError("Soft zones on '" + c.Key + "' failed, physics turned off: " + e);
-                        _p.Physics.Value = false;
-                        try { c.Soft.Release(); } catch { }
-                    }
             }
             WrinkleStep(her);
             Release();
@@ -653,6 +637,31 @@ namespace SfMorph
                 }
             }
             else if (_embodyOn) { _embodyOn = false; try { Embody.Release(); } catch { } }
+            // the soft points after her bones carry our changes AND after Embody (0.8.5), before the game's physics and IK: the Animator
+            // rewrites the embodied partner's arms before this step and Embody writes them back at your controllers just above, so the
+            // "partner" capsules on his hand bones are where you hold his hand only from here on (before 0.8.5 the soft points were
+            // pushed by his animated hand). GPU contact reads the same capsules later, at its dispatch after skinning, so it was right
+            // already; SetCapsules only hands it the list.
+            if (physics) SoftStep(her, quality);
+        }
+
+        // The soft points, their impacts (ripple), GPU contact's capsule list, the skin marks and the breast mirror's hidden-source gate.
+        void SoftStep(Character her, int quality)
+        {
+            try
+            {
+                her.Soft.Simulate(Time.deltaTime, Contacts(), _p.Softness.Value, _p.Springiness.Value, _p.ShowSoftPoints.Value, quality, _p.Gravity.Value);
+                RippleStep(her);
+                GpuStep(her);
+                MarksStep(her);
+                VrHands.MirrorLive();
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogError("Soft zones on '" + her.Key + "' failed, physics turned off: " + e);
+                _p.Physics.Value = false;
+                try { her.Soft.Release(); } catch { }
+            }
         }
 
         // The GPU contact deformer: loaded once from the DLL's folder; follows the soft zones' build and this frame's capsules.

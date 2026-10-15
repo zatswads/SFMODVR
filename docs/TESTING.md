@@ -97,6 +97,16 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.8.5 (soft points read Embody's hands)
+
+Install `dist/SfMorph.dll` (bundle unchanged). Log: `SF Body Morphs 0.8.5`. Headset: (1) Embody on, his hands on (both), physics hands
+off, Physics on, Show soft points on: put his hand on her breast / belly / glute where the animation does NOT have it: the soft points
+dent and her breast moves under your controller, nothing dents where the animation's hand would be; GPU contact dents in the same place;
+(2) let go of the controller pose (move the hand away): the dent goes with it, no dent left at the animated hand; (3) Embody hands off
+(the animation drives his arms): his animated hand dents her as before; (4) Embody on with the partner hidden by the game: no dents
+from him ("is hidden: its N capsules don't touch her" in the log); (5) physics hands on + Embody: one dent under the physics hand, no
+second one at the animated hand. Send the log + screenshots.
+
 ## 0.8.4 (crease shade)
 
 Install `dist/SfMorph.dll` + `dist/sfmorph_shaders` (new albedo pass; the old bundle logs "the shader bundle has no albedo pass" and greys
