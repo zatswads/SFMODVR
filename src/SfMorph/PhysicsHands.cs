@@ -63,6 +63,13 @@ namespace SfMorph
         const string Pfx = "SfPhys";
         const string HerPfx = "SfPhysHer_";
         const float PalmMass = 0.35f;
+        // 0.7.8 follow fix (see StepHand / UpdateHand): the palm chases the frame-sampled controller target plus the velocity it had (feed
+        // forward) and closes the remaining gap at GapGain per second; the sample is extrapolated by at most MaxLead seconds to the fixed
+        // step. MaxFf caps the sampled speed, MaxGapV the speed the gap term may add. A target that moves more than JumpBase + JumpSpeed *
+        // frame time in one frame is the game moving the rig the controllers hang under (a POV cut), not the hand: the hand is carried along.
+        const float GapGain = 25f, MaxLead = 0.06f, MaxFf = 4f, MaxGapV = 3f, JumpBase = 0.12f, JumpSpeed = 8f;
+        const float HerMaxV = 4f;                  // sampled speed cap of her kinematic segments (m/s)
+        const int CookPerFrame = 2;                // convex hulls cooked per rendered frame (the capsule collides until then)
 
         // Sizes (metres, from the design).
         // 0.7.7: the soft capsules of the palm are half of the 3 cm physical palm (PalmThick), not the old 3.5 cm radius that stuck 2 cm
@@ -698,7 +705,31 @@ namespace SfMorph
             for (int k = 0; k < 32; k++) Physics.IgnoreLayerCollision(_layerHer, k, k != _layerHand);
             _layersApplied = true; _taken = true;
             Plugin.Log.LogInfo("PhysicsHands: layers " + _layerHand + " (hands) and " + _layerHer + " (her body): each collides only with the other; the earlier matrix is restored on release");
+            MakeMaterials(_s != null ? _s.Friction : 0.8f);
             return null;
+        }
+
+        // ---- friction (0.7.8) ----
+        // PhysX's default material (0.6 / 0.6) slid a resting hand off her moving thigh. One material for every hand collider and one for
+        // every collider of hers, the same numbers, combine Average: dynamic 0.75 x f, static f, f = [Hands] Friction. The slider writes the
+        // fields in place (the shapes sharing the material follow), nothing is recreated.
+        static PhysicMaterial _handMat, _herMat;
+        static float _matF = -1f;
+
+        static void MakeMaterials(float f)
+        {
+            f = Mathf.Clamp01(f);
+            if (_handMat == null) _handMat = new PhysicMaterial(Pfx + "_hand") { frictionCombine = PhysicMaterialCombine.Average, bounciness = 0f, bounceCombine = PhysicMaterialCombine.Minimum };
+            if (_herMat == null) _herMat = new PhysicMaterial(Pfx + "_her") { frictionCombine = PhysicMaterialCombine.Average, bounciness = 0f, bounceCombine = PhysicMaterialCombine.Minimum };
+            SetFriction(f);
+            LogOnce("friction", "friction " + (0.75f * f).ToString("0.00") + " dynamic / " + f.ToString("0.00") + " static (Average) on the hands and her colliders");
+        }
+
+        static void SetFriction(float f)
+        {
+            _matF = f;
+            if (_handMat != null) { _handMat.dynamicFriction = 0.75f * f; _handMat.staticFriction = f; }
+            if (_herMat != null) { _herMat.dynamicFriction = 0.75f * f; _herMat.staticFriction = f; }
         }
 
         static void RestoreLayers()
@@ -749,6 +780,17 @@ namespace SfMorph
             public Vector3 FixedPos, LastTarget;
             public Quaternion FixedRot = Quaternion.identity;
             public float FarTime, NextUpgrade, NextMat;
+            // 0.7.8 follow fix. Trk: the controller target sampled once per rendered frame with its velocity (extrapolated to each fixed step).
+            // Off0/Off1: how far the body stood from the target it aimed at, at the end of the last two fixed steps (the visual interpolates
+            // between them); StepsDone counts the steps that aimed, OffSeen the ones already captured. Vis*: what this frame's visual added.
+            public Track Trk;
+            public int StepsDone, OffSeen, VisFrame = -1;
+            public bool OffValid, VisHave, JointWas = true;
+            public Vector3 Off0P, Off1P, VisP, VisPrev;
+            public Quaternion Off0Q = Quaternion.identity, Off1Q = Quaternion.identity, VisQ = Quaternion.identity;
+            // 10 s diagnostics: steps at the force cap in free air / touching her, the gap there, and the visual offset's frame-to-frame change
+            public int CapFreeN, CapTouchN, CapSatFree, CapSatTouch, JitN;
+            public float GapAtCapSum, JitSum, JitMax;
         }
 
         static Hand _left, _right;
@@ -866,6 +908,8 @@ namespace SfMorph
                     cc.height = (len + 2f * sh.R) / sp.Scale;
                     col = cc;
                 }
+                if (_handMat == null) MakeMaterials(s.Friction);
+                col.sharedMaterial = _handMat;
                 h.ColT.Add(go.transform); h.Cols.Add(col);
             }
             SetLayerRec(h.PRoot, _layerHand);
@@ -964,7 +1008,8 @@ namespace SfMorph
             h.Kin = false;
             h.CollideOn = true;
             h.RigFailed = false;
-            EnableRig(h);
+            h.JointWas = s.JointedFingers;
+            if (s.JointedFingers) EnableRig(h);
             if (_dbgOn) AddMarkers(h);
             _statusDirty = true;
         }
@@ -1054,36 +1099,43 @@ namespace SfMorph
 
         // ================= her body: kinematic colliders (the geometry lives in HerBody.cs) =================
 
-        // The PhysX half of one of her segments (HerBody.Seg): the rigidbody and collider that follow her bones. The hull fields are for
-        // the convex-hull colliders of the 0.7.8 hull package (unused until then).
-#pragma warning disable 649   // hull fields: filled by the hull package
+        // The PhysX half of one of her segments (HerBody.Seg): a kinematic rigidbody on a GameObject whose origin is the segment's joint A
+        // (axis segments; spheres: the sphere's centre) so the capsule and the convex hull share one layout (HerBody.SegPose). The capsule
+        // always exists (a sphere is a capsule of length 0); the hull segments get a convex MeshCollider cooked from HerBody's skin points,
+        // and whichever one HullColliders asks for (and the cook allowed) is the one that is enabled.
         sealed class SegBody
         {
             public HerBody.Seg S;
             public GameObject Go; public Transform T; public Rigidbody Rb; public CapsuleCollider Cap;
-            public SphereCollider Sph; public MeshCollider Hull; public Mesh HullMesh;
-            public bool HullOk, HullTried; public float CookedInset;
-            public float RBase, Ratio = 1f, H;      // capsule radius at the current softness; her bone's scale since the build; capsule height
-            public Vector3 ScaleWritten, LastPos; public bool Placed;
-            public GameObject Mark;
+            public MeshCollider Hull; public Mesh HullMesh;
+            public bool HullOk, HullTried, UsingHull, Queued; public float CookedInset;
+            public float RBase, Ratio = 1f, H = -1f, CenterY;   // capsule radius at the current softness; her bone's scale since the build; capsule height and centre written
+            public Vector3 ScaleWritten = Vector3.one, LastPos; public bool Placed;
+            public GameObject Mark, HMark;
         }
-#pragma warning restore 649
 
         static readonly List<SegBody> _bodies = new List<SegBody>();
         static readonly Dictionary<Collider, SegBody> _segOfCol = new Dictionary<Collider, SegBody>();
+        static readonly Queue<SegBody> _cookQueue = new Queue<SegBody>();
+        static readonly System.Diagnostics.Stopwatch _cookSw = new System.Diagnostics.Stopwatch();
         static GameObject _herGo;
         static bool _herBuilt;                    // the bodies exist (HerBody has the geometry)
         static int _herVersion = -1;              // HerBody.BuildVersion the bodies were made from
         static float _herNext, _herSoftness = -1f;
         static string _herNote = "";
         static bool _herBuiltSeen; static string _herNoteSeen = "";   // what the status line last said about HerBody
+        static bool _hullWant;                    // HullColliders as last applied
+        static int _cookOk, _cookFail, _cookFrames; static float _cookMs; static bool _cookLogged;
+        static int _herSampleFrame = -1;          // the rendered frame her segments were last sampled in (once per frame, at its first fixed step)
 
-        // One body per HerBody segment: a capsule (spheres are capsules of length 0) at the skin radius minus the inset.
+        // One body per HerBody segment: a capsule (spheres are capsules of length 0) at the skin radius minus the inset; the hulls of the
+        // segments that have them are queued and cooked a couple per frame (the capsule collides meanwhile).
         static void BuildHerBodies(HandsSettings s)
         {
             DestroyHer();
             _herVersion = HerBody.BuildVersion;
             _herGo = new GameObject(Pfx + "_her");
+            if (_herMat == null) MakeMaterials(s.Friction);
             foreach (var g in HerBody.Segs)
             {
                 var b = new SegBody { S = g };
@@ -1094,6 +1146,7 @@ namespace SfMorph
                 b.T.SetParent(_herGo.transform, false);
                 b.Cap = b.Go.AddComponent<CapsuleCollider>();
                 b.Cap.direction = 1; b.Cap.radius = b.RBase; b.Cap.height = 2f * b.RBase;
+                b.Cap.sharedMaterial = _herMat;
                 b.Rb = b.Go.AddComponent<Rigidbody>();
                 b.Rb.isKinematic = true; b.Rb.useGravity = false;
                 b.Rb.interpolation = RigidbodyInterpolation.None;
@@ -1104,26 +1157,189 @@ namespace SfMorph
             _herSoftness = s.Softness;
             _herNote = "";
             _statusDirty = true;
+            _hullWant = s.HullColliders;
+            _cookOk = _cookFail = _cookFrames = 0; _cookMs = 0f; _cookLogged = false;
+            QueueHulls(s);
             if (_dbgOn) AddHerMarkers();
         }
 
         static void DestroyHer()
         {
             RemoveHerMarkers();
-            foreach (var b in _bodies) if (b.Go != null) UnityEngine.Object.Destroy(b.Go);
+            foreach (var b in _bodies)
+            {
+                if (b.Go != null) UnityEngine.Object.Destroy(b.Go);
+                if (b.HullMesh != null) UnityEngine.Object.Destroy(b.HullMesh);
+            }
             _bodies.Clear();
             _segOfCol.Clear();
+            _cookQueue.Clear();
             if (_herGo != null) UnityEngine.Object.Destroy(_herGo);
             _herGo = null; _herBuilt = false; _herVersion = -1;
+            for (int i = 0; i < HerBody.Segs.Count; i++) HerBody.Segs[i].Trk.Reset();   // the sampled poses belong to the bodies that followed them
             HerBody.ClearPhys();   // no bodies, no contacts: the last push must not linger in HerBody
             _statusDirty = true;
         }
 
-        // Her live bones -> the kinematic capsules (MovePosition/MoveRotation so a moving hand feels her motion).
+        // ---- convex hulls (0.7.8) ----
+
+        // Queues the hull segments whose hull is missing or was cooked for another inset (softness moved), when hulls are wanted at all.
+        // A segment without HullPts (no hull from HerBody) simply keeps its capsule.
+        static void QueueHulls(HandsSettings s)
+        {
+            if (!s.HullColliders) return;
+            for (int i = 0; i < _bodies.Count; i++)
+            {
+                var b = _bodies[i];
+                if (b.Queued || b.Go == null || !b.S.Hull || b.S.HullPts == null || b.S.HullTris == null) continue;
+                if (b.HullTried && Mathf.Abs(b.CookedInset - HerBody.Inset(b.S, s.Softness)) <= 0.002f) continue;
+                b.Queued = true;
+                _cookQueue.Enqueue(b);
+            }
+        }
+
+        // Per rendered frame: cooks at most CookPerFrame queued hulls (PhysX cooking is a few ms for 130-200 points).
+        static void CookStep(HandsSettings s)
+        {
+            if (_cookQueue.Count == 0) return;
+            _cookSw.Reset(); _cookSw.Start();
+            int n = 0;
+            while (n < CookPerFrame && _cookQueue.Count > 0)
+            {
+                var b = _cookQueue.Dequeue();
+                b.Queued = false;
+                if (b.Go == null) continue;
+                try { CookHull(b, s); }
+                catch (Exception e) { _cookFail++; LogOnce("hullerr" + b.S.Name, "her " + b.S.Name + ": hull cooking error (" + e.Message + "), capsule kept"); b.HullTried = true; }
+                n++;
+            }
+            _cookSw.Stop();
+            _cookMs += (float)_cookSw.Elapsed.TotalMilliseconds; _cookFrames++;
+            _statusDirty = true;
+            if (_cookQueue.Count == 0 && !_cookLogged && _cookOk + _cookFail > 0)
+            {
+                _cookLogged = true;   // the first drain of a build; later re-cooks (softness moved) stay quiet unless one fails
+                Plugin.Log.LogInfo("PhysicsHands: her hulls cooked: " + _cookOk + " ok, " + _cookFail + " failed, " + _cookMs.ToString("0.0") + " ms total over " + _cookFrames + " frames");
+            }
+        }
+
+        // The hull of one segment: HerBody's skin points pulled in by the inset (toward the axis, or the centre for a bone-space hull,
+        // never closer than 12 mm) so her soft zones give first, as the capsule radius always was. Inset is in world metres and the hull
+        // lives at scale (rr, rl, rr), so it is divided by rr (her bone's scale now). Failure keeps the capsule.
+        static void CookHull(SegBody b, HandsSettings s)
+        {
+            var g = b.S;
+            float inset = HerBody.Inset(g, s.Softness);
+            b.HullTried = true; b.CookedInset = inset;
+            var src = g.HullPts; var tris = g.HullTris;
+            if (src == null || tris == null || src.Length < 4 || tris.Length < 12) return;
+            float rr = g.A != null ? Mathf.Clamp(Mathf.Abs(g.A.lossyScale.x) / g.BuildScale, 0.25f, 4f) : 1f;
+            float ins = inset / rr, floor = 0.012f / rr;
+            bool bone = g.Space == 1;
+            Vector3 centre = Vector3.zero;
+            if (bone) { for (int i = 0; i < src.Length; i++) centre += src[i]; centre /= src.Length; }
+            var pts = new Vector3[src.Length];
+            for (int i = 0; i < pts.Length; i++)
+            {
+                Vector3 ax = bone ? centre : new Vector3(0f, src[i].y, 0f);
+                Vector3 rad = src[i] - ax;
+                float r = rad.magnitude;
+                pts[i] = r < 1e-5f ? src[i] : ax + rad * (Mathf.Max(floor, r - ins) / r);   // a pole on the axis stays there
+            }
+            string fail = CookInto(b, pts, tris);
+            if (fail != null && pts.Length > 64)
+            {
+                // PhysX refuses a hull of more than 255 polygons: a rough grid of 190 points can split into 380 triangles. Retry with every
+                // other point (the last one, a pole, kept) and a fan as the triangle list (a convex shape only needs the points).
+                var sub = new List<Vector3>(pts.Length / 2 + 2);
+                for (int i = 0; i < pts.Length; i += 2) sub.Add(pts[i]);
+                if ((pts.Length - 1) % 2 != 0) sub.Add(pts[pts.Length - 1]);
+                var ft = new int[(sub.Count - 2) * 3];
+                for (int i = 0; i + 2 < sub.Count; i++) { ft[i * 3] = 0; ft[i * 3 + 1] = i + 1; ft[i * 3 + 2] = i + 2; }
+                string f2 = CookInto(b, sub.ToArray(), ft);
+                if (f2 == null) { LogOnce("hullreduce" + g.Name, "her " + g.Name + ": convex hull cooking failed (" + fail + "), cooked a reduced set of " + sub.Count + " of " + pts.Length + " points"); fail = null; }
+            }
+            if (fail != null)
+            {
+                _cookFail++;
+                LogOnce("hullfail" + g.Name, "her " + g.Name + ": convex hull cooking failed (" + fail + "), " + (b.HullOk ? "the previous hull kept" : "capsule kept"));
+                return;
+            }
+            _cookOk++;
+            b.HullOk = true;
+            EnsureHullMark(b);
+            ApplyShape(b);
+        }
+
+        // Cooks pts / tris into the segment's MeshCollider (made on the first success). null when it worked, else why not; on failure the
+        // previous hull, if any, stays.
+        static string CookInto(SegBody b, Vector3[] pts, int[] tris)
+        {
+            for (int i = 0; i < tris.Length; i++) if (tris[i] < 0 || tris[i] >= pts.Length) return "triangle index out of range";
+            var mesh = new Mesh { name = "SfPhysHull_" + b.S.Name };
+            mesh.vertices = pts; mesh.triangles = tris; mesh.RecalculateBounds();
+            var mc = b.Hull;
+            bool added = mc == null;
+            if (added)
+            {
+                mc = b.Go.AddComponent<MeshCollider>();
+                mc.cookingOptions = MeshColliderCookingOptions.CookForFasterSimulation | MeshColliderCookingOptions.EnableMeshCleaning | MeshColliderCookingOptions.WeldColocatedVertices | MeshColliderCookingOptions.UseFastMidphase;
+                mc.convex = true;
+                mc.sharedMaterial = _herMat;
+            }
+            bool was = mc.enabled;
+            mc.enabled = true;   // a disabled collider reports empty bounds: enabled while we check the cook
+            string fail = null;
+            try { mc.sharedMesh = mesh; } catch (Exception e) { fail = e.Message; }
+            if (fail == null && (mc.sharedMesh == null || mesh.bounds.size.sqrMagnitude < 1e-8f || mc.bounds.size.sqrMagnitude < 1e-8f)) fail = "empty shape";
+            if (fail != null)
+            {
+                UnityEngine.Object.Destroy(mesh);
+                if (added) UnityEngine.Object.DestroyImmediate(mc);
+                else { try { mc.sharedMesh = b.HullMesh; } catch (Exception) { } mc.enabled = was; }
+                return fail;
+            }
+            if (added) { b.Hull = mc; _segOfCol[mc] = b; mc.enabled = false; }   // ApplyShape enables it when it is the one in use
+            else mc.enabled = was;
+            var old = b.HullMesh;
+            b.HullMesh = mesh;
+            if (old != null) UnityEngine.Object.Destroy(old);
+            return null;
+        }
+
+        // Which of the two colliders is on: the hull when it is wanted (HullColliders) and cooked, else the capsule. Switching never
+        // re-cooks. The segment object's scale belongs to the shape (hull: SegPose's scale; capsule: one), so it is written here too.
+        static void ApplyShape(SegBody b)
+        {
+            bool use = _hullWant && b.HullOk && b.Hull != null;
+            if (use == b.UsingHull) { if (use) EnsureHullMark(b); return; }
+            b.UsingHull = use;
+            b.Cap.enabled = !use;
+            if (b.Hull != null) b.Hull.enabled = use;
+            b.H = -1f;   // StepHer writes the capsule's size again
+            Vector3 p, sc; Quaternion q;
+            if (use && HerBody.SegPose(b.S, out p, out q, out sc)) { b.T.localScale = sc; b.ScaleWritten = sc; }
+            else { b.T.localScale = Vector3.one; b.ScaleWritten = use ? Vector3.zero : Vector3.one; }
+            RefreshMarks(b);
+            _statusDirty = true;
+        }
+
+        static bool ScaleMoved(Vector3 a, Vector3 w)
+        {
+            return Mathf.Abs(a.x - w.x) > 0.01f * w.x || Mathf.Abs(a.y - w.y) > 0.01f * w.y || Mathf.Abs(a.z - w.z) > 0.01f * w.z;
+        }
+
+        // Her live bones -> the kinematic shapes (MovePosition/MoveRotation so a moving hand feels her motion). The poses are sampled once
+        // per rendered frame (her bones only change then) and extrapolated to the end of each fixed step, the way the palms follow the
+        // controllers (Track): chasing the stale pose made every segment jump at the first step of a frame and rest at the others
+        // (velocity alternating 2x / 0), which showed up as hundreds of contact starts per 10 s on a hand that merely rested on her.
         static void StepHer()
         {
             if (!_herBuilt) return;
             float fdt = Time.fixedDeltaTime;
+            bool sample = Time.frameCount != _herSampleFrame;
+            _herSampleFrame = Time.frameCount;
+            float tEnd = Time.fixedTime + fdt;
             for (int i = 0; i < _bodies.Count; i++)
             {
                 var b = _bodies[i];
@@ -1132,24 +1348,41 @@ namespace SfMorph
                 if (g.A == null || (!g.Sphere && g.B == null) || b.Go == null) { HerBody.MarkDirty(); continue; }
                 Vector3 p, sc; Quaternion q;
                 if (!HerBody.SegPose(g, out p, out q, out sc)) continue;
-                float len = g.Sphere ? 0f : sc.y * g.Len0;
+                if (sample)
+                {
+                    if (g.Trk.Ok && (p - g.Trk.P).sqrMagnitude > 0.25f) { g.Trk.Reset(); b.Placed = false; }   // a cut: no velocity across it
+                    g.Trk.Sample(p, q, _frameT, g.Trk.Ok ? _frameT - g.Trk.T : 0f, HerMaxV);
+                }
+                Vector3 tp = p; Quaternion tq = q;
+                if (g.Trk.Ok) { tp = g.Trk.At(tEnd, MaxLead); tq = g.Trk.Q; }
+
                 float ratio = sc.x;
                 if (Mathf.Abs(ratio - b.Ratio) > 0.01f) b.Ratio = ratio;   // her bones were scaled: the skin got fatter or thinner
-                float r = b.RBase * b.Ratio;
-                float h = Mathf.Max(2f * r, len + 2f * r);
-                if (Mathf.Abs(r - b.Cap.radius) > 1e-4f || Mathf.Abs(h - b.H) > 1e-3f)
+                if (b.UsingHull)
                 {
-                    b.Cap.radius = r; b.Cap.height = h; b.H = h;
-                    if (b.Mark != null) b.Mark.transform.localScale = new Vector3(2f * r, h * 0.5f, 2f * r);
+                    if (ScaleMoved(sc, b.ScaleWritten)) { b.T.localScale = sc; b.ScaleWritten = sc; }   // the markers inherit it
                 }
-                if (!b.Placed || (p - b.LastPos).sqrMagnitude > 0.25f)
+                else
                 {
-                    b.T.SetPositionAndRotation(p, q);
-                    b.Rb.position = p; b.Rb.rotation = q;
+                    // the capsule lives at scale one: radius from the bone's scale, length from the live A -> B, centred along +Y from the joint
+                    float len = g.Sphere ? 0f : sc.y * g.Len0;
+                    float r = b.RBase * b.Ratio;
+                    float h = Mathf.Max(2f * r, len + 2f * r);
+                    float cy = len * 0.5f;
+                    if (Mathf.Abs(r - b.Cap.radius) > 1e-4f || Mathf.Abs(h - b.H) > 1e-3f || Mathf.Abs(cy - b.CenterY) > 1e-3f)
+                    {
+                        b.Cap.radius = r; b.Cap.height = h; b.Cap.center = new Vector3(0f, cy, 0f); b.H = h; b.CenterY = cy;
+                        PlaceCapMark(b);
+                    }
+                }
+                if (!b.Placed || (tp - b.LastPos).sqrMagnitude > 0.25f)
+                {
+                    b.T.SetPositionAndRotation(tp, tq);
+                    b.Rb.position = tp; b.Rb.rotation = tq;
                     b.Placed = true;
                 }
-                else { b.Rb.MovePosition(p); b.Rb.MoveRotation(q); }
-                b.LastPos = p;
+                else { b.Rb.MovePosition(tp); b.Rb.MoveRotation(tq); }
+                b.LastPos = tp;
             }
         }
 
@@ -1211,21 +1444,60 @@ namespace SfMorph
             h.Marks.Clear();
         }
 
+        // Her markers (orange): the capsule's primitive, and for a hull segment a child with the hull's own mesh (it inherits the segment's
+        // scale like the collider does); only the shape that is in use is shown.
         static void AddHerMarkers()
         {
             if (_matHer == null) _matHer = MarkMat(new Color(1f, 0.5f, 0.1f, 1f));
             foreach (var b in _bodies)
             {
-                if (b.Go == null || b.Mark != null) continue;
-                b.Mark = NewMarker(b.T, PrimitiveType.Capsule, _matHer);
-                float r = b.Cap.radius, h = Mathf.Max(2f * r, b.Cap.height);
-                b.Mark.transform.localScale = new Vector3(2f * r, h * 0.5f, 2f * r);
+                if (b.Go == null) continue;
+                if (b.Mark == null) { b.Mark = NewMarker(b.T, PrimitiveType.Capsule, _matHer); PlaceCapMark(b); }
+                EnsureHullMark(b);
+                RefreshMarks(b);
             }
+        }
+
+        static void PlaceCapMark(SegBody b)
+        {
+            if (b.Mark == null) return;
+            float r = b.Cap.radius, h = Mathf.Max(2f * r, b.Cap.height);
+            b.Mark.transform.localScale = new Vector3(2f * r, h * 0.5f, 2f * r);
+            b.Mark.transform.localPosition = b.Cap.center;
+        }
+
+        static void EnsureHullMark(SegBody b)
+        {
+            if (!_dbgOn || b.Go == null || b.HullMesh == null) return;
+            if (_matHer == null) _matHer = MarkMat(new Color(1f, 0.5f, 0.1f, 1f));
+            MeshFilter mf;
+            if (b.HMark == null)
+            {
+                b.HMark = new GameObject(Pfx + "_debug");
+                b.HMark.transform.SetParent(b.T, false);
+                mf = b.HMark.AddComponent<MeshFilter>();
+                var mr = b.HMark.AddComponent<MeshRenderer>();
+                mr.shadowCastingMode = ShadowCastingMode.Off; mr.receiveShadows = false;
+                if (_matHer != null) mr.sharedMaterial = _matHer;
+                b.HMark.SetActive(b.UsingHull);
+            }
+            else mf = b.HMark.GetComponent<MeshFilter>();
+            if (mf != null && mf.sharedMesh != b.HullMesh) mf.sharedMesh = b.HullMesh;
+        }
+
+        static void RefreshMarks(SegBody b)
+        {
+            if (b.Mark != null) b.Mark.SetActive(!b.UsingHull);
+            if (b.HMark != null) b.HMark.SetActive(b.UsingHull);
         }
 
         static void RemoveHerMarkers()
         {
-            foreach (var b in _bodies) if (b.Mark != null) { UnityEngine.Object.Destroy(b.Mark); b.Mark = null; }
+            foreach (var b in _bodies)
+            {
+                if (b.Mark != null) { UnityEngine.Object.Destroy(b.Mark); b.Mark = null; }
+                if (b.HMark != null) { UnityEngine.Object.Destroy(b.HMark); b.HMark = null; }
+            }
         }
 
         static void SetDebug(bool on)
@@ -1254,6 +1526,10 @@ namespace SfMorph
         static readonly HashSet<string> _contacts = new HashSet<string>();
         static int _enters, _tpFar, _tpJump, _tpNan;
         static float _nextSummary;
+        // frame bookkeeping for the follow: the time of the last rendered frame this ran in and its length, fixed steps since then,
+        // and the 10 s statistics of steps per frame and of rig shifts (SummariseFcap)
+        static float _frameT = -1f, _frameDt;
+        static int _stepsNow, _stepSum, _stepFrames, _stepMax, _rigShifts;
 
         // Enter / Stay from the probes on the palm and the finger rigidbodies: first contacts go to the log, every call stamps the touch time.
         internal static void NoteContact(bool left, Collision c, bool enter)
@@ -1291,6 +1567,53 @@ namespace SfMorph
             if (h.Rig.Count > 0) Physics.SyncTransforms();
             h.CurValid = false;
             h.FarTime = 0f;
+            h.Trk.Reset(); h.OffValid = false; h.VisHave = false;   // the sampled target and the offset history belong to where the hand was
+        }
+
+        // The game moved the rig the controllers hang under (a POV or shot cut): the target jumped, the hand did not. Carry the hand along
+        // with it instead of letting it race across the gap through her: it keeps its displacement from its target (how far a blocked
+        // hand stands from the controller), rotated by the same turn as the target; its velocity is rotated too, and the fingers ride
+        // along on the transform hierarchy. The turn is taken from the OLD sampled rotation, so this runs before the new sample. Not a
+        // teleport: nothing is dropped, a hand held against her stays held.
+        static void ShiftHand(Hand h, Vector3 tp, Quaternion tq)
+        {
+            var rb = h.Rb;
+            Quaternion dq = tq * Quaternion.Inverse(h.Trk.Q);
+            if (!Finite(dq)) { Teleport(h, tp, tq); return; }
+            Vector3 rel = h.HaveFixed ? rb.position - h.FixedPos : Vector3.zero;   // from the target the last step aimed at, not the lead-free sample
+            if (!Finite(rel) || rel.sqrMagnitude > 0.25f) rel = Vector3.zero;
+            Vector3 np = tp + dq * rel;
+            Quaternion nq = dq * rb.rotation;
+            rb.position = np; rb.rotation = nq;
+            h.PRoot.SetPositionAndRotation(np, nq);
+            rb.velocity = dq * rb.velocity; rb.angularVelocity = dq * rb.angularVelocity;
+            for (int i = 0; i < h.Rig.Count; i++)
+            {
+                var frb = h.Rig[i].Rb;
+                if (frb != null && !frb.isKinematic) { frb.velocity = dq * frb.velocity; frb.angularVelocity = dq * frb.angularVelocity; }
+            }
+            if (h.Rig.Count > 0) Physics.SyncTransforms();
+            h.FixedPos = tp; h.FixedRot = tq; h.HaveFixed = true; h.LastTarget = tp; h.HaveLast = true;
+            h.CurValid = false; h.FarTime = 0f;
+            h.Trk.Reset();
+            h.Off0P = h.Off1P = np - tp; h.Off0Q = h.Off1Q = nq * Quaternion.Inverse(tq); h.OffValid = true; h.OffSeen = h.StepsDone;
+            h.VisHave = false;
+        }
+
+        // The body's displacement from the target it aimed at, at the end of the fixed step that just ran: the rigidbody now (interpolation
+        // is None, so its pose is the last step's result) against the SAME extrapolated target that step used (FixedPos / FixedRot, not the
+        // raw controller). Called before a step replaces the target and from the rendered frame, so every step's offset is seen; the last
+        // two are kept for the visual to interpolate between.
+        static void CaptureOffset(Hand h)
+        {
+            if (h.StepsDone == h.OffSeen) return;
+            h.OffSeen = h.StepsDone;
+            if (h.Kin || !h.HaveFixed || h.Rb == null) { h.OffValid = false; return; }
+            Vector3 dp = h.Rb.position - h.FixedPos;
+            Quaternion dq = h.Rb.rotation * Quaternion.Inverse(h.FixedRot);
+            if (!Finite(dp) || !Finite(dq) || dp.sqrMagnitude >= 0.5f * 0.5f) { h.OffValid = false; return; }
+            if (h.OffValid) { h.Off0P = h.Off1P; h.Off0Q = h.Off1Q; } else { h.Off0P = dp; h.Off0Q = dq; }
+            h.Off1P = dp; h.Off1Q = dq; h.OffValid = true;
         }
 
         // ================= per fixed step =================
@@ -1302,6 +1625,7 @@ namespace SfMorph
             if (!Active && !_herBuilt) return;
             try
             {
+                _stepsNow++;
                 float dt = Time.fixedDeltaTime;
                 if (_s != null && dt > 0f)
                 {
@@ -1317,6 +1641,7 @@ namespace SfMorph
                         Plugin.Log.LogInfo("PhysicsHands: last 10 s: " + _enters + " contact starts, teleports " + (_tpFar + _tpJump + _tpNan) + " (too far " + _tpFar + ", target jumped " + _tpJump + ", NaN " + _tpNan + ")");
                     _enters = _tpFar = _tpJump = _tpNan = 0;
                     SummariseFcap(_left, "left"); SummariseFcap(_right, "right");
+                    _stepSum = _stepFrames = _stepMax = 0; _rigShifts = 0;
                 }
             }
             catch (Exception e)
@@ -1325,34 +1650,57 @@ namespace SfMorph
             }
         }
 
+        // The 10 s line per palm. "At the cap": the share of fixed steps the pull wanted more than the force cap; split into steps in free
+        // air (nothing of hers touched for 0.3 s) and steps touching her, each as the share of its own steps (free air should be near 0:
+        // a palm saturating in free air was the 0.7.7 bug). Gap: how far the palm stood from its target on the steps at the cap.
+        // Steps/frame and rig shifts are global; the jitter is the frame-to-frame change of the offset the visual adds to the controller.
         static void SummariseFcap(Hand h, string side)
         {
             if (h == null || h.CapN == 0) return;
-            Plugin.Log.LogInfo("PhysicsHands: last 10 s " + side + " palm: force cap avg " + (h.CapSum / h.CapN).ToString("0.0") + " N, resist max " + h.ResistMax.ToString("0.00")
-                               + ", pull at the cap in " + (100f * h.CapSat / h.CapN).ToString("0") + "% of steps" + (h.RigOn ? "" : "; fingers " + (h.RigFailed ? "kinematic (fallback)" : "kinematic")));
+            var sb = new StringBuilder("PhysicsHands: last 10 s " + side + " palm: force cap avg " + (h.CapSum / h.CapN).ToString("0.0") + " N, resist max " + h.ResistMax.ToString("0.00")
+                               + ", at the cap " + (100f * h.CapSat / h.CapN).ToString("0") + "% (free air " + Pct(h.CapSatFree, h.CapFreeN) + " of " + h.CapFreeN + " steps, touching " + Pct(h.CapSatTouch, h.CapTouchN) + " of " + h.CapTouchN + ")"
+                               + (h.CapSat > 0 ? ", gap at the cap avg " + (100f * h.GapAtCapSum / h.CapSat).ToString("0.0") + " cm" : ""));
+            if (_stepFrames > 0) sb.Append("; fixed steps/frame avg ").Append(((float)_stepSum / _stepFrames).ToString("0.0")).Append(" max ").Append(_stepMax);
+            sb.Append("; rig shifts ").Append(_rigShifts);
+            if (h.JitN > 0) sb.Append("; visual offset jitter avg ").Append((h.JitSum / h.JitN).ToString("0.0")).Append(" mm max ").Append(h.JitMax.ToString("0.0")).Append(" mm");
+            if (!h.RigOn) sb.Append("; fingers ").Append(_s != null && !_s.JointedFingers ? "kinematic (switched off)" : h.RigFailed ? "kinematic (fallback)" : "kinematic");
+            Plugin.Log.LogInfo(sb.ToString());
             h.CapSum = 0f; h.CapN = 0; h.CapSat = 0; h.ResistMax = 0f;
+            h.CapFreeN = h.CapTouchN = h.CapSatFree = h.CapSatTouch = 0; h.GapAtCapSum = 0f;
+            h.JitSum = 0f; h.JitMax = 0f; h.JitN = 0;
         }
 
+        static string Pct(int n, int of) { return of > 0 ? (100f * n / of).ToString("0") + "%" : "-"; }
+
+        // Follow, per fixed step. The target is NOT the controller's transform: the controllers only change once per rendered frame while
+        // physics runs 0, 1 or several steps in one, so a stale target made the old one-step deadbeat accelerate on the step that saw the
+        // new pose and brake on the next (bang-bang: the pull sat at its force cap in free air). Instead UpdateHand samples the target
+        // once per frame with its velocity (Track); here it is extrapolated to the end of this step, the palm is asked for that velocity
+        // (feed-forward) plus a correction closing the gap at GapGain per second, and the force is the one that gets there in one step,
+        // capped as before. In free air the velocity error stays near zero and the cap is not reached.
         static void StepHand(Hand h, Transform ctl, Vector3 off, Vector3 rot, float dt)
         {
             var rb = h.Rb;
             if (h.PGo == null || rb == null) return;
             if (ctl == null)
             {
-                h.HaveFixed = false; h.HaveLast = false;
+                h.HaveFixed = false; h.HaveLast = false; h.OffValid = false; h.Trk.Reset();
                 if (!rb.isKinematic) { rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero; }
                 return;
             }
+            CaptureOffset(h);   // what the previous step did, against the target it aimed at (before FixedPos is replaced below)
             Vector3 tp; Quaternion tq;
-            Target(ctl, off, rot, h.Spec.Align, out tp, out tq);
+            if (h.Trk.Ok) { tp = h.Trk.At(Time.fixedTime + dt, MaxLead); tq = h.Trk.Q; }
+            else Target(ctl, off, rot, h.Spec.Align, out tp, out tq);
             if (!Finite(tp) || !Finite(tq))
             {
                 _tpNan++;
-                h.HaveFixed = false;
+                h.HaveFixed = false; h.OffValid = false; h.Trk.Reset();
                 if (!rb.isKinematic) { rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero; }
                 return;
             }
             h.FixedPos = tp; h.FixedRot = tq; h.HaveFixed = true;
+            h.StepsDone++;
             if (h.Kin)
             {
                 rb.MovePosition(tp); rb.MoveRotation(tq);
@@ -1371,19 +1719,25 @@ namespace SfMorph
             }
             else h.FarTime = 0f;
 
-            // Compliant follow. Translation: the velocity that would close the gap in one step (6 m/s at most) is asked for by a
-            // force, capped. The cap drops from 60 N to 12 N as her skin under the hand resists (SoftZones.LeftResist/RightResist,
-            // 0..1, written by the contact sim), so a pressed hand slows and stops instead of shoving through.
+            // Compliant follow. Translation: the sampled target velocity plus the gap closed at GapGain per second (the gap term at most
+            // MaxGapV), 6 m/s at most, is asked for by a force, capped. The cap drops from 60 N to 12 N as her skin under the hand resists
+            // (SoftZones.LeftResist/RightResist, 0..1, written by the contact sim), so a pressed hand slows and stops instead of shoving through.
             float resist = Mathf.Clamp01(h.Left ? SoftZones.LeftResist : SoftZones.RightResist);
             float fcap = Mathf.Lerp(60f, 12f, resist);
-            Vector3 vDes = gap / dt;
+            Vector3 vGap = gap * GapGain;
+            if (vGap.sqrMagnitude > MaxGapV * MaxGapV) vGap = vGap.normalized * MaxGapV;
+            Vector3 vDes = h.Trk.V + vGap;
             if (vDes.sqrMagnitude > 36f) vDes = vDes.normalized * 6f;
             Vector3 force = h.TotalMass * (vDes - rb.velocity) / dt;
             float fm = force.magnitude;
             bool capped = fm > fcap;
             if (capped) force *= fcap / fm;
             rb.AddForce(force, ForceMode.Force);
-            h.CapSum += fcap; h.CapN++; if (capped) h.CapSat++; if (resist > h.ResistMax) h.ResistMax = resist;
+            bool touching = Time.fixedTime - _handTouchT[h.Left ? 0 : 1] < 0.3f;   // same window as FingerStep
+            h.CapSum += fcap; h.CapN++;
+            if (touching) h.CapTouchN++; else h.CapFreeN++;
+            if (capped) { h.CapSat++; h.GapAtCapSum += gap.magnitude; if (touching) h.CapSatTouch++; else h.CapSatFree++; }
+            if (resist > h.ResistMax) h.ResistMax = resist;
 
             // Rotation: PD torque tau = I * (kp * theta * axis - kd * omega) with I the hand's inertia (palm + the finger bodies by the
             // parallel-axis term), clamped to 4 N*m. kp/kd are limited so the explicit step stays stable at slow fixed rates.
@@ -1446,6 +1800,12 @@ namespace SfMorph
         {
             _s = s;
             float now = Time.unscaledTime, dt = Time.deltaTime;
+            // the rendered frame: its time and length (the targets are sampled against them) and how many fixed steps ran since the last one
+            float tNow = Time.time;
+            _frameDt = _frameT >= 0f ? tNow - _frameT : dt;
+            _frameT = tNow;
+            _stepSum += _stepsNow; if (_stepsNow > _stepMax) _stepMax = _stepsNow; _stepFrames++; _stepsNow = 0;
+            if (_frameDt > 0.5f || _frameDt < 0f) ResetTracks();   // a pause, a load or a long hitch: no velocity across it
             if (now < _retryAt) return;
             Grip.Update();   // idempotent within a frame: the integrator calls it earlier in the apply step
             if (!_layersApplied)
@@ -1454,6 +1814,8 @@ namespace SfMorph
                 if (why != null) { SetStatus("off: " + why); _retryAt = now + 5f; return; }
             }
             _taken = true;
+            if (_handMat != null && Mathf.Abs(s.Friction - _matF) > 0.01f) SetFriction(Mathf.Clamp01(s.Friction));
+            if (!_brSub) { Application.onBeforeRender += BeforeRender; _brSub = true; }
 
             var cl = VrHands.LeftController; var cr = VrHands.RightController;
             if (cl == null) cl = null;   // a destroyed controller reads as null: make it really null
@@ -1490,8 +1852,20 @@ namespace SfMorph
                 }
                 if (_herBuilt && Mathf.Abs(s.Softness - _herSoftness) > 0.02f)
                 {
-                    _herSoftness = s.Softness;   // the soft zones' inset follows the softness setting
+                    _herSoftness = s.Softness;   // the soft zones' inset follows the softness setting: capsules at once, hulls re-cooked
                     foreach (var b in _bodies) b.RBase = Mathf.Max(0.012f, b.S.RSkin - HerBody.Inset(b.S, s.Softness));
+                    QueueHulls(s);
+                }
+                if (_herBuilt)
+                {
+                    if (s.HullColliders != _hullWant)   // hulls <-> capsules by the setting, without cooking again
+                    {
+                        _hullWant = s.HullColliders;
+                        QueueHulls(s);
+                        foreach (var b in _bodies) ApplyShape(b);
+                        _statusDirty = true;
+                    }
+                    CookStep(s);
                 }
             }
             else if (_herBuilt) DestroyHer();
@@ -1518,7 +1892,15 @@ namespace SfMorph
             var sb = new StringBuilder("on: ");
             AppendHand(sb, _left, "L"); sb.Append(", "); AppendHand(sb, _right, "R");
             if (!s.Collide) sb.Append("; collisions off (visual only)");
-            else if (_herBuilt) sb.Append("; her ").Append(_bodies.Count).Append(" colliders");
+            else if (_herBuilt)
+            {
+                int hulls = 0;
+                foreach (var b in _bodies) if (b.UsingHull) hulls++;
+                int cooking = _cookQueue.Count, plain = Mathf.Max(0, _bodies.Count - hulls - cooking);
+                sb.Append("; her ").Append(_bodies.Count).Append(" colliders (").Append(hulls).Append(" hulls, ");
+                if (cooking > 0) sb.Append(cooking).Append(" cooking, ");
+                sb.Append(plain).Append(" capsules/spheres)");
+            }
             else sb.Append("; ").Append(_herNote.Length > 0 ? _herNote : HerBody.Note.Length > 0 ? HerBody.Note : (her == null ? "her: not found" : "her: building"));
             sb.Append("; layers ").Append(_layerHand).Append('/').Append(_layerHer).Append("; grip ").Append(Grip.Source.Length > 0 ? Grip.Source : "none yet");
             return sb.ToString();
@@ -1527,7 +1909,8 @@ namespace SfMorph
         static void AppendHand(StringBuilder sb, Hand h, string side)
         {
             if (h == null) { sb.Append(side).Append(" none"); return; }
-            sb.Append(side).Append(' ').Append(h.Spec.Visual).Append(h.Fallback ? " (fallback)" : "").Append(h.RigOn ? ", jointed fingers" : ", kinematic fingers");
+            sb.Append(side).Append(' ').Append(h.Spec.Visual).Append(h.Fallback ? " (fallback)" : "")
+              .Append(h.RigOn ? ", jointed fingers" : _s != null && !_s.JointedFingers && h.CollideOn ? ", kinematic fingers (switched off)" : ", kinematic fingers");
 
         }
 
@@ -1585,7 +1968,7 @@ namespace SfMorph
                 rb.isKinematic = false;
                 Teleport(h, p, q);
                 h.Kin = false;
-                if (!h.RigFailed) EnableRig(h);
+                if (!h.RigFailed && _s != null && _s.JointedFingers) EnableRig(h);
             }
             else
             {
@@ -1599,21 +1982,59 @@ namespace SfMorph
         static void UpdateHand(Hand h, Transform ctl, HandsSettings s, float dt, float now)
         {
             if (h.PGo == null || h.VGo == null) return;
-            if (ctl == null) { SetVisible(h, false); return; }
+            if (ctl == null) { SetVisible(h, false); h.Trk.Reset(); h.OffValid = false; h.VisHave = false; return; }
             Vector3 tp; Quaternion tq;
             Target(ctl, h.Left ? s.LeftPos : s.RightPos, h.Left ? s.LeftRot : s.RightRot, h.Spec.Align, out tp, out tq);
             if (!Finite(tp) || !Finite(tq)) return;
             if (h.CollideOn != s.Collide) SetCollide(h, s.Collide, tp, tq);
-
-            // The visual: the fresh controller target composed with where the body stands relative to the target it chased at the
-            // last fixed step. In free air that offset is ~0 (1:1 with the controller, no added latency); blocked, it is the displacement.
-            Vector3 vp = tp; Quaternion vq = tq;
-            if (s.Collide && h.HaveFixed && !h.Kin)
+            if (h.JointWas != s.JointedFingers)   // the finger rig on or off at runtime
             {
-                Vector3 dp = h.Rb.position - h.FixedPos;
-                Quaternion dq = h.Rb.rotation * Quaternion.Inverse(h.FixedRot);
-                if (Finite(dp) && Finite(dq) && dp.sqrMagnitude < 0.5f * 0.5f) { vp += dp; vq = dq * tq; SetDisp(h.Left, dp, dq); }
+                h.JointWas = s.JointedFingers;
+                if (h.CollideOn && !h.Kin)
+                {
+                    if (s.JointedFingers) { if (!h.RigFailed) EnableRig(h); }
+                    else DisableRig(h);
+                }
+                Plugin.Log.LogInfo("PhysicsHands: jointed fingers " + (s.JointedFingers ? "on" : "off") + " (" + (h.Left ? "left" : "right") + " hand)");
+                _statusDirty = true;
             }
+
+            // The target for the fixed steps: sampled once per rendered frame with its velocity (Track). A sample that jumped further than a
+            // hand can move in the frame is the game moving the rig the controllers hang under: the hand is carried along (ShiftHand) before
+            // the new sample replaces the old one it needs.
+            if (h.Trk.Ok && !h.Kin)
+            {
+                float thr = JumpBase + JumpSpeed * _frameDt;
+                if ((tp - h.Trk.P).sqrMagnitude > thr * thr) { ShiftHand(h, tp, tq); _rigShifts++; }
+            }
+            h.Trk.Sample(tp, tq, _frameT, _frameDt, MaxFf);
+
+            // The visual: the fresh controller target composed with where the body stands relative to the target it aimed at. In free air
+            // that offset is ~0 (1:1 with the controller, no added latency); blocked, it is the displacement. The offset is measured per
+            // FIXED step but shown every RENDERED frame, and the two rates differ (50 Hz against 72-90 Hz): a frame after 0 steps shows the
+            // same pose as the last one, a frame after 2 jumps by two steps, which reads as stutter. So the last two steps' offsets are kept
+            // (CaptureOffset) and blended by how far into the current step the frame falls, as a Rigidbody with Interpolate would (the rigidbody
+            // stays on None: the target it aims at is the one the offset is measured against).
+            Vector3 vp = tp; Quaternion vq = tq;
+            h.VisP = Vector3.zero; h.VisQ = Quaternion.identity; h.VisFrame = Time.frameCount;   // BeforeRender puts the same offset on the late controller pose
+            if (s.Collide && !h.Kin)
+            {
+                CaptureOffset(h);
+                if (h.OffValid)
+                {
+                    float fdt = Time.fixedDeltaTime;
+                    float a = fdt > 0f ? Mathf.Clamp01((Time.time - Time.fixedTime) / fdt) : 1f;
+                    Vector3 dp = Vector3.Lerp(h.Off0P, h.Off1P, a);
+                    Quaternion dq = Quaternion.Slerp(h.Off0Q, h.Off1Q, a);
+                    vp += dp; vq = dq * tq;
+                    SetDisp(h.Left, dp, dq);
+                    h.VisP = dp; h.VisQ = dq;
+                    if (h.VisHave) { float d = (dp - h.VisPrev).magnitude * 1000f; h.JitSum += d; h.JitN++; if (d > h.JitMax) h.JitMax = d; }
+                    h.VisPrev = dp; h.VisHave = true;
+                }
+                else h.VisHave = false;
+            }
+            else h.VisHave = false;
             h.VRoot.SetPositionAndRotation(vp, vq);
 
             // grip -> curl (the target the finger joints are driven to); the visual fingers follow the simulated bones
@@ -1645,6 +2066,38 @@ namespace SfMorph
             }
         }
 
+        // The headset's tracking update runs after the apply step (right before render, as Embody found), so the controller transform used
+        // above is up to a frame old by the time the frame is drawn: a hand model parented to the controller got the late pose, our
+        // separate visual did not and trailed the real hand by a varying amount, which reads as a floating, unstable hand. Put the same
+        // physics offset on the controller's pose as it is now, and pose the simulated fingers against the moved root again.
+        static bool _brSub;
+
+        static void BeforeRender()
+        {
+            if (_s == null) return;
+            try { RefreshVisual(_left); RefreshVisual(_right); }
+            catch (Exception e) { LogOnce("brerr" + e.GetType().Name, "pre-render pose error: " + e.Message); }
+        }
+
+        static void RefreshVisual(Hand h)
+        {
+            if (h == null || h.VGo == null || h.VRoot == null || h.VisFrame != Time.frameCount) return;
+            var ctl = h.Left ? VrHands.LeftController : VrHands.RightController;
+            if (ctl == null) return;
+            Vector3 tp; Quaternion tq;
+            Target(ctl, h.Left ? _s.LeftPos : _s.RightPos, h.Left ? _s.LeftRot : _s.RightRot, h.Spec.Align, out tp, out tq);
+            if (!Finite(tp) || !Finite(tq)) return;
+            h.VRoot.SetPositionAndRotation(tp + h.VisP, h.VisQ * tq);
+            if (h.RigOn) PoseFromRig(h);
+        }
+
+        static void ResetTracks()
+        {
+            if (_left != null) { _left.Trk.Reset(); _left.VisHave = false; }
+            if (_right != null) { _right.Trk.Reset(); _right.VisHave = false; }
+            for (int i = 0; i < HerBody.Segs.Count; i++) HerBody.Segs[i].Trk.Reset();
+        }
+
         static void PoseFingers(Hand h)
         {
             float c = h.Curl;
@@ -1672,6 +2125,10 @@ namespace SfMorph
                 RestoreHide(_hideL); RestoreHide(_hideR);
                 if (_dbgOn) SetDebug(false);
                 RestoreLayers();
+                if (_brSub) { Application.onBeforeRender -= BeforeRender; _brSub = false; }
+                if (_handMat != null) UnityEngine.Object.Destroy(_handMat);
+                if (_herMat != null) UnityEngine.Object.Destroy(_herMat);
+                _handMat = _herMat = null; _matF = -1f;
                 if (_skinMat != null) UnityEngine.Object.Destroy(_skinMat);
                 _skinMat = null;
                 bool had = Capsules.Count > 0;
@@ -1688,6 +2145,8 @@ namespace SfMorph
             _herSoftness = -1f; _statusDirty = false; RebuildCapsNow = false;
             _contacts.Clear();
             _enters = _tpFar = _tpJump = _tpNan = 0;
+            _frameT = -1f; _frameDt = 0f; _stepsNow = _stepSum = _stepFrames = _stepMax = _rigShifts = 0;
+            _herSampleFrame = -1; _hullWant = false; _cookOk = _cookFail = _cookFrames = 0; _cookMs = 0f; _cookLogged = false;
             Status = "";
         }
     }
