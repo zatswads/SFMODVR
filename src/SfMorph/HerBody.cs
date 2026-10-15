@@ -60,6 +60,7 @@ namespace SfMorph
         public bool PushByPartner;
         public Transform Embodied;
         public float Softness = 0.5f;           // 0..1: how much her soft zones give (the inset of the collision shapes)
+        public bool SoftZonesOn = true;         // 0.8.0: the soft zones run (they dent under a hand); off, every segment is inset like a firm one
         public List<SoftCapsule> Caps;           // Body.Contacts(): what can touch her this frame
     }
 
@@ -153,6 +154,7 @@ namespace SfMorph
         public static float Unit = 1f;                              // mesh units -> metres
         public static string Note = "";                             // why nothing is built ("only 2 bones found"), or ""
         public static string Status = "";
+        public static bool SoftZonesOn = true;                      // the same, of this frame (HerBodySettings.SoftZonesOn)
         public static float Softness = 0.5f;                        // the Physics tab's softness of this frame (HerBodySettings.Softness): Embody's clasp reads it
         public static int BuildVersion;                             // bumped on every build and release: PhysicsHands rebuilds its bodies when it changes
         // Whether anything can push her limbs now: the physics hands (their contact impulses) or, with the geometric push (0.7.8), other hands.
@@ -205,7 +207,7 @@ namespace SfMorph
         public static void Update(Character her, HerBodySettings s)
         {
             if (s == null || !s.On || her == null || her.Root == null) return;
-            Softness = s.Softness;
+            Softness = s.Softness; SoftZonesOn = s.SoftZonesOn;
             float now = Time.unscaledTime;
             if (Built)
             {
@@ -266,11 +268,13 @@ namespace SfMorph
             return true;
         }
 
-        // Same measure as SoftZones.MorphWeight: the first blendshape of the first body mesh that has any (a character's clone, not the game's mesh).
+        // How far the character's rest shape is morphed: the summed weights (0..1 each) of the first body mesh's body, face and slider shapes,
+        // never the joint correctives (they follow the pose; MorphState.NonJcmSum). Feeds the rebuild trigger and the build log (a full
+        // character reads about 200 %). 0 for the game's own mesh.
         static float MorphWeight(Character her)
         {
             foreach (var r in her.Renderers)
-                if (r != null && r.sharedMesh != null && r.sharedMesh.blendShapeCount > 0 && r.sharedMesh.name.ToLowerInvariant().Contains("body")) return r.GetBlendShapeWeight(0) / 100f;
+                if (r != null && r.sharedMesh != null && r.sharedMesh.blendShapeCount > 0 && r.sharedMesh.name.ToLowerInvariant().Contains("body")) return MorphState.NonJcmSum(r);
             return 0f;
         }
 
@@ -333,7 +337,18 @@ namespace SfMorph
 
         // How far the collision shape of a segment is pulled in from her skin: soft zones give by the softness setting (so the soft
         // contact acts first), firm parts barely.
-        public static float Inset(Seg g, float softness) { return g.Soft ? Mathf.Lerp(0.02f, 0.045f, Mathf.Clamp01(softness)) : 0.008f; }
+        // 0.8.0: only while the soft zones run (they dent first); with them off nothing dents, so a soft segment is inset like a firm one.
+        public static float Inset(Seg g, float softness, bool softZonesOn) { return g.Soft && softZonesOn ? Mathf.Lerp(0.02f, 0.045f, Mathf.Clamp01(softness)) : 0.008f; }
+        public static float Inset(Seg g, float softness) { return Inset(g, softness, true); }
+
+        // How far a hand may sink into the skin of segment `seg` (Defs index) before it stops, where the soft zones / GPU contact dent it:
+        // soft segments lerp(1, 3 cm, Softness) while the soft zones run, else (and for firm ones) 0.5 cm. Reads this frame's settings.
+        public static float SkinAllowance(int seg)
+        {
+            bool soft = seg >= 0 && seg < Defs.Length && Defs[seg].Soft;
+            if (!soft || !SoftZonesOn) return 0.005f;
+            return Mathf.Lerp(0.010f, 0.030f, Mathf.Clamp01(Softness));
+        }
 
         static void Build(Character her, HerBodySettings s)
         {
@@ -444,13 +459,18 @@ namespace SfMorph
                     segOfIdx[i] = t != null && segOf.TryGetValue(t, out si) ? si : -1;
                 }
                 // this mesh's bind space -> each hull segment's frame, rigidly through the segment's own bone A (bind pose of A in THIS mesh,
-                // A's matrix now, the frame's inverse): pose independent, includes the units and her scale, no sign or handedness guesses
+                // A's matrix now, the frame's inverse): pose independent, includes the units and her scale, no sign or handedness guesses.
+                // 0.8.0: through the roll bone instead when it is not A (the pelvis: its axis runs Hip_L to Hip_R but its skin is Root_M's).
+                // Through Hip_L the pelvis vertices followed the thigh, so a build in a pose with the hip flexed relative to Root_M
+                // squashed the hull (radius 6 mm, frame check 11 cm off) in 4 of 11 builds of the 0.7.9 log.
                 var rig = new Matrix4x4[segs.Count]; var rigOk = new bool[segs.Count];
                 for (int i = 0; i < segs.Count; i++)
                 {
                     if (locs[i] == null) continue;
-                    int ia = Array.IndexOf(bs, segs[i].A);
-                    if (ia >= 0 && ia < d.Bind.Length) { rig[i] = fInv[i] * segs[i].A.localToWorldMatrix * d.Bind[ia]; rigOk[i] = true; }
+                    Transform rb = segs[i].RollRef != null && segs[i].RollRef != segs[i].A && segs[i].Space == 0 ? segs[i].RollRef : segs[i].A;
+                    int ia = Array.IndexOf(bs, rb);
+                    if (ia < 0 && rb != segs[i].A) { rb = segs[i].A; ia = Array.IndexOf(bs, rb); }
+                    if (ia >= 0 && ia < d.Bind.Length) { rig[i] = fInv[i] * rb.localToWorldMatrix * d.Bind[ia]; rigOk[i] = true; }
                 }
                 var acc = new float[segs.Count];
                 for (int v = 0; v < d.Pos.Length && v < d.Weights.Length; v++)
@@ -526,7 +546,7 @@ namespace SfMorph
                 }
                 else if (g.Sphere && g.Name.StartsWith("breast_", StringComparison.Ordinal)) g.Drop = true;   // no vertices: a sphere at the bone's origin would be a guess
                 if (g.Hull && !g.Drop) BuildHull(g, locs[i]);
-                float inset = Inset(g, s.Softness);
+                float inset = Inset(g, s.Softness, s.SoftZonesOn);
                 if (g.Drop) { sbLog.Append("\n  ").Append(g.Name).Append(" (").Append(g.A.name).Append(" sphere): only ").Append(g.Verts).Append(" verts under ").Append(g.Owner).Append(", not made"); continue; }
                 sbLog.Append("\n  ").Append(g.Name).Append(" (").Append(g.A.name).Append(g.B != null ? "->" + g.B.name : " sphere" + (g.Owner != g.A.name ? ", owner " + g.Owner : "")).Append("): ")
                      .Append(g.Verts).Append(" verts, skin r ").Append(g.RSkin.ToString("0.000")).Append(dists.Count >= 12 ? "" : " (default)");
@@ -582,8 +602,12 @@ namespace SfMorph
             if (m == null || pos == null || !m.isReadable) return 0;   // the game's own GPU-only meshes have no blendshapes
             int bc = m.blendShapeCount, n = m.vertexCount, used = 0;
             if (bc == 0 || pos.Length != n) return 0;
+            var layout = MorphState.ShapeLayout(m);       // 0.8.0: the joint correctives follow the pose; baked in, they would shape her colliders by the pose of the build
             for (int k = 0; k < bc; k++)
             {
+                bool jcm = false;
+                for (int q = 0; q < layout.Count; q++) if (layout[q].Index == k) { jcm = layout[q].Kind == ShapeKind.Jcm; break; }
+                if (jcm) continue;
                 float wgt = r.GetBlendShapeWeight(k);
                 if (Mathf.Abs(wgt) < 0.1f) continue;      // 0.001 of the full weight
                 int last = m.GetBlendShapeFrameCount(k) - 1;
@@ -1123,7 +1147,7 @@ namespace SfMorph
                 if (g.Sphere) { _sa[k] = _sb[k] = g.A.TransformPoint(g.LocalCenter); }
                 else { _sa[k] = g.A.position; _sb[k] = g.B.position; }
                 _srSkin[k] = g.RSkin * rr;
-                _sr[k] = _srSkin[k] - Mathf.Min(SkinGive, Inset(g, s.Softness));   // the skin gives a little before the limb moves
+                _sr[k] = _srSkin[k] - Mathf.Min(SkinGive, Inset(g, s.Softness, s.SoftZonesOn));   // the skin gives a little before the limb moves
                 _sOk[k] = Finite(_sa[k]) && Finite(_sb[k]) && _sr[k] > 0.001f;
             }
         }
