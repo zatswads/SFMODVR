@@ -168,12 +168,12 @@ namespace SfMorph
                 if (sub == null && mood != _expMood)
                 {
                     _expMood = mood;
-                    // TODO(director): set the animator float "mood_num" once per press; Reactions has no such method in the 0.7.9 R0 API yet.
+                    _body.React.SetAnimFloat("mood_num", mood);
                 }
                 if (sub == null && rn != _expReaction)
                 {
                     _expReaction = rn;
-                    // TODO(director): set the animator float "reaction_num" once per press; Reactions has no such method in the 0.7.9 R0 API yet.
+                    _body.React.SetAnimFloat("reaction_num", rn);
                 }
             }
 

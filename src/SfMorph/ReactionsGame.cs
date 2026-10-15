@@ -833,6 +833,32 @@ namespace SfMorph
             catch (Exception e) { LogOnce("breath:" + e.GetType().Name, "breath failed: " + e.Message); return false; }
         }
 
+        // Experimental (panel): write one of the game's Animator floats once (mood_num, reaction_num). What they mean is unknown, so the
+        // first call logs the controller's parameter list; a float the controller lacks is refused instead of warning every call.
+        bool _paramsLogged;
+        public bool SetAnimFloat(string name, float v)
+        {
+            if (!Found || _anim == null || Dead(_anim) || string.IsNullOrEmpty(name)) return false;
+            try
+            {
+                int h = Animator.StringToHash(name);
+                bool has = false;
+                var sb = _paramsLogged ? null : new System.Text.StringBuilder();
+                foreach (var p in _anim.parameters)
+                {
+                    if (p.nameHash == h && p.type == AnimatorControllerParameterType.Float) has = true;
+                    if (sb != null) sb.Append(sb.Length > 0 ? ", " : "").Append(p.name).Append(':').Append(p.type);
+                }
+                if (sb != null) { _paramsLogged = true; Plugin.Log.LogInfo("Reactions: her Animator parameters: " + sb); }
+                if (!has) { LogOnce("nofloat:" + name, "her Animator has no float '" + name + "'"); return false; }
+                float was = _anim.GetFloat(h);
+                _anim.SetFloat(h, v);
+                Plugin.Log.LogInfo("Reactions: set Animator " + name + " " + was.ToString("0.##") + " -> " + v.ToString("0.##") + " (experimental; the game may overwrite it)");
+                return true;
+            }
+            catch (Exception e) { LogOnce("setfloat:" + e.GetType().Name, "Animator float failed: " + e.Message); return false; }
+        }
+
         // The face without a voice: the Animator's "moan" trigger (a wince). Never layer weights, never "eyelid".
         public bool WinceTrigger()
         {
