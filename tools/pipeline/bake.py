@@ -204,7 +204,7 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
             sc = bpy.context.scene
             sc.render.bake.use_selected_to_active = True
             sc.render.bake.cage_extrusion = 0.012
-            sc.render.bake.max_ray_distance = 0.03
+            sc.render.bake.max_ray_distance = 0.05
             sc.render.bake.margin = 24
             sc.render.bake.margin_type = 'EXTEND'
             sc.render.bake.target = 'IMAGE_TEXTURES'
@@ -220,6 +220,14 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
                 sc.render.image_settings.file_format = 'PNG'
                 sc.render.image_settings.color_depth = '8'
             sc.render.image_settings.color_mode = 'RGB'
+            # pixels whose rays found no VaM skin come out pure black: give them the skin tone / a flat normal
+            px = np.empty(res * res * 4, np.float32)
+            img.pixels.foreach_get(px)
+            px = px.reshape(-1, 4)
+            miss = px[:, :3].max(1) < 0.004
+            px[miss, :3] = fill[:3] if kind == 'albedo' else (0.5, 0.5, 1.0)
+            img.pixels.foreach_set(px.ravel())
+            log('  %s %s: %.2f%% of pixels had no hit (filled)' % (mat, kind, 100.0 * miss.mean()))
             img.save_render(path, scene=sc)
             written.append((mat, kind, os.path.basename(path)))
             log('baked %s %s (%dx%d) -> %s' % (mat, kind, res, res, path))
