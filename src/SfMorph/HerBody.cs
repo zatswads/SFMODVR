@@ -42,6 +42,7 @@ namespace SfMorph
 
     // What the integrator hands HerBody every frame (Body fills it from the config).
     // 0.8.0: a contact capsule in WORLD space for this frame (no Transform): the physics hands' and Embody's ghosts for her yield
+#pragma warning disable 649   // filled by PhysicsHands.FillGhost / Embody.FillGhost
     internal struct WorldCap
     {
         public Vector3 A, B; public float R;
@@ -49,6 +50,7 @@ namespace SfMorph
         public string By;               // "your left physics hand", "your left hand (Player)": never built per frame
         public CapSource Src;           // for the Live gate / Reactions naming; may be null (= always live)
     }
+#pragma warning restore 649
 
     internal class HerBodySettings
     {
@@ -63,8 +65,9 @@ namespace SfMorph
 
     // Her body as a set of segments (the pelvis, spine, chest, neck, head, thighs, calves, arms, butt and breast spheres): which bones
     // they follow, how big her skin is around them (read from her body meshes), where they stand now, and how hard hands push them.
-    // The geometry is shared: the physics hands build PhysX bodies on it (PhysicsHands.cs), Overlap turns the pushes into spring
-    // torques, and a geometric push for hands that aren't physics hands plugs in here (GeoPush). It exists whenever Physics or the
+    // The geometry is shared: the physics hands build PhysX bodies on it (PhysicsHands.cs), Overlap turns the YIELD (how deep any
+    // hand is in her animation-pose skin, measured here before Overlap writes) into limb rotations, a geometric push for hands that
+    // aren't physics hands plugs in here (GeoPush) and the analytic skin queries (SkinDepth, CapsuleDepth) serve the fingers. It exists whenever Physics or the
     // physics hands are on, not only with the hands. Everything is built once and rebuilt when she changes (checked every 2 s).
     internal static class HerBody
     {
@@ -128,7 +131,7 @@ namespace SfMorph
             public Vector3 ImpSum, ImpPt; public float ImpW, ImpWL, ImpWR;
             public Vector3 PhysF, PhysPt, GeoF, GeoPt; public float GeoW; public bool PushRight; public CapSource GeoBy; public float GeoDepth;
             public string GeoName;                  // who pushed geometrically when the capsule has no CapSource (its Owner), never built per frame
-            public bool PushLogged;
+            public bool PushLogged, YieldLogged;
             // Space 1 (the head): where the shape's centre is in the segment-local frame (metres at scale 1); a fallback sphere collider
             // sits there (SegPose puts the frame at A, not at the sphere's centre). Zero for every other segment.
             public Vector3 FrameCenter;
@@ -150,6 +153,7 @@ namespace SfMorph
         public static float Unit = 1f;                              // mesh units -> metres
         public static string Note = "";                             // why nothing is built ("only 2 bones found"), or ""
         public static string Status = "";
+        public static float Softness = 0.5f;                        // the Physics tab's softness of this frame (HerBodySettings.Softness): Embody's clasp reads it
         public static int BuildVersion;                             // bumped on every build and release: PhysicsHands rebuilds its bodies when it changes
         // Whether anything can push her limbs now: the physics hands (their contact impulses) or, with the geometric push (0.7.8), other hands.
         public static bool PushActive { get { return Built && (PhysicsHands.Active || _geoActive); } }
@@ -170,17 +174,38 @@ namespace SfMorph
         const float SkinGive = 0.015f;
         const float PushStiffness = 300f, PushDamp = 4f, PushCapPerHand = 20f, PushCapPerSeg = 40f, PushMinN = 0.2f;
         const float MaxCapSpeed = 3f, TeleportSpeed = 8f;   // m/s, the same rules as SoftSim
+        // 0.8.0 yield (design-0.8.0 section 3): the deepest penetration below this is no yield; at most GhostMax world-space ghost capsules per frame
+        const float YieldMinPen = 0.002f;
+        const int GhostMax = 64;
+
+        // ClaspGive (design 3.2): curl units (0..1 of a full curl) a clasp may sink past first contact on a segment at Softness 0.5
+        // (0.1 curl ~ 8 deg at the proximal joint ~ 1 cm at the tip), by Defs index
+        static readonly float[] _clasp = MakeClasp();
+        static float[] MakeClasp()
+        {
+            var a = new float[Defs.Length];
+            for (int i = 0; i < a.Length; i++)
+            {
+                string n = Defs[i].Name;
+                a[i] = n.StartsWith("breast", StringComparison.Ordinal) || n.StartsWith("butt", StringComparison.Ordinal) ? 0.25f
+                     : n.StartsWith("thigh", StringComparison.Ordinal) ? 0.15f : n == "pelvis" ? 0.10f : n == "spine" ? 0.12f : n == "chest" ? 0.08f
+                     : n.StartsWith("upperarm", StringComparison.Ordinal) ? 0.06f : n.StartsWith("forearm", StringComparison.Ordinal) ? 0.04f
+                     : n.StartsWith("calf", StringComparison.Ordinal) ? 0.05f : n == "neck" || n == "head" ? 0.03f : 0.10f;
+            }
+            return a;
+        }
 
         static void LogOnce(string key, string msg) { if (_once.Add(key)) Plugin.Log.LogInfo("Her body: " + msg); }
         static bool Finite(Vector3 v) { return !(float.IsNaN(v.x) || float.IsNaN(v.y) || float.IsNaN(v.z) || float.IsInfinity(v.x) || float.IsInfinity(v.y) || float.IsInfinity(v.z)); }
 
         // ================= update =================
 
-        // Per frame from Body.ApplyAll (after her bone changes, before Overlap reads the pushes): builds her segments, rebuilds them
-        // when she changes (every 2 s: renderers, bones, character shape), runs the geometric push.
+        // Per frame from Body.ApplyAll (after Apply, BEFORE Overlap: the bones hold the animation's pose, Overlap.Unwind saw to that):
+        // builds her segments, rebuilds them when she changes (every 2 s: renderers, bones, character shape), runs the yield / push query.
         public static void Update(Character her, HerBodySettings s)
         {
             if (s == null || !s.On || her == null || her.Root == null) return;
+            Softness = s.Softness;
             float now = Time.unscaledTime;
             if (Built)
             {
@@ -263,9 +288,11 @@ namespace SfMorph
             Segs.Clear();
             Array.Clear(_byIndex, 0, _byIndex.Length);
             _builtRends.Clear();
-            Built = false; Root = null; Status = ""; _dirty = false; _geoActive = false;
-            _pN = -1; _catN = -1; _pushBits = 0; _tallyAt = 0f; _statBase = "";
+            Built = false; Root = null; Status = ""; _dirty = false; _geoActive = false; HandsSegBits = 0;
+            _pN = -1; _gN = -1; _catN = -1; _pushBits = 0; _tallyAt = 0f; _statBase = ""; _mixSig = 0;
+            Array.Clear(_sOk, 0, _sOk.Length);
             Array.Clear(_sumF, 0, _sumF.Length); Array.Clear(_nF, 0, _nF.Length);
+            Array.Clear(_sumY, 0, _sumY.Length); Array.Clear(_nY, 0, _nY.Length); Array.Clear(_maxY, 0, _maxY.Length);
         }
 
         public static Seg Find(string name)
@@ -535,6 +562,7 @@ namespace SfMorph
             int nh = 0;
             foreach (var g in Segs) if (g.HullPts != null) nh++;
             _statBase = "Her body: " + Segs.Count + " segments (" + nh + " hulls, " + (Segs.Count - nh) + " capsules/spheres)";
+            HandsSegBits = (int)(SegBit("forearm_L") | SegBit("forearm_R"));
             _pushBits = 0;
             Status = _statBase;
             BuildVersion++;
@@ -910,30 +938,52 @@ namespace SfMorph
         static object _catList;
         static Transform _catRoot;
         static readonly Vector3[] _sa = new Vector3[Defs.Length], _sb = new Vector3[Defs.Length];   // her segments' world axes / centres this frame
-        static readonly float[] _sr = new float[Defs.Length];
+        static readonly float[] _sr = new float[Defs.Length];        // shape radius for the yield / push: the skin minus the skin give
+        static readonly float[] _srSkin = new float[Defs.Length];    // 0.8.0: the skin itself (RSkin * her bone's scale, no give): SkinDepth / CapsuleDepth
         static readonly bool[] _sOk = new bool[Defs.Length];
+        // 0.8.0 world-space ghost capsules of this frame: [0, _nPhysGhost) the physics hands at the controllers (yield only), then Embody's
+        static readonly WorldCap[] _ghost = new WorldCap[GhostMax];
+        static int _nPhysGhost, _nEmbGhost, _gN = -1;
+        static int _nVr, _nPartner, _nEmbExcl;                       // what Categorise found (the source mix log)
+        static long _mixSig; static float _mixNext;
         // pushes seen (merged physics + geometric) for the 10 s log and the status
         static readonly float[] _sumF = new float[Defs.Length];
         static readonly int[] _nF = new int[Defs.Length];
         static readonly string[] _byLast = new string[Defs.Length];
+        // yields seen: the pen sum / count / max and who, for the 10 s log
+        static readonly float[] _sumY = new float[Defs.Length], _maxY = new float[Defs.Length];
+        static readonly int[] _nY = new int[Defs.Length];
+        static readonly string[] _byY = new string[Defs.Length];
         static float _tallyAt;
         static uint _pushBits;
         static string _statBase = "";
 
         // Which capsules can push her geometrically: your hand models and the partner's hands (the physics hands push through contact
         // impulses; her own capsules never push her). Decided when the capsule set changes, not per frame.
+        // 0.8.0: the partner you embody is DROPPED (_catEmb): his hand transforms hold the animation's pose, not your controller, so
+        // Embody.FillGhost stands for his hands. PushByPartner governs the other partner rigs.
         static bool _catPartner; static Transform _catEmb;
         static void Categorise(List<SoftCapsule> caps)
         {
             int n = caps.Count;
             if (_cat.Length < n) _cat = new byte[Mathf.Max(n, _cat.Length * 2)];
+            _nVr = _nPartner = _nEmbExcl = 0;
             for (int i = 0; i < n; i++)
             {
                 var c = caps[i];
-                bool ok = c.T != null && ((c.Kind == "vr" && c.Owner != "PhysicsHands")
-                                          || (c.Kind == "partner" && (_catPartner || (_catEmb != null && c.T.IsChildOf(_catEmb)))));
+                bool ok = false, vr = false;
+                if (c.T != null)
+                {
+                    if (c.Kind == "vr" && c.Owner != "PhysicsHands") { ok = true; vr = true; }
+                    else if (c.Kind == "partner")
+                    {
+                        if (_catEmb != null && c.T.IsChildOf(_catEmb)) _nEmbExcl++;
+                        else ok = _catPartner;
+                    }
+                }
                 if (ok && Root != null && c.T.IsChildOf(Root)) ok = false;
                 _cat[i] = (byte)(ok ? 1 : 0);
+                if (ok) { if (vr) _nVr++; else _nPartner++; }
             }
             _catN = n; _catVer = VrHands.Version; _catList = caps; _catRoot = Root;
         }
@@ -961,41 +1011,44 @@ namespace SfMorph
             c1 = p1 + d1 * s; c2 = p2 + d2 * t;
         }
 
-        // Pushes from hands that aren't physics hands (your hand models, the partner's hands), by how deep they are in her SKIN shape (the
-        // radius the capsule colliders had before the inset: RSkin x her bone scale): per capsule and segment a force along the line from the
-        // capsule to her axis, Stiffness x depth + Damp x the capsule's approach speed, capped per hand and per segment. Fills GeoF / GeoPt / GeoBy
-        // per segment every frame and sets _geoActive. (Physics.ComputePenetration would need a collider per capsule; the push only needs depth.)
+        // Yield and push sources (0.8.0 rewrite of the 0.7.8 geometric push). Every frame, BEFORE Overlap (HerBody.Update runs first, against
+        // the animation's pose: Overlap.Unwind), for each source capsule and each of her segments, by how deep the capsule is in her SKIN
+        // shape (the radius the capsule colliders had before the inset: RSkin x her bone scale, minus the skin give):
+        //  - YIELD (all sources): pen-weighted point and direction into her, the deepest penetration, who. Overlap turns it into limb
+        //    rotations (a position-based displacement, not a force).
+        //  - PUSH (list capsules and Embody's ghosts, not the physics ghosts): Stiffness x depth + Damp x approach speed along the line
+        //    from the capsule to her axis, capped per hand and per segment: GeoF / GeoPt / GeoBy / GeoDepth / GeoVn, what Reactions reads.
+        // Sources: Body.Contacts() capsules that Categorise accepted (your hand models, other partners' hands), then the world-space ghosts:
+        // the physics hands at the CONTROLLER pose (PhysicsHands.FillGhost; yield only: their contact already reaches Reactions through
+        // the PhysX hits) and Embody's hands at the IK target (Embody.FillGhost; both). Physics.ComputePenetration would need a collider per
+        // capsule; this only needs depth.
         static void GeoPush(HerBodySettings s)
         {
             for (int i = 0; i < Segs.Count; i++)
             {
                 var g = Segs[i];
                 g.GeoF = Vector3.zero; g.GeoPt = Vector3.zero; g.GeoW = 0f; g.GeoDepth = 0f; g.GeoBy = null; g.GeoName = null; g.GeoVn = 0f;
+                g.YieldPen = 0f; g.YieldPt = Vector3.zero; g.YieldN = Vector3.zero; g.YieldBy = null; g.YieldHand = -1; g.YieldW = 0f;
             }
             _geoActive = false;
+            ShapesNow(s);                                   // also for SkinDepth / CapsuleDepth, whatever the sources are
             var caps = s.Caps;
-            if (!s.PushByTouch || caps == null || caps.Count == 0) { _pN = -1; return; }
-            int n = caps.Count;
-            if (n != _catN || VrHands.Version != _catVer || !ReferenceEquals(caps, _catList) || !ReferenceEquals(Root, _catRoot)
-                || s.PushByPartner != _catPartner || !ReferenceEquals(s.Embodied, _catEmb)) { _catPartner = s.PushByPartner; _catEmb = s.Embodied; Categorise(caps); }
-            bool reset = n != _pN || VrHands.Version != _pVer;
-            if (_pA.Length < n) { int m = Mathf.Max(n, _pA.Length * 2); _pA = new Vector3[m]; _pB = new Vector3[m]; _pOk = new bool[m]; reset = true; }
-            if (reset) { Array.Clear(_pOk, 0, _pOk.Length); _pN = n; _pVer = VrHands.Version; }   // a different capsule set: no velocities from the old one
+            bool listOn = s.PushByTouch && caps != null && caps.Count > 0;
+            int n = listOn ? caps.Count : 0;
+            _nPhysGhost = Mathf.Clamp(PhysicsHands.FillGhost(_ghost, 0, GhostMax), 0, GhostMax);
+            // the physics hands' ghosts are not a "touch push" (PushByTouch is about hands that aren't physics hands); Embody's are
+            _nEmbGhost = s.PushByTouch ? Mathf.Clamp(Embody.FillGhost(_ghost, _nPhysGhost, GhostMax - _nPhysGhost), 0, GhostMax - _nPhysGhost) : 0;
+            int ng = _nPhysGhost + _nEmbGhost;
+            if (n == 0) { _nVr = _nPartner = _nEmbExcl = 0; _catN = -1; }   // no list: no categories (and the next list is categorised afresh)
+            if (n > 0 && (n != _catN || VrHands.Version != _catVer || !ReferenceEquals(caps, _catList) || !ReferenceEquals(Root, _catRoot)
+                || s.PushByPartner != _catPartner || !ReferenceEquals(s.Embodied, _catEmb))) { _catPartner = s.PushByPartner; _catEmb = s.Embodied; Categorise(caps); }
+            LogMix(s);
+            if (n == 0 && ng == 0) { _pN = -1; _gN = -1; return; }
+            bool reset = n != _pN || VrHands.Version != _pVer || ng != _gN;
+            int need = n + GhostMax;
+            if (_pA.Length < need) { int m = Mathf.Max(need, _pA.Length * 2); _pA = new Vector3[m]; _pB = new Vector3[m]; _pOk = new bool[m]; reset = true; }
+            if (reset) { Array.Clear(_pOk, 0, _pOk.Length); _pN = n; _pVer = VrHands.Version; _gN = ng; }   // a different capsule set: no velocities from the old one
             float dt = Time.deltaTime, invDt = dt > 1e-4f && dt < 0.5f ? 1f / dt : 0f;
-
-            // her segments' skin shapes in the world, once
-            for (int i = 0; i < Segs.Count; i++)
-            {
-                var g = Segs[i];
-                int k = g.Index;
-                _sOk[k] = false;
-                if (g.A == null || (!g.Sphere && g.B == null)) continue;
-                float rr = RollScale(g);
-                if (g.Sphere) { _sa[k] = _sb[k] = g.A.TransformPoint(g.LocalCenter); }
-                else { _sa[k] = g.A.position; _sb[k] = g.B.position; }
-                _sr[k] = g.RSkin * rr - Mathf.Min(SkinGive, Inset(g, s.Softness));   // the skin gives a little before the limb moves
-                _sOk[k] = Finite(_sa[k]) && Finite(_sb[k]) && _sr[k] > 0.001f;
-            }
 
             for (int ci = 0; ci < n; ci++)
             {
@@ -1003,48 +1056,26 @@ namespace SfMorph
                 if (c.T == null || !(c.Radius > 0f)) { _pOk[ci] = false; continue; }
                 Matrix4x4 m = c.T.localToWorldMatrix;
                 Vector3 a = m.MultiplyPoint3x4(c.LocalA), b = m.MultiplyPoint3x4(c.LocalB);
-                Vector3 va = Vector3.zero, vb = Vector3.zero;
-                Vector3 raA = Vector3.zero, raB = Vector3.zero;   // the same velocities before the MaxCapSpeed clamp: what the reactions classify a slap by
-                if (_pOk[ci] && invDt > 0f)
-                {
-                    va = (a - _pA[ci]) * invDt; vb = (b - _pB[ci]) * invDt;
-                    float sa = va.sqrMagnitude, sbb = vb.sqrMagnitude;
-                    if (sa > TeleportSpeed * TeleportSpeed || sbb > TeleportSpeed * TeleportSpeed) { va = Vector3.zero; vb = Vector3.zero; }   // jumped, not moved
-                    else
-                    {
-                        raA = va; raB = vb;
-                        if (sa > MaxCapSpeed * MaxCapSpeed) va *= MaxCapSpeed / Mathf.Sqrt(sa);
-                        if (sbb > MaxCapSpeed * MaxCapSpeed) vb *= MaxCapSpeed / Mathf.Sqrt(sbb);
-                    }
-                }
-                _pA[ci] = a; _pB[ci] = b; _pOk[ci] = true;   // tracked even while hidden so its speed is right when it comes back
+                Vector3 va, vb, raA, raB;   // raA/raB: the same velocities before the MaxCapSpeed clamp: what the reactions classify a slap by
+                Velocity(ci, a, b, invDt, out va, out vb, out raA, out raB);   // tracked even while hidden so its speed is right when it comes back
                 if (_cat[ci] == 0) continue;
                 var src = c.Src;
                 if (src != null && !src.Live) continue;      // a hidden partner (or replaced controller model) touches nothing
                 if (!Finite(a) || !Finite(b)) continue;
                 _geoActive = true;
-                for (int i = 0; i < Segs.Count; i++)
-                {
-                    var g = Segs[i];
-                    int k = g.Index;
-                    if (!_sOk[k]) continue;
-                    float t; Vector3 cc, cs;
-                    ClosestSegSeg(a, b, _sa[k], _sb[k], out t, out cc, out cs);
-                    Vector3 diff = cs - cc;
-                    float dist = diff.magnitude;
-                    float pen = c.Radius + _sr[k] - dist;
-                    if (pen <= 0f || dist < 1e-4f) continue;
-                    Vector3 nrm = diff / dist;                             // into her
-                    float vn = Mathf.Max(0f, Vector3.Dot(Vector3.Lerp(va, vb, t), nrm));
-                    float vnRaw = Mathf.Max(0f, Vector3.Dot(Vector3.Lerp(raA, raB, t), nrm));   // unclamped: a hand-model slap above the push clamp still reads as one
-                    if (vnRaw > g.GeoVn) g.GeoVn = vnRaw;
-                    float mag = Mathf.Min(PushCapPerHand, PushStiffness * pen + PushDamp * vn);
-                    Vector3 f = nrm * mag;
-                    g.GeoF += f;
-                    g.GeoPt += (cc + nrm * c.Radius) * mag;
-                    g.GeoW += mag;
-                    if (pen > g.GeoDepth) { g.GeoDepth = pen; g.GeoBy = src; g.GeoName = c.Owner; }
-                }
+                string who = src != null && src.Name != null ? src.Name : (c.Owner ?? "a hand");
+                Feed(a, b, c.Radius, src, c.Owner, who, HandOf(who), true, va, vb, raA, raB);
+            }
+            for (int gi = 0; gi < ng; gi++)
+            {
+                var w = _ghost[gi];
+                if (!(w.R > 0f) || !Finite(w.A) || !Finite(w.B)) continue;
+                if (w.Src != null && !w.Src.Live) continue;
+                bool geo = gi >= _nPhysGhost;                // Embody's: geometric hands; the physics hands' yield only
+                Vector3 va = Vector3.zero, vb = Vector3.zero, raA = Vector3.zero, raB = Vector3.zero;
+                if (geo) Velocity(n + gi, w.A, w.B, invDt, out va, out vb, out raA, out raB);
+                _geoActive = true;
+                Feed(w.A, w.B, w.R, w.Src, w.By, w.By ?? "a hand", w.Hand, geo, va, vb, raA, raB);
             }
 
             for (int i = 0; i < Segs.Count; i++)
@@ -1058,12 +1089,115 @@ namespace SfMorph
                     if (!Finite(g.GeoF) || !Finite(g.GeoPt)) { g.GeoF = Vector3.zero; g.GeoW = 0f; }
                 }
                 else g.GeoW = 0f;
+                if (g.YieldW > 1e-6f)
+                {
+                    g.YieldPt /= g.YieldW;
+                    float nm = g.YieldN.magnitude;
+                    if (nm > 1e-6f) g.YieldN /= nm;
+                    if (!(nm > 1e-6f) || !Finite(g.YieldPt) || !Finite(g.YieldN)) { g.YieldPen = 0f; g.YieldW = 0f; g.YieldPt = g.YieldN = Vector3.zero; g.YieldBy = null; }
+                }
+                else { g.YieldW = 0f; g.YieldPen = 0f; }
                 if (!g.PushLogged && g.GeoF.sqrMagnitude >= PushMinN * PushMinN)
                 {
                     g.PushLogged = true;
                     Plugin.Log.LogInfo("Her body: first push on " + g.Name + " by " + ByName(g, 0f, 1f) + " (" + g.GeoF.magnitude.ToString("0.0") + " N, " + (g.GeoDepth * 100f).ToString("0.0") + " cm deep)");
                 }
+                if (!g.YieldLogged && g.YieldPen >= YieldMinPen)
+                {
+                    g.YieldLogged = true;
+                    Plugin.Log.LogInfo("Her body: first yield on " + g.Name + " by " + (g.YieldBy ?? "a hand") + " (" + (g.YieldPen * 100f).ToString("0.0") + " cm deep)");
+                }
             }
+        }
+
+        // her segments' skin shapes in the world, once per frame: the axis, the radius the push / yield use (skin - give) and the skin radius
+        static void ShapesNow(HerBodySettings s)
+        {
+            for (int i = 0; i < Segs.Count; i++)
+            {
+                var g = Segs[i];
+                int k = g.Index;
+                _sOk[k] = false;
+                if (g.A == null || (!g.Sphere && g.B == null)) continue;
+                float rr = RollScale(g);
+                if (g.Sphere) { _sa[k] = _sb[k] = g.A.TransformPoint(g.LocalCenter); }
+                else { _sa[k] = g.A.position; _sb[k] = g.B.position; }
+                _srSkin[k] = g.RSkin * rr;
+                _sr[k] = _srSkin[k] - Mathf.Min(SkinGive, Inset(g, s.Softness));   // the skin gives a little before the limb moves
+                _sOk[k] = Finite(_sa[k]) && Finite(_sb[k]) && _sr[k] > 0.001f;
+            }
+        }
+
+        // The capsule's world velocity from last frame's endpoints (slot si), with the MaxCapSpeed clamp and without it; a jump is not motion.
+        static void Velocity(int si, Vector3 a, Vector3 b, float invDt, out Vector3 va, out Vector3 vb, out Vector3 raA, out Vector3 raB)
+        {
+            va = vb = raA = raB = Vector3.zero;
+            if (_pOk[si] && invDt > 0f)
+            {
+                va = (a - _pA[si]) * invDt; vb = (b - _pB[si]) * invDt;
+                float sa = va.sqrMagnitude, sbb = vb.sqrMagnitude;
+                if (sa > TeleportSpeed * TeleportSpeed || sbb > TeleportSpeed * TeleportSpeed) { va = Vector3.zero; vb = Vector3.zero; }   // jumped, not moved
+                else
+                {
+                    raA = va; raB = vb;
+                    if (sa > MaxCapSpeed * MaxCapSpeed) va *= MaxCapSpeed / Mathf.Sqrt(sa);
+                    if (sbb > MaxCapSpeed * MaxCapSpeed) vb *= MaxCapSpeed / Mathf.Sqrt(sbb);
+                }
+            }
+            _pA[si] = a; _pB[si] = b; _pOk[si] = true;
+        }
+
+        // One source capsule against every segment (see GeoPush). who/hand: for the yield; owner: GeoName; geo false = yield only.
+        static void Feed(Vector3 a, Vector3 b, float rad, CapSource src, string owner, string who, int hand, bool geo, Vector3 va, Vector3 vb, Vector3 raA, Vector3 raB)
+        {
+            for (int i = 0; i < Segs.Count; i++)
+            {
+                var g = Segs[i];
+                int k = g.Index;
+                if (!_sOk[k]) continue;
+                float t; Vector3 cc, cs;
+                ClosestSegSeg(a, b, _sa[k], _sb[k], out t, out cc, out cs);
+                Vector3 diff = cs - cc;
+                float dist = diff.magnitude;
+                float pen = rad + _sr[k] - dist;
+                if (pen <= 0f || dist < 1e-4f) continue;
+                Vector3 nrm = diff / dist;                             // into her
+                // yield: pen-weighted so the point and direction stay continuous when the deepest capsule changes (a palm and five fingers on a thigh)
+                g.YieldW += pen; g.YieldPt += (cc + nrm * rad) * pen; g.YieldN += nrm * pen;
+                if (pen > g.YieldPen) { g.YieldPen = pen; g.YieldBy = who; g.YieldHand = hand; }
+                if (!geo) continue;
+                float vn = Mathf.Max(0f, Vector3.Dot(Vector3.Lerp(va, vb, t), nrm));
+                float vnRaw = Mathf.Max(0f, Vector3.Dot(Vector3.Lerp(raA, raB, t), nrm));   // unclamped: a hand-model slap above the push clamp still reads as one
+                if (vnRaw > g.GeoVn) g.GeoVn = vnRaw;
+                float mag = Mathf.Min(PushCapPerHand, PushStiffness * pen + PushDamp * vn);
+                Vector3 f = nrm * mag;
+                g.GeoF += f;
+                g.GeoPt += (cc + nrm * rad) * mag;
+                g.GeoW += mag;
+                if (pen > g.GeoDepth) { g.GeoDepth = pen; g.GeoBy = src; g.GeoName = owner; }
+            }
+        }
+
+        // Which of YOUR hands a source name stands for ("your left hand", "your right physics hand"), -1 when it doesn't say.
+        static int HandOf(string who)
+        {
+            if (who == null) return -1;
+            if (who.IndexOf("left", StringComparison.Ordinal) >= 0) return 0;
+            if (who.IndexOf("right", StringComparison.Ordinal) >= 0) return 1;
+            return -1;
+        }
+
+        // The source mix, logged when it changes (at most every 2 s).
+        static void LogMix(HerBodySettings s)
+        {
+            long sig = 1L + _nVr + ((long)_nPartner << 8) + ((long)_nEmbExcl << 16) + ((long)_nPhysGhost << 24) + ((long)_nEmbGhost << 32);
+            if (_nVr + _nPartner + _nEmbExcl + _nPhysGhost + _nEmbGhost == 0) sig = 0;
+            if (sig == _mixSig) return;
+            float now = Time.unscaledTime;
+            if (now < _mixNext) return;
+            _mixNext = now + 2f; _mixSig = sig;
+            if (sig != 0)
+                Plugin.Log.LogInfo("Her body: yield sources: hand models " + _nVr + ", partners " + _nPartner + " (embodied excluded: " + _nEmbExcl + "), physics ghosts " + _nPhysGhost + ", his ghosts " + _nEmbGhost);
         }
 
         // Nothing can push her: the last pushes must not linger.
@@ -1082,19 +1216,32 @@ namespace SfMorph
             return g.GeoBy != null ? g.GeoBy.Name : (g.GeoName != null ? g.GeoName : "a hand");
         }
 
-        // Every frame: which segments are pushed (status line), and every 10 s one log line with their average force while pushes happened.
+        // Every frame: which segments yield or are pushed (status line), and every 10 s one log line with their average force and
+        // penetration while that happened.
         static void Tally(float now)
         {
             uint bits = 0;
             for (int i = 0; i < Segs.Count; i++)
             {
                 var g = Segs[i];
+                int k = g.Index;
                 Vector3 f = g.PhysF + g.GeoF;
-                if (!PushActive || f.sqrMagnitude < PushMinN * PushMinN) continue;
-                bits |= 1u << g.Index;
-                float wp = g.PhysF.magnitude, wg = g.GeoF.magnitude;
-                _sumF[g.Index] += f.magnitude; _nF[g.Index]++;
-                _byLast[g.Index] = ByName(g, wp, wg);
+                bool pushed = PushActive && f.sqrMagnitude >= PushMinN * PushMinN;
+                bool yielded = g.YieldPen >= YieldMinPen;
+                if (!pushed && !yielded) continue;
+                bits |= 1u << k;
+                if (pushed)
+                {
+                    float wp = g.PhysF.magnitude, wg = g.GeoF.magnitude;
+                    _sumF[k] += f.magnitude; _nF[k]++;
+                    _byLast[k] = ByName(g, wp, wg);
+                }
+                if (yielded)
+                {
+                    _sumY[k] += g.YieldPen; _nY[k]++;
+                    if (g.YieldPen > _maxY[k]) _maxY[k] = g.YieldPen;
+                    _byY[k] = g.YieldBy;
+                }
             }
             if (bits != _pushBits)
             {
@@ -1102,7 +1249,7 @@ namespace SfMorph
                 var sb = new StringBuilder(_statBase);
                 bool first = true;
                 for (int i = 0; i < Segs.Count; i++)
-                    if ((bits & (1u << Segs[i].Index)) != 0) { sb.Append(first ? "; pushed: " : ", ").Append(Segs[i].Name); first = false; }
+                    if ((bits & (1u << Segs[i].Index)) != 0) { sb.Append(first ? "; yielding: " : ", ").Append(Segs[i].Name); first = false; }
                 Status = sb.ToString();
             }
             if (_tallyAt <= 0f) _tallyAt = now + 10f;
@@ -1118,32 +1265,93 @@ namespace SfMorph
                     sb.Append(Segs[i].Name).Append(' ').Append((_sumF[k] / _nF[k]).ToString("0.0")).Append(" N avg by ").Append(_byLast[k]);
                     _sumF[k] = 0f; _nF[k] = 0;
                 }
-                if (sb != null) Plugin.Log.LogInfo(sb.ToString());
+                StringBuilder sy = null;
+                for (int i = 0; i < Segs.Count; i++)
+                {
+                    int k = Segs[i].Index;
+                    if (_nY[k] == 0) continue;
+                    if (sy == null) sy = new StringBuilder(sb != null ? "; yield: " : "Her body: last 10 s yield: "); else sy.Append(", ");
+                    sy.Append(Segs[i].Name).Append(' ').Append((_sumY[k] / _nY[k] * 100f).ToString("0.0")).Append(" cm avg ").Append((_maxY[k] * 100f).ToString("0.0")).Append(" max by ").Append(_byY[k] ?? "a hand");
+                    _sumY[k] = 0f; _nY[k] = 0; _maxY[k] = 0f;
+                }
+                if (sb != null) { if (sy != null) sb.Append(sy); Plugin.Log.LogInfo(sb.ToString()); }
+                else if (sy != null) Plugin.Log.LogInfo(sy.ToString());
             }
         }
 
-        // The push on one of her segments over the last step: the force ON HER (N, world), where it acted, and who pushed ("your right
-        // physics hand", "Player", ...). The physics hands' contact force (PhysF) and the geometric push (GeoF) add up; false below 0.2 N.
-        // ---- 0.8.0 yield and analytic queries (design-0.8.0 sections 2, 3.1, 3.2; stubs until P2) ----
+        // ---- 0.8.0 yield and analytic queries (design-0.8.0 sections 2, 3.1, 3.2) ----
+
+        // The yield of one of her segments this frame (Overlap's input), measured by GeoPush before Overlap against the animation's pose:
+        // the pen-weighted contact point (world), the unit direction INTO her, the deepest penetration after the skin give (m), who and
+        // which of YOUR hands (0 left, 1 right, -1 unknown). False below YieldMinPen (2 mm), when nothing is built or the index is bad.
         public static bool YieldOn(int segIndex, out Vector3 point, out Vector3 normalIntoHer, out float pen, out string by, out int hand)
         {
-            point = Vector3.zero; normalIntoHer = Vector3.zero; pen = 0f; by = null; hand = -1; return false;
+            point = Vector3.zero; normalIntoHer = Vector3.zero; pen = 0f; by = null; hand = -1;
+            if (!Built || segIndex < 0 || segIndex >= _byIndex.Length) return false;
+            var g = _byIndex[segIndex];
+            if (g == null || !(g.YieldPen >= YieldMinPen) || !(g.YieldW > 0f)) return false;
+            point = g.YieldPt; normalIntoHer = g.YieldN; pen = g.YieldPen; by = g.YieldBy; hand = g.YieldHand;
+            return true;
         }
-        // curl units (0..1 of a full curl): how far a clasp may sink past first contact on this segment, before Softness
-        public static float ClaspGive(int segIndex) { return 0.1f; }
-        // deepest segment for a sphere (p, r) against the skin shapes (RSkin * rr, no give): depth > 0 inside; false = none within r
+
+        // Curl units (0..1 of a full curl): how far a clasp may sink past first contact on this segment, before the caller scales it by
+        // (0.5 + Softness). 0.1 for an index outside the segments.
+        public static float ClaspGive(int segIndex) { return segIndex >= 0 && segIndex < _clasp.Length ? _clasp[segIndex] : 0.1f; }
+
+        // The deepest of her segments for a sphere (p, r) against the SKIN shapes (RSkin x her bone scale, no give: a finger stops at the
+        // skin, the soft zones dent under it). depth > 0 inside (the sphere overlaps the skin by that much); false = none within r.
+        // Uses the shapes GeoPush placed this frame (HerBody.Update ran): 17 point-capsule tests.
         public static bool SkinDepth(Vector3 p, float r, out int segIndex, out float depth, out Vector3 normalIntoHer)
         {
-            segIndex = -1; depth = 0f; normalIntoHer = Vector3.zero; return false;
+            segIndex = -1; depth = 0f; normalIntoHer = Vector3.zero;
+            if (!Built || !Finite(p) || float.IsNaN(r)) return false;
+            for (int i = 0; i < Segs.Count; i++)
+            {
+                int k = Segs[i].Index;
+                if (!_sOk[k]) continue;
+                Vector3 ab = _sb[k] - _sa[k];
+                float l2 = ab.sqrMagnitude;
+                float t = l2 > 1e-10f ? Mathf.Clamp01(Vector3.Dot(p - _sa[k], ab) / l2) : 0f;
+                Vector3 c = _sa[k] + ab * t, diff = c - p;
+                float dist = diff.magnitude;
+                float d = r + _srSkin[k] - dist;
+                if (d <= depth) continue;
+                depth = d; segIndex = k;
+                // a centre on the axis has no direction: perpendicular to the axis (any), else down
+                normalIntoHer = dist > 1e-5f ? diff / dist : (l2 > 1e-10f ? Vector3.Cross(ab, Vector3.up).normalized : Vector3.down);
+            }
+            return segIndex >= 0;
         }
-        // max penetration of a capsule into the skin shapes, 0 when none; skipSegBits = segments to ignore (1u << Seg.Index)
+
+        // The deepest penetration (m) of a capsule (a, b, r) into the skin shapes, 0 when none; skipSegBits = segments to ignore
+        // (1u << Seg.Index, SegBit). segIndex / normalIntoHer describe the deepest one.
         public static float CapsuleDepth(Vector3 a, Vector3 b, float r, uint skipSegBits, out int segIndex, out Vector3 normalIntoHer)
         {
-            segIndex = -1; normalIntoHer = Vector3.zero; return 0f;
+            segIndex = -1; normalIntoHer = Vector3.zero;
+            if (!Built || !Finite(a) || !Finite(b) || float.IsNaN(r)) return 0f;
+            float best = 0f;
+            for (int i = 0; i < Segs.Count; i++)
+            {
+                int k = Segs[i].Index;
+                if (!_sOk[k] || (skipSegBits & (1u << k)) != 0u) continue;
+                float t; Vector3 cc, cs;
+                ClosestSegSeg(a, b, _sa[k], _sb[k], out t, out cc, out cs);
+                Vector3 diff = cs - cc;
+                float dist = diff.magnitude;
+                float d = r + _srSkin[k] - dist;
+                if (d <= best || dist < 1e-5f) continue;
+                best = d; segIndex = k; normalIntoHer = diff / dist;
+            }
+            return best;
         }
-        public static uint SegBit(string segName) { return 0u; }    // 0 when not built
-        public static int HandsSegBits;                              // forearm_L/R + the wrists' owners: never 'her own hands' for CapsuleDepth callers
 
+        // The bit of a segment by name (1u << Seg.Index), 0 when it is not built.
+        public static uint SegBit(string segName) { var g = Find(segName); return g != null ? 1u << g.Index : 0u; }
+        public static int HandsSegBits;                              // forearm_L/R (her hands have no segment): never 'her own hands' for CapsuleDepth callers
+
+        // The push on one of her segments over the last step: the force ON HER (N, world), where it acted, and who pushed ("your right
+        // physics hand", "Player", ...). The physics hands' contact force (PhysF) and the geometric push (GeoF) add up; false below 0.2 N.
+        // Overlap no longer reads it (0.8.0: YieldOn); it stays for diagnostics.
         public static bool PushOn(string seg, out Vector3 point, out Vector3 forceOnHer, out string by)
         {
             return PushOn(Find(seg), out point, out forceOnHer, out by);

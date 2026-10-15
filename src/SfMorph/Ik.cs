@@ -12,11 +12,18 @@ namespace SfMorph
         // cosines below is clamped to [-1, 1], so a fully straight chain is safe.
         const float ReachClamp = 1f;
 
+        // 0.8.0 (Embody's elbow swivel): the pole direction turned about the root-target line `dir` (unit) by `degrees` (right-handed about dir,
+        // as Quaternion.AngleAxis). The pole is expected perpendicular to dir (as in TwoBone), so the result stays perpendicular, and a
+        // unit pole stays unit. Anything not finite, or a degenerate dir, returns the pole unchanged.
+        public static Vector3 SwivelPole(Vector3 pole, Vector3 dir, float degrees)
+        {
+            if (float.IsNaN(degrees) || float.IsInfinity(degrees) || dir.sqrMagnitude < 1e-10f) return pole;
+            Vector3 r = Quaternion.AngleAxis(degrees, dir.normalized) * pole;
+            return float.IsNaN(r.x) || float.IsNaN(r.y) || float.IsNaN(r.z) ? pole : r;
+        }
+
         // Rotates root and mid (world rotations, slerped by w from what they are now toward the solved ones) so that `end` reaches
         // `target`, and slerps end.rotation toward endRot by w. w 0 = untouched, 1 = exact (up to ReachClamp). false = nothing done.
-        // 0.8.0: the pole rotated about dir (unit) by degrees (Embody's elbow swivel). Stub until P2.
-        public static Vector3 SwivelPole(Vector3 pole, Vector3 dir, float degrees) { return pole; }
-
         public static bool TwoBone(Transform root, Transform mid, Transform end, Vector3 target, Quaternion endRot, float w)
         {
             if (root == null || mid == null || end == null || !(w > 0f)) return false;
