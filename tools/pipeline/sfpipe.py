@@ -466,6 +466,8 @@ def run(a, chk):
     log('stiffer fit on %d vertices (fingers, toes, eyelids); %d eyelid vertices keep her eye opening' % ((stiff > 1).sum(), lids.sum()))
     eye_off, eye_ratio, fm_her, fm_vam = None, {}, None, None
     eye_open = None      # (apertures, closed) once measured on the VaM skin
+    S = None             # mouth similarity (her proportions only): maps her mouth parts to the VaM-sized face
+    lid_chk = []         # (eye, nearest fitted lid vertex to the eye centre, eyeball radius) in metres
     r_vam = None
     r_her = {}
     if a.proportions == 'vam':
@@ -621,19 +623,24 @@ def run(a, chk):
                 'mostly closed (caught mid-blink?): her own lids keep their opening. Re-export from VaM with the SfExport '
                 'plugin (it turns blinking off) to get the character\'s eye shape too' if closed else 'open: the lids are fitted'))
             if closed:
+                # her own lids stay, so her eyeballs keep their size (the VaM-sized eyeball would push through them)
+                if eye_ratio:
+                    log('eyes closed on the VaM skin: eyeball scale %s -> 1.0 (her lids and eyeball stay matched)' % {e: round(r, 3) for e, r in eye_ratio.items()})
+                eye_ratio = {e: 1.0 for e in ('Eye_L', 'Eye_R')}
                 for e in ('Eye_L', 'Eye_R'):
                     r = np.linalg.norm(wc - bind_pos[e], axis=1)
                     nodata |= r < 0.021
                     stiff_b = np.maximum(stiff_b, np.clip(12.0 * (1 - (r - 0.016) / 0.012), 1, 12))
         # VaM's shoulders come from a T-pose (trapezius bunched up with the arms raised) and don't come down with
-        # the arms: her own clavicle/shoulder shape is held by extra stiffness (the data still pulls), VaM's takes
-        # over smoothly around it
+        # the arms: her own clavicle/shoulder shape is kept (no data within 12 cm of the shoulder and scapula bind
+        # positions), with a stiffness ramp (10 at 12 cm down to 1 at 18 cm) so VaM's shape takes over smoothly around it
         n_sh = np.zeros(nw, bool)
         for sdn in ('Shoulder_L', 'Shoulder_R', 'Scapula_L', 'Scapula_R'):
             r = np.linalg.norm(wc - bind_pos[sdn], axis=1)
-            n_sh |= r < 0.11
-            stiff_b = np.maximum(stiff_b, np.clip(6.0 * (1 - (r - 0.11) / 0.06), 1, 6))
-        log('%d mouth-interior vertices keep her shape (no data); %d shoulder vertices stiffer (up to 6, data on)' % (mouth_in.sum(), n_sh.sum()))
+            n_sh |= r < 0.12
+            stiff_b = np.maximum(stiff_b, np.clip(10.0 * (1 - (r - 0.12) / 0.06), 1, 10))
+        nodata |= n_sh
+        log('%d mouth-interior vertices keep her shape (no data); %d shoulder vertices keep her shape (no data within 12 cm, stiffness ramp to 10 out to 18 cm)' % (mouth_in.sum(), n_sh.sum()))
         # Face pre-alignment: her head (only) is warped onto VaM's face landmarks first, so the ICP starts with the
         # nose, chin, ears and mouth near their targets (its smoothness term anchors to the aligned shape).
         if fm_her is not None and fm_vam is not None:
@@ -656,6 +663,23 @@ def run(a, chk):
         else:
             warn('face metrics failed: no face pre-alignment (the fit starts from her own face)')
             x_start = wc.copy()
+        # Mouth similarity S: the face shrinks to the VaM character's, so her teeth, tongue and mouth interior shrink
+        # with it (centre: her eye midpoint, no rotation), landing her lip ring on the pre-aligned lip ring
+        # (the lips only: her boundary ring has a few stray vertices up at the nostrils, so the ring is cut to +-12 mm round its median height)
+        ring_i = mouth_w[np.abs(wc[mouth_w][:, 1] - np.median(wc[mouth_w][:, 1])) < 0.012]
+        ring_c = wc[ring_i].mean(0); ring_t = x_start[ring_i].mean(0)
+        if fm_her is not None and fm_vam is not None:
+            s_mouth = float(np.mean([fm_vam['spacing'] / fm_her['spacing'],
+                                     np.linalg.norm(fm_vam['chin'] - fm_vam['em']) / np.linalg.norm(fm_her['chin'] - fm_her['em'])]))
+        else:
+            s_mouth = 1.0
+        S_tr = ring_t - (eye_mid_b + s_mouth * (ring_c - eye_mid_b))
+        S = lambda p: eye_mid_b + s_mouth * (np.asarray(p) - eye_mid_b) + S_tr
+        x_start[mouth_in] = S(wc[mouth_in])
+        log('mouth similarity S: scale %.4f about her eye midpoint (eye spacing %.4f, eye-chin %.4f), her lip ring centroid moves %.1f mm to the pre-aligned ring (%d lip-ring vertices of %d, %d interior vertices)' % (
+            s_mouth, fm_vam['spacing'] / fm_her['spacing'] if fm_her is not None and fm_vam is not None else 1.0,
+            np.linalg.norm(fm_vam['chin'] - fm_vam['em']) / np.linalg.norm(fm_her['chin'] - fm_her['em']) if fm_her is not None and fm_vam is not None else 1.0,
+            1000 * np.linalg.norm(S(ring_c) - ring_c), len(ring_i), len(mouth_w), mouth_in.sum()))
         min_dot = np.where(np.linalg.norm(wc - eye_mid_b, axis=1) < 0.12, 0.2, 0.5)
         xfit, wmatch, dist = fit.nonrigid_icp(x_start, wf, lambda x: sfio.vertex_normals(x, wf, hsign), surfaces, hlab, log, stiff=stiff_b, nodata=nodata, min_dot=min_dot)
         movable = (hlab == names.index('torso')) & (wc[:, 1] < bind_pos['Neck_M'][1])
@@ -667,9 +691,20 @@ def run(a, chk):
 
     wd, b0, b1 = fit.untangle(wc, wf, wd, iters=1000, rings=5)
     log('untangle fitted skin: %d flipped triangles -> %d' % (b0, b1))
+    if S is not None:
+        # mouth: what the generic relaxation cannot undo (tiny triangles at the lip corners folded by the lip fit) is
+        # blended towards the mouth similarity S, which never folds, ring by ring until the mouth has no flipped triangle
+        wd, f0, f1 = untangle_toward(wc, wf, wd, S(wc) - wc, np.linalg.norm(wc - hm_b, axis=1) < 0.06)
+        log('untangle fitted skin, mouth (towards the similarity S): %d flipped triangles -> %d' % (f0, f1))
 
     # normals of the fitted skin on the welded mesh (one normal per welded vertex: no seams at mesh borders)
     wn0 = sfio.vertex_normals(wc, wf, hsign); wn1 = sfio.vertex_normals(wc + wd, wf, hsign)
+
+    # head weight column: smoothstep of the bind-pose height between her Neck_M and Head_M (the ramp the head
+    # alignment uses), written as the last value of every morph and skin line (the game's head-follow weight)
+    def head_w(y):
+        t = np.clip((np.asarray(y) - bind_pos['Neck_M'][1]) / (bind_pos['Head_M'][1] - bind_pos['Neck_M'][1]), 0, 1)
+        return t * t * (3 - 2 * t)
 
     # --- every mesh: offsets (fitted, rigid or following), normal deltas -------------------------------
     pos = 0
@@ -685,11 +720,13 @@ def run(a, chk):
     if a.joints == 'all':
         for e in eye_off:
             joint_off[e] = eye_off[e]
+        if S is not None and 'Jaw_M' in bind_pos:
+            joint_off['Jaw_M'] = S(bind_pos['Jaw_M']) - bind_pos['Jaw_M']
     elif a.joints == 'face':
         for e in eye_off:
             joint_off[e] = cap(eye_off[e])
         if 'Jaw_M' in bind_pos:
-            joint_off['Jaw_M'] = cap(fit.shell_average(wc, wd, bind_pos['Jaw_M']))
+            joint_off['Jaw_M'] = cap(fit.shell_average(wc, wd, bind_pos['Jaw_M'])) if S is None else S(bind_pos['Jaw_M']) - bind_pos['Jaw_M']
     log('joints (%s): %s' % (a.joints, ', '.join('%s %s mm' % (b, np.round(o * 1000, 1).tolist()) for b, o in sorted(joint_off.items()) if np.any(o)) or 'all zero'))
     if eye_ratio and eye_off:
         # her lids against the eyeball: the fitted lid vertices must stay outside it
@@ -697,7 +734,8 @@ def run(a, chk):
             c = bind_pos[e] + eye_off[e]
             lid = np.linalg.norm(wc - bind_pos[e], axis=1) < 0.03
             dl = np.linalg.norm(wc[lid] + wd[lid] - c, axis=1)
-            log('  %s: eyeball radius %.2f mm (VaM), nearest fitted lid vertex %.2f mm from the centre (%d vertices within 30 mm)' % (
+            lid_chk.append((e, float(dl.min()), float(eye_ratio[e] * r_her[e])))
+            log('  %s: eyeball radius %.2f mm, nearest fitted lid vertex %.2f mm from the centre (%d vertices within 30 mm)' % (
                 e, 1000 * eye_ratio[e] * r_her[e], 1000 * dl.min(), lid.sum()))
     results = []
     from scipy.spatial import cKDTree
@@ -712,6 +750,8 @@ def run(a, chk):
             near, _ = skin_tree.query(m.vc)
             pinned = near < 2e-5
             pinned[m.fit_idx] = True
+            if S is not None and m.name in ('reika_upperMouth', 'reika_lowerMouth'):
+                d = np.where(pinned[:, None], d, S(m.vc) - m.vc)   # soft target: the shrunk mouth; the seams stay on the skin
             d = fit.smooth_follow(m.vc, m.faces, d, pinned)
         n_a = n_b = None
         if len(m.fit_idx):
@@ -722,6 +762,8 @@ def run(a, chk):
             j = RIGID[m.name]
             if j in eye_off:   # eyeball: moves to VaM's eye centre and takes its size
                 d[:] = eye_off[j] + (eye_ratio.get(j, 1.0) - 1.0) * (m.vc - bind_pos[j])
+            elif S is not None:
+                d[:] = S(m.vc) - m.vc
             else:
                 d[:] = d.mean(0)
         elif len(m.fit_idx) < len(m.v):
@@ -751,6 +793,20 @@ def run(a, chk):
             if len(m.fit_idx):
                 m.vp1[m.fit_idx] = xfit[widx[pos - len(m.fit_idx):pos]]
         results.append(m)
+
+    # upper-teeth front against the upper lip's inner surface (fitted face skin facing back into the mouth)
+    tm = next((m for m in results if m.name == 'reika_upperTeeth'), None)
+    if tm is not None and bindfit:
+        tp = tm.vc + tm.dc
+        cen = np.abs(tp[:, 0] - eye_mid_b[0]) < 0.008
+        tf = tp[cen][np.argmax(tp[cen][:, 2])]
+        fpos = (wc + wd)[face_w]; fn = wn1[face_w]
+        win = (np.abs(fpos[:, 0] - tf[0]) < 0.010) & (np.abs(fpos[:, 1] - tf[1]) < 0.004) & (fn[:, 2] < -0.2) & (fpos[:, 2] > tf[2] - 0.02) & (fpos[:, 2] < tf[2] + 0.03)
+        if win.any():
+            log('upper teeth front z %.1f mm (y %.1f) vs upper lip inner surface z %.1f mm (%d vertices): clearance %.1f mm (positive = teeth behind the lip)' % (
+                1000 * tf[2], 1000 * tf[1], 1000 * fpos[win, 2].mean(), win.sum(), 1000 * (fpos[win, 2].mean() - tf[2])))
+        else:
+            log('upper teeth front z %.1f mm: no inner-lip vertices found near it to measure the clearance' % (1000 * tf[2]))
 
     # --- verification ------------------------------------------------------------------------------------
     body = None
@@ -792,7 +848,7 @@ def run(a, chk):
 
     # --- write -------------------------------------------------------------------------------------------
     for m in results:
-        sfio.write_morph(os.path.join(a.out, m.name + '.morph.txt'), m.name, m.d, m.dn)
+        sfio.write_morph(os.path.join(a.out, m.name + '.morph.txt'), m.name, m.d, m.dn, h=head_w(m.vc[:, 1]))
     with open(os.path.join(a.out, 'joints.txt'), 'w', encoding='utf-8', newline='\n') as f:
         f.write('# bone\tparent\tbind position\toffset (bind space, Unity axes, metres)\n')
         for b in sorted(joint_off):
@@ -802,11 +858,12 @@ def run(a, chk):
     # variants (uniform_upperBody_normal replaces her upper body when she's dressed) and any unconverted mesh follow
     # in the game, whichever of her meshes the scene uses.
     with open(os.path.join(a.out, 'skin.txt'), 'w', encoding='utf-8', newline='\n') as f:
-        f.write('# her skin, welded, common bind space: position, normal, offset, normal delta\n')
+        f.write('# her skin, welded, common bind space: position, normal, offset, normal delta, head weight\n')
         f.write('vertices %d\n' % nw)
         dn = wn1 - wn0
+        hw = head_w(wc[:, 1])
         for i in range(nw):
-            f.write('%.6g %.6g %.6g %.4g %.4g %.4g %.6g %.6g %.6g %.4g %.4g %.4g\n' % (tuple(wc[i]) + tuple(wn0[i]) + tuple(wd[i]) + tuple(dn[i])))
+            f.write('%.6g %.6g %.6g %.4g %.4g %.4g %.6g %.6g %.6g %.4g %.4g %.4g %.4g\n' % (tuple(wc[i]) + tuple(wn0[i]) + tuple(wd[i]) + tuple(dn[i]) + (hw[i],)))
     with open(os.path.join(a.out, 'binds.txt'), 'w', encoding='utf-8', newline='\n') as f:
         f.write('# bone\tbind pose (mesh -> bone), 16 values row by row, common bind space\n')
         for b in sorted(canon):
@@ -822,6 +879,7 @@ def run(a, chk):
         f.write('made\t%s\n' % time.strftime('%Y-%m-%d %H:%M'))
         f.write('scale\t%.5f\n' % s)
         f.write('proportions\t%s\n' % a.proportions)
+        f.write('frames\tbody face\n')
         for m in results:
             f.write('mesh\t%s\t%d\n' % (m.name, len(m.v)))
         for n in FIT:  # her skin: clothes follow the nearest of these vertices in the game
@@ -836,13 +894,42 @@ def run(a, chk):
                            for k in ('vc', 'dc', 'vp', 'vp1', 'faces', 'face_group', 'uv')},
                         **{'%s|groups' % m.name: np.array(m.groups) for m in results})
     log('fit stage done in %.0f s' % (time.time() - t0))
-    summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, a.proportions)
+    summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, a.proportions, lid_chk)
     with open(os.path.join(chk, 'report.txt'), 'w', encoding='utf-8') as f:
         f.write('\n'.join(LOG) + '\n')
     return 0 if rep else 1
 
 
-def summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, proportions):
+def untangle_toward(v, faces, d, target, region, rings=2, step=0.25, iters=60):
+    """Remove flipped triangles (normal reversed between v and v + d) inside region by blending the offsets of the
+    vertices round them (rings rings wide) towards target offsets, a little more each pass. Returns (d, flipped before,
+    flipped after) counting the triangles that touch region."""
+    n = len(v)
+    reg = region[faces].any(1)
+    e = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
+    import scipy.sparse as sp
+    A = sp.coo_matrix((np.ones(len(e) * 2), (np.r_[e[:, 0], e[:, 1]], np.r_[e[:, 1], e[:, 0]])), shape=(n, n)).tocsr()
+
+    def bad(dd):
+        a = np.cross(v[faces[:, 1]] - v[faces[:, 0]], v[faces[:, 2]] - v[faces[:, 0]])
+        w = v + dd
+        b = np.cross(w[faces[:, 1]] - w[faces[:, 0]], w[faces[:, 2]] - w[faces[:, 0]])
+        return (np.einsum('ij,ij->i', a, b) < 0) & (np.linalg.norm(a, axis=1) > 1e-14) & reg
+    d0 = d.copy(); d = d.copy(); t = np.zeros(n)
+    first = int(bad(d).sum())
+    for _ in range(iters):
+        bf = bad(d)
+        if not bf.any():
+            break
+        m = np.zeros(n, bool); m[faces[bf].ravel()] = True
+        for _ in range(rings):
+            m = m | (A @ m.astype(float) > 0)
+        t[m] = np.minimum(1.0, t[m] + step)
+        d = d0 * (1 - t[:, None]) + target * t[:, None]
+    return d, first, int(bad(d).sum())
+
+
+def summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, proportions, lid_chk=()):
     """PASS/WARN lines for the things that matter, printed and written to _check/summary.txt (the Blender stage
     appends its texture line). Thresholds: eyes open, face metrics within 3 mm of VaM, fit residual mean < 0.5 mm,
     flipped triangles per main skin mesh < 0.5 %, largest offset < 6 cm, joint offsets only on the face."""
@@ -861,6 +948,10 @@ def summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, pr
             add(True, "eye opening: open (%s mm), VaM's lids are fitted" % shown)
     else:
         add(False, 'eye opening: not measured (%s)' % ('--proportions vam' if proportions == 'vam' else 'no usable VaM Sclera'))
+    if lid_chk:
+        bad = [(e, d, r) for e, d, r in lid_chk if d < r - 0.001]
+        add(not bad, 'lids vs eyeball: nearest fitted lid vertex to the eye centre %s mm, eyeball radius %s mm (need lid >= radius - 1 mm)' % (
+            '/'.join('%.1f' % (1000 * d) for e, d, r in lid_chk), '/'.join('%.1f' % (1000 * r) for e, d, r in lid_chk)))
     if fm_diff is not None:
         bad = {k: v for k, v in fm_diff.items() if v > 0.003}
         worst = max(fm_diff, key=fm_diff.get)

@@ -248,7 +248,7 @@ namespace SfMorph
             GUILayout.FlexibleSpace();
             GUILayout.EndHorizontal();
             if (pickNone && c.Look.Morph != null) { c.Look.Morph = null; _body.Touch(c); }
-            if (pick != null && c.Look.Morph != pick) { c.Look.Morph = pick; c.Look.MorphWeight = 1f; _body.Touch(c); }
+            if (pick != null && c.Look.Morph != pick) { c.Look.Morph = pick; c.Look.MorphFace = 1f; c.Look.MorphBody = 1f; _body.Touch(c); }
             if (all.Count == 0)
                 GUILayout.Label("off: no converted characters yet. Export her (Presets tab) and a VaM character (SfExport plugin), then run tools/pipeline/run.ps1.", _off);
             if (GUILayout.Button("Rescan the folder", GUILayout.Width(160))) MorphSet.Rescan();
@@ -301,8 +301,13 @@ namespace SfMorph
         {
             GUILayout.Space(6);
             GUILayout.Label(c.Look.Morph, _bold);
-            float w = Slider("Shape", c.Look.MorphWeight * 100f, 0f, 100f, "0", 100f, null, " %") / 100f;
-            if (Mathf.Abs(w - c.Look.MorphWeight) > 0.0001f) { c.Look.MorphWeight = w; _body.Touch(c); }
+            var set = MorphSet.Find(c.Look.Morph);
+            bool two = set != null && set.TwoFrames;   // decided once, before any control: the same controls in the Layout pass and the click pass
+            float fw = Slider("Face", c.Look.MorphFace * 100f, 0f, 100f, "0", 100f, null, " %") / 100f;
+            if (Mathf.Abs(fw - c.Look.MorphFace) > 0.0001f) { c.Look.MorphFace = fw; _body.Touch(c); }
+            float bw = Slider("Body", c.Look.MorphBody * 100f, 0f, 100f, "0", 100f, two ? null : "off: this character has a single shape (Face drives all of it)", " %") / 100f;
+            if (two && Mathf.Abs(bw - c.Look.MorphBody) > 0.0001f) { c.Look.MorphBody = bw; _body.Touch(c); }
+            GUILayout.Label("Face: the character's face and head. Body: her figure (lower it if the body looks too heavy in her animations).", _hint);
             bool j = GUILayout.Toggle(c.Look.MorphJoints, " Move her joints to the new shape (limbs bend in the right place)");
             if (j != c.Look.MorphJoints) { c.Look.MorphJoints = j; _body.Touch(c); }
             bool sk = GUILayout.Toggle(c.Look.MorphSkin, " Skin textures baked from the VaM character");

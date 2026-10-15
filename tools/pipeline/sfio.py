@@ -182,12 +182,14 @@ def vertex_normals(v, f, sign=1.0):
     return out
 
 
-def write_morph(path, name, offsets, dnormals):
+def write_morph(path, name, offsets, dnormals, h=None):
     """Per-vertex offsets in the game's vertex order, bind space, Unity axes.
-    Text: header lines, then one 'dx dy dz nx ny nz' line per vertex (all vertices, in order)."""
+    Text: header lines, then one 'dx dy dz nx ny nz [h]' line per vertex (all vertices, in order); h is the optional
+    head weight (0..1) of the vertex."""
     with open(path, 'w', encoding='utf-8', newline='\n') as f:
         f.write('# SfMorph morph: per-vertex position and normal deltas, bind space, game vertex order\n')
         f.write('mesh %s\n' % name)
         f.write('vertices %d\n' % len(offsets))
-        for o, n in zip(offsets, dnormals):
-            f.write('%.6g %.6g %.6g %.5g %.5g %.5g\n' % (o[0], o[1], o[2], n[0], n[1], n[2]))
+        for i, (o, n) in enumerate(zip(offsets, dnormals)):
+            f.write('%.6g %.6g %.6g %.5g %.5g %.5g' % (o[0], o[1], o[2], n[0], n[1], n[2]))
+            f.write('\n' if h is None else ' %.4g\n' % h[i])

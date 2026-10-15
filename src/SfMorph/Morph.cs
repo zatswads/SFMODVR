@@ -16,6 +16,7 @@ namespace SfMorph
     internal class MorphSet
     {
         public string Name, Dir, Source = "?";
+        public bool TwoFrames;   // character.txt 'frames<TAB>body face': separate Body and Face strength (the pipeline wrote head weights)
         public readonly Dictionary<string, int> Meshes = new Dictionary<string, int>();
         public readonly HashSet<string> Skin = new HashSet<string>();
         public readonly HashSet<string> Hide = new HashSet<string>();     // original mesh names to switch off while she is active
@@ -42,6 +43,7 @@ namespace SfMorph
                     case "mesh": if (f.Length > 2 && int.TryParse(f[2], out n)) s.Meshes[f[1]] = n; break;
                     case "skin": s.Skin.Add(f[1]); break;
                     case "hide": s.Hide.Add(f[1]); break;
+                    case "frames": s.TwoFrames = f[1].IndexOf("body", StringComparison.OrdinalIgnoreCase) >= 0 && f[1].IndexOf("face", StringComparison.OrdinalIgnoreCase) >= 0; break;
                     case "texture": if (f.Length > 3) s.Textures.Add(new[] { f[1], f[2], f[3] }); break;
                 }
             }
@@ -142,6 +144,7 @@ namespace SfMorph
     internal class MeshMorph
     {
         public Vector3[] D, N;
+        public float[] H;   // head weight 0..1 per vertex (7th value of a line); null when the file has none (single-frame character)
 
         public static MeshMorph Read(string path)
         {
@@ -155,13 +158,33 @@ namespace SfMorph
             if (n < 0 || lines.Length - i < n) throw new Exception(Path.GetFileName(path) + ": truncated");
             var m = new MeshMorph { D = new Vector3[n], N = new Vector3[n] };
             var inv = CultureInfo.InvariantCulture;
+            var h = new float[n]; bool allH = n > 0;
             for (int k = 0; k < n; k++)
             {
                 var f = lines[i + k].Split(' ');
                 m.D[k] = new Vector3(float.Parse(f[0], inv), float.Parse(f[1], inv), float.Parse(f[2], inv));
                 if (f.Length >= 6) m.N[k] = new Vector3(float.Parse(f[3], inv), float.Parse(f[4], inv), float.Parse(f[5], inv));
+                if (f.Length >= 7) h[k] = Mathf.Clamp01(float.Parse(f[6], inv)); else allH = false;
             }
+            if (allH) m.H = h;
             return m;
+        }
+
+        // The shape as Unity blendshapes on a clone. With head weights: shape 0 'body' = D*(1-H), shape 1 'face' = D*H
+        // (shape 0 stays the body, which SoftZones reads); without: one shape. Returns whether it has two.
+        public static bool AddFrames(Mesh clone, string name, Vector3[] d, Vector3[] n, float[] h)
+        {
+            if (h == null || h.Length != d.Length) { clone.AddBlendShapeFrame("SfMorph " + name, 100f, d, n, null); return false; }
+            var bd = new Vector3[d.Length]; var bn = new Vector3[d.Length]; var fd = new Vector3[d.Length]; var fn = new Vector3[d.Length];
+            for (int k = 0; k < d.Length; k++)
+            {
+                float hv = h[k];
+                bd[k] = d[k] * (1f - hv); fd[k] = d[k] * hv;
+                if (n != null && k < n.Length) { bn[k] = n[k] * (1f - hv); fn[k] = n[k] * hv; }
+            }
+            clone.AddBlendShapeFrame("SfMorph body", 100f, bd, bn, null);
+            clone.AddBlendShapeFrame("SfMorph face", 100f, fd, fn, null);
+            return true;
         }
     }
 
@@ -178,7 +201,8 @@ namespace SfMorph
             public Matrix4x4[] Bind;       // the original bind poses
             public Matrix4x4 ToMesh;       // common bind space -> this mesh's space (identity for her own meshes)
             public string Kind;            // "morph" or "follow"
-            public float Weight = -1f, BindWeight = -1f;
+            public bool Two;               // the clone has two blendshapes: 0 = body, 1 = face (else one, driven by Face)
+            public float Weight = -1f, Weight1 = -1f, BindWeight = -1f;   // last weights set on shapes 0 and 1
         }
         class Saved { public Texture Tex; public bool Keyword; }
 
@@ -214,8 +238,9 @@ namespace SfMorph
             var look = c.Look;
             var set = apply && look.Morph != null ? MorphSet.Find(look.Morph) : null;
             if (apply && look.Morph != null && set == null) Status = "off: no folder '" + look.Morph + "' in " + MorphSet.Root;
-            float w = set != null ? Mathf.Clamp01(look.MorphWeight) : 0f;
-            if (set == null || w <= 0f) { Release(); JointWeight = 0f; return; }
+            float face = set != null ? Mathf.Clamp01(look.MorphFace) : 0f;
+            float body = set != null ? Mathf.Clamp01(look.MorphBody) : 0f;
+            if (set == null || (face <= 0f && body <= 0f)) { Release(); JointWeight = 0f; return; }
 
             string why = set != _set ? "character picked" : _builtFor == null ? "shape back on" : !SameList(_builtFor, c.Renderers) ? RendererChange(c) : null;
             if (why == null)
@@ -232,19 +257,25 @@ namespace SfMorph
             if (rebuild) Build(c, set);
 
             bool joints = look.MorphJoints;
-            JointWeight = joints ? w : 0f;
+            JointWeight = joints ? face : 0f;   // joint offsets are face joints only (eyes, jaw)
             foreach (var kv in _slots)
             {
                 var r = kv.Key; var s = kv.Value;
                 if (r == null || s.Clone == null || r.sharedMesh != s.Clone) continue;
-                float bw = joints ? w : 0f;
+                float bw = joints ? face : 0f;
                 if (s.BindWeight != bw)
                 {
                     SetBind(r, s, set, bw); s.BindWeight = bw;
                     r.sharedMesh = s.Clone;  // make sure the renderer picks up the new bind poses
-                    s.Weight = -1f;
+                    s.Weight = -1f; s.Weight1 = -1f;
                 }
-                if (s.Weight != w) { r.SetBlendShapeWeight(0, w * 100f); s.Weight = w; }
+                float w0 = s.Two ? body : face, w1 = s.Two ? face : 0f;   // two shapes: 0 body, 1 face; one shape: Face
+                if (s.Weight != w0 || s.Weight1 != w1)
+                {
+                    r.SetBlendShapeWeight(0, w0 * 100f);
+                    if (s.Two) r.SetBlendShapeWeight(1, w1 * 100f);
+                    s.Weight = w0; s.Weight1 = w1;
+                }
             }
             HideMeshes(c, set);
             if (look.MorphSkin && !_texOn) { ApplyTextures(c, set); _texOn = true; }
@@ -351,7 +382,7 @@ namespace SfMorph
                 if (!_clones.TryGetValue(orig, out clone))
                 {
                     clone = Clone(orig, d);
-                    clone.AddBlendShapeFrame("SfMorph " + set.Name, 100f, mm.D, mm.N, null);
+                    MeshMorph.AddFrames(clone, set.Name, mm.D, mm.N, mm.H);
                     _clones[orig] = clone;
                 }
                 Use(r, orig, clone, d, Matrix4x4.identity, "morph");
@@ -372,9 +403,14 @@ namespace SfMorph
                 if (!_clones.TryGetValue(orig, out clone))
                 {
                     clone = Clone(orig, d);
-                    Vector3[] fd, fn;
-                    skin.Follow(d.Pos, d.Nrm, toSkin, out fd, out fn);
-                    clone.AddBlendShapeFrame("SfMorph " + set.Name, 100f, fd, fn, null);
+                    Vector3[] fd, fn, fh, fhn;
+                    skin.Follow(d.Pos, d.Nrm, toSkin, out fd, out fn, out fh, out fhn);
+                    if (fh != null)   // body part (with the push-out) and face part
+                    {
+                        clone.AddBlendShapeFrame("SfMorph body", 100f, fd, fn, null);
+                        clone.AddBlendShapeFrame("SfMorph face", 100f, fh, fhn, null);
+                    }
+                    else clone.AddBlendShapeFrame("SfMorph " + set.Name, 100f, fd, fn, null);
                     _clones[orig] = clone;
                 }
                 Use(r, orig, clone, d, toSkin.inverse, "follow");
@@ -411,7 +447,7 @@ namespace SfMorph
 
         void Use(SkinnedMeshRenderer r, Mesh orig, Mesh clone, MeshData d, Matrix4x4 toMesh, string kind)
         {
-            _slots[r] = new Slot { Orig = orig, Clone = clone, Bind = d.Bind, ToMesh = toMesh, Kind = kind };
+            _slots[r] = new Slot { Orig = orig, Clone = clone, Bind = d.Bind, ToMesh = toMesh, Kind = kind, Two = clone.blendShapeCount >= 2 };
             r.sharedMesh = clone;
         }
 
@@ -679,6 +715,8 @@ namespace SfMorph
     internal class SkinRef
     {
         readonly List<Vector3> _p = new List<Vector3>(), _n = new List<Vector3>(), _d = new List<Vector3>(), _dn = new List<Vector3>();
+        readonly List<float> _h = new List<float>();   // head weight per skin point; only complete when every point has one
+        public bool HasH { get { return _p.Count > 0 && _h.Count == _p.Count; } }
         readonly Dictionary<Transform, Matrix4x4> _bind = new Dictionary<Transform, Matrix4x4>();
         Dictionary<long, List<int>> _grid;
         const float Cell = 0.02f;
@@ -700,6 +738,7 @@ namespace SfMorph
                 var f = lines[i + k].Split(' ');
                 Func<int, Vector3> v3 = o => new Vector3(float.Parse(f[o], inv), float.Parse(f[o + 1], inv), float.Parse(f[o + 2], inv));
                 s._p.Add(v3(0)); s._n.Add(v3(3)); s._d.Add(v3(6)); s._dn.Add(v3(9));
+                if (f.Length >= 13 && s._h.Count == k) s._h.Add(Mathf.Clamp01(float.Parse(f[12], inv)));   // absent on any line: single-frame character
             }
             foreach (var raw in File.ReadAllLines(bindPath))
             {
@@ -720,6 +759,7 @@ namespace SfMorph
             for (int i = 0; i < d.Pos.Length; i++)
             {
                 _p.Add(d.Pos[i]); _n.Add(d.Nrm != null ? d.Nrm[i] : Vector3.up); _d.Add(m.D[i]); _dn.Add(m.N[i]);
+                if (m.H != null && _h.Count == _p.Count - 1) _h.Add(m.H[i]);
             }
             var bones = r.bones;
             for (int i = 0; i < bones.Length && i < d.Bind.Length; i++) if (bones[i] != null && !_bind.ContainsKey(bones[i])) _bind[bones[i]] = d.Bind[i];
@@ -762,26 +802,39 @@ namespace SfMorph
 
         // Per vertex: the weighted delta of the nearest skin vertices; then, where the shape would put the skin through
         // the cloth (cloth was outside the skin and isn't any more), pushed out along the new skin normal.
-        public void Follow(Vector3[] pos, Vector3[] nrm, Matrix4x4 toSkin, out Vector3[] outD, out Vector3[] outN)
+        // With head weights (HasH) the result splits: outD/outN is the body part (plus the push-out), faceD/faceN the face
+        // part (the interpolated h share of the delta); both null-free sum to the single-frame result. Without: faceD/faceN null.
+        public void Follow(Vector3[] pos, Vector3[] nrm, Matrix4x4 toSkin, out Vector3[] outD, out Vector3[] outN, out Vector3[] faceD, out Vector3[] faceN)
         {
             var back = toSkin.inverse;
+            bool split = HasH;
             outD = new Vector3[pos.Length];
             outN = new Vector3[pos.Length];
+            faceD = split ? new Vector3[pos.Length] : null;
+            faceN = split ? new Vector3[pos.Length] : null;
             var idx = new int[4]; var dist = new float[4];
             for (int v = 0; v < pos.Length; v++)
             {
                 var p = toSkin.MultiplyPoint3x4(pos[v]);
                 int found = Nearest(p, idx, dist);
                 if (found == 0) continue;
-                Vector3 dsum = Vector3.zero, nsum = Vector3.zero; float wsum = 0f;
-                for (int k = 0; k < found; k++) { float w = 1f / (dist[k] + 0.002f); w *= w; dsum += _d[idx[k]] * w; nsum += _dn[idx[k]] * w; wsum += w; }
+                Vector3 dsum = Vector3.zero, nsum = Vector3.zero; float wsum = 0f, hsum = 0f;
+                for (int k = 0; k < found; k++)
+                {
+                    float w = 1f / (dist[k] + 0.002f); w *= w;
+                    dsum += _d[idx[k]] * w; nsum += _dn[idx[k]] * w; wsum += w;
+                    if (split) hsum += _h[idx[k]] * w;
+                }
                 var dd = dsum / wsum;
+                float hv = split ? Mathf.Clamp01(hsum / wsum) : 0f;
+                Vector3 nDelta = Vector3.zero;
                 if (nrm != null && v < nrm.Length)  // the skin's normal change, carried over (outfit body variants are skin too)
                 {
                     var fn0 = toSkin.MultiplyVector(nrm[v]).normalized;
                     var fn1 = (fn0 + nsum / wsum).normalized;
-                    outN[v] = back.MultiplyVector(fn1).normalized * nrm[v].magnitude - nrm[v];
+                    nDelta = back.MultiplyVector(fn1).normalized * nrm[v].magnitude - nrm[v];
                 }
+                if (split) { faceN[v] = nDelta * hv; outN[v] = nDelta * (1f - hv); } else outN[v] = nDelta;
                 int n0 = idx[0];
                 var nb = _n[n0]; var pb = _p[n0];
                 float h0 = Vector3.Dot(p - pb, nb);
@@ -789,8 +842,10 @@ namespace SfMorph
                 var p1 = p + dd;
                 float h1 = Vector3.Dot(p1 - pb1, nb1);
                 float want = h0 > 0f ? Mathf.Min(h0, 0.003f) : float.NegativeInfinity;
-                if (h1 < want) p1 += nb1 * (want - h1);
-                outD[v] = back.MultiplyVector(p1 - p);
+                var push = Vector3.zero;
+                if (h1 < want) push = nb1 * (want - h1);
+                if (split) { faceD[v] = back.MultiplyVector(dd * hv); outD[v] = back.MultiplyVector(dd * (1f - hv) + push); }   // the push-out goes with the body
+                else outD[v] = back.MultiplyVector(dd + push);
             }
         }
 

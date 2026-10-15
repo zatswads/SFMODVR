@@ -15,21 +15,22 @@ namespace SfMorph
         public readonly Dictionary<string, Vector3> Bones = new Dictionary<string, Vector3>(); // bone name -> scale factor
         public readonly Dictionary<string, float> Regions = new Dictionary<string, float>();   // slider (Detail) id -> value
 
-        // A converted character from the Characters tab (folder name under SfMorphs\morphs), how much of its shape,
-        // and whether its joints and baked skin are used.
+        // A converted character from the Characters tab (folder name under SfMorphs\morphs), how much of its face and
+        // body shape, and whether its joints and baked skin are used. (Characters without head weights have one shape,
+        // driven by MorphFace.)
         public string Morph;
-        public float MorphWeight = 1f;
+        public float MorphFace = 1f, MorphBody = 1f;
         public bool MorphJoints = true, MorphSkin = true;
 
         public bool Empty { get { return Bones.Count == 0 && Regions.Count == 0 && Morph == null; } }
         public int Count { get { return Bones.Count + Regions.Count + (Morph != null ? 1 : 0); } }
 
-        public void Clear() { Bones.Clear(); Regions.Clear(); Morph = null; MorphWeight = 1f; MorphJoints = true; MorphSkin = true; }
+        public void Clear() { Bones.Clear(); Regions.Clear(); Morph = null; MorphFace = 1f; MorphBody = 1f; MorphJoints = true; MorphSkin = true; }
 
         public void CopyFrom(Look o)
         {
             Clear();
-            Morph = o.Morph; MorphWeight = o.MorphWeight; MorphJoints = o.MorphJoints; MorphSkin = o.MorphSkin;
+            Morph = o.Morph; MorphFace = o.MorphFace; MorphBody = o.MorphBody; MorphJoints = o.MorphJoints; MorphSkin = o.MorphSkin;
             foreach (var kv in o.Bones) Bones[kv.Key] = kv.Value;
             foreach (var kv in o.Regions) Regions[kv.Key] = kv.Value;
         }
@@ -41,7 +42,7 @@ namespace SfMorph
         {
             var sb = new StringBuilder("# SF Body Morphs look\n");
             if (Morph != null)
-                sb.Append("character\t").Append(Morph).Append('\t').Append(MorphWeight.ToString("0.###", Inv)).Append(' ')
+                sb.Append("character\t").Append(Morph).Append('\t').Append(MorphFace.ToString("0.###", Inv)).Append(' ').Append(MorphBody.ToString("0.###", Inv)).Append(' ')
                   .Append(MorphJoints ? 1 : 0).Append(' ').Append(MorphSkin ? 1 : 0).Append('\n');
             foreach (var kv in Regions) sb.Append("region\t").Append(kv.Key).Append('\t').Append(kv.Value.ToString("0.###", Inv)).Append('\n');
             foreach (var kv in Bones)
@@ -62,11 +63,21 @@ namespace SfMorph
                 {
                     case "region": if (float.TryParse(f[2], NumberStyles.Float, Inv, out v)) Regions[f[1]] = v; break;
                     case "character":
-                        var c = f[2].Split(' ');
+                        var c = f[2].Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
                         Morph = f[1];
-                        if (c.Length > 0 && float.TryParse(c[0], NumberStyles.Float, Inv, out v)) MorphWeight = v;
-                        if (c.Length > 1) MorphJoints = c[1] != "0";
-                        if (c.Length > 2) MorphSkin = c[2] != "0";
+                        if (c.Length >= 4)   // new: face body joints skin
+                        {
+                            if (float.TryParse(c[0], NumberStyles.Float, Inv, out v)) MorphFace = v;
+                            if (float.TryParse(c[1], NumberStyles.Float, Inv, out v)) MorphBody = v;
+                            MorphJoints = c[2] != "0";
+                            MorphSkin = c[3] != "0";
+                        }
+                        else   // old: weight joints skin (one weight for both)
+                        {
+                            if (c.Length > 0 && float.TryParse(c[0], NumberStyles.Float, Inv, out v)) { MorphFace = v; MorphBody = v; }
+                            if (c.Length > 1) MorphJoints = c[1] != "0";
+                            if (c.Length > 2) MorphSkin = c[2] != "0";
+                        }
                         break;
                     case "bone":
                         var p = f[2].Split(' ');

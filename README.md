@@ -41,6 +41,17 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.7.1:
+- Characters keep her rig: the character's face goes on at its own proportions (eye spacing, nose, chin, ears,
+  head width within about 1 mm), her body gets the character's surface on her own joint centres, so limb, finger
+  and shoulder proportions stay hers and only the eyes and jaw move. Her shoulders/clavicles keep her shape (VaM
+  shoulders come from a T-pose and stayed raised). Teeth, tongue and the mouth interior scale with the face (her
+  teeth showed through the smaller lips). Eyeballs keep her size while the VaM export's eyes are closed.
+- Face and Body sliders instead of one Shape slider (two blendshapes: body, face); old characters still load.
+- The skin tint is set to white while the baked skin is on (it tinted the baked colour twice); her anime brow mesh
+  is hidden while a character is on (the character's brows are in its face texture).
+- Pipeline: any VaM female character (validation, PASS/WARN summary, run.ps1 -All). Re-run run.ps1 for older characters.
+
 0.7.0:
 - New **VR** tab (Physics, VR hands, Embody).
 - Soft zones felt like "only jiggle" in 0.6.3: your own VR hands had no colliders (the hand finder matched UI objects named
