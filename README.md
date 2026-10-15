@@ -41,6 +41,15 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.8.0:
+- Characters → Body sliders, like the ispinox Claire VaM scene: Fitness, Body Type, Waist, Hip, Breasts and Breast Under on a
+  converted character, each 0-100 % from that character's own setting; plus Skin Tone (lighter/darker through the tint) and Gloss.
+  The sliders stay greyed until the character has slider data: export the VaM character again with "Export morphs for SF" (the
+  updated tools/vam/SfExport.cs) and re-run tools/pipeline/run.ps1.
+- Joint correctives (VaM's pJCM morphs): the shoulder, collar, elbow, hip and knee bends get the VaM character's corrective shapes
+  as her joints swing, measured from VaM's rest pose. "Joint correctives" toggle under the sliders.
+- Clothes follow the sliders and correctives like they follow the base shape.
+
 0.7.9:
 - Physics hands still stuttered in 0.7.8 (the log: the pull at its limit in 87-99 % of steps in free air, the drawn hand jittering by
   ~8 mm and ~6 deg): the follow force and turning torque were sized for the whole hand (palm and fingers) but applied to the palm

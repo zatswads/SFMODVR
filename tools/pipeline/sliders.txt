@@ -1,0 +1,37 @@
+# Body sliders: how one 0..1 slider drives VaM (Genesis 2 Female) morphs. Source: docs/research/vam-body-sliders.md (table in section 1).
+# Tab separated.  slider<TAB>name<TAB>default s   starts a slider;  morph<TAB>morph name<TAB>start<TAB>end   adds a morph to it:
+# the morph's value is start + s * (end - start) (linear, reversed ranges allowed).
+# The pipeline writes shape.<slider>.txt = sum over the morphs of (end - start) * (the morph's delta per unit value), transferred to her,
+# and 'slider <name> <s0> <file>' in character.txt (s0: the slider position the VaM character is at). Morphs the export lacks are skipped (WARN).
+# Not here: Skin Tone and Gloss (material scalars, not morphs); the Breasts slider's "pinned to 0 -> 0" morphs (no effect);
+# the "Breast Under" slider moves Breast Height Lower only (as the research notes).
+
+slider	Fitness	0
+morph	Bodybuilder Details	0	1
+morph	Torso Fitness	0	1
+morph	Fitness Size	0	1
+
+slider	Body Type	0
+morph	Body Tone	0	1
+morph	(REN) Thin	0	-0.5
+morph	Chubby 3	0	0.4
+
+slider	Waist	0.5
+morph	Waist Width	-0.5	0.5
+
+slider	Hip	0.6
+morph	Hip Size	0	0.7
+morph	Thighs Size	0	0.9
+morph	HipThighYoung	0	1
+
+slider	Breasts	0.5
+morph	Breast Zero	0.4	0
+morph	Breast Small	0.7	0
+morph	Breasts Small	0.8	0
+morph	Breast Large	0	0.5
+morph	Breasts Natural	0	0.8
+morph	Breasts TogetherApart	0	0.3
+morph	Breast Sag1	0	0.546
+
+slider	Breast Under	0
+morph	Breast Height Lower	-0.2	0.5
