@@ -7,6 +7,11 @@
 //   urls.txt        the texture files the appearance uses (face/torso/limbs/genitals)
 //   tex_*.png       the textures VaM renders with (diffuse, specular, gloss, normal, decal)
 //   thumb.jpg       a portrait
+// The second button exports individual morph deltas (slider morphs + pJCM correctives):
+//   morphs/<name>.delta  sparse per-UV-vertex delta (probe step) in body.obj's frame and scale
+//   morphs.txt           one row per morph: value, probe, pose control, region, found/missing, |D|max mm, nonzero
+//   info.txt             gets the base drift lines appended
+// Morph list: Custom/Scripts/SfMod/morphs.cfg next to the plugin (built-in defaults if absent).
 // into Saves\PluginData\SfExport\<atom>-<time>\ (VaM lets plugins write there without asking).
 // Personal use: the output contains DAZ/VaM content; never share it.
 using System;
@@ -21,6 +26,8 @@ public class SfExport : MVRScript
 {
     JSONStorableString _status;
     bool _busy;
+    string _lastDir;
+    const string CfgPath = "Custom/Scripts/SfMod/morphs.cfg";
     static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
     public override void Init()
@@ -33,10 +40,25 @@ public class SfExport : MVRScript
         _status = new JSONStorableString("status", "Load the look (e.g. an appearance preset), then press Export.");
         var b = CreateButton("Export character for SF");
         b.button.onClick.AddListener(() => { if (!_busy) StartCoroutine(Run()); });
+        var b2 = CreateButton("Export morphs for SF (sliders + correctives)");
+        b2.button.onClick.AddListener(() => { if (!_busy) StartCoroutine(RunMorphs()); });
         CreateTextField(_status);
     }
 
     void Say(string s) { if (_status != null) _status.val = s; SuperController.LogMessage("SF export: " + s); }
+    void Progress(string s) { if (_status != null) _status.val = s; }
+
+    // The atom's auto blink flag (it drives the eyelid morphs), or null.
+    JSONStorableBool FindBlink()
+    {
+        foreach (var id in containingAtom.GetStorableIDs())
+        {
+            var st = containingAtom.GetStorableByID(id);
+            var b = st != null ? st.GetBoolJSONParam("blinkEnabled") : null;
+            if (b != null) return b;
+        }
+        return null;
+    }
 
     IEnumerator Run()
     {
@@ -51,6 +73,7 @@ public class SfExport : MVRScript
 
         string dir = "Saves/PluginData/SfExport/" + Safe(containingAtom.uid) + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", Inv);
         FileManagerSecure.CreateDirectory(dir);
+        _lastDir = dir;
         Say("exporting to " + dir + " ...");
 
         // Morphed, unposed vertices: ask VaM's character runner for a snapshot (what VaM's own OBJ
@@ -58,13 +81,7 @@ public class SfExport : MVRScript
         Vector3[] verts = null, normals = null;
         // Auto blink drives the eyelid morphs: a snapshot mid-blink gives the character half-closed eyes for good.
         // Blink off and the lids open again for the snapshot, then back as it was.
-        JSONStorableBool blink = null;
-        foreach (var id in containingAtom.GetStorableIDs())
-        {
-            var st = containingAtom.GetStorableByID(id);
-            var b = st != null ? st.GetBoolJSONParam("blinkEnabled") : null;
-            if (b != null) { blink = b; break; }
-        }
+        JSONStorableBool blink = FindBlink();
         bool blinkWas = blink != null && blink.val;
         if (blinkWas) { blink.val = false; Say("eyes open for the snapshot ..."); yield return new WaitForSeconds(0.8f); }
         var run = containingAtom.GetComponentInChildren<DAZCharacterRun>();
@@ -151,6 +168,241 @@ public class SfExport : MVRScript
         Say("done: " + verts.Length + " vertices, " + written.Count + " textures -> " + dir + ". Check: " +
             (stretched == 0 ? "body.obj looks intact" : stretched + " stretched faces in body.obj - the morph snapshot may be incomplete; press Export again"));
         _busy = false;
+    }
+
+    // ---------------------------------------------------------------- morph deltas
+
+    // Morph names to export: morphs.cfg (one display name per line; '#' comments; "prefix <text>" adds every
+    // morph whose name starts with <text>), else the built-in defaults.
+    static readonly string[] DefaultNames = {
+        "Bodybuilder Details", "Torso Fitness", "Fitness Size", "Body Tone", "(REN) Thin", "Chubby 3", "Waist Width",
+        "Hip Size", "Thighs Size", "HipThighYoung", "Breast Zero", "Breast Small", "Breasts Small", "Breast Large",
+        "Breasts Natural", "Breasts TogetherApart", "Breast Sag1", "Breast Height Lower" };
+    const string DefaultPrefix = "pJCM";
+
+    void LoadList(List<string> names, List<string> prefixes, out string source)
+    {
+        source = "built-in defaults";
+        try
+        {
+            if (FileManagerSecure.FileExists(CfgPath))
+            {
+                foreach (var raw in FileManagerSecure.ReadAllText(CfgPath).Split('\n'))
+                {
+                    var line = raw.Trim();
+                    if (line.Length == 0 || line[0] == '#') continue;
+                    if (line.StartsWith("prefix ", StringComparison.OrdinalIgnoreCase)) { prefixes.Add(line.Substring(7).Trim()); continue; }
+                    names.Add(line);
+                }
+                source = CfgPath;
+                return;
+            }
+        }
+        catch (Exception e) { SuperController.LogError("SF export: " + CfgPath + ": " + e.Message + " (using defaults)"); names.Clear(); prefixes.Clear(); }
+        names.AddRange(DefaultNames);
+        prefixes.Add(DefaultPrefix);
+    }
+
+    // One snapshot of the morphed UV vertices: sets _snap (a CLONE, VaM may reuse its array) or leaves it null on timeout.
+    Vector3[] _snap;
+    IEnumerator Snap(DAZCharacterRun run)
+    {
+        _snap = null;
+        var before = run.snappedMorphedUVVertices;
+        yield return null; // let the (threaded) morph update see the new values first
+        run.doSnap = true;
+        for (int f = 1; f <= 60; f++)
+        {
+            yield return null;
+            var cur = run.snappedMorphedUVVertices;
+            if (cur != null && (!ReferenceEquals(cur, before) || (!run.doSnap && f >= 2)))
+            {
+                _snap = (Vector3[])cur.Clone();
+                yield break;
+            }
+        }
+    }
+
+    static float MaxDist(Vector3[] a, Vector3[] b)
+    {
+        float m = 0f;
+        for (int i = 0; i < a.Length; i++) { float d = (a[i] - b[i]).sqrMagnitude; if (d > m) m = d; }
+        return Mathf.Sqrt(m);
+    }
+
+    class PoseRec { public DAZMorph m; public float v; }
+
+    IEnumerator RunMorphs()
+    {
+        _busy = true;
+        // State to put back whatever happens.
+        var poseRecs = new List<PoseRec>();
+        JSONStorableBool blink = null;
+        bool blinkWas = false;
+        DAZMorph probing = null; float probingV = 0f, probingMin = 0f, probingMax = 0f;
+        try
+        {
+            var selector = containingAtom.GetComponentInChildren<DAZCharacterSelector>();
+            var character = selector != null ? selector.selectedCharacter : null;
+            if (character == null) { Say("no character selected"); yield break; }
+            DAZSkinV2 skin = character.GetComponentInChildren<DAZMergedSkinV2>();
+            if (skin == null) skin = character.skin;
+            var mesh = skin != null ? skin.dazMesh : null;
+            var run = containingAtom.GetComponentInChildren<DAZCharacterRun>();
+            var ui = selector.morphsControlUI;
+            if (mesh == null || run == null || ui == null) { Say("character has no skin mesh / character run / morph list yet"); yield break; }
+            int nv = mesh.numUVVertices;
+
+            // Names: cfg or defaults, plus every morph under a prefix (pJCM).
+            var names = new List<string>(); var prefixes = new List<string>(); string listSource;
+            LoadList(names, prefixes, out listSource);
+            var all = ui.GetMorphs();
+            var seen = new HashSet<string>(names);
+            if (all != null && prefixes.Count > 0)
+            {
+                var found = new List<string>();
+                foreach (var m in all)
+                {
+                    if (m == null) continue;
+                    string n = m.displayName;
+                    if (string.IsNullOrEmpty(n) || seen.Contains(n)) continue;
+                    foreach (var pre in prefixes)
+                        if (n.StartsWith(pre, StringComparison.OrdinalIgnoreCase)) { found.Add(n); seen.Add(n); break; }
+                }
+                found.Sort(StringComparer.Ordinal);
+                names.AddRange(found);
+            }
+
+            // Stable base: pose-control morphs to zero (restored in the finally), eyes open.
+            if (all != null)
+                foreach (var m in all)
+                    if (m != null && m.isPoseControl && m.morphValue != 0f) { poseRecs.Add(new PoseRec { m = m, v = m.morphValue }); m.morphValue = 0f; }
+            blink = FindBlink();
+            blinkWas = blink != null && blink.val;
+            if (blinkWas) { blink.val = false; Progress("eyes open for the base ..."); yield return new WaitForSeconds(0.8f); }
+
+            Progress("snapping the base (twice) ...");
+            yield return StartCoroutine(Snap(run));
+            var baseA = _snap;
+            for (int i = 0; i < 10; i++) yield return null;
+            yield return StartCoroutine(Snap(run));
+            var baseB = _snap;
+            if (baseA == null || baseB == null) { Say("morph export aborted: the character run did not deliver a snapshot within 60 frames"); yield break; }
+            if (baseA.Length != nv || baseB.Length != nv) { Say("morph export aborted: snapshot has " + baseA.Length + " vertices, mesh has " + nv); yield break; }
+            float noise = MaxDist(baseA, baseB) * 1000f;
+            if (noise > 0.1f)
+            {
+                Say("morph export aborted: the base changes by " + noise.ToString("0.###", Inv) + " mm between two snapshots (limit 0.1). " +
+                    "Breathing, expressions or BetterBends are moving the morphs: pause them (and animation) and press the button again.");
+                yield break;
+            }
+            var baseline = baseA;
+
+            // Output folder: the last body.obj export of this atom, else a new one (with the base as body.obj).
+            string dir = _lastDir;
+            if (dir == null || !FileManagerSecure.FileExists(dir + "/body.obj"))
+            {
+                dir = "Saves/PluginData/SfExport/" + Safe(containingAtom.uid) + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", Inv);
+                FileManagerSecure.CreateDirectory(dir);
+                _lastDir = dir;
+                FileManagerSecure.WriteAllText(dir + "/body.obj", Obj("VaM " + character.displayName + " morph export base (pose-control morphs zeroed)",
+                    baseline, run.snappedMorphedUVNormals, mesh.UV, mesh.UVPolyList, mesh.materialNames));
+            }
+            FileManagerSecure.CreateDirectory(dir + "/morphs");
+
+            var rows = new StringBuilder("# name\tvalue\tprobe value\tisPoseControl\tregion\tstatus\t|D| max mm\tnonzero\n");
+            int written = 0;
+            for (int k = 0; k < names.Count; k++)
+            {
+                string name = names[k];
+                Progress("morph " + (k + 1) + " of " + names.Count + ": " + name);
+                DAZMorph m = null;
+                try { m = ui.GetMorphByDisplayName(name); } catch (Exception e) { SuperController.LogError("SF export: " + name + ": " + e.Message); }
+                if (m == null)
+                {
+                    SuperController.LogMessage("SF export: morph '" + name + "' not found, skipped");
+                    rows.Append(name).Append("\t-\t-\t-\t-\tmissing\t-\t-\n");
+                    continue;
+                }
+                bool isJcm = name.StartsWith("pJCM", StringComparison.OrdinalIgnoreCase);
+                float v = m.morphValue;
+                string pc = m.isPoseControl ? "1" : "0", region = m.resolvedRegionName;
+                probing = m; probingV = v; probingMin = m.min; probingMax = m.max;
+                // Widen the limits if the probe value is outside them (put back right after the snap).
+                float target = isJcm ? 1f : v + 1f;
+                if (target > m.max) m.max = target;
+                if (target < m.min) m.min = target;
+                m.morphValue = target;
+                float probe = m.morphValue;
+                float step = probe - v;
+                if (Mathf.Abs(step) < 0.01f)
+                {
+                    SuperController.LogError("SF export: morph '" + name + "' would not move (value " + F(v) + ", set " + F(probe) + "), skipped");
+                    m.morphValue = v; m.min = probingMin; m.max = probingMax; probing = null;
+                    rows.Append(name).Append('\t').Append(F(v)).Append("\t-\t").Append(pc).Append('\t').Append(region).Append("\tskipped (cannot move)\t-\t-\n");
+                    continue;
+                }
+                yield return StartCoroutine(Snap(run));
+                var probed = _snap;
+                m.morphValue = v; m.min = probingMin; m.max = probingMax; probing = null;
+                if (probed == null || probed.Length != nv)
+                {
+                    SuperController.LogError("SF export: no snapshot for '" + name + "', skipped");
+                    rows.Append(name).Append('\t').Append(F(v)).Append('\t').Append(F(probe)).Append('\t').Append(pc).Append('\t').Append(region).Append("\tskipped (no snapshot)\t-\t-\n");
+                    continue;
+                }
+
+                var sb = new StringBuilder(8192);
+                sb.Append("# name ").Append(name).Append('\n')
+                  .Append("# probe step ").Append(F(step)).Append(" (value ").Append(F(v)).Append(" -> ").Append(F(probe)).Append(")\n")
+                  .Append("# vertices ").Append(nv).Append(" (UV vertices, body.obj order)\n")
+                  .Append("# i dx dy dz: 0-based UV vertex index, delta in metres, Unity axes, as body.obj; |d| < 0.05 mm dropped\n");
+                int nz = 0; float maxD = 0f;
+                for (int i = 0; i < nv; i++)
+                {
+                    var d = probed[i] - baseline[i];
+                    float mag = d.magnitude;
+                    if (mag > maxD) maxD = mag;
+                    if (mag < 0.00005f) continue;
+                    nz++;
+                    sb.Append(i).Append(' ').Append(V(d)).Append('\n');
+                }
+                FileManagerSecure.WriteAllText(dir + "/morphs/" + Safe(name) + ".delta", sb.ToString());
+                written++;
+                rows.Append(name).Append('\t').Append(F(v)).Append('\t').Append(F(probe)).Append('\t').Append(pc).Append('\t').Append(region)
+                    .Append("\tfound\t").Append((maxD * 1000f).ToString("0.###", Inv)).Append('\t').Append(nz).Append('\n');
+            }
+            FileManagerSecure.WriteAllText(dir + "/morphs.txt", rows.ToString());
+
+            // Re-snap the base: how far did the base wander while we probed?
+            for (int i = 0; i < 10; i++) yield return null;
+            yield return StartCoroutine(Snap(run));
+            string drift;
+            if (_snap != null && _snap.Length == nv)
+            {
+                float dr = MaxDist(baseline, _snap) * 1000f;
+                drift = "max " + dr.ToString("0.###", Inv) + " mm" + (dr > 0.1f ? " (above 0.1 mm: check that nothing was moving morphs)" : " (ok)");
+            }
+            else drift = "re-snap failed";
+            string info = dir + "/info.txt", old = "";
+            try { if (FileManagerSecure.FileExists(info)) old = FileManagerSecure.ReadAllText(info); } catch { }
+            if (old.Length > 0 && !old.EndsWith("\n")) old += "\n";
+            FileManagerSecure.WriteAllText(info, old + "morph export\t" + names.Count + " morphs from " + listSource + ", " + written + " written, base snapshot noise " +
+                noise.ToString("0.###", Inv) + " mm\nbase drift\t" + drift + "\nbase pose-control morphs zeroed\t" + poseRecs.Count + "\n");
+            Say("morphs done: " + written + " of " + names.Count + " written -> " + dir + "/morphs. Base drift " + drift);
+        }
+        finally
+        {
+            // Put everything back (also if the coroutine was cut short).
+            try
+            {
+                if (probing != null) { probing.morphValue = probingV; probing.min = probingMin; probing.max = probingMax; }
+                foreach (var r in poseRecs) r.m.morphValue = r.v;
+                if (blinkWas && blink != null) blink.val = true;
+            }
+            catch (Exception e) { SuperController.LogError("SF export: restoring morph values: " + e.Message); }
+            _busy = false;
+        }
     }
 
     // Faces with an edge longer than 10 cm: Genesis 2's longest edges are a few cm, so any such face means
