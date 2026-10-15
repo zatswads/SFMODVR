@@ -93,7 +93,10 @@ def nonrigid_icp(x0, faces, normals_fn, surfaces, lab, log, stiff=None, nodata=N
                  alphas=(40, 20, 10, 5, 2.5, 1.2, 0.6, 0.3, 0.15), inner=3,
                  dmax=(0.15, 0.10, 0.07, 0.05, 0.035, 0.025, 0.018, 0.013, 0.01), min_dot=0.5):
     """x0: (n,3) start positions; surfaces[label] = Surface of allowed VaM triangles; lab: (n,) label per vertex.
-    Minimises sum w|x - c|^2 + alpha |L (x - x0)|^2, re-finding closest points c each pass."""
+    Minimises sum w|x - c|^2 + alpha |L (x - x0)|^2, re-finding closest points c each pass.
+    min_dot: smallest normal agreement (vertex normal . surface normal) for a match, a scalar or one value per vertex
+    (looser on the face, where features such as the nose and the lids are steep). The along-normal test applies
+    only beyond 4 mm."""
     n = len(x0)
     L = uniform_laplacian(n, faces)
     LtL = (L.T @ (L if stiff is None else sp.diags(stiff) @ L)).tocsc()
@@ -113,7 +116,8 @@ def nonrigid_icp(x0, faces, normals_fn, surfaces, lab, log, stiff=None, nodata=N
                 # matches are how inner lips and folds latch onto the wrong surface and crumple the face
                 off = q - x[sel]
                 along = np.abs(np.einsum('ij,ij->i', off, nrm[sel])) / np.maximum(d, 1e-9)
-                ok = (d < dm) & (dot > min_dot) & ((along > 0.8) | (d < 0.002))
+                md = min_dot[sel] if np.ndim(min_dot) else min_dot
+                ok = (d < dm) & (dot > md) & ((along > 0.8) | (d < 0.004))
                 c[sel] = q; dist[sel] = d
                 w[sel] = np.where(ok, 1.0, 0.0)
             if nodata is not None:

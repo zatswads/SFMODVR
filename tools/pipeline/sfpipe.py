@@ -36,6 +36,7 @@ RIGID = {  # moved without deforming: mesh -> joint it is centred on (None = its
 }
 PATCH_RIGID = ('reika_eyelashes_a_1', 'reika_eyelashes_a_2')        # strands: move with the skin patch
 ATTACH = ('reika_nipple_type_1', 'reika_nail_normal', 'lewdTattoos_normal', 'pubicHair_typeB_normal')  # lie on the skin
+HIDE = ('reika_eyeBrow_a',)  # hidden while a character is on (the baked face texture has its brows)
 VAM_SKIN = {'Legs', 'Nostrils', 'Lips', 'Face', 'Toenails', 'Fingernails', 'Head', 'Hands', 'Shoulders', 'Neck',
             'Hips', 'Torso', 'Nipples', 'Forearms', 'Feet', 'Ears', 'defaultMat'}
 
@@ -47,12 +48,124 @@ def log(s):
     LOG.append(s)
 
 
+FACE_LM = ('nose', 'chin', 'eyeL', 'eyeR', 'mouth', 'earL', 'earR')
+
+
+def slice_x_extent(v, f, y, zmin):
+    """x extent of the mesh's cross-section at height y, in front of z = zmin (edge/plane intersections)."""
+    pts = []
+    for i, j in ((0, 1), (1, 2), (2, 0)):
+        a, b = v[f[:, i]], v[f[:, j]]
+        m = (a[:, 1] - y) * (b[:, 1] - y) < 0
+        t = (y - a[m, 1]) / (b[m, 1] - a[m, 1])
+        pts.append(a[m] + (b[m] - a[m]) * t[:, None])
+    p = np.concatenate(pts)
+    p = p[p[:, 2] > zmin]
+    return p[:, 0].min(), p[:, 0].max()
+
+
+def face_metrics(pts, eL, eR, mouth_pts=None, mouth=None, mesh=None):
+    """Face measures from the head skin points pts (bind space, Unity axes: +z forward, +y up) and the eye centres.
+    mouth: the mouth centre, or mouth_pts: the mouth-opening vertices (centre: mean x, median y, front z - 4 mm). Nose tip =
+    most forward point between mouth and eye height, chin = lowest point of the front of the face (both averaged over
+    the points within 2 mm of the extreme), head width = x extent of the cross-section at eye height in front of the ears (z > eye - 45 mm)."""
+    em = 0.5 * (eL + eR)
+    if mouth is None:
+        # (median height: her boundary ring has a few stray vertices up at the nostrils)
+        mouth = mouth_pts.mean(0); mouth[1] = np.median(mouth_pts[:, 1]); mouth[2] = mouth_pts[:, 2].max() - 0.004
+        mrange = (mouth_pts[:, 1].min() - em[1], mouth_pts[:, 1].max() - em[1])
+    mrange = locals().get('mrange', (np.nan, np.nan))
+    mid = np.abs(pts[:, 0] - em[0]) < 0.03
+    nm = mid & (pts[:, 1] < em[1]) & (pts[:, 1] > mouth[1])
+    q = pts[nm]; nose = q[q[:, 2] > q[:, 2].max() - 0.002].mean(0)
+    cm = mid & (pts[:, 1] < mouth[1]) & (pts[:, 2] > mouth[2] - 0.02)
+    q = pts[cm]; chin = q[q[:, 1] < q[:, 1].min() + 0.002].mean(0)
+    # lip front: the most forward point of the lips (between the nose and the chin, near the middle), a surface
+    # feature that does not depend on how either mesh is cut open at the mouth
+    lm_ = (np.abs(pts[:, 0] - em[0]) < 0.012) & (pts[:, 1] < nose[1] - 0.008) & (pts[:, 1] > chin[1] + 0.015)
+    q = pts[lm_]; lip = q[q[:, 2] > q[:, 2].max() - 0.0015].mean(0)
+    x0, x1 = slice_x_extent(mesh[0], mesh[1], em[1], em[2] - 0.045)
+    # lateral extreme at eye height, ears included (her ear landmark)
+    ew = np.abs(pts[:, 1] - em[1]) < 0.01
+    lat = {sg: pts[ew & (np.sign(pts[:, 0]) == sg)][np.argmax(np.abs(pts[ew & (np.sign(pts[:, 0]) == sg)][:, 0]))] for sg in (-1, 1)}
+    return dict(eL=eL, eR=eR, em=em, mouth=mouth, lip=lip, spacing=np.linalg.norm(eL - eR), eye_mouth=np.linalg.norm(em - mouth),
+                eye_lip=np.linalg.norm(em - lip),
+                nose=nose, chin=chin, width=x1 - x0, lat=lat, mrange=mrange)
+
+
+def log_face_metrics(tag, m, log):
+    log('  face metrics %-26s eye spacing %.1f mm, eye-mouth %.1f mm (lip front %.1f, opening y %.1f..%.1f), nose (%.1f %.1f %.1f) mm, chin (%.1f %.1f %.1f) mm, head width at eyes %.1f mm' % (
+        (tag,) + (1000 * m['spacing'], 1000 * m['eye_mouth'], 1000 * m['eye_lip']) + tuple(1000 * np.array(m['mrange'])) + tuple(1000 * (m['nose'] - m['em'])) + tuple(1000 * (m['chin'] - m['em'])) + (1000 * m['width'],)))
+
+
+def face_landmarks(m, pts, ears=None):
+    """Landmarks for the face pre-alignment. Ear centres: the centroid of VaM's 'Ears' per side (ears), or, for her,
+    the lateral extreme of the face at eye height."""
+    d = dict(nose=m['nose'], chin=m['chin'], eyeL=m['eL'], eyeR=m['eR'], mouth=m['mouth'])
+    for sg, k in ((-1, 'earL'), (1, 'earR')):
+        d[k] = (ears[np.sign(ears[:, 0]) == sg].mean(0) if len(ears) > 2 else ears[0 if sg < 0 else 1]) if ears is not None else m['lat'][sg]
+    return d
+
+
+def body_metrics(sets, names, bind_pos, nip_y, log):
+    """Cross-section width (x) and depth (z) at body landmarks for each of sets = {tag: (points, label per point)}:
+    mid-thigh (y 0.65-0.70), widest hip, under-bust, waist and mid-upper-arm."""
+    arm = tuple(n for n in names if n.startswith(('uparm', 'forearm', 'hand', 'fIndex', 'fMiddle', 'fRing', 'fPinky', 'fThumb')))
+    def trunk(pts, lab):
+        return pts[~np.isin(lab, [names.index(n) for n in arm])]
+    def wd(p):
+        return (p[:, 0].max() - p[:, 0].min(), p[:, 2].max() - p[:, 2].min()) if len(p) > 2 else (np.nan, np.nan)
+    def band(p, y, h=0.005):
+        return p[np.abs(p[:, 1] - y) <= h]
+    def widest(p, y0, y1):
+        ys = np.arange(y0, y1, 0.005)
+        w = [wd(band(p, y))[0] for y in ys]
+        return ys[int(np.nanargmax(w))]
+    tr = {k: trunk(*v) for k, v in sets.items()}
+    ref = next(iter(sets))
+    y_hip = {k: widest(tr[k], 0.78, 1.0) for k in sets}
+    y_ub = nip_y - 0.065
+    ys = np.arange(y_hip[ref] + 0.05, y_ub - 0.03, 0.005)
+    y_waist = ys[int(np.nanargmin([wd(band(tr[ref], y))[0] for y in ys]))]
+    rows = []
+    def row(label, fn):
+        rows.append('  %-34s %s' % (label, '   '.join('%s %s' % (k, fn(k)) for k in sets)))
+    fmt = lambda wdv: '%.0fx%.0f' % (1000 * wdv[0], 1000 * wdv[1])
+    for sd in ('L', 'R'):
+        def thigh(k):
+            pts, lab = sets[k]
+            p = pts[(lab == names.index('thigh' + sd)) & (pts[:, 1] >= 0.65) & (pts[:, 1] <= 0.70)]
+            return fmt(wd(p))
+        row('mid-thigh %s (y .65-.70)' % sd, thigh)
+    row('widest hip (own y)', lambda k: '%s @%.3f' % (fmt(wd(band(tr[k], y_hip[k]))), y_hip[k]))
+    row('under-bust (y %.3f)' % y_ub, lambda k: fmt(wd(band(tr[k], y_ub))))
+    row('waist (y %.3f)' % y_waist, lambda k: fmt(wd(band(tr[k], y_waist))))
+    for sd in ('L', 'R'):
+        a0, a1 = bind_pos['Shoulder_' + sd], bind_pos['Elbow_' + sd]
+        ax = (a1 - a0) / np.linalg.norm(a1 - a0); wv = np.cross(ax, [0, 0, 1.0]); wv /= np.linalg.norm(wv)
+        def upper_arm(k):
+            pts, lab = sets[k]
+            p = pts[lab == names.index('uparm' + sd)]
+            t = (p - a0) @ ax / np.linalg.norm(a1 - a0)
+            p = p[(t > 0.45) & (t < 0.55)]
+            if len(p) < 3:
+                return 'n/a'
+            return fmt((np.ptp(p @ wv), np.ptp(p[:, 2])))
+        row('mid-upper-arm %s' % sd, upper_arm)
+    log('  body cross-sections, width x depth in mm (%s):' % ' / '.join(sets))
+    for r in rows:
+        log(r)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--game', required=True)
     ap.add_argument('--vam', required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--name', default=None)
+    ap.add_argument('--joints', choices=('face', 'all', 'none'), default='face',
+                    help="joints.txt offsets: face = only the eyes and the jaw (each capped to 15 mm, the rest stays hers so "
+                         "her rig and animations are untouched); all = every bone (shell average of the fitted offsets); none")
     ap.add_argument('--proportions', choices=('hers', 'vam'), default='hers',
                     help="hers: the VaM character's surface and face on her own skeleton (limb, finger and shoulder "
                          "proportions stay hers, so her rig and animations fit); vam: also take VaM's proportions")
@@ -111,6 +224,7 @@ def main():
     # --- her fitted skin, welded across meshes -----------------------------------------------------------
     sel_v, sel_f = [], []
     base = 0
+    fit_off = {}
     for m in meshes:
         groups = FIT.get(m.name)
         m.fit_idx = np.zeros(0, np.int64)
@@ -122,6 +236,7 @@ def main():
         m.fit_idx = used
         remap = -np.ones(len(m.v), np.int64); remap[used] = np.arange(len(used)) + base
         sel_v.append((m, used))
+        fit_off[m.name] = base
         sel_f.append(remap[m.faces[fmask]])
         base += len(used)
         log('  fit %s: %d of %d vertices (%s)' % (m.name, len(used), len(m.v), ', '.join(m.groups[i] for i in gi)))
@@ -207,6 +322,7 @@ def main():
     for e in ('Eye_L', 'Eye_R'):
         lids |= np.linalg.norm(x0 - dst[[i for i, (h, v) in enumerate(lm) if h == e][0]], axis=1) < 0.021
     log('stiffer fit on %d vertices (fingers, toes, eyelids); %d eyelid vertices keep her eye opening' % ((stiff > 1).sum(), lids.sum()))
+    eye_off, eye_ratio, fm_her, fm_vam = None, {}, None, None
     if a.proportions == 'vam':
         xfit, wmatch, dist = fit.nonrigid_icp(x0, wf, lambda x: sfio.vertex_normals(x, wf, hsign), surfaces, hlab, log, stiff=stiff, nodata=lids)
         # trunk only: the face's lips and lids and the fingers keep the vertex layout the fit gave them
@@ -239,7 +355,7 @@ def main():
         vam_u = rig.apply(np.linalg.inv(Av), vam_v)
         bsrc, bdst, bl = [], [], []
         for (h, v), sp in zip(lm, src):
-            if h in M and v in vj:
+            if h in M and v in vj and h != 'Head_M' and not h.startswith('Eye_'):
                 bsrc.append(rig.apply(np.linalg.inv(M[h])[None], vj[v][None])[0]); bdst.append(bind_pos[h]); bl.append(h)
         # nipples and mouth: the same VaM points, unposed with their own vertex's skinning
         if nip is not None and 'Nipples' in vam.groups:
@@ -251,12 +367,56 @@ def main():
                     bsrc.append(vam_u[j]); bdst.append(hm[np.argmax(hm[:, 2])]); bl.append('nipple')
         hm_b = face.vc[bv].mean(0); hm_b[2] = face.vc[bv][:, 2].max() - 0.004
         vm_b = rig.apply(np.linalg.inv(M['Head_M'])[None], vam_mouth[None])[0]
-        bsrc.append(vm_b); bdst.append(hm_b); bl.append('mouth')
         bsrc = np.array(bsrc); bdst = np.array(bdst)
         dd = np.linalg.norm(bdst - bsrc, axis=1)
-        log('her proportions: VaM unposed into her bind pose; %d landmarks, mean %.1f mm, max %.1f mm (%s) before the warp' % (
-            len(bl), 1000 * dd.mean(), 1000 * dd.max(), bl[int(np.argmax(dd))]))
+        log('her proportions: VaM unposed into her bind pose; %d landmarks (no head, eyes or mouth: the face stays VaM-like), '
+            'mean %.1f mm, max %.1f mm (%s) before the warp' % (len(bl), 1000 * dd.mean(), 1000 * dd.max(), bl[int(np.argmax(dd))]))
         vam_b = fit.tps_warp(vam_u, bsrc, bdst, smoothing=1e-4)
+        # Head decoupling: the head is not part of the proportion warp. VaM's head goes on her skeleton rigidly (eye
+        # midpoints coincide), blended over the neck from the warped body (weight 0 at her Neck_M, 1 at her Head_M).
+        eye_v = {}
+        for e, v in (('Eye_L', 'lEye'), ('Eye_R', 'rEye')):
+            eye_v[e] = rig.apply(np.linalg.inv(M[e])[None], vj[v][None])[0]
+        eye_mid_b = 0.5 * (bind_pos['Eye_L'] + bind_pos['Eye_R'])
+        t_eye = eye_mid_b - 0.5 * (eye_v['Eye_L'] + eye_v['Eye_R'])
+        yN, yH = bind_pos['Neck_M'][1], bind_pos['Head_M'][1]
+        head_names = [names.index(x) for x in ('torso', 'lipU', 'lipL')]
+        w_head = np.where(np.isin(vlab_v, head_names), np.clip((vam_u[:, 1] + t_eye[1] - yN) / (yH - yN), 0, 1), 0.0)
+        vam_b = vam_b * (1 - w_head)[:, None] + (vam_u + t_eye) * w_head[:, None]
+        log('head decoupling: VaM head rigid at her eyes, offset %s mm (eye spacing VaM %.1f mm, hers %.1f mm); neck blend between y %.3f and %.3f, %d VaM vertices fully rigid' % (
+            np.round(t_eye * 1000, 1), 1000 * np.linalg.norm(eye_v['Eye_L'] - eye_v['Eye_R']),
+            1000 * np.linalg.norm(bind_pos['Eye_L'] - bind_pos['Eye_R']), yN, yH, (w_head >= 1).sum()))
+        eye_c = {e: eye_v[e] + t_eye for e in eye_v}                      # VaM eye centres in her bind space
+        eye_off = {e: eye_c[e] - bind_pos[e] for e in eye_c}
+        vm_a = vm_b + t_eye
+        # eyeball radii: VaM's 'Sclera' vertices around their eye (VaM's rest pose, her scale), hers: her sclera meshes
+        scl = vam_v[np.unique(vam.faces[vam.face_group == vam.groups.index('Sclera')])]
+        r_vam = np.mean([np.linalg.norm(scl[np.sign(scl[:, 0]) == sg] - vj[k], axis=1).mean() for sg, k in ((-1, 'lEye'), (1, 'rEye'))])
+        r_her = {}
+        for nm, e in (('reika_left_sclera', 'Eye_L'), ('reika_right_sclera', 'Eye_R')):
+            ms = next((m for m in meshes if m.name == nm), None)
+            if ms is not None:
+                r_her[e] = np.linalg.norm(ms.vc - bind_pos[e], axis=1).mean()
+        eye_ratio = {e: r_vam / r for e, r in r_her.items()}
+        log('eyeball radius: VaM %.2f mm, hers %s mm (scale %s); eye offsets %s mm' % (
+            1000 * r_vam, {e: round(float(1000 * r), 2) for e, r in r_her.items()}, {e: round(float(r), 3) for e, r in eye_ratio.items()},
+            {e: np.round(o * 1000, 1).tolist() for e, o in eye_off.items()}))
+        # face metrics source points: her face mesh (welded), VaM's head skin
+        used = face.fit_idx
+        face_w = widx[fit_off['reika_face_a'] + np.arange(len(used))]
+        mouth_w = widx[fit_off['reika_face_a'] + np.searchsorted(used, bv)]
+        vhead = np.unique(vam.faces[np.isin(vam.face_group, [vam.groups.index(g) for g in ('Face', 'Nostrils', 'Lips', 'Ears', 'Head')])])
+        vears = np.unique(vam.faces[vam.face_group == vam.groups.index('Ears')])
+        fm_her = face_metrics(wc[face_w], bind_pos['Eye_L'], bind_pos['Eye_R'], mouth_pts=wc[mouth_w], mesh=(wc, wf))
+        # VaM's mouth opening: its lip vertices that touch the inner mouth (the same kind of ring as her boundary vertices)
+        lip_i = np.unique(vam.faces[vam.face_group == vam.groups.index('Lips')])
+        in_i = np.unique(vam.faces[vam.face_group == vam.groups.index('InnerMouth')])
+        ring = lip_i[cKDTree(vam_b[in_i]).query(vam_b[lip_i])[0] < 0.0015]
+        if len(ring) >= 10:
+            vm_a = vam_b[ring].mean(0); vm_a[2] = vam_b[ring][:, 2].max() - 0.004
+        log('VaM mouth opening: %d ring vertices, centre %s mm from the eye midpoint' % (len(ring), np.round(1000 * (vm_a - eye_mid_b), 1)))
+        fm_vam = face_metrics(vam_b[vhead], eye_c['Eye_L'], eye_c['Eye_R'], mouth_pts=vam_b[ring] if len(ring) >= 10 else None,
+                              mouth=None if len(ring) >= 10 else vm_a, mesh=(vam_b, vf))
         vfn_b, _ = sfio.face_normals(vam_b, vf)
         vfn_b *= vsign
         surfaces = {}
@@ -265,11 +425,9 @@ def main():
             surfaces[li] = fit.Surface(vam_b, vf[mm], vfn_b[mm]) if mm.any() else None
         stiff_b = np.ones(nw)
         stiff_b[np.isin(hlab, [i for i, n in enumerate(names) if n.startswith(('hand', 'fIndex', 'fMiddle', 'fRing', 'fPinky', 'fThumb', 'foot'))])] = 8.0
-        lids = np.zeros(nw, bool)
-        for e in ('Eye_L', 'Eye_R'):
+        for e in ('Eye_L', 'Eye_R'):   # a soft ring round the eyes (the lids are fitted now)
             r = np.linalg.norm(wc - bind_pos[e], axis=1)
-            stiff_b = np.maximum(stiff_b, np.clip(12.0 * (1 - (r - 0.016) / 0.012), 1, 12))
-            lids |= r < 0.021
+            stiff_b = np.maximum(stiff_b, np.clip(3.0 * (1 - (r - 0.016) / 0.012), 1, 3))
         # her mouth's inside (the face mesh continues behind the lips): faces down like the underside of a chin
         # (inside, normals face the head's centre line; the chin's skin faces away from it)
         wn_b = sfio.vertex_normals(wc, wf, hsign)
@@ -278,25 +436,65 @@ def main():
         # and the whole bag behind the lips, down towards the throat (the chin's skin is lower or further forward)
         mouth_in |= ((wc[:, 2] < hm_b[2] - 0.012) & (np.abs(wc[:, 0] - hm_b[0]) < 0.035)
                      & (wc[:, 1] > hm_b[1] - 0.035) & (wc[:, 1] < hm_b[1] + 0.03) & (wc[:, 2] > hm_b[2] - 0.11))
-        lids |= mouth_in
+        nodata = mouth_in.copy()
+        # VaM exports can catch the lids mid-blink. Measure each eye's opening on the VaM skin (the largest
+        # skin-free gap on a vertical line through the eye, in front of the eyeball); if it's mostly closed, her
+        # own lids keep their opening (and the report says to re-export with blinking off), else VaM's lids are fitted.
+        if 'Sclera' in vam.groups:
+            scl = np.unique(vam.faces[vam.face_group == vam.groups.index('Sclera')])
+            cen_f = vam_b[vf].mean(1)
+            apertures = []
+            for sgn in (-1, 1):
+                sv = vam_b[scl][np.sign(vam_b[scl, 0]) == sgn]
+                if not len(sv):
+                    continue
+                ec = sv.mean(0); er = np.linalg.norm(sv - ec, axis=1).mean()
+                m = (np.abs(cen_f[:, 0] - ec[0]) < 0.002) & (cen_f[:, 2] > ec[2] + 0.5 * er) & (np.abs(cen_f[:, 1] - ec[1]) < 0.012)
+                ys = np.sort(np.r_[cen_f[m, 1] - ec[1], -0.012, 0.012])
+                gaps = np.diff(ys)
+                apertures.append(float(gaps.max()) if len(gaps) else 0.0)
+            ap = min(apertures) if apertures else 1.0
+            closed = ap < 0.006
+            log('VaM eye opening: %s mm -> %s' % (', '.join('%.1f' % (1000 * a) for a in apertures),
+                'mostly closed (caught mid-blink?): her own lids keep their opening. Re-export from VaM with the SfExport '
+                'plugin (it turns blinking off) to get the character\'s eye shape too' if closed else 'open: the lids are fitted'))
+            if closed:
+                for e in ('Eye_L', 'Eye_R'):
+                    r = np.linalg.norm(wc - bind_pos[e], axis=1)
+                    nodata |= r < 0.021
+                    stiff_b = np.maximum(stiff_b, np.clip(12.0 * (1 - (r - 0.016) / 0.012), 1, 12))
         # VaM's shoulders come from a T-pose (trapezius bunched up with the arms raised) and don't come down with
-        # the arms: her own clavicle/shoulder shape stays, VaM's takes over smoothly around it
-        shoulder = np.zeros(nw, bool)
+        # the arms: her own clavicle/shoulder shape is held by extra stiffness (the data still pulls), VaM's takes
+        # over smoothly around it
+        n_sh = np.zeros(nw, bool)
         for sdn in ('Shoulder_L', 'Shoulder_R', 'Scapula_L', 'Scapula_R'):
             r = np.linalg.norm(wc - bind_pos[sdn], axis=1)
-            shoulder |= r < 0.11
-            stiff_b = np.maximum(stiff_b, np.clip(10.0 * (1 - (r - 0.11) / 0.06), 1, 10))
-        lids |= shoulder
-        log('%d mouth-interior and %d shoulder vertices keep her shape' % (mouth_in.sum(), shoulder.sum()))
-        xfit, wmatch, dist = fit.nonrigid_icp(wc.copy(), wf, lambda x: sfio.vertex_normals(x, wf, hsign), surfaces, hlab, log, stiff=stiff_b, nodata=lids)
+            n_sh |= r < 0.11
+            stiff_b = np.maximum(stiff_b, np.clip(6.0 * (1 - (r - 0.11) / 0.06), 1, 6))
+        log('%d mouth-interior vertices keep her shape (no data); %d shoulder vertices stiffer (up to 6, data on)' % (mouth_in.sum(), n_sh.sum()))
+        # Face pre-alignment: her head (only) is warped onto VaM's face landmarks first, so the ICP starts with the
+        # nose, chin, ears and mouth near their targets (its smoothness term anchors to the aligned shape).
+        lm_her = face_landmarks(fm_her, wc[face_w], ears=None)
+        # her ear landmark is the lateral extreme of the face at eye height, so VaM's is the lateral extreme of its
+        # 'Ears' at eye height too (their centroid sits lower and further in: it squashed her ears by 3 cm)
+        ve = vam_b[vears]; ve = ve[np.abs(ve[:, 1] - eye_mid_b[1]) < 0.01]
+        ears_dst = np.array([ve[np.argmax(np.abs(ve[:, 0]) * (np.sign(ve[:, 0]) == sg))] for sg in (-1, 1)])
+        lm_vam = face_landmarks(fm_vam, vam_b[vhead], ears=ears_dst)
+        lsrc = np.array([lm_her[k] for k in FACE_LM]); ldst = np.array([lm_vam[k] for k in FACE_LM])
+        log('face pre-alignment landmarks, her -> VaM (mm): ' + ', '.join('%s %.1f' % (k, 1000 * np.linalg.norm(lm_vam[k] - lm_her[k])) for k in FACE_LM))
+        pre = fit.tps_warp(wc, lsrc, ldst, smoothing=1e-4)
+        w_her = np.where(np.isin(hlab, head_names), np.clip((wc[:, 1] - yN) / (yH - yN), 0, 1), 0.0)
+        x_start = wc + (pre - wc) * w_her[:, None]
+        min_dot = np.where(np.linalg.norm(wc - eye_mid_b, axis=1) < 0.12, 0.2, 0.5)
+        xfit, wmatch, dist = fit.nonrigid_icp(x_start, wf, lambda x: sfio.vertex_normals(x, wf, hsign), surfaces, hlab, log, stiff=stiff_b, nodata=nodata, min_dot=min_dot)
         movable = (hlab == names.index('torso')) & (wc[:, 1] < bind_pos['Neck_M'][1])
         xfit = fit.relax_project(xfit, wf, wc, surfaces, hlab, lambda x: sfio.vertex_normals(x, wf, hsign), wmatch > 0, movable, log=log)
         wd = xfit - wc
-        vam_out = vam_b; vam_eyes = np.array([bind_pos['Eye_L'], bind_pos['Eye_R']]); bindfit = True
+        vam_out = vam_b; vam_eyes = np.array([eye_c['Eye_L'], eye_c['Eye_R']]); bindfit = True
     log('fitted skin offsets in bind pose: mean %.1f mm, p99 %.1f mm, max %.1f mm' % (
         1000 * np.linalg.norm(wd, axis=1).mean(), 1000 * np.percentile(np.linalg.norm(wd, axis=1), 99), 1000 * np.linalg.norm(wd, axis=1).max()))
 
-    wd, b0, b1 = fit.untangle(wc, wf, wd)
+    wd, b0, b1 = fit.untangle(wc, wf, wd, iters=1000, rings=5)
     log('untangle fitted skin: %d flipped triangles -> %d' % (b0, b1))
 
     # normals of the fitted skin on the welded mesh (one normal per welded vertex: no seams at mesh borders)
@@ -304,12 +502,32 @@ def main():
 
     # --- every mesh: offsets (fitted, rigid or following), normal deltas -------------------------------
     pos = 0
-    joint_off = {}
-    for b in canon:
-        joint_off[b] = fit.shell_average(wc, wd, bind_pos[b])
-    for e in ('Eye_L', 'Eye_R'):
-        if e in bind_pos:
-            joint_off[e] = fit.shell_average(wc, wd, bind_pos[e], kmin=96, ratio=2.0)
+    joint_off = {b: np.zeros(3) for b in canon}
+    if a.joints == 'all':
+        for b in canon:
+            joint_off[b] = fit.shell_average(wc, wd, bind_pos[b])
+    if eye_off is None:   # vam proportions: the eye joints follow the fitted skin around them
+        eye_off = {e: fit.shell_average(wc, wd, bind_pos[e], kmin=96, ratio=2.0) for e in ('Eye_L', 'Eye_R') if e in bind_pos}
+    def cap(o, mx=0.015):
+        n = np.linalg.norm(o)
+        return o if n <= mx else o * (mx / n)
+    if a.joints == 'all':
+        for e in eye_off:
+            joint_off[e] = eye_off[e]
+    elif a.joints == 'face':
+        for e in eye_off:
+            joint_off[e] = cap(eye_off[e])
+        if 'Jaw_M' in bind_pos:
+            joint_off['Jaw_M'] = cap(fit.shell_average(wc, wd, bind_pos['Jaw_M']))
+    log('joints (%s): %s' % (a.joints, ', '.join('%s %s mm' % (b, np.round(o * 1000, 1).tolist()) for b, o in sorted(joint_off.items()) if np.any(o)) or 'all zero'))
+    if eye_ratio and eye_off:
+        # her lids against the eyeball: the fitted lid vertices must stay outside it
+        for e in ('Eye_L', 'Eye_R'):
+            c = bind_pos[e] + eye_off[e]
+            lid = np.linalg.norm(wc - bind_pos[e], axis=1) < 0.03
+            dl = np.linalg.norm(wc[lid] + wd[lid] - c, axis=1)
+            log('  %s: eyeball radius %.2f mm (VaM), nearest fitted lid vertex %.2f mm from the centre (%d vertices within 30 mm)' % (
+                e, 1000 * eye_ratio[e] * r_her[e], 1000 * dl.min(), lid.sum()))
     results = []
     from scipy.spatial import cKDTree
     skin_tree = cKDTree(wc)
@@ -331,7 +549,10 @@ def main():
             d[m.fit_idx] = wd[k]
         if m.name in RIGID:
             j = RIGID[m.name]
-            d[:] = joint_off[j] if j else d.mean(0)
+            if j in eye_off:   # eyeball: moves to VaM's eye centre and takes its size
+                d[:] = eye_off[j] + (eye_ratio.get(j, 1.0) - 1.0) * (m.vc - bind_pos[j])
+            else:
+                d[:] = d.mean(0)
         elif len(m.fit_idx) < len(m.v):
             free = np.ones(len(m.v), bool); free[m.fit_idx] = False
             d2, b0, b1 = fit.untangle(m.vc, m.faces, d)
@@ -361,7 +582,23 @@ def main():
         results.append(m)
 
     # --- verification ------------------------------------------------------------------------------------
-    rep = verify(results, wmatch, dist, log)
+    body = None
+    if bindfit:
+        fm_fit = face_metrics((wc + wd)[face_w], bind_pos['Eye_L'] + eye_off['Eye_L'], bind_pos['Eye_R'] + eye_off['Eye_R'],
+                              mouth_pts=(wc + wd)[mouth_w], mesh=(wc + wd, wf))
+        log('face metrics (head, eye midpoint at her eyes; positions relative to it):')
+        log_face_metrics('Reika bind face', fm_her, log)
+        log_face_metrics('VaM head (rigid, aligned)', fm_vam, log)
+        log_face_metrics('fitted result', fm_fit, log)
+        dif = lambda k: np.linalg.norm(fm_fit[k] - fm_vam[k]) if np.ndim(fm_fit[k]) else abs(fm_fit[k] - fm_vam[k])
+        log('  fitted - VaM: eye spacing %.1f mm, eye-mouth %.1f mm (lip front %.1f), nose %.1f mm, chin %.1f mm, head width %.1f mm' % (
+            1000 * dif('spacing'), 1000 * dif('eye_mouth'), 1000 * dif('eye_lip'), 1000 * dif('nose'), 1000 * dif('chin'), 1000 * dif('width')))
+        nip_y = nip.vc[:, 1].mean() if nip is not None else bind_pos['Chest_M'][1]
+        skin_vi = np.unique(vf.ravel())
+        vlab_vb = vlab_v
+        sets = {'Reika': (wc, hlab), 'fitted': (wc + wd, hlab), 'VaM-warped': (vam_out[skin_vi], vlab_vb[skin_vi])}
+        body = lambda: body_metrics(sets, names, bind_pos, nip_y, log)
+    rep = verify(results, wmatch, dist, log, body)
     # the other direction: how well her fitted skin covers the VaM skin, per VaM material
     kd1 = cKDTree(xfit); kd0 = cKDTree(wc if bindfit else x0)
     rows = []
@@ -406,6 +643,8 @@ def main():
             f.write('mesh\t%s\t%d\n' % (m.name, len(m.v)))
         for n in FIT:  # her skin: clothes follow the nearest of these vertices in the game
             f.write('skin\t%s\n' % n)
+        for n in HIDE:  # her anime brows: VaM characters carry their brows in the face texture
+            f.write('hide\t%s\n' % n)
     np.savez_compressed(os.path.join(chk, 'stage.npz'),
                         vam_v=vam_out, vam_eyes=vam_eyes, vam_f=vam.faces, vam_g=vam.face_group, vam_uv=vam.uv, vam_vn=vam.vn * vsign,
                         vam_groups=np.array(vam.groups), names=np.array([m.name for m in results]),
@@ -419,7 +658,7 @@ def main():
     return 0 if rep else 1
 
 
-def verify(meshes, wmatch, dist, log):
+def verify(meshes, wmatch, dist, log, extra=None):
     """Vertex counts/order, flipped and stretched triangles, offset sizes, fit residual."""
     ok = True
     log('verification (bind pose, before -> after):')
@@ -448,6 +687,8 @@ def verify(meshes, wmatch, dist, log):
     mm = wmatch > 0
     log('  fit residual (matched %.1f%%): mean %.2f mm, p95 %.2f mm, max %.1f mm' % (
         100 * mm.mean(), 1000 * dist[mm].mean(), 1000 * np.percentile(dist[mm], 95), 1000 * dist[mm].max()))
+    if extra:
+        extra()
     log('  result: %s' % ('OK' if ok else 'CHECK (see rows above)'))
     return ok
 

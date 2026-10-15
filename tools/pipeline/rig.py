@@ -10,8 +10,14 @@ def pose_pairs():
     # The trunk is not rotated: both stand upright, and VaM's spine/collar joints sit along the back while hers
     # run through the middle of the body, so their directions say more about rig conventions than posture
     # (matching them tipped her torso 21 degrees back). The surface fit takes care of posture.
+    # The scapula is the exception: a limb root, not part of the trunk. Her Scapula->Shoulder direction is matched to
+    # VaM's collar->shoulder, but only in the coronal plane ('xy': elevation and spread; front/back is the collar
+    # joint's placement along the back, the rig convention above, and matching it swung the shoulders 3 cm back and
+    # dragged the whole proportion warp with them). This brings her shoulder joints, and the arms below, to where
+    # VaM's are instead of 3-5 cm off.
     p = {}
     for s, v in SIDES:
+        p['Scapula_' + s] = [('Scapula_' + s, 'Shoulder_' + s, v + 'Collar', v + 'Shldr', 'xy')]
         p['Hip_' + s] = [('Hip_' + s, 'Knee_' + s, v + 'Thigh', v + 'Shin')]
         p['Knee_' + s] = [('Knee_' + s, 'Ankle_' + s, v + 'Shin', v + 'Foot')]
         p['Ankle_' + s] = [('Ankle_' + s, 'Toes_' + s, v + 'Foot', v + 'Toe')]
@@ -188,9 +194,12 @@ def pose_skeleton(canon, skel, vam_pos, log=None):
         R[b] = Rp
         if b in pairs:
             src, dst = [], []
-            for hf, ht, vf, vt in pairs[b]:
+            for pr in pairs[b]:
+                hf, ht, vf, vt = pr[:4]
                 if hf in bind_pos and ht in bind_pos and vf in vam_pos and vt in vam_pos:
                     hv = Rp @ (bind_pos[ht] - bind_pos[hf]); vv = vam_pos[vt] - vam_pos[vf]
+                    if len(pr) > 4:   # 'xy': only the direction in the coronal plane (up/down, out), not front/back
+                        hv = hv * np.array([1, 1, 0]); vv = vv * np.array([1, 1, 0])
                     if np.linalg.norm(hv) > 1e-5 and np.linalg.norm(vv) > 1e-5:
                         src.append(hv); dst.append(vv)
                     elif log:

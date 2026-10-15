@@ -18,6 +18,7 @@ namespace SfMorph
         public string Name, Dir, Source = "?";
         public readonly Dictionary<string, int> Meshes = new Dictionary<string, int>();
         public readonly HashSet<string> Skin = new HashSet<string>();
+        public readonly HashSet<string> Hide = new HashSet<string>();     // original mesh names to switch off while she is active
         public readonly List<string[]> Textures = new List<string[]>();   // material, kind (albedo/normal), file
         Texture2D _thumb; bool _thumbTried;
         Dictionary<string, Vector3> _joints;
@@ -40,6 +41,7 @@ namespace SfMorph
                     case "source": s.Source = f[1]; break;
                     case "mesh": if (f.Length > 2 && int.TryParse(f[2], out n)) s.Meshes[f[1]] = n; break;
                     case "skin": s.Skin.Add(f[1]); break;
+                    case "hide": s.Hide.Add(f[1]); break;
                     case "texture": if (f.Length > 3) s.Textures.Add(new[] { f[1], f[2], f[3] }); break;
                 }
             }
@@ -187,13 +189,21 @@ namespace SfMorph
         readonly Dictionary<Material, Dictionary<string, Saved>> _saved = new Dictionary<Material, Dictionary<string, Saved>>();
         readonly Dictionary<string, Texture2D> _tex = new Dictionary<string, Texture2D>();
         readonly HashSet<string> _badTex = new HashSet<string>();
+        readonly Dictionary<Material, Dictionary<string, Color>> _savedCol = new Dictionary<Material, Dictionary<string, Color>>();
+        readonly List<SkinnedMeshRenderer> _hidden = new List<SkinnedMeshRenderer>();   // renderers we switched off ('hide' lines); only these get switched back on
+        static readonly HashSet<string> _loggedProps = new HashSet<string>();
         readonly Dictionary<Transform, Vector3> _jointLocal = new Dictionary<Transform, Vector3>();
         static readonly HashSet<string> _loggedMats = new HashSet<string>();
         MorphSet _set;
         List<SkinnedMeshRenderer> _builtFor;
         bool _texOn;
         float _nextCheck;
-        public string Status = "";
+        string _status = "";
+        public string Status
+        {
+            get { return _hidden.Count > 0 && _status.Length > 0 ? _status + ", " + _hidden.Count + " meshes hidden" : _status; }
+            set { _status = value; }
+        }
 
         public float JointWeight;   // what Body adds to the joints this frame
         public Dictionary<Transform, Vector3> JointLocal { get { return _jointLocal; } }
@@ -236,11 +246,46 @@ namespace SfMorph
                 }
                 if (s.Weight != w) { r.SetBlendShapeWeight(0, w * 100f); s.Weight = w; }
             }
+            HideMeshes(c, set);
             if (look.MorphSkin && !_texOn) { ApplyTextures(c, set); _texOn = true; }
             else if (!look.MorphSkin && _texOn) { RestoreTextures(); _texOn = false; }
         }
 
         string _why = "";
+
+        // 'hide' lines: meshes of the game's woman the character replaces (by original mesh name) are switched off while
+        // she is active. Only renderers we switched off are touched again; the game's own enabled state is left alone.
+        void HideMeshes(Character c, MorphSet set)
+        {
+            for (int i = _hidden.Count - 1; i >= 0; i--)
+            {
+                var r = _hidden[i];
+                if (r == null) { _hidden.RemoveAt(i); continue; }
+                if (!c.Renderers.Contains(r) || !r.gameObject.activeInHierarchy || !set.Hide.Contains(OrigName(r)))
+                { r.enabled = true; _hidden.RemoveAt(i); continue; }
+                if (r.enabled) r.enabled = false;   // the game turned it back on
+            }
+            if (set.Hide.Count == 0) return;
+            foreach (var r in c.Renderers)
+            {
+                if (r == null || !r.enabled || !r.gameObject.activeInHierarchy || _hidden.Contains(r)) continue;
+                var n = OrigName(r);
+                if (n != null && set.Hide.Contains(n)) { r.enabled = false; _hidden.Add(r); }
+            }
+        }
+
+        string OrigName(SkinnedMeshRenderer r)
+        {
+            Slot s;
+            if (_slots.TryGetValue(r, out s) && s.Orig != null) return s.Orig.name;
+            return r.sharedMesh != null ? r.sharedMesh.name : "";
+        }
+
+        void ShowHidden()
+        {
+            foreach (var r in _hidden) if (r != null) r.enabled = true;
+            _hidden.Clear();
+        }
 
         string RendererChange(Character c)
         {
@@ -263,7 +308,7 @@ namespace SfMorph
         {
             if (set != _set)
             {
-                ReleaseMeshes(true); RestoreTextures(); _texOn = false; _set = set;
+                ReleaseMeshes(true); RestoreTextures(); ShowHidden(); _texOn = false; _set = set;
                 foreach (var t in _tex.Values) if (t != null) UnityEngine.Object.Destroy(t);
                 _tex.Clear(); _badTex.Clear();
             }
@@ -508,6 +553,8 @@ namespace SfMorph
                         foreach (var pn in normal ? NormalProps : AlbedoProps) if (mat.HasProperty(pn)) { prop = pn; break; }
                         if (prop == null) continue;
                         var tex = Load(set, t[2], normal);
+                        if (_loggedProps.Add(mname)) LogProps(mname, mat);
+                        if (tex != null && !normal) WhiteTint(mat);
                         if (tex == null || mat.GetTexture(prop) == tex) continue;
                         Dictionary<string, Saved> sv;
                         if (!_saved.TryGetValue(mat, out sv)) { sv = new Dictionary<string, Saved>(); _saved[mat] = sv; }
@@ -519,6 +566,48 @@ namespace SfMorph
                 }
             }
             if (done.Count > 0) Plugin.Log.LogInfo("Character '" + set.Name + "' textures: " + string.Join(", ", done.ToArray()));
+        }
+
+        static readonly string[] TintProps = { "_SkinColor", "_BaseColor", "_Color" };
+
+        // The skin shader multiplies the albedo by its own tint: with the baked skin on, the tint is white (originals come back with the textures).
+        void WhiteTint(Material mat)
+        {
+            foreach (var pn in TintProps)
+            {
+                if (!mat.HasProperty(pn)) continue;
+                Dictionary<string, Color> sc;
+                if (!_savedCol.TryGetValue(mat, out sc)) { sc = new Dictionary<string, Color>(); _savedCol[mat] = sc; }
+                var cur = mat.GetColor(pn);
+                if (!sc.ContainsKey(pn)) sc[pn] = cur;
+                if (cur != Color.white) mat.SetColor(pn, Color.white);
+            }
+        }
+
+        static string F(float v) { return v.ToString("0.###", CultureInfo.InvariantCulture); }
+
+        // Once per material: every float and colour property, to tune the look later.
+        static void LogProps(string mname, Material mat)
+        {
+            try
+            {
+                var sh = mat.shader;
+                var sb = new StringBuilder("Material '" + mname + "' (" + sh.name + ") properties:");
+                int n = sh.GetPropertyCount();
+                for (int i = 0; i < n; i++)
+                {
+                    var type = sh.GetPropertyType(i);
+                    var pn = sh.GetPropertyName(i);
+                    if (type == ShaderPropertyType.Float || type == ShaderPropertyType.Range) sb.Append(' ').Append(pn).Append('=').Append(F(mat.GetFloat(pn)));
+                    else if (type == ShaderPropertyType.Color)
+                    {
+                        var col = mat.GetColor(pn);
+                        sb.Append(' ').Append(pn).Append("=(").Append(F(col.r)).Append(',').Append(F(col.g)).Append(',').Append(F(col.b)).Append(',').Append(F(col.a)).Append(')');
+                    }
+                }
+                Plugin.Log.LogInfo(sb.ToString());
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Couldn't list the properties of '" + mname + "': " + e.Message); }
         }
 
         Texture2D Load(MorphSet set, string file, bool normal)
@@ -551,13 +640,20 @@ namespace SfMorph
                 }
             }
             _saved.Clear();
+            foreach (var kv in _savedCol)
+            {
+                if (kv.Key == null) continue;
+                foreach (var p in kv.Value) kv.Key.SetColor(p.Key, p.Value);
+            }
+            _savedCol.Clear();
         }
 
         // ---- giving everything back ----
 
         public void Release()
         {
-            if (_slots.Count == 0 && _saved.Count == 0) return;
+            ShowHidden();
+            if (_slots.Count == 0 && _saved.Count == 0 && _savedCol.Count == 0) return;
             ReleaseMeshes(false);
             RestoreTextures();
             _texOn = false;
