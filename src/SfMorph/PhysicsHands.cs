@@ -1448,6 +1448,14 @@ namespace SfMorph
 
         // Runner.FixedUpdate: the palm follows the target by a force-capped pull and a PD torque, the fingers get their joint
         // targets; her capsules follow her bones. Before the physics step.
+        // 0.7.7: the push a physics hand gave one of her segments ("forearm_L", "upperarm_R", ...) over the last fixed step: the force ON
+        // HER (N, world) and where it acted. false when nothing pushed it (or below 0.2 N). (Stub until the implementation lands.)
+        public static bool PushOn(string seg, out Vector3 point, out Vector3 forceOnHer)
+        {
+            point = Vector3.zero; forceOnHer = Vector3.zero;
+            return false;
+        }
+
         public static void FixedStep()
         {
             if (!Active && !_herBuilt) return;

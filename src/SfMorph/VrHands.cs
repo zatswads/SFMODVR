@@ -15,6 +15,22 @@ namespace SfMorph
         public Vector3 LocalA, LocalB;
         public float Radius;
         public string Owner, Kind;
+        public CapSource Src;   // 0.7.7: who this capsule belongs to (shared by its capsules); null = always live, ungated
+    }
+
+    // 0.7.7: one thing that can touch her (a VR hand, a physics hand, a partner rig, her own body). Gated sources count only while one
+    // of their renderers is drawn in the headset (VrHands.UpdateLive, once per frame): a hidden partner whose animation still puts his
+    // hands on her, or controller models replaced by the physics hands, must not dent her or push her breast physics.
+    internal sealed class CapSource
+    {
+        public int Id;                            // 1..VrHands.MaxSources-1, stable while the source lives (0 = no source)
+        public string Name;                       // "your left hand", "your right physics hand", "Player", "[Character]", "her"
+        public string Kind;                       // "vr", "partner", "hers"
+        public bool Gated;                        // false: always live (her own capsules, the physics hands)
+        public bool Live = true;                  // written by VrHands.UpdateLive
+        public string Why = "";                   // why not live ("hidden"), or a note ("no renderer found: assumed drawn")
+        public readonly List<Renderer> Rends = new List<Renderer>();
+        public int CapCount;
     }
 
     // Finds the hands that can touch her (the user's VR hands/controllers, the partner rigs' hands, her own forearms/hands/thighs)
@@ -26,6 +42,38 @@ namespace SfMorph
         public static int Version;                               // bumped whenever Capsules changes
         public static Transform LeftController, RightController; // the tracked controller poses, null if not found
         public static string Status = "";
+
+        // ---- 0.7.7 capsule sources (interface; see CapSource) ----
+        public const int MaxSources = 64;
+        public static bool GateHidden = true;     // [Physics] GateHidden: false = every source live (to compare)
+        public static int BreastColliders = 1;    // [Physics] BreastColliders: 0 off, 1 main breast chains, 2 all breast DynamicBones
+        public static readonly List<CapSource> Sources = new List<CapSource>();
+        static int _nextSourceId = 1;
+
+        // A new source with the next free id (ids wrap within 1..MaxSources-1, skipping ones still in Sources).
+        public static CapSource NewSource(string name, string kind, bool gated)
+        {
+            int id = 0;
+            for (int n = 0; n < MaxSources && id == 0; n++)
+            {
+                int cand = _nextSourceId;
+                _nextSourceId = _nextSourceId + 1 >= MaxSources ? 1 : _nextSourceId + 1;
+                bool used = false;
+                foreach (var s in Sources) if (s.Id == cand) { used = true; break; }
+                if (!used) id = cand;
+            }
+            var src = new CapSource { Id = id, Name = name, Kind = kind, Gated = gated };
+            Sources.Add(src);
+            return src;
+        }
+
+        public static void DropSource(CapSource s) { if (s != null) Sources.Remove(s); }
+
+        // Once per frame, before the soft points: Live for every gated source. (Stub until the implementation lands.)
+        public static void UpdateLive() { }
+
+        // Once per frame, after the soft points: attach/detach the breast DynamicBone mirror colliders whose source changed liveness.
+        public static void MirrorLive() { }
 
         const BindingFlags Any = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
@@ -570,7 +618,7 @@ namespace SfMorph
         // The vr and partner capsules as DynamicBoneColliders in the m_Colliders of the game's breast DynamicBones (root name
         // contains "breast", under `her`). Safe to call every Refresh: the mirrors are rebuilt only when Capsules changed, the
         // game's DynamicBones are looked at again every 10 s (outfit swaps bring new ones).
-        public static void AttachToGameBreasts(Transform her, bool on)
+        public static void AttachToGameBreasts(Transform her, bool on, List<SoftCapsule> caps)
         {
             Types();
             if (!on || her == null || _db == null || _dbc == null) { RemoveMirrors(); return; }
@@ -582,7 +630,7 @@ namespace SfMorph
                 RemoveMirrors();
                 _attVersion = Version;
                 _attHer = her;
-                foreach (var c in Capsules)
+                foreach (var c in caps ?? Capsules)
                 {
                     if (c.T == null || (c.Kind != "vr" && c.Kind != "partner")) continue;
                     var col = MakeCollider(c);

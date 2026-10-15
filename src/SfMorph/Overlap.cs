@@ -6,7 +6,16 @@ namespace SfMorph
 {
     // Secondary animation: her limbs, head and spine follow the animation through damped springs (overlap, follow-through).
     // Embody is ignored on purpose: it drives HIS arms, not hers (the Embody field is kept for the integrator's signature).
-    internal class OverlapSettings { public float Amount, Arms = 1f, Legs = 1f, Head = 1f, Spine = 1f; public Embody Embody; }   // Embody: unused here
+    internal class OverlapSettings
+    {
+        public float Amount, Arms = 1f, Legs = 1f, Head = 1f, Spine = 1f; public Embody Embody;   // Embody: unused here
+        // 0.7.7 (v2): ripple 0..1; bounce per region (0 arms, 1 legs, 2 head, 3 spine) 0..1; planted lock; limb push from the physics
+        // hands 0..1; Caps = Body.Contacts() this frame (partner/hers capsules for the planted test; null when no hands are tracked)
+        public float Ripple = 0.5f, LimbPush = 0.5f;
+        public readonly float[] Bounce = { 0.5f, 0.4f, 0.6f, 0.3f };
+        public bool PlantedLock = true;
+        public List<SoftCapsule> Caps;
+    }
 
     // Runs in Body.ApplyAll after Apply(c) and before Soft.Simulate, i.e. after the animation wrote this frame and before LateUpdate scripts.
     //

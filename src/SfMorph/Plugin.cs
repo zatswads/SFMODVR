@@ -21,6 +21,9 @@ namespace SfMorph
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
+        internal ConfigEntry<bool> GateHidden, OverlapPlanted;
+        internal ConfigEntry<float> OverlapRipple, ArmsBounce, LegsBounce, HeadBounce, SpineBounce, HandsLimbPush;
+        internal ConfigEntry<int> BreastColliders;
         internal ConfigEntry<bool> KeysUnfocused, Apply, Physics, ShowSoftPoints, EmbodyOn, EmbodyHideHead, HandsOn, HandsCollide, GpuContactOn;
         internal ConfigEntry<float> UiScale, Softness, Springiness, Gravity, OverlapAmount, OverlapArms, OverlapLegs, OverlapHead, OverlapSpine;
         internal ConfigEntry<int> EmbodyHands, EmbodyView, EmbodyPartner, HandsMesh, Quality;
@@ -52,6 +55,15 @@ namespace SfMorph
             OverlapSpine = Config.Bind("Motion", "Spine", 1f, new ConfigDescription("Overlap amount on the spine.", new AcceptableValueRange<float>(0f, 1f)));
             Gravity = Config.Bind("Physics", "Gravity", 0.5f, new ConfigDescription("Soft zones settle toward the floor as she moves (breasts most, thighs least): they hang when she stands, flatten on her back, drop when she bends over. 0 off.", new AcceptableValueRange<float>(0f, 1f)));
             GpuContactOn = Config.Bind("Physics", "GpuContact", true, "Per-vertex contact on the GPU (shader bundle sfmorph_shaders next to the DLL): her skin is pressed exactly around hands and fingers.");
+            GateHidden = Config.Bind("Physics", "GateHidden", true, "Hands that aren't drawn (a hidden partner, controller models replaced by the physics hands) don't touch her.");
+            BreastColliders = Config.Bind("Physics", "BreastColliders", 1, new ConfigDescription("Hands push the game's own breast physics: 0 off, 1 the main breast chains, 2 every breast DynamicBone.", new AcceptableValueRange<int>(0, 2)));
+            OverlapRipple = Config.Bind("Motion", "Ripple", 0.5f, new ConfigDescription("Motion travels down the chains: a fast turn of the torso swings the head and arms a little later (0 off).", new AcceptableValueRange<float>(0f, 1f)));
+            ArmsBounce = Config.Bind("Motion", "ArmsBounce", 0.5f, new ConfigDescription("How much the arms overshoot and settle (0 damped, 1 bouncy).", new AcceptableValueRange<float>(0f, 1f)));
+            LegsBounce = Config.Bind("Motion", "LegsBounce", 0.4f, new ConfigDescription("How much the legs overshoot and settle.", new AcceptableValueRange<float>(0f, 1f)));
+            HeadBounce = Config.Bind("Motion", "HeadBounce", 0.6f, new ConfigDescription("How much the head and neck overshoot and settle.", new AcceptableValueRange<float>(0f, 1f)));
+            SpineBounce = Config.Bind("Motion", "SpineBounce", 0.3f, new ConfigDescription("How much the spine overshoots and settles.", new AcceptableValueRange<float>(0f, 1f)));
+            OverlapPlanted = Config.Bind("Motion", "PlantedLock", true, "Planted hands and feet stay where the animation puts them while the rest of the limb trails.");
+            HandsLimbPush = Config.Bind("Hands", "LimbPush", 0.5f, new ConfigDescription("Your physics hands push her arms aside; the pose springs back (0 off).", new AcceptableValueRange<float>(0f, 1f)));
             ShowSoftPoints = Config.Bind("Physics", "ShowSoftPoints", false, "Small markers on the soft points (green at rest, red touched) and the contact capsules, to see what touches what.");
             WrinkOn = Config.Bind("Wrinkles", "On", false, "Procedural skin wrinkles: folds appear in her skin's normal map where the skin compresses (expressions, bending), computed on the GPU (shader bundle sfmorph_shaders next to the DLL).");
             WrinkStrength = Config.Bind("Wrinkles", "Strength", 1f, new ConfigDescription("How deep the folds look (0 none, 2 strong).", new AcceptableValueRange<float>(0f, 2f)));

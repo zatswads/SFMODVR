@@ -492,15 +492,17 @@ namespace SfMorph
             bool physics = _p.Apply.Value && _p.Physics.Value && her != null;
             bool embody = _p.EmbodyOn.Value && her != null;
             bool physHands = _p.HandsOn.Value && her != null;
+            VrHands.GateHidden = _p.GateHidden.Value; VrHands.BreastColliders = _p.BreastColliders.Value;
             if (physics || embody || physHands)
             {
                 if (Time.unscaledTime >= _nextHands)   // hands/controllers come and go with scenes: every 2 s, cheap when unchanged
                 {
                     _nextHands = Time.unscaledTime + 2f;
-                    try { VrHands.Survey(her); VrHands.Refresh(her, Found); VrHands.AttachToGameBreasts(her.Root, physics); }
+                    try { VrHands.Survey(her); VrHands.Refresh(her, Found); VrHands.AttachToGameBreasts(her.Root, physics, Contacts()); }
                     catch (Exception e) { Plugin.Log.LogWarning("Hands for the soft zones: " + e); }
                 }
                 _handsOn = true;
+                try { VrHands.UpdateLive(); } catch (Exception e) { Plugin.Log.LogWarning("Hands visibility: " + e.Message); }   // once per frame, before anything reads Live
             }
             else if (_handsOn) { _handsOn = false; try { VrHands.Release(); } catch { } }
             if (physHands || embody) try { Grip.Update(); } catch (Exception e) { Plugin.Log.LogWarning("Grip: " + e.Message); }
@@ -527,6 +529,9 @@ namespace SfMorph
                 {
                     _ovs.Amount = _p.OverlapAmount.Value; _ovs.Arms = _p.OverlapArms.Value; _ovs.Legs = _p.OverlapLegs.Value;
                     _ovs.Head = _p.OverlapHead.Value; _ovs.Spine = _p.OverlapSpine.Value; _ovs.Embody = Embody;
+                    _ovs.Ripple = _p.OverlapRipple.Value; _ovs.PlantedLock = _p.OverlapPlanted.Value; _ovs.LimbPush = _p.HandsLimbPush.Value;
+                    _ovs.Bounce[0] = _p.ArmsBounce.Value; _ovs.Bounce[1] = _p.LegsBounce.Value; _ovs.Bounce[2] = _p.HeadBounce.Value; _ovs.Bounce[3] = _p.SpineBounce.Value;
+                    _ovs.Caps = physics || physHands ? Contacts() : null;
                     try { Overlap.Update(c, _ovs, Time.deltaTime); _overlapOn = true; }
                     catch (Exception e)
                     {
@@ -559,6 +564,7 @@ namespace SfMorph
                     {
                         c.Soft.Simulate(Time.deltaTime, Contacts(), _p.Softness.Value, _p.Springiness.Value, _p.ShowSoftPoints.Value, quality, _p.Gravity.Value);
                         GpuStep(c);
+                        VrHands.MirrorLive();
                     }
                     catch (Exception e)
                     {
