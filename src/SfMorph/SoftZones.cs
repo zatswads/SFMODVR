@@ -243,6 +243,10 @@ namespace SfMorph
         // 0.7.2: how deep each physics hand is into her skin (0..1 of the limit), for the hands' force cap; per zone contact.
         // Smoothed (0.1 s) from the deepest dent each SfPhys* hand makes (SoftSim.cs); 0 when that hand touches nothing or the zones are off.
         public static float LeftResist, RightResist;
+        // 0.7.3 (stubs): the GPU contact deformer's view of a build: bumped on every Build/Teardown; per renderer vertex masks.
+        public int BuildVersion;
+        public float[] MaskFor(UnityEngine.SkinnedMeshRenderer r) { return null; }
+        public List<UnityEngine.SkinnedMeshRenderer> GpuRenderers = new List<UnityEngine.SkinnedMeshRenderer>();
 
         // True while any point of a zone whose Id starts with the prefix (e.g. "thighOut_L", "glute", "thigh") is touched by anything.
         // Per frame state from the last Simulate; allocation-free.
