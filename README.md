@@ -41,6 +41,27 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.8.2:
+- Reactions "didn't do anything" (0.7.9/0.8.0 logs: 200 touches, her voice played 0 times). Causes and fixes:
+  - Her voice was dropped outside the game's sex/foreplay mode, where most of the testing happened: now she voices there too with the game's
+    own moan clips on her voice source.
+  - The game's "dirty talk playing" flag never clears after a line, and its feeling-loop flag is on for long stretches of sex mode: both
+    blocked her voice. Now only dirty talk actually sounding holds back a caress or grope voice; slaps always get through (as the game's
+    own touch moan does), cutting a running moan when hard.
+  - All of the game's moan clips are padded to 4 s, which kept the moan source "playing" and forced a 4 s pause between reactions: the
+    tail now counts as silence after 1.8 s.
+  - A swing over several body parts reacted to its first (often weakest) contact: now to the strongest one.
+  - The slap sound was the game's hand-job stroking clip, 3D with a short range, and quieter for borderline hits: now the game's skin
+    impact (thrust) clips, louder, audible at arm's length, and one continuous strength from soft to too hard.
+  - Her face: slaps show the game's eye reactions plus the wince or a blink; caresses and gropes now show in her eyes too; her blush is
+    scaled to the material's range; the game's own expression level follows her excitement (feed the game's desire is now on).
+  - States flipped between startled and the others on every hit and spanking never raised her excitement: calmer now.
+- The game's sound-effect shuffle (sex/hand-job sounds) threw the same IndexOutOfRange / NullReference as its dirty talk: the voice guard
+  repairs it too.
+- Reactions tab: a "last:" line says what each touch did or why it stayed quiet, and "Diagnose sound and face" logs the whole audio
+  chain (listeners, mixer levels, sources), plays a test tone two ways and reports which face layers react: if you hear nothing,
+  press it and send the log.
+
 0.8.1:
 - A hand pressed on her (lower belly especially) made jagged, hand-shaped cut-outs with sharp steps and went too deep: the GPU contact moved
   only the vertices inside a hand's capsule, each to the capsule's surface along its own normal, with nothing outside the rim (a wall at

@@ -115,6 +115,13 @@ none; (7) fps with everything on vs GPU contact off (expect < 1 ms at Balanced);
 areola and tattoo stay on the skin (log: `overlays follow the body under them: ...`); (9) Wrinkles (Debug off): broad soft folds, not thin
 lines. Send the log + screenshots.
 
+## 0.8.2 (reactions fixes)
+
+Reactions on, outside and inside sex/foreplay mode: slaps give a sound and a voice (log "-> moan" or "-> voice clip", the panel's "last:"
+line says why when not); caresses show in her eyes now and then; the 10 s summary lists skip reasons. Press "Diagnose sound and face" once
+and send the log block "Reactions diagnose": it says whether the test tone played (2D and through the game's sound-effect mixer), the
+mixer levels, our source's state and which Animator layers changed after the "moan" trigger.
+
 ## 0.7.9 (reactions, voice guard)
 
 Hands first: physics hands idle in free air 20 s: the 10 s line shows "at the cap" free air near 0 %, "follow v err avg" <= 0.15 m/s
