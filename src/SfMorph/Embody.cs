@@ -19,6 +19,9 @@ namespace SfMorph
         // how soft her body is (the Physics tab's Softness, 0..1): the clasp sinks past first contact by ClaspGive * (0.5 + Softness).
         // Body.cs fills it next to RestCurl (or HerBody.Softness once P2 publishes it).
         public float Softness = 0.5f;
+        // whether the soft zones run (the Physics tab): hands may sink 1-3 cm into soft parts then, else 0.5 cm like firm ones (design 13.3a).
+        // Body.cs: `_emb.SoftZonesOn = physics;` (true until then).
+        public bool SoftZonesOn = true;
         // Controller -> his wrist (m, degrees), in the controller's axes. The position is where the wrist sits relative to the
         // tracked pose (Quest Touch, from Embody for VaM); the right hand is the left mirrored. The rotation is added to an
         // automatic hand alignment (fingers along the controller's forward, thumb along its up, palm toward the body's midline;
@@ -118,6 +121,10 @@ namespace SfMorph
             // to the pole there (so a pass that finds the pole already swivelled can take it out again), the next search time
             public float Swivel, SwivelT, Applied, NextSearch;
             public Vector3 PlacedElbow;
+            // 0.8.0 hand stop at her skin: the smoothed shift added to the wrist target (and its velocity), 10 s diagnostics
+            public Vector3 Stop, StopV;
+            public bool StopInit, StopLogged;
+            public int StopN; public float StopSum, StopMax; public string StopSeg = "";
             public bool SwivelLogged;
             public string GhostBy; public int GhostIdx = -1;
             // Follow of the IK target (world): the smoothed point, its velocity, and how far it trails the raw target.
@@ -1005,14 +1012,23 @@ namespace SfMorph
             if (now < _nextStat) return;
             _nextStat = now + 10f;
             var l = _rig.L; var r = _rig.R;
-            if (l.SwN + r.SwN + l.Stops + r.Stops > 0)
+            if (l.SwN + r.SwN + l.Stops + r.Stops + l.StopN + r.StopN > 0)
             {
                 var sb = new StringBuilder("Embody: last 10 s: elbow swivel L ");
                 SwivelWord(sb, l); sb.Append(", R "); SwivelWord(sb, r);
                 sb.Append("; clasp stops L ").Append(l.Stops).Append(" R ").Append(r.Stops);
+                sb.Append("; hand stop L "); StopWord(sb, l); sb.Append(", R "); StopWord(sb, r);
                 Plugin.Log.LogInfo(sb.ToString());
             }
+            l.StopN = r.StopN = 0; l.StopSum = r.StopSum = l.StopMax = r.StopMax = 0f; l.StopSeg = r.StopSeg = "";
             l.SwN = r.SwN = l.Stops = r.Stops = 0; l.SwSum = r.SwSum = l.SwMax = r.SwMax = 0f;
+        }
+
+        static void StopWord(StringBuilder sb, Arm a)
+        {
+            if (a.StopN == 0) sb.Append("none");
+            else sb.Append("avg ").Append((a.StopSum / a.StopN * 100f).ToString("0.0")).Append(" cm max ").Append((a.StopMax * 100f).ToString("0.0"))
+                .Append(" cm (deepest: ").Append(a.StopSeg.Length > 0 ? a.StopSeg : "?").Append(')');
         }
 
         static void SwivelWord(StringBuilder sb, Arm a)
@@ -1047,12 +1063,18 @@ namespace SfMorph
                 if (a.Side == "left") { dp = PhysicsHands.LeftDp; dq = PhysicsHands.LeftDq; }
                 else { dp = PhysicsHands.RightDp; dq = PhysicsHands.RightDq; }
             }
-            var cq = dq * ctrl.rotation;
-            var raw = ctrl.position + dp + cq * offPos;
+            // The physics wrist is ctrl.position + ctrl.rotation * offset + dp (PhysicsHands.Target + Off): the displacement dq turns the
+            // HAND, not the wrist offset (0.8.0: composing it into the offset put the hand 3.5 cm off for 10 cm and 20 deg).
+            var raw = ctrl.position + dp + ctrl.rotation * offPos;
             // The target trails the controller a little (critically damped, 6 Hz): wrist and elbow lag on fast moves. Advanced once per
             // frame (save); the pre-render pass keeps the same trail as an offset on the new raw target.
             var T = save ? FollowStep(a, raw) : raw + a.Lag;
-            var tq = cq * Quaternion.Euler(offRot) * a.Kinv;
+            var tq = dq * ctrl.rotation * Quaternion.Euler(offRot) * a.Kinv;
+            // 0.8.0 (design 13.3a): without the physics hands his hand stops at her skin. The shift is measured at the RAW target (open
+            // loop: what the stopped hand does cannot change it), smoothed, and added to the target the IK reaches; the yield ghost
+            // stays at the raw controller target, so pushing deeper moves her limb and the stopped hand follows its surface.
+            if (save) StopStep(a, T, tq);
+            T += a.Stop;
 
             var toT = T - A;
             float dist = toT.magnitude;
@@ -1394,6 +1416,14 @@ namespace SfMorph
             var T = ctrl.position + cq * offPos + a.Lag;
             var tq = cq * Quaternion.Euler(offRot) * a.Kinv;
             if (!Finite(T) || !Finite(tq)) return 0;
+            return BuildHand(a, T, tq, hand, into, at, room);
+        }
+
+        // The hand's capsules at the pose (T, tq) for the given hand: the palm (wrist -> middle root, and two more toward the index and
+        // pinky roots) and, where the neutral hand is known, the three bone segments of each finger at the current curl. The ghost and
+        // the stop at her skin use the same builder (the stop tests the candidate pose, the ghost publishes the raw controller pose).
+        int BuildHand(Arm a, Vector3 T, Quaternion tq, int hand, WorldCap[] into, int at, int room)
+        {
             if (a.GhostBy == null || a.GhostIdx != _partnerIdx)
             {
                 a.GhostIdx = _partnerIdx;
@@ -1419,6 +1449,85 @@ namespace SfMorph
                 for (int j = 0; j < 3; j++) n += Put(into, at + n, room - n, T + tq * _fkP[j], T + tq * _fkP[j + 1], r, hand, a.GhostBy);
             }
             return n;
+        }
+
+        // ---- 0.8.0 hand stop at her skin (design 13.3a) ----
+
+        static readonly WorldCap[] _dcap = new WorldCap[48];
+        const float StopHz = 12f, StopMaxShift = 0.25f, StopMinPen = 0.001f;
+
+        // How far a hand may sink into her skin before it stops, where the soft zones / GPU contact dent it. TODO: replace with
+        // HerBody.SkinAllowance(seg) (P2, same numbers) once it exists; soft segments lerp(1.0, 3.0 cm, Softness) while the soft zones run,
+        // else 0.5 cm like the firm ones.
+        float SkinAllowance(int seg)
+        {
+            bool soft = seg >= 0 && seg < HerBody.Defs.Length && HerBody.Defs[seg].Soft;
+            if (!soft || _cur == null || !_cur.SoftZonesOn) return 0.005f;
+            return Mathf.Lerp(0.010f, 0.030f, Mathf.Clamp01(_cur.Softness));
+        }
+
+        // The shift (metres, world) that takes his hand out of her skin at the candidate pose: three passes along the deepest penetration.
+        Vector3 StopShift(Arm a, Vector3 T, Quaternion tq, out int deepSeg)
+        {
+            deepSeg = -1;
+            int n = BuildHand(a, T, tq, a.Side == "left" ? 0 : 1, _dcap, 0, _dcap.Length);
+            var shift = Vector3.zero;
+            for (int it = 0; it < 3; it++)
+            {
+                float deepest = 0f; var nrm = Vector3.zero; int dseg = -1;
+                for (int i = 0; i < n; i++)
+                {
+                    var c = _dcap[i];
+                    int seg; Vector3 nr;
+                    var A = c.A + shift; var B = c.B + shift;
+                    float pen = HerBody.CapsuleDepth(A, B, c.R, 0u, out seg, out nr);
+                    if (!(pen > 0f)) continue;
+                    float al = SkinAllowance(seg);
+                    if (pen <= al) continue;     // inside what the skin gives
+                    pen = HerBody.CapsuleDepth(A, B, Mathf.Max(c.R - al, 0.001f), 0u, out seg, out nr);
+                    if (pen > deepest) { deepest = pen; nrm = nr; dseg = seg; }
+                }
+                if (deepest <= StopMinPen) break;
+                if (it == 0) deepSeg = dseg;
+                shift -= nrm * deepest;
+            }
+            if (!Finite(shift)) return Vector3.zero;
+            float m = shift.magnitude;
+            return m > StopMaxShift ? shift * (StopMaxShift / m) : shift;
+        }
+
+        // Once per frame (not in the pre-render pass, which reuses a.Stop): the target shift, then the exact critically damped step toward it
+        // (12 Hz, the FollowStep form). Nothing tests while the physics hands run (their hull is the contact) or her body isn't built.
+        void StopStep(Arm a, Vector3 T, Quaternion tq)
+        {
+            var shift = Vector3.zero;
+            int seg = -1;
+            if (!PhysicsHands.Active && HerBody.Built && a.Fingers != null && Finite(T) && Finite(tq))
+                shift = StopShift(a, T, tq, out seg);
+            float dt = Mathf.Max(_dt, 1e-4f);
+            if (!a.StopInit || _dtRaw > 0.25f) { a.Stop = shift; a.StopV = Vector3.zero; a.StopInit = true; }
+            else
+            {
+                float w = 2f * Mathf.PI * StopHz;
+                var e = a.Stop - shift;
+                var c2 = a.StopV + w * e;
+                float ex = Mathf.Exp(-w * dt);
+                a.Stop = shift + (e + c2 * dt) * ex;
+                a.StopV = (a.StopV - w * c2 * dt) * ex;
+                if (shift.sqrMagnitude < 1e-12f && a.Stop.sqrMagnitude < 1e-8f && a.StopV.sqrMagnitude < 1e-6f) { a.Stop = Vector3.zero; a.StopV = Vector3.zero; }
+            }
+            if (!Finite(a.Stop)) { a.Stop = Vector3.zero; a.StopV = Vector3.zero; }
+            float m = a.Stop.magnitude;
+            if (m > 0.003f)
+            {
+                a.StopN++; a.StopSum += m;
+                if (m > a.StopMax) { a.StopMax = m; if (seg >= 0 && seg < HerBody.SegNames.Length) a.StopSeg = HerBody.SegNames[seg]; }
+                if (!a.StopLogged)
+                {
+                    a.StopLogged = true;
+                    Plugin.Log.LogInfo("Embody: his " + a.Side + " hand stops at her skin (analytic; allowance soft 1.0-3.0 cm, firm 0.5 cm)");
+                }
+            }
         }
 
         static int Put(WorldCap[] into, int i, int room, Vector3 A, Vector3 B, float r, int hand, string by)
@@ -1482,6 +1591,7 @@ namespace SfMorph
             StopFingers(a);
             a.Written = false; a.PlacedFrame = -1; a.Overridden = false; a.Dist = -1f;
             a.Follow = false; a.Lag = Vector3.zero;
+            a.Stop = a.StopV = Vector3.zero; a.StopInit = false;
             a.Swivel = a.SwivelT = a.Applied = 0f; a.NextSearch = 0f;   // the arm goes back to the animation's elbow with the arm itself
         }
 
