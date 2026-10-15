@@ -424,7 +424,7 @@ namespace SfMorph
                 if (tier <= 2 && (wasGuarded || State == RState.Startled)) chance = 0f;
                 if (test) chance = 1f;
                 if (_quiet) { if (tier >= 3) { Skip("same swing"); Note("voice skipped (same swing)"); } }
-                else if (tier >= 3 && I < 0.3f && !test) { Skip("weak tap"); Note("voice skipped (weak tap)"); }
+                else if (tier >= 3 && I < 0.12f && !test) { Skip("weak tap"); Note("voice skipped (weak tap)"); }
                 else if (chance >= 1f || Rand() < chance)
                 {
                     if (_g.Found) _g.ReadGatesNow(_now);   // forced: ReadGates itself only reads every 0.1 s
