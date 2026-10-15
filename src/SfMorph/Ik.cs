@@ -23,8 +23,8 @@ namespace SfMorph
         }
 
         // Rotates root and mid (world rotations, slerped by w from what they are now toward the solved ones) so that `end` reaches
-        // `target`, and slerps end.rotation toward endRot by w. w 0 = untouched, 1 = exact (up to ReachClamp). false = nothing done.
-        public static bool TwoBone(Transform root, Transform mid, Transform end, Vector3 target, Quaternion endRot, float w)
+        // `target`, and slerps end.rotation toward endRot by w * endW (endW < 1: a pinned ankle reads stiff while the knee swings; Overlap passes 0.5 for feet). w 0 = untouched, 1 = exact (up to ReachClamp). false = nothing done.
+        public static bool TwoBone(Transform root, Transform mid, Transform end, Vector3 target, Quaternion endRot, float w, float endW = 1f)
         {
             if (root == null || mid == null || end == null || !(w > 0f)) return false;
             if (float.IsNaN(target.x) || float.IsNaN(target.y) || float.IsNaN(target.z)) return false;
@@ -54,7 +54,8 @@ namespace SfMorph
             var m0 = mid.rotation;
             var m1 = FromTo(C - B, Tc - B) * m0;
             mid.rotation = w >= 0.9999f ? m1 : Quaternion.Slerp(m0, m1, w);
-            end.rotation = w >= 0.9999f ? endRot : Quaternion.Slerp(end.rotation, endRot, w);
+            float we = Mathf.Clamp01(w * endW);
+            end.rotation = we >= 0.9999f ? endRot : Quaternion.Slerp(end.rotation, endRot, we);
             return true;
         }
 
