@@ -334,7 +334,7 @@ namespace SfMorph
             foreach (var p in _partners)
             {
                 if (np++ > 0) sb.Append(", ");
-                sb.Append(p.Root.name).Append(' ').Append(p.Caps.Count);
+                sb.Append(p.Root != null ? p.Root.name : "?").Append(' ').Append(p.Caps.Count);
                 bool hid = p.Src != null && !p.Src.Live;
                 if (hid || p.Skipped > 0)
                 {

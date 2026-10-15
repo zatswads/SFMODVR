@@ -358,12 +358,16 @@ namespace SfMorph
             if (mesh != _p.HandsMesh.Value) _p.HandsMesh.Value = mesh;
             bool col = GUILayout.Toggle(_p.HandsCollide.Value, " Stop at her body (the skin gives first, then resistance)");
             if (col != _p.HandsCollide.Value) _p.HandsCollide.Value = col;
+            string pushOff = !_p.HandsOn.Value ? "off: physics hands are off" : !_p.HandsCollide.Value ? "off: collisions are off" : null;
+            float lp = Slider("Push her arms", _p.HandsLimbPush.Value * 100f, 0f, 100f, "0", 50f, pushOff, " %") / 100f;
+            if (Mathf.Abs(lp - _p.HandsLimbPush.Value) > 0.0001f) _p.HandsLimbPush.Value = lp;
             GUI.enabled = true;
             if (_p.HandsOn.Value && PhysicsHands.Status.Length > 0) GUILayout.Label(PhysicsHands.Status, PhysicsHands.Status.StartsWith("off") ? _off : _hint);
             GUILayout.Label("Grip curls the fingers. Hand position/rotation offsets per controller: [Embody] Left/RightHandOffset in sfmodvr.sfmorph.cfg.", _hint);
         }
 
         static readonly string[] Qualities = { "Performance", "Balanced", "Fidelity" };
+        static readonly string[] BreastModes = { "Off", "Main chains", "All" };
 
         // Her secondary motion: limbs, head and spine trail the animation through damped springs.
         void MotionSection(Character c)
@@ -373,18 +377,35 @@ namespace SfMorph
             float a = Slider("Overlap", _p.OverlapAmount.Value * 100f, 0f, 100f, "0", 30f, off == null ? null : "off: " + off, " %") / 100f;
             if (Mathf.Abs(a - _p.OverlapAmount.Value) > 0.0001f) _p.OverlapAmount.Value = a;
             string sub = off ?? (_p.OverlapAmount.Value > 0f ? null : "overlap is 0");
+            string subOff = sub == null ? null : "off: " + sub;
             float v;
-            v = Slider("  Arms", _p.OverlapArms.Value * 100f, 0f, 100f, "0", 100f, sub == null ? null : "off: " + sub, " %") / 100f;
+            v = Slider("Ripple", _p.OverlapRipple.Value * 100f, 0f, 100f, "0", 50f, subOff, " %") / 100f;
+            if (Mathf.Abs(v - _p.OverlapRipple.Value) > 0.0001f) _p.OverlapRipple.Value = v;
+            v = Slider("  Arms", _p.OverlapArms.Value * 100f, 0f, 100f, "0", 100f, subOff, " %") / 100f;
             if (Mathf.Abs(v - _p.OverlapArms.Value) > 0.0001f) _p.OverlapArms.Value = v;
-            v = Slider("  Legs", _p.OverlapLegs.Value * 100f, 0f, 100f, "0", 100f, sub == null ? null : "off: " + sub, " %") / 100f;
+            v = Slider("    bounce", _p.ArmsBounce.Value * 100f, 0f, 100f, "0", 50f, subOff, " %") / 100f;
+            if (Mathf.Abs(v - _p.ArmsBounce.Value) > 0.0001f) _p.ArmsBounce.Value = v;
+            v = Slider("  Legs", _p.OverlapLegs.Value * 100f, 0f, 100f, "0", 100f, subOff, " %") / 100f;
             if (Mathf.Abs(v - _p.OverlapLegs.Value) > 0.0001f) _p.OverlapLegs.Value = v;
-            v = Slider("  Head & neck", _p.OverlapHead.Value * 100f, 0f, 100f, "0", 100f, sub == null ? null : "off: " + sub, " %") / 100f;
+            v = Slider("    bounce", _p.LegsBounce.Value * 100f, 0f, 100f, "0", 40f, subOff, " %") / 100f;
+            if (Mathf.Abs(v - _p.LegsBounce.Value) > 0.0001f) _p.LegsBounce.Value = v;
+            v = Slider("  Head & neck", _p.OverlapHead.Value * 100f, 0f, 100f, "0", 100f, subOff, " %") / 100f;
             if (Mathf.Abs(v - _p.OverlapHead.Value) > 0.0001f) _p.OverlapHead.Value = v;
-            v = Slider("  Spine", _p.OverlapSpine.Value * 100f, 0f, 100f, "0", 100f, sub == null ? null : "off: " + sub, " %") / 100f;
+            v = Slider("    bounce", _p.HeadBounce.Value * 100f, 0f, 100f, "0", 60f, subOff, " %") / 100f;
+            if (Mathf.Abs(v - _p.HeadBounce.Value) > 0.0001f) _p.HeadBounce.Value = v;
+            v = Slider("  Spine", _p.OverlapSpine.Value * 100f, 0f, 100f, "0", 100f, subOff, " %") / 100f;
             if (Mathf.Abs(v - _p.OverlapSpine.Value) > 0.0001f) _p.OverlapSpine.Value = v;
+            v = Slider("    bounce", _p.SpineBounce.Value * 100f, 0f, 100f, "0", 30f, subOff, " %") / 100f;
+            if (Mathf.Abs(v - _p.SpineBounce.Value) > 0.0001f) _p.SpineBounce.Value = v;
+            GUI.enabled = sub == null;
+            bool planted = GUILayout.Toggle(_p.OverlapPlanted.Value, " Planted hands and feet stay where the animation puts them");
+            GUI.enabled = true;
+            if (sub == null && planted != _p.OverlapPlanted.Value) _p.OverlapPlanted.Value = planted;
             if (off == null && _body.Overlap.Status.Length > 0) GUILayout.Label(_body.Overlap.Status, _body.Overlap.Status.StartsWith("off") ? _off : _hint);
             GUILayout.Label("Her elbows, wrists, knees, head and spine trail fast animation a little and settle (follow-through). " +
-                            "It fades out where a hand or her other leg touches her, so contacts don't slide.", _hint);
+                            "It fades out where a hand or her other leg touches her, so contacts don't slide. " +
+                            "Ripple: motion travels down the chains (a fast turn of the torso swings the head and arms a little later). " +
+                            "Bounce: how much a part overshoots and settles.", _hint);
         }
 
         void PhysicsSection(Character c)
@@ -416,6 +437,11 @@ namespace SfMorph
             GUI.enabled = sliderOff == null;
             GUILayout.EndHorizontal();
             if (sliderOff == null && _p.GpuContactOn.Value && _body.GpuStatus.Length > 0) GUILayout.Label(_body.GpuStatus, _body.GpuStatus.Contains("off:") ? _off : _hint);
+            bool gate = GUILayout.Toggle(_p.GateHidden.Value, " Hidden hands don't touch her (partner not drawn, controller models replaced)");
+            if (sliderOff == null && gate != _p.GateHidden.Value) _p.GateHidden.Value = gate;
+            GUILayout.Label("Breast physics colliders (hands push the game's own breast physics)", _hint);
+            int bc = GUILayout.Toolbar(Mathf.Clamp(_p.BreastColliders.Value, 0, 2), BreastModes);
+            if (sliderOff == null && bc != _p.BreastColliders.Value) _p.BreastColliders.Value = bc;
             bool show = GUILayout.Toggle(_p.ShowSoftPoints.Value, " Show soft points and contact capsules (debug)");
             if (sliderOff == null && show != _p.ShowSoftPoints.Value) _p.ShowSoftPoints.Value = show;
             GUI.enabled = true;
@@ -424,7 +450,11 @@ namespace SfMorph
             {
                 if (c.Soft.Status.Length > 0) GUILayout.Label(c.Soft.Status, c.Soft.Status.StartsWith("off") ? _off : _hint);
                 if (c.Soft.Contacts.Length > 0) GUILayout.Label(c.Soft.Contacts, _hint);
-                if (VrHands.Status.Length > 0) GUILayout.Label(VrHands.Status, _hint);
+                if (VrHands.Status.Length > 0)
+                {
+                    GUILayout.Label(VrHands.Status, _hint);
+                    GUILayout.Label(VrHands.ContactsFeed, _hint);
+                }
             }
             GUILayout.Label("Soft points under her skin (springs, like VaM's soft physics) are pushed by your VR hands, the partner's hands and fingers, " +
                             "her forearms and hands, and her other thigh. Softness: how far the skin gives. Springiness: how much the zones lag " +

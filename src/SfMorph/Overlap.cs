@@ -220,7 +220,9 @@ namespace SfMorph
             }
 
             // Limb push torques (arms), from the physics hands' last fixed step.
-            if (_lp > 0f && _region[0] > 0f) PushPass();
+            // (independent of the overlap amount: with Overlap 0 the arms still yield to a push and spring back to the animation)
+            bool pushable = _lp > 0f && PhysicsHands.Active;
+            if (pushable) PushPass();
 
             int driven = 0;
             for (int i = 0; i < _bones.Count; i++)
@@ -230,7 +232,7 @@ namespace SfMorph
                 int rg = GroupRegion[b.Group];
                 float wReq = _region[rg];
                 Quaternion cur = tr.localRotation;
-                if (wReq <= 0f)
+                if (wReq <= 0f && !(b.CanPush && pushable))   // an arm bone that can be pushed keeps running with no lag term (w 0)
                 {
                     // Off for this bone: if the animation did not rewrite it, put the animation's rotation back, once.
                     if (b.HasLast && Same(cur, b.LastWrite)) tr.localRotation = b.Target;
@@ -556,9 +558,9 @@ namespace SfMorph
             for (int g = 0; g < 6; g++) if (_contact[g] > 0.01f && _region[GroupRegion[g]] > 0f) fade |= 1 << g;
             int planted = 0;
             for (int e = 0; e < _effs.Length; e++) if (_effs[e] != null && _effs[e].On && _effs[e].Planted > 0.5f) planted |= 1 << e;
-            long sig = driven | (Mathf.RoundToInt(_region[0] * 10f) << 8) | (Mathf.RoundToInt(_region[1] * 10f) << 12) | (Mathf.RoundToInt(_region[2] * 10f) << 16)
-                     | (Mathf.RoundToInt(_region[3] * 10f) << 20) | ((long)fade << 24)
-                     | ((long)planted << 32) | ((long)Mathf.RoundToInt(_ripple * 10f) << 36) | ((long)_pushBits << 41);
+            uint lo = (uint)driven | ((uint)Mathf.RoundToInt(_region[0] * 10f) << 8) | ((uint)Mathf.RoundToInt(_region[1] * 10f) << 12) | ((uint)Mathf.RoundToInt(_region[2] * 10f) << 16)
+                    | ((uint)Mathf.RoundToInt(_region[3] * 10f) << 20) | ((uint)fade << 24);
+            long sig = (long)lo | ((long)planted << 32) | ((long)Mathf.RoundToInt(_ripple * 10f) << 36) | ((long)_pushBits << 41);
             if (sig == _sig) return;
             _sig = sig;
             if (driven == 0) { Status = _bones.Count == 0 ? "off: no chain bones found" : "off (Amount 0)"; return; }
