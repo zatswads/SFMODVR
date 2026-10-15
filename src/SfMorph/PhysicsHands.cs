@@ -56,17 +56,57 @@ namespace SfMorph
         public static readonly float[] LeftFingerCurlDeg = new float[15], RightFingerCurlDeg = new float[15];
         // TouchingHer(name) lives in PhysicsHands.Rig.cs.
         // The visual wrists (Embody's IK targets when it follows the hands).
-        // Per hand, this frame: how far the physics body stands from the controller target (the displacement the visual pose gets).
-        // Zero / identity when the hand is missing, kinematic (Collide off) or not built. Embody composes it into its wrist targets.
+        // Per hand, this frame: the displacement the DRAWN hand gets from the controller target. 0.8.0: the SHOWN offset, gated: zero in
+        // free air, the blocked body's displacement faded in on contact (UpdateHand). Zero / identity when the hand is missing, kinematic
+        // (Collide off) or not built. Embody composes it into its wrist targets, so his hand and the drawn hand agree.
         public static Vector3 LeftDp, RightDp;
         public static Quaternion LeftDq = Quaternion.identity, RightDq = Quaternion.identity;
         public static readonly List<SoftCapsule> Capsules = new List<SoftCapsule>();
 
-        // 0.8.0 (design-0.8.0 section 5.6): this side's capsules at the CONTROLLER target pose (not the blocked body), for her yield.
-        // Writes at most `max` entries from `start`; returns the count written; 0 when not Active or no controller.
-        internal static int FillGhost(WorldCap[] into, int start, int max) { return 0; }
+        // 0.8.0 (design-0.8.0 section 5.6): this hand's capsules at the CONTROLLER target pose (no blocked-body offset, no lead), for her
+        // yield: her limb is pushed from where the hand is, not from where the physics hand got blocked. The endpoints are the drawn hand's
+        // capsules (the visual fingers' pose) re-expressed in the palm frame at the controller pose. Called by HerBody.Update, BEFORE
+        // PhysicsHands.Update in the frame: the controller is fresh, the finger pose at most one frame old. Writes at most `max` entries
+        // from `start`; returns the count; 0 when not Active or no controller. Hands with collisions off still publish (their "vr"
+        // capsules are Owner "PhysicsHands" and the contact categoriser drops them: this ghost is then the only source for the hand).
+        internal static int FillGhost(WorldCap[] into, int start, int max)
+        {
+            if (into == null || max <= 0 || start < 0 || !Active || _s == null) return 0;
+            int n = 0;
+            for (int side = 0; side < 2; side++)
+            {
+                var h = side == 0 ? _left : _right;
+                if (h == null || h.VGo == null || h.VRoot == null || h.VBones == null || h.Src == null || h.GhostN == 0) continue;
+                var ctl = side == 0 ? VrHands.LeftController : VrHands.RightController;
+                if (ctl == null) continue;
+                Vector3 tp; Quaternion tq;
+                Target(ctl, h.Left ? _s.LeftPos : _s.RightPos, h.Left ? _s.LeftRot : _s.RightRot, h.Spec.Align, out tp, out tq);
+                if (!Finite(tp) || !Finite(tq)) continue;
+                float u = h.Spec.Scale;
+                var vr = h.VRoot;
+                for (int i = 0; i < h.GhostN && n < max && start + n < into.Length; i++)
+                {
+                    var bone = h.VBones[h.GhostBone[i]];
+                    if (bone == null) continue;
+                    // InverseTransformPoint divides by the root's scale (root units): back to metres in the palm frame
+                    Vector3 la = vr.InverseTransformPoint(bone.TransformPoint(h.GhostA[i])) * u;
+                    Vector3 lb = vr.InverseTransformPoint(bone.TransformPoint(h.GhostB[i])) * u;
+                    var wc = new WorldCap { A = tp + tq * la, B = tp + tq * lb, R = h.GhostR[i], Hand = side, By = h.Src.Name, Src = h.Src };
+                    if (!Finite(wc.A) || !Finite(wc.B)) continue;
+                    into[start + n] = wc;
+                    n++;
+                }
+            }
+            return n;
+        }
+
         // -1 when the collider is not one of her segment colliders
-        internal static int SegIndexOf(Collider c) { return -1; }
+        internal static int SegIndexOf(Collider c)
+        {
+            SegBody b;
+            return !ReferenceEquals(c, null) && c != null && _segOfCol.TryGetValue(c, out b) && b.S != null ? b.S.Index : -1;
+        }
+        static readonly Func<Collider, int> _segOfFn = SegIndexOf;   // cached: a method group converts to a new delegate on every use
 
         const BindingFlags Any = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         const string Pfx = "SfPhys";
@@ -81,6 +121,11 @@ namespace SfMorph
         // step-to-step oscillation), the rotation gap gain (1/s) and its cap (rad/s), and the torque cap (N*m) turned into a per-step
         // angular velocity cap through the hand's inertia
         const float FollowGain = 0.7f, TurnGain = 0.6f, RotGapGain = 25f, MaxGapW = 10f, TorqueCap = 4f;
+        // 0.8.0: while the hand touches her the torque cap drops (N*m): the palm flattens on her instead of holding the controller's exact
+        // roll; the difference shows as the drawn rotation offset, which is the contact feel
+        const float TouchTorqueCap = 1.5f;
+        // 0.8.0 drawn-offset gate (section 4): the raw offset below the first number shows as nothing, above the second as itself
+        const float GateMmLo = 0.005f, GateMmHi = 0.015f, GateDegLo = 4f, GateDegHi = 10f, GateAttack = 0.04f, GateRelease = 0.25f;
         const float HerMaxV = 4f;                  // sampled speed cap of her kinematic segments (m/s)
         const int CookPerFrame = 2;                // convex hulls cooked per rendered frame (the capsule collides until then)
 
@@ -727,12 +772,18 @@ namespace SfMorph
         // every collider of hers, the same numbers, combine Average: static = dynamic = 0.75 x f, f = [Hands] Friction (default 0.5). No stick
         // threshold above the sliding friction (a higher static value made a hand cling then break loose = stick-slip jitter under the follow
         // force). The slider writes the fields in place (the shapes sharing the material follow), nothing is recreated.
-        static PhysicMaterial _handMat, _herMat;
+        // 0.8.0: the fingers get their own low-friction material (0.15, combine Minimum: PhysX gives Minimum priority over her Average, so
+        // a fingertip slides on skin as in DynamicLimbs while the palm, on _handMat, still carries the hand along with her). The slider
+        // doesn't touch it.
+        static PhysicMaterial _handMat, _herMat, _fingerMat;
         static float _matF = -1f;
+        const float FingerFriction = 0.15f;
 
         static void MakeMaterials(float f)
         {
             f = Mathf.Clamp01(f);
+            if (_fingerMat == null)
+                _fingerMat = new PhysicMaterial(Pfx + "_finger") { dynamicFriction = FingerFriction, staticFriction = FingerFriction, frictionCombine = PhysicMaterialCombine.Minimum, bounciness = 0f, bounceCombine = PhysicMaterialCombine.Minimum };
             if (_handMat == null) _handMat = new PhysicMaterial(Pfx + "_hand") { frictionCombine = PhysicMaterialCombine.Average, bounciness = 0f, bounceCombine = PhysicMaterialCombine.Minimum };
             if (_herMat == null) _herMat = new PhysicMaterial(Pfx + "_her") { frictionCombine = PhysicMaterialCombine.Average, bounciness = 0f, bounceCombine = PhysicMaterialCombine.Minimum };
             SetFriction(f);
@@ -773,7 +824,6 @@ namespace SfMorph
             public Quaternion[] Rest = new Quaternion[15];
             public Vector3[] AxisLocal = new Vector3[15];
             public Vector3[] DirLocal = new Vector3[15];   // per finger*3+joint: the finger's direction in the bone's axes (joint secondary axis)
-            public float Curl, AppliedCurl = -1f;
             public int BuiltMesh;
             public CapSource Src;                          // 0.7.7: who these soft capsules belong to (VrHands.NewSource), made with the first RebuildCaps, dropped with the hand
             // the finger rig (PhysicsHands.Rig.cs)
@@ -781,11 +831,21 @@ namespace SfMorph
             public readonly List<Fing> Rig = new List<Fing>();
             public readonly Fing[] FingAt = new Fing[15];            // the rig's body per finger*3+joint (null: none)
             public readonly Quaternion[] RelScratch = new Quaternion[15];
-            public readonly float[] FCurl = new float[5];             // per finger: the curl the joints are asked for (held by the tip-cast conform)
+            public readonly float[] FCurl = new float[5];             // per finger: the curl the joints are asked for (UpdateHand: command, conform, ease)
             public readonly float[] FWritten = new float[5];
-            public readonly int[] TipBone = { -1, -1, -1, -1, -1 };    // the bone holding each finger's tip capsule
-            public readonly Vector3[] TipLocal = new Vector3[5];       // the tip (capsule end), in that bone's space
-            public readonly float[] TipR = new float[5];
+            public readonly float[] FApplied = { -1f, -1f, -1f, -1f, -1f };   // kinematic fingers: the curl last written to the bones
+            // 0.8.0 finger conform (section 5): one fan per finger (null: no such finger), the first touching step of last frame per finger
+            // (hysteresis), and the 10 s counters
+            public readonly FingerFan[] Fan = new FingerFan[5];
+            public readonly int[] FanStep = { -1, -1, -1, -1, -1 };
+            public readonly int[] FHeldN = new int[5];                // frames each finger was held by contact
+            public int FContactN, FGiveN, FFlipN; public float FContactSum, FGiveSum;
+            // her capsules the soft zones read (RebuildCaps) as the visual-bone-local endpoints the controller-pose ghost is made from
+            public int[] GhostBone = new int[0]; public Vector3[] GhostA = new Vector3[0], GhostB = new Vector3[0]; public float[] GhostR = new float[0]; public int GhostN;
+            // the drawn-offset gate (section 4): weight of the raw offset that is shown, and the 10 s statistics raw against shown
+            public float VisW;
+            public int OffN, FreeN; public float RawMmSum, RawDegSum, ShownMmSum, ShownDegSum, FreeMaxMm, FreeMaxDeg;
+            public float JitRawSum, JitRawMax, JitRawQSum, JitRawQMax; public Vector3 RawPrev; public Quaternion RawPrevQ = Quaternion.identity;
             public float TotalMass = 0.35f, BadT, StuckT, SeenFixed = -1f, CapSum, ResistMax;
             // 10 s diagnostics of the follow loops: velocity errors and how often they flip sign step to step (an oscillation at the
             // step rate flips nearly every step; a healthy loop rarely does)
@@ -925,8 +985,8 @@ namespace SfMorph
                     cc.height = (len + 2f * sh.R) / sp.Scale;
                     col = cc;
                 }
-                if (_handMat == null) MakeMaterials(s.Friction);
-                col.sharedMaterial = _handMat;
+                if (_handMat == null || _fingerMat == null) MakeMaterials(s.Friction);
+                col.sharedMaterial = sh.Tag == "palm" ? _handMat : _fingerMat;
                 h.ColT.Add(go.transform); h.Cols.Add(col);
             }
             SetLayerRec(h.PRoot, _layerHand);
@@ -1009,19 +1069,7 @@ namespace SfMorph
                     h.AxisLocal[i] = Quaternion.Inverse(rr) * sp.FAxis[f];
                     h.DirLocal[i] = Quaternion.Inverse(rr) * sp.FDir[f];
                 }
-            // the tip of each finger's last collider (conform casts start there), in its bone's space
-            for (int f = 0; f < 5; f++)
-            {
-                int lastBone = sp.Fin[f * 3 + 1] >= 0 ? sp.Fin[f * 3 + 1] : sp.Fin[f * 3];
-                if (lastBone < 0) continue;
-                foreach (var sh in sp.Cols)
-                {
-                    if (sh.Box || sh.Bone != lastBone) continue;
-                    h.TipBone[f] = lastBone;
-                    h.TipLocal[f] = h.PBones[lastBone].InverseTransformPoint(h.PRoot.TransformPoint(sh.B));
-                    h.TipR[f] = sh.R;
-                }
-            }
+            BuildFans(h);
             h.Kin = false;
             h.CollideOn = true;
             h.RigFailed = false;
@@ -1057,11 +1105,19 @@ namespace SfMorph
                 if (h == null || h.VGo == null) continue;
                 if (h.Left) LeftWrist = h.VBones[0]; else RightWrist = h.VBones[0];
                 if (h.Src == null) h.Src = VrHands.NewSource(h.Left ? "your left physics hand" : "your right physics hand", "vr", false);
+                int nc = h.Spec.Caps.Count;
+                if (h.GhostBone.Length != nc) { h.GhostBone = new int[nc]; h.GhostA = new Vector3[nc]; h.GhostB = new Vector3[nc]; h.GhostR = new float[nc]; }
+                h.GhostN = 0;
                 foreach (var c in h.Spec.Caps)
                 {
                     var bone = h.VBones[c.Bone];
-                    Vector3 a = h.VRoot.TransformPoint(c.A), b = h.VRoot.TransformPoint(c.B);
-                    Capsules.Add(new SoftCapsule { T = bone, LocalA = bone.InverseTransformPoint(a), LocalB = bone.InverseTransformPoint(b), Radius = c.R, Owner = "PhysicsHands", Kind = "vr", Src = h.Src });
+                    // from the REST pose (the bone's root-space matrix), not from where the bones stand now: a rebuild while the fingers are
+                    // curled (the other hand was rebuilt) would otherwise bake the curl into the capsules
+                    Matrix4x4 inv = h.Spec.Bones[c.Bone].M.inverse;
+                    Vector3 la = inv.MultiplyPoint3x4(c.A), lb = inv.MultiplyPoint3x4(c.B);
+                    Capsules.Add(new SoftCapsule { T = bone, LocalA = la, LocalB = lb, Radius = c.R, Owner = "PhysicsHands", Kind = "vr", Src = h.Src });
+                    // the same capsule for FillGhost: bone-local endpoints on the visual bones, re-posed at the controller each frame
+                    h.GhostBone[h.GhostN] = c.Bone; h.GhostA[h.GhostN] = la; h.GhostB[h.GhostN] = lb; h.GhostR[h.GhostN] = c.R; h.GhostN++;
                 }
                 h.Src.CapCount = h.Spec.Caps.Count;
             }
@@ -1704,7 +1760,22 @@ namespace SfMorph
                                + (h.CapSat > 0 ? ", gap at the cap avg " + (100f * h.GapAtCapSum / h.CapSat).ToString("0.0") + " cm" : ""));
             if (_stepFrames > 0) sb.Append("; fixed steps/frame avg ").Append(((float)_stepSum / _stepFrames).ToString("0.0")).Append(" max ").Append(_stepMax);
             sb.Append("; rig shifts ").Append(_rigShifts);
-            if (h.JitN > 0) sb.Append("; visual offset jitter avg ").Append((h.JitSum / h.JitN).ToString("0.0")).Append(" mm max ").Append(h.JitMax.ToString("0.0")).Append(" mm, rotation avg ").Append((h.JitQSum / h.JitN).ToString("0.00")).Append(" deg max ").Append(h.JitQMax.ToString("0.00")).Append(" deg");
+            // 0.8.0: the offset of the physics body from the controller, RAW (what the follow loop leaves) against SHOWN (what the gate lets
+            // through). The raw free-air max says whether the loop is quiet; the shown numbers are what the user sees.
+            if (h.OffN > 0)
+            {
+                float n = h.OffN;
+                sb.Append("; drawn offset raw avg ").Append((h.RawMmSum / n).ToString("0.0")).Append(" mm / ").Append((h.RawDegSum / n).ToString("0.0")).Append(" deg (free air ").Append(h.FreeN)
+                  .Append(" frames: max ").Append(h.FreeMaxMm.ToString("0.0")).Append(" mm / ").Append(h.FreeMaxDeg.ToString("0.0")).Append(" deg), shown avg ")
+                  .Append((h.ShownMmSum / n).ToString("0.0")).Append(" mm / ").Append((h.ShownDegSum / n).ToString("0.0")).Append(" deg");
+                if (h.JitN > 0)
+                    sb.Append("; jitter raw avg ").Append((h.JitRawSum / h.JitN).ToString("0.0")).Append(" mm max ").Append(h.JitRawMax.ToString("0.0")).Append(" mm / ").Append((h.JitRawQSum / h.JitN).ToString("0.00")).Append(" deg max ").Append(h.JitRawQMax.ToString("0.00"))
+                      .Append(" deg, shown avg ").Append((h.JitSum / h.JitN).ToString("0.0")).Append(" mm max ").Append(h.JitMax.ToString("0.0")).Append(" mm / ").Append((h.JitQSum / h.JitN).ToString("0.00")).Append(" deg max ").Append(h.JitQMax.ToString("0.00")).Append(" deg");
+            }
+            if (h.Fan[0] != null || h.Fan[1] != null)
+                sb.Append("; fingers: conform held idx/mid/ring/pinky/thumb ").Append(h.FHeldN[1]).Append('/').Append(h.FHeldN[2]).Append('/').Append(h.FHeldN[3]).Append('/').Append(h.FHeldN[4]).Append('/').Append(h.FHeldN[0])
+                  .Append(" frames, avg contact curl ").Append(h.FContactN > 0 ? (h.FContactSum / h.FContactN).ToString("0.00") : "-")
+                  .Append(", give used avg ").Append(h.FGiveN > 0 ? (h.FGiveSum / h.FGiveN).ToString("0.00") : "-").Append(", probe flips ").Append(h.FFlipN);
             sb.Append("; follow v err avg ").Append((h.VErrSum / h.CapN).ToString("0.00")).Append(" m/s max ").Append(h.VErrMax.ToString("0.00")).Append(", flips ").Append(Pct(h.VFlipN, h.CapN))
               .Append("; spin err avg ").Append((h.WErrSum / h.CapN).ToString("0.0")).Append(" rad/s max ").Append(h.WErrMax.ToString("0.0")).Append(", flips ").Append(Pct(h.WFlipN, h.CapN))
               .Append(" (velocity follow ").Append(FollowGain.ToString("0.0")).Append("/").Append(TurnGain.ToString("0.0")).Append(")");
@@ -1713,6 +1784,10 @@ namespace SfMorph
             h.CapSum = 0f; h.CapN = 0; h.CapSat = 0; h.ResistMax = 0f;
             h.CapFreeN = h.CapTouchN = h.CapSatFree = h.CapSatTouch = 0; h.GapAtCapSum = 0f;
             h.JitSum = 0f; h.JitMax = 0f; h.JitN = 0; h.JitQSum = 0f; h.JitQMax = 0f;
+            h.JitRawSum = h.JitRawMax = h.JitRawQSum = h.JitRawQMax = 0f;
+            h.OffN = h.FreeN = 0; h.RawMmSum = h.RawDegSum = h.ShownMmSum = h.ShownDegSum = h.FreeMaxMm = h.FreeMaxDeg = 0f;
+            for (int f = 0; f < 5; f++) h.FHeldN[f] = 0;
+            h.FContactN = h.FGiveN = h.FFlipN = 0; h.FContactSum = h.FGiveSum = 0f;
             h.VErrSum = h.VErrMax = h.WErrSum = h.WErrMax = 0f; h.VFlipN = h.WFlipN = 0;
         }
 
@@ -1792,7 +1867,8 @@ namespace SfMorph
             if (resist > h.ResistMax) h.ResistMax = resist;
 
             // Rotation: the same loop. Target spin = the controller's (Trk.W, feed-forward) plus the angle closed at RotGapGain per second;
-            // the per-step change is capped by TorqueCap through the hand's inertia about the axis of the change (palm + fingers).
+            // the per-step change is capped by TorqueCap (TouchTorqueCap while she is touched) through the hand's inertia about the axis of
+            // the change (palm + fingers).
             Quaternion dq = tq * Quaternion.Inverse(rq);
             if (dq.w < 0f) dq = new Quaternion(-dq.x, -dq.y, -dq.z, -dq.w);
             float ang; Vector3 axis;
@@ -1818,7 +1894,7 @@ namespace SfMorph
                     float rn = Vector3.Dot(r, n);
                     I += g.Rb.mass * (r.sqrMagnitude - rn * rn);
                 }
-                float dwCap = TorqueCap * dt / Mathf.Max(I, 1e-5f);
+                float dwCap = (touching ? TouchTorqueCap : TorqueCap) * dt / Mathf.Max(I, 1e-5f);
                 if (dwm > dwCap) dw *= dwCap / dwm;
             }
             if (!Finite(dv)) dv = Vector3.zero;
@@ -1847,7 +1923,7 @@ namespace SfMorph
 
         // ================= per frame (the apply step) =================
 
-        static bool _statusDirty;
+        static bool _statusDirty, _fadeLogged;
         static string _gripSeen = "";
 
         static void SetDisp(bool left, Vector3 dp, Quaternion dq)
@@ -2095,6 +2171,11 @@ namespace SfMorph
             // same pose as the last one, a frame after 2 jumps by two steps, which reads as stutter. So the last two steps' offsets are kept
             // (CaptureOffset) and blended by how far into the current step the frame falls, as a Rigidbody with Interpolate would (the rigidbody
             // stays on None: the target it aims at is the one the offset is measured against).
+            //
+            // 0.8.0 (section 4): what is SHOWN of that offset is gated. Whatever the follow loop leaves in free air (Track's half-frame
+            // velocity lag, PhysX solver noise, finger-drive transients) must not show, so the drawn hand is exactly the controller until the
+            // hand touches her (weight 1 within 40 ms) or the offset is clearly more than noise (5-15 mm, 4-10 deg); it fades back over
+            // 250 ms. The raw offset is still measured (the 10 s line reports both) and the rigidbody is untouched: this is only what is drawn.
             Vector3 vp = tp; Quaternion vq = tq;
             h.VisP = Vector3.zero; h.VisQ = Quaternion.identity; h.VisFrame = Time.frameCount;   // BeforeRender puts the same offset on the late controller pose
             if (s.Collide && !h.Kin)
@@ -2106,32 +2187,60 @@ namespace SfMorph
                     float a = fdt > 0f ? Mathf.Clamp01((Time.time - Time.fixedTime) / fdt) : 1f;
                     Vector3 dp = Vector3.Lerp(h.Off0P, h.Off1P, a);
                     Quaternion dq = Quaternion.Slerp(h.Off0Q, h.Off1Q, a);
-                    vp += dp; vq = dq * tq;
-                    SetDisp(h.Left, dp, dq);
-                    h.VisP = dp; h.VisQ = dq;
+                    float rawMm = dp.magnitude * 1000f, rawDeg = Quaternion.Angle(Quaternion.identity, dq);
+                    if (!Finite(dp) || !Finite(dq) || float.IsNaN(rawDeg)) { dp = Vector3.zero; dq = Quaternion.identity; rawMm = rawDeg = 0f; }
+                    bool touchingHand = Time.fixedTime - _handTouchT[h.Left ? 0 : 1] < 0.3f;
+                    if (s.DrawnOffsetFade)
+                    {
+                        float wRaw = touchingHand ? 1f : Mathf.Max(Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(GateMmLo, GateMmHi, dp.magnitude)), Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(GateDegLo, GateDegHi, rawDeg)));
+                        float tau = wRaw > h.VisW ? GateAttack : GateRelease;
+                        h.VisW += (wRaw - h.VisW) * (1f - Mathf.Exp(-Mathf.Min(dt, 0.1f) / tau));
+                        if (!_fadeLogged)
+                        {
+                            _fadeLogged = true;
+                            LogOnce("fade", "drawn offset fade on (" + (GateMmLo * 1000f).ToString("0") + "-" + (GateMmHi * 1000f).ToString("0") + " mm / " + GateDegLo.ToString("0") + "-" + GateDegHi.ToString("0")
+                                            + " deg, attack " + (GateAttack * 1000f).ToString("0") + " ms, release " + (GateRelease * 1000f).ToString("0") + " ms)");
+                        }
+                    }
+                    else h.VisW = 1f;   // [Hands] DrawnOffsetFade off: the raw physics pose, for comparing in the headset
+                    Vector3 dpS = h.VisW >= 0.999f ? dp : dp * h.VisW;
+                    Quaternion dqS = h.VisW >= 0.999f ? dq : Quaternion.Slerp(Quaternion.identity, dq, h.VisW);
+                    vp += dpS; vq = dqS * tq;
+                    SetDisp(h.Left, dpS, dqS);
+                    h.VisP = dpS; h.VisQ = dqS;
+                    float shownMm = dpS.magnitude * 1000f, shownDeg = Quaternion.Angle(Quaternion.identity, dqS);
+                    h.OffN++; h.RawMmSum += rawMm; h.RawDegSum += rawDeg; h.ShownMmSum += shownMm; h.ShownDegSum += shownDeg;
+                    if (!touchingHand)
+                    {
+                        h.FreeN++;
+                        if (rawMm > h.FreeMaxMm) h.FreeMaxMm = rawMm;
+                        if (rawDeg > h.FreeMaxDeg) h.FreeMaxDeg = rawDeg;
+                    }
                     if (h.VisHave)
                     {
-                        float d = (dp - h.VisPrev).magnitude * 1000f, da = Quaternion.Angle(h.VisPrevQ, dq);
+                        float d = (dpS - h.VisPrev).magnitude * 1000f, da = Quaternion.Angle(h.VisPrevQ, dqS);
                         h.JitSum += d; h.JitQSum += da; h.JitN++;
                         if (d > h.JitMax) h.JitMax = d;
                         if (da > h.JitQMax) h.JitQMax = da;
+                        float dr = (dp - h.RawPrev).magnitude * 1000f, dra = Quaternion.Angle(h.RawPrevQ, dq);
+                        h.JitRawSum += dr; h.JitRawQSum += dra;
+                        if (dr > h.JitRawMax) h.JitRawMax = dr;
+                        if (dra > h.JitRawQMax) h.JitRawQMax = dra;
                     }
-                    h.VisPrev = dp; h.VisPrevQ = dq; h.VisHave = true;
+                    h.VisPrev = dpS; h.VisPrevQ = dqS; h.RawPrev = dp; h.RawPrevQ = dq; h.VisHave = true;
                 }
                 else h.VisHave = false;
             }
             else h.VisHave = false;
             h.VRoot.SetPositionAndRotation(vp, vq);
 
-            // grip -> curl (the target the finger joints are driven to); the visual fingers follow the simulated bones
-            float g = h.Left ? Grip.Left : Grip.Right;
-            h.Curl = Mathf.Lerp(h.Curl, g, 1f - Mathf.Exp(-25f * dt));
+            // the fingers: command (rest curl / trigger / grip) -> conform to her skin -> ease -> FCurl, which FingerStep turns into joint
+            // targets (rig) or PoseFinger into bone rotations (kinematic); the visual fingers follow the simulated bones
+            UpdateFingers(h, s, dt);
             if (h.RigOn) PoseFromRig(h);
             else
-            {
-                for (int f = 0; f < 5; f++) h.FCurl[f] = h.Curl;
-                if (Mathf.Abs(h.Curl - h.AppliedCurl) > 0.002f) { h.AppliedCurl = h.Curl; PoseFingers(h); }
-            }
+                for (int f = 0; f < 5; f++)
+                    if (Mathf.Abs(h.FCurl[f] - h.FApplied[f]) > 0.002f) { h.FApplied[f] = h.FCurl[f]; PoseFinger(h, f); }
             PublishFingers(h);
 
             SetVisible(h, !s.HideVisual);
@@ -2188,19 +2297,19 @@ namespace SfMorph
             for (int i = 0; i < HerBody.Segs.Count; i++) HerBody.Segs[i].Trk.Reset();
         }
 
-        static void PoseFingers(Hand h)
+        // Kinematic fingers (rig off, failed, or collisions off): one finger's bones at its own curl.
+        static void PoseFinger(Hand h, int f)
         {
-            float c = h.Curl;
-            for (int f = 0; f < 5; f++)
-                for (int j = 0; j < 3; j++)
-                {
-                    int i = f * 3 + j, bi = h.Spec.Fin[i];
-                    if (bi < 0) continue;
-                    float max = f == 0 ? ThumbMax[j] : FingerMax[j];
-                    var q = h.Rest[i] * Quaternion.AngleAxis(max * c, h.AxisLocal[i]);
-                    h.VBones[bi].localRotation = q;
-                    h.PBones[bi].localRotation = q;
-                }
+            float c = h.FCurl[f];
+            for (int j = 0; j < 3; j++)
+            {
+                int i = f * 3 + j, bi = h.Spec.Fin[i];
+                if (bi < 0) continue;
+                float max = f == 0 ? ThumbMax[j] : FingerMax[j];
+                var q = h.Rest[i] * Quaternion.AngleAxis(max * c, h.AxisLocal[i]);
+                h.VBones[bi].localRotation = q;
+                h.PBones[bi].localRotation = q;
+            }
         }
 
         // ================= release =================
@@ -2218,7 +2327,8 @@ namespace SfMorph
                 if (_brSub) { Application.onBeforeRender -= BeforeRender; _brSub = false; }
                 if (_handMat != null) UnityEngine.Object.Destroy(_handMat);
                 if (_herMat != null) UnityEngine.Object.Destroy(_herMat);
-                _handMat = _herMat = null; _matF = -1f;
+                if (_fingerMat != null) UnityEngine.Object.Destroy(_fingerMat);
+                _handMat = _herMat = _fingerMat = null; _matF = -1f;
                 if (_skinMat != null) UnityEngine.Object.Destroy(_skinMat);
                 _skinMat = null;
                 bool had = Capsules.Count > 0;

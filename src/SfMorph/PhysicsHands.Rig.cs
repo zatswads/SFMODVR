@@ -6,8 +6,9 @@ namespace SfMorph
 {
     // The jointed finger rig of the physics hands (0.7.2): per finger two rigidbodies (the proximal phalanx; the middle and distal
     // fused into one), each on a ConfigurableJoint to its parent body with a slerp drive whose maxForce is the finger's compliance.
-    // The curl target goes in through the standard SetTargetRotationLocal recipe; a tip cast slows a finger that is about to touch
-    // her; the visual fingers copy the simulated bones. A hand whose rig goes wrong falls back to kinematic fingers (0.7.0).
+    // The curl target goes in through the standard SetTargetRotationLocal recipe; since 0.8.0 each finger's curl is its command (rest
+    // curl, trigger, grip) stopped at her skin by a FingerFan sweep (UpdateFingers); the visual fingers copy the simulated bones. A hand
+    // whose rig goes wrong falls back to kinematic fingers (0.7.0).
     internal static partial class PhysicsHands
     {
         static PhysicsHands()
@@ -33,13 +34,22 @@ namespace SfMorph
         // ---- tuning (from the design) ----
         const float MassProx = 0.04f, MassFused = 0.03f;
         const float SpringK = 100f, DamperK = 5f, ForceProx = 0.3f, ForceFused = 0.15f;   // slerp drive; maxForce (N*m) is the compliance
-        // 0.7.7: while the hand touches her the fingers give: 0.4 of the free-air compliance, so they splay and bend on her instead of
+        // 0.7.7: while the hand touches her the fingers give: a fraction of the free-air compliance (0.4 until 0.8.0, now 0.3: softer, the
+        // fan stops them at her skin so they no longer need to be stiff to hold their place), so they splay and bend on her instead of
         // holding their curl (a 12 N fingertip press at 7 cm is 0.84 N*m, well over either).
-        const float GiveScale = 0.4f, GiveProx = ForceProx * GiveScale, GiveFused = ForceFused * GiveScale;
+        const float GiveScale = 0.3f, GiveProx = ForceProx * GiveScale, GiveFused = ForceFused * GiveScale;
         const float RangeProxMin = -10f, RangeProxMax = 100f, RangeFusedMin = -5f, RangeFusedMax = 110f;   // curl angle range (degrees, + = toward the palm)
         const float SideLimit = 8f;                                                        // proximal sideways play
-        const float ConformReach = 0.016f;                                                 // tip cast length beyond the tip
         const float InertiaFloor = 1e-5f;
+        // 0.8.0 finger commands and conform (section 5): the rest curl per finger at [Hands] RestCurl 0.25 (scaled by RestCurl / 0.25), the
+        // share of the touching fingers' curl the others (index and pinky half, middle and ring three quarters) follow, and the ease of
+        // FCurl toward its target: exponential at EaseRate per second, never faster than EaseMax per second (0 -> 1 takes >= 0.125 s)
+        static readonly float[] RestCurlF = { 0.15f, 0.20f, 0.25f, 0.30f, 0.35f };
+        static readonly float[] FollowerK = { 0f, 0.5f, 0.75f, 0.75f, 0.5f };
+        const float EaseRate = 15f, EaseMax = 8f;
+        static readonly string[] FingerTag = { "thumb", "index", "middle", "ring", "pinky" };
+        static readonly float[] _cmd = new float[5], _contact = new float[5];   // UpdateFingers scratch (the main thread only)
+        static readonly int[] _fseg = new int[5];
 
         // The sign of the joint's angular X limit against the curl angle is the one thing this rig can't know without running:
         // the drive target is the inverse of the wanted rotation (the recipe), and the limit is assumed to share that convention
@@ -99,8 +109,8 @@ namespace SfMorph
             Plugin.Log.LogInfo("PhysicsHands: " + (h.Left ? "left" : "right") + " finger rig: " + (h.Rig.Count + 1) + " rigidbodies (palm " + PalmMass.ToString("0.00") + " kg, fingers "
                                + MassProx.ToString("0.00") + "/" + MassFused.ToString("0.00") + " kg, hand " + mass.ToString("0.00") + " kg), " + h.Rig.Count + " configurable joints, slerp drive spring "
                                + SpringK + " damper " + DamperK + " maxForce " + ForceProx + "/" + ForceFused + " N*m, curl range " + RangeProxMin + ".." + RangeProxMax + " / " + RangeFusedMin + ".." + RangeFusedMax
-                               + " deg, X limit sign " + (_limFlip ? "swapped" : "twist = -curl") + ", side play +-" + SideLimit + " deg, tip casts "
-                               + (h.TipBone[1] >= 0 ? "on" : "off"));
+                               + " deg, X limit sign " + (_limFlip ? "swapped" : "twist = -curl") + ", side play +-" + SideLimit + " deg, conform fans "
+                               + (h.Fan[1] != null ? "on" : "off"));
             _statusDirty = true;
         }
 
@@ -198,7 +208,7 @@ namespace SfMorph
             for (int i = 0; i < 15; i++) h.FingAt[i] = null;
             h.RigOn = false;
             h.TotalMass = PalmMass;
-            h.AppliedCurl = -1f;
+            for (int f = 0; f < 5; f++) h.FApplied[f] = -1f;   // the kinematic fingers are posed again
             h.CurValid = false;
             var sp = h.Spec;
             if (h.PBones != null)
@@ -242,31 +252,107 @@ namespace SfMorph
             return 2f * Mathf.Atan2(p, d.w) * Mathf.Rad2Deg;
         }
 
-        // How fast a closing finger may keep closing (0..1): a short cast from the finger's tip along its curl motion and along the
-        // finger, on her layer; the nearer her skin, the slower, and at contact the target is held.
-        static float ConformAdvance(Hand h, int f)
+        // ---- finger conform (0.8.0, design section 5) ----
+        // Replaces the closed-loop tip casts of 0.7.x (ConformAdvance, once per fixed step, which also had to guess the motion direction):
+        // every finger has a FingerFan, the places its tip and last capsule pass through at 8 curl fractions, in the palm frame, built
+        // once from the rest pose. Each rendered frame the fan is laid on the palm's RIGIDBODY pose (where the colliders really are, not the
+        // drawn hand) and the first fraction that touches her is the stop curl. It doesn't depend on where the finger is now, so closing
+        // can't change what it senses, and there is no per-step cast.
+
+        // One fan per finger, from the same bones, rest rotations, curl axes and ranges the rig and PoseFinger use. Joint 0 is the
+        // proximal bone, joint 1 the fused middle + distal (the collider is rigid from there to the tip); a finger with one bone has one
+        // joint. The tip is the end B of the finger's last collider.
+        static void BuildFans(Hand h)
         {
-            int tb = h.TipBone[f];
-            if (tb < 0 || _layerHer < 0) return 1f;
-            var tipT = h.PBones[tb];
-            int slot = h.Spec.Fin[f * 3 + 1] == tb ? f * 3 + 1 : f * 3;
-            Vector3 tip = tipT.TransformPoint(h.TipLocal[f]);
-            Vector3 axis = tipT.TransformDirection(h.AxisLocal[slot]);
-            Vector3 root = h.PBones[h.Spec.Fin[f * 3]].position;
-            Vector3 mv = Vector3.Cross(axis, tip - root);
-            float r = h.TipR[f], len = r + ConformReach;
-            int mask = 1 << _layerHer;
-            float gap = float.MaxValue;
-            RaycastHit hit;
-            if (mv.sqrMagnitude > 1e-10f && Physics.Raycast(tip, mv.normalized, out hit, len, mask, QueryTriggerInteraction.Ignore)) gap = hit.distance - r;
-            Vector3 fd = tip - tipT.position;
-            if (fd.sqrMagnitude > 1e-10f && Physics.Raycast(tip, fd.normalized, out hit, len, mask, QueryTriggerInteraction.Ignore)) gap = Mathf.Min(gap, hit.distance - r);
-            if (gap >= ConformReach) return 1f;
-            return Mathf.Clamp01(gap / ConformReach);
+            var sp = h.Spec;
+            float u = sp.Scale;
+            int built = 0;
+            for (int f = 0; f < 5; f++)
+            {
+                h.Fan[f] = null;
+                int b0 = sp.Fin[f * 3], b1 = sp.Fin[f * 3 + 1];
+                if (b0 < 0) continue;
+                int joints = b1 >= 0 ? 2 : 1;
+                string tag = FingerTag[f] + (b1 >= 0 ? "B" : "");
+                ShapeSpec tipShape = null;
+                foreach (var sh in sp.Cols) if (!sh.Box && sh.Tag == tag) { tipShape = sh; break; }
+                if (tipShape == null) continue;
+                var P = new Vector3[joints + 1]; var Q = new Quaternion[joints]; var axis = new Vector3[joints]; var max = new float[joints];
+                for (int j = 0; j < joints; j++)
+                {
+                    Vector3 pos, sc; Quaternion rot;
+                    Decompose(sp.Bones[sp.Fin[f * 3 + j]].M, out pos, out rot, out sc);
+                    P[j] = pos * u; Q[j] = rot; axis[j] = h.AxisLocal[f * 3 + j]; max[j] = JointMax(f, j);
+                }
+                P[joints] = tipShape.B * u;
+                var fan = new FingerFan();
+                fan.Build(joints, P, Q, axis, max, f == 0 ? ThumbR : FingerR);
+                if (fan.Built) { h.Fan[f] = fan; built++; }
+            }
+            LogOnce("fan", "finger conform: fan " + FingerFan.Steps + " steps x " + FingerFan.ProbesPerStep + " probes per finger, radius " + (FingerR * 1000f).ToString("0") + " mm (thumb " + (ThumbR * 1000f).ToString("0.0")
+                           + "), enter +" + (FingerFan.EnterPad * 1000f).ToString("0") + " mm / stay -" + (FingerFan.ExitPad * 1000f).ToString("0") + " mm; followers " + FollowerK[1].ToString("0.##") + "/" + FollowerK[2].ToString("0.##")
+                           + "; ease " + EaseRate.ToString("0") + "/s; finger friction " + FingerFriction.ToString("0.00") + " (Minimum); drive force on touch " + GiveScale.ToString("0.0#") + "x");
+            if (built == 0) LogOnce("fannone" + h.Left, (h.Left ? "left" : "right") + " hand: no finger fans (no finger colliders to sweep)");
         }
 
-        // Per fixed step, before the physics step: measure the joints, check the rig is sane, decide each finger's curl (the tip cast
-        // may hold it), write the joint targets.
+        // Per rendered frame: each finger's curl command from the controller (section 5.1), its contact curl from the fan (5.3), the
+        // target after followers and the give (5.4), eased into FCurl. FingerStep only turns FCurl into joint targets.
+        static void UpdateFingers(Hand h, HandsSettings s, float dt)
+        {
+            float grip = Mathf.Clamp01(h.Left ? Grip.Left : Grip.Right), trig = Mathf.Clamp01(h.Left ? Grip.TriggerLeft : Grip.TriggerRight);
+            float rs = Mathf.Clamp01(s.RestCurl) / 0.25f;
+            // index = trigger; middle, ring, pinky = grip; the thumb closes with the grip or, a bit less, with the trigger
+            _cmd[1] = Mathf.Lerp(Mathf.Clamp01(RestCurlF[1] * rs), 1f, trig);
+            for (int f = 2; f < 5; f++) _cmd[f] = Mathf.Lerp(Mathf.Clamp01(RestCurlF[f] * rs), 1f, grip);
+            _cmd[0] = Mathf.Lerp(Mathf.Clamp01(RestCurlF[0] * rs), 1f, Mathf.Max(grip, 0.6f * trig));
+
+            // contact: the fan on the rigidbody's pose, once per frame per finger (<= 16 CheckSphere + one cast each)
+            bool cast = s.FingerConform && _herBuilt && _layerHer >= 0 && h.CollideOn && !h.Kin && h.Rb != null;
+            Vector3 pos = Vector3.zero; Quaternion rot = Quaternion.identity;
+            if (cast)
+            {
+                pos = h.Rb.position; rot = h.Rb.rotation;
+                if (!Finite(pos) || !Finite(rot)) cast = false;
+            }
+            int herMask = 1 << _layerHer;
+            float avg = 0f; int nTouch = 0;
+            for (int f = 0; f < 5; f++)
+            {
+                float c = 1f; int seg = -1, step = -1;
+                var fan = h.Fan[f];
+                if (cast && fan != null) c = fan.ConformPhysics(pos, rot, 1f, herMask, h.FanStep[f], _segOfFn, out seg, out step);
+                if (!(c >= 0f)) c = 1f;   // NaN
+                // probe flips: the first touching step jumping by two or more between consecutive frames is chatter
+                if (step >= 0 && h.FanStep[f] >= 0 && Mathf.Abs(step - h.FanStep[f]) >= 2) h.FFlipN++;
+                h.FanStep[f] = step;
+                _contact[f] = c; _fseg[f] = seg;
+                if (c < 1f && f != 0) { avg += c; nTouch++; }
+            }
+            if (nTouch > 0) avg /= nTouch;
+
+            float soft = 0.5f + Mathf.Clamp01(s.Softness);
+            float edt = Mathf.Min(dt, 0.1f);
+            for (int f = 0; f < 5; f++)
+            {
+                float target = _cmd[f];
+                if (nTouch > 0 && _contact[f] >= 1f && f != 0) target = Mathf.Max(target, FollowerK[f] * avg);   // DL's followers wrap along
+                if (_contact[f] < 1f)
+                {
+                    float give = (_fseg[f] >= 0 ? HerBody.ClaspGive(_fseg[f]) : 0.06f) * soft;
+                    target = Mathf.Min(target, _contact[f] + give);
+                    h.FHeldN[f]++; h.FContactN++; h.FContactSum += _contact[f]; h.FGiveN++; h.FGiveSum += give;
+                }
+                target = Mathf.Clamp01(target);
+                // the ease (DL: 0.15 s): exponential at EaseRate (time constant 67 ms), no faster than EaseMax per second
+                float cur = h.FCurl[f];
+                float stepC = (target - cur) * (1f - Mathf.Exp(-EaseRate * edt));
+                float lim = EaseMax * edt;
+                h.FCurl[f] = Mathf.Clamp01(cur + Mathf.Clamp(stepC, -lim, lim));
+            }
+        }
+
+        // Per fixed step, before the physics step: measure the joints, check the rig is sane, write the joint targets from FCurl
+        // (UpdateFingers decides it, once per rendered frame).
         static void FingerStep(Hand h, float dt)
         {
             var sp = h.Spec;
@@ -297,19 +383,6 @@ namespace SfMorph
 
             CaptureRig(h);   // the visual fingers interpolate between the last two of these (one per fixed step)
 
-            // each finger's curl: opening is always allowed; closing is slowed (held at contact) by the tip cast
-            bool cast = _herBuilt && h.CollideOn;
-            for (int f = 0; f < 5; f++)
-            {
-                float want = h.Curl, cur = h.FCurl[f];
-                if (want <= cur) cur = want;
-                else
-                {
-                    float adv = cast && want - cur > 0.0005f ? ConformAdvance(h, f) : 1f;
-                    cur += (want - cur) * adv;
-                }
-                h.FCurl[f] = cur;
-            }
             for (int i = 0; i < h.Rig.Count; i++)
             {
                 var g = h.Rig[i];
