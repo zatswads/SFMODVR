@@ -126,6 +126,8 @@ namespace SfMorph
             public Quaternion PW = Quaternion.identity; public Vector3 POmega; public int PState;
             // limb push (every bone but wrists/ankles): offset rotation in the parent's frame, its angular velocity, this frame's torque (world)
             public bool CanPush, PushLive; public Quaternion Qp = Quaternion.identity; public Vector3 OmegaP, TauW;
+            // 0.7.9: angular impulse (N*m*s, world) from Kick, applied at the next push kick, then zeroed
+            public Vector3 KickW;
         }
 
         class Eff
@@ -280,13 +282,14 @@ namespace SfMorph
                 // is left alone (exactly the game's animation).
                 // not gated on `pushable`: when the push source disappears (hand lifted, physics hands off) the offset must decay through its spring
                 // below instead of snapping to identity here; the off path is only reached once PushLive has cleared (pa < 0.05 deg, at rest)
-                bool pushWake = wReq <= 0f && b.CanPush && (b.PushLive || b.TauW.sqrMagnitude > 1e-8f);
+                // 0.7.9: a pending flinch kick wakes the bone too (LimbPush > 0 only), with no hand pushing and at region weight 0
+                bool pushWake = wReq <= 0f && b.CanPush && (b.PushLive || b.TauW.sqrMagnitude > 1e-8f || (_lp > 0f && b.KickW.sqrMagnitude > 1e-12f));
                 if (wReq <= 0f && !pushWake)
                 {
                     // Off for this bone: if the animation did not rewrite it, put the animation's rotation back, once.
                     if (b.HasLast && Same(cur, b.LastWrite)) tr.localRotation = b.Target;
                     b.HasLast = false; b.Init = false; b.PState = 0;
-                    b.Qp = Quaternion.identity; b.OmegaP = Vector3.zero; b.PushLive = false; b.TauW = Vector3.zero;
+                    b.Qp = Quaternion.identity; b.OmegaP = Vector3.zero; b.PushLive = false; b.TauW = Vector3.zero; b.KickW = Vector3.zero;
                     continue;
                 }
 
@@ -312,7 +315,7 @@ namespace SfMorph
                     b.Prev = b.Target; b.Qs = b.Target; b.Omega = Vector3.zero; b.Init = true;
                     // every reset path zeroes the ripple and push state too
                     b.PState = 0; b.POmega = Vector3.zero;
-                    b.Qp = Quaternion.identity; b.OmegaP = Vector3.zero; b.PushLive = false;
+                    b.Qp = Quaternion.identity; b.OmegaP = Vector3.zero; b.PushLive = false; b.KickW = Vector3.zero;
                     _grpReset[b.Group] = true;
                 }
                 b.LastPos = pos;
@@ -360,6 +363,19 @@ namespace SfMorph
                 // Push kick: torque (world) -> the parent's frame (Qp is premultiplied onto the bone's local rotation).
                 bool pushOn = b.CanPush && _lp > 0f;
                 float pInertia = PushInertiaR[rg], pClampDeg = PushClampDegR[rg];
+                // 0.7.9 flinch: a pending angular impulse J (N*m*s) becomes an instant change of the push spring's velocity, d(omega) = J / I
+                // (the same I as the torque kick above, in the parent's frame), capped at 0.15 x the region's torque cap so no kick outruns
+                // a hard push; the spring then returns it. Runs with no hand pushing and at region weight 0 (PushLive keeps the bone awake).
+                if (pushOn && b.KickW.sqrMagnitude > 1e-12f && b.P != null && n > 0)
+                {
+                    float km = b.KickW.magnitude, kcap = PushTauMaxR[rg] * 0.15f;
+                    if (km > kcap) b.KickW *= kcap / km;
+                    b.OmegaP += (Quaternion.Inverse(b.P.rotation) * b.KickW) / pInertia;
+                    float ko = b.OmegaP.magnitude;
+                    if (ko > PushOmegaMax) b.OmegaP *= PushOmegaMax / ko;
+                    b.PushLive = true;
+                }
+                if (n > 0 || !pushOn) b.KickW = Vector3.zero;    // a paused frame (n 0) keeps the kick for the next one
                 if (pushOn && b.TauW.sqrMagnitude > 1e-8f && b.P != null && n > 0)
                 {
                     // the knee (see PushInertiaR): soft-saturate the torque at 0.8 of the clamp angle's equilibrium torque
@@ -648,9 +664,22 @@ namespace SfMorph
             Status = _sb.ToString();
         }
 
-        // package C (0.7.9 reactions): an angular impulse (N*s at `point`, world) on every bone that carries the segment (PushMaps),
-        // applied at the next Update's push kick. A no-op in R0.
-        public void Kick(int segIndex, Vector3 point, Vector3 impulseNs) { }
+        // package C (0.7.9 reactions): a linear impulse (N*s, world) on her segment `segIndex` (HerBody.SegNames) at `point` (world), as
+        // an angular impulse on every bone that carries the segment (PushMaps), applied at the next Update's push kick.
+        // Units: impulse N*s at lever arm r (m) = angular impulse J = share * cross(point - bone, impulse) in N*m*s; the push spring turns
+        // it into a velocity change d(omega) = J / I (rad/s, I in PushInertiaR). Several kicks in a frame add up; Update caps the total.
+        // A no-op when LimbPush is 0 or nothing is built.
+        public void Kick(int segIndex, Vector3 point, Vector3 impulseNs)
+        {
+            if (!(_lp > 0f) || !Ok(point) || !Ok(impulseNs)) return;
+            for (int i = 0; i < _pushRes.Length; i++)
+            {
+                var r = _pushRes[i];
+                if (r.Seg != segIndex || r.Bone.T == null) continue;
+                Vector3 j = Vector3.Cross(point - r.Bone.T.position, impulseNs) * r.Share;
+                if (Ok(j)) r.Bone.KickW += j;
+            }
+        }
 
         // Gives back the animation's rotation on bones the animation did not rewrite, forgets everything.
         public void Release()
