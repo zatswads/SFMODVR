@@ -90,6 +90,21 @@ namespace SfMorph
 
         public string TexturePath(string file) { return Path.Combine(Dir, file); }
 
+        // Her whole fitted skin + bind poses as the pipeline wrote them (skin.txt, binds.txt): what clothes and outfit
+        // body variants follow, whichever of her meshes the scene uses. Null for characters made before 0.6.2.
+        SkinRef _ref; bool _refTried;
+        public SkinRef Reference
+        {
+            get
+            {
+                if (_refTried) return _ref;
+                _refTried = true;
+                try { _ref = SkinRef.Load(Path.Combine(Dir, "skin.txt"), Path.Combine(Dir, "binds.txt")); }
+                catch (Exception e) { Plugin.Log.LogWarning("Couldn't read the skin reference of " + Name + ": " + e.Message); }
+                return _ref;
+            }
+        }
+
         // ---- the gallery: every folder with a character.txt ----
 
         static List<MorphSet> _all;
@@ -192,10 +207,13 @@ namespace SfMorph
             float w = set != null ? Mathf.Clamp01(look.MorphWeight) : 0f;
             if (set == null || w <= 0f) { Release(); JointWeight = 0f; return; }
 
-            bool rebuild = set != _set || _builtFor == null || !SameList(_builtFor, c.Renderers);
-            if (!rebuild)
+            string why = set != _set ? "character picked" : _builtFor == null ? "shape back on" : !SameList(_builtFor, c.Renderers) ? RendererChange(c) : null;
+            if (why == null)
                 foreach (var kv in _slots)  // the game swapped a mesh itself (mesh swaps are its customisation)
-                    if (kv.Key != null && kv.Key.sharedMesh != kv.Value.Clone) { rebuild = true; break; }
+                    if (kv.Key != null && kv.Key.sharedMesh != kv.Value.Clone)
+                    { why = "the game swapped " + kv.Key.name + "'s mesh to " + (kv.Key.sharedMesh != null ? kv.Key.sharedMesh.name : "none"); break; }
+            bool rebuild = why != null;
+            if (rebuild) _why = why;
             if (!rebuild && Time.unscaledTime >= _nextCheck)
             {
                 _nextCheck = Time.unscaledTime + 2f;
@@ -220,6 +238,16 @@ namespace SfMorph
             }
             if (look.MorphSkin && !_texOn) { ApplyTextures(c, set); _texOn = true; }
             else if (!look.MorphSkin && _texOn) { RestoreTextures(); _texOn = false; }
+        }
+
+        string _why = "";
+
+        string RendererChange(Character c)
+        {
+            var add = new List<string>(); var rem = new List<string>();
+            foreach (var r in c.Renderers) if (r != null && !_builtFor.Contains(r)) add.Add(r.name);
+            foreach (var r in _builtFor) if (r == null || !c.Renderers.Contains(r)) rem.Add(r != null ? r.name : "(destroyed)");
+            return "renderers " + (add.Count > 0 ? "+" + string.Join(" +", add.ToArray()) + " " : "") + (rem.Count > 0 ? "-" + string.Join(" -", rem.ToArray()) : "");
         }
 
         static bool SameList(List<SkinnedMeshRenderer> a, List<SkinnedMeshRenderer> b)
@@ -253,7 +281,8 @@ namespace SfMorph
             int morphed = 0, follow = 0, skipped = 0;
             var problems = new List<string>();
             // pass 1: her converted meshes (and the skin the clothes follow)
-            var skin = new SkinRef();
+            var stored = set.Reference;
+            var skin = stored ?? new SkinRef();   // older characters: the skin meshes present in the scene
             var pending = new List<KeyValuePair<SkinnedMeshRenderer, Mesh>>();
             foreach (var r in c.Renderers)
             {
@@ -281,11 +310,11 @@ namespace SfMorph
                     _clones[orig] = clone;
                 }
                 Use(r, orig, clone, d, Matrix4x4.identity, "morph");
-                if (set.Skin.Contains(orig.name)) skin.Add(r, d, mm);
+                if (stored == null && set.Skin.Contains(orig.name)) skin.Add(r, d, mm);
                 morphed++;
             }
             // pass 2: clothes and anything not converted follow the nearest skin vertex
-            if (skin.Count > 0) skin.Index();
+            if (stored == null && skin.Count > 0) skin.Index();
             foreach (var kv in pending)
             {
                 var r = kv.Key; var orig = kv.Value;
@@ -298,7 +327,9 @@ namespace SfMorph
                 if (!_clones.TryGetValue(orig, out clone))
                 {
                     clone = Clone(orig, d);
-                    clone.AddBlendShapeFrame("SfMorph " + set.Name, 100f, skin.Follow(d.Pos, toSkin), null, null);
+                    Vector3[] fd, fn;
+                    skin.Follow(d.Pos, d.Nrm, toSkin, out fd, out fn);
+                    clone.AddBlendShapeFrame("SfMorph " + set.Name, 100f, fd, fn, null);
                     _clones[orig] = clone;
                 }
                 Use(r, orig, clone, d, toSkin.inverse, "follow");
@@ -306,9 +337,9 @@ namespace SfMorph
             }
             JointLocals(c, set);
             Status = set.Name + ": " + morphed + " meshes morphed, " + follow + " follow (clothes and the rest)" + (skipped > 0 ? ", " + skipped + " skipped (see the log)" : "")
-                     + "; " + _jointLocal.Count + " joints moved, " + simulatedCount + " physics bones keep their parent's";
+                     + "; " + _jointLocal.Count + " joints moved, " + simulatedCount + " physics/driven bones keep their parent's";
             Plugin.Log.LogInfo("Character '" + set.Name + "' on '" + c.Key + "': " + morphed + " meshes morphed, " + follow + " follow the skin, "
-                               + _jointLocal.Count + " joints, built in " + ((Time.realtimeSinceStartup - t0) * 1000f).ToString("0") + " ms"
+                               + _jointLocal.Count + " joints, built in " + ((Time.realtimeSinceStartup - t0) * 1000f).ToString("0") + " ms (" + _why + ")"
                                + (problems.Count > 0 ? "; skipped: " + string.Join("; ", problems.ToArray()) : ""));
         }
 
@@ -316,14 +347,22 @@ namespace SfMorph
         // always with the original bind poses (the clone's are moved with the joints).
         MeshData Data(Mesh orig, List<string> problems)
         {
-            Mesh cl;
+            MeshData d;
+            if (_data.TryGetValue(orig, out d)) return d;
             string err;
-            var d = MeshData.Read(_clones.TryGetValue(orig, out cl) && cl != null ? cl : orig, out err);
+            d = MeshData.Read(orig, out err);
             if (d == null) { problems.Add(orig.name + ": " + err); return null; }
-            Matrix4x4[] ob;
-            if (_origBind.TryGetValue(orig, out ob)) d.Bind = ob; else _origBind[orig] = d.Bind;
+            _data[orig] = d;
+            if (_loggedLayout.Add(orig.name))
+            {
+                var sb = new StringBuilder("Mesh '" + orig.name + "' layout:");
+                foreach (var a in orig.GetVertexAttributes()) sb.Append(' ').Append(a.attribute).Append('=').Append(a.format).Append('x').Append(a.dimension).Append("/s").Append(a.stream);
+                Plugin.Log.LogInfo(sb.ToString());
+            }
             return d;
         }
+        readonly Dictionary<Mesh, MeshData> _data = new Dictionary<Mesh, MeshData>();
+        static readonly HashSet<string> _loggedLayout = new HashSet<string>();
 
         void Use(SkinnedMeshRenderer r, Mesh orig, Mesh clone, MeshData d, Matrix4x4 toMesh, string kind)
         {
@@ -368,12 +407,22 @@ namespace SfMorph
                 if (root == null || !root.IsChildOf(c.Root)) continue;
                 foreach (var t in root.GetComponentsInChildren<Transform>(true)) if (t != root) simulated.Add(t);
             }
+            // A bone hanging under a transform that isn't a skin bone (face rig 'Facial', eyelid and thigh-skin drivers)
+            // has no bind pose for its parent: its offset can't be put into the parent's space reliably, and the
+            // driver may be moved by the game. Such bones aren't moved; they keep their ancestors' offset. The
+            // same goes for bones the physics simulates.
+            var skinSet = new HashSet<Transform>(c.BoneList);
+            var fixedBones = new HashSet<Transform>();
             foreach (var t in c.BoneList)  // parents first
             {
                 if (t == null) continue;
                 Vector3 o;
-                if (!simulated.Contains(t) && j.TryGetValue(t.name, out o)) _eff[t.name] = o;
-                else _eff[t.name] = Inherited(t);   // simulated or not in joints.txt: moves with its ancestors
+                bool aboveSkin = true;   // parent chain has no skin bone: the static rig root (DeformationSystem)
+                for (var a = t.parent; a != null; a = a.parent) if (skinSet.Contains(a)) { aboveSkin = false; break; }
+                bool driven = t.parent != null && !skinSet.Contains(t.parent) && !aboveSkin;
+                if (simulated.Contains(t) || driven) fixedBones.Add(t);
+                if (!fixedBones.Contains(t) && j.TryGetValue(t.name, out o)) _eff[t.name] = o;
+                else _eff[t.name] = Inherited(t);   // moves with its ancestors
             }
             // parent bind poses from her converted meshes' original bind poses (not clothes, not our moved ones)
             var bindOf = new Dictionary<Transform, Matrix4x4>();
@@ -389,7 +438,7 @@ namespace SfMorph
             foreach (var t in c.BoneList)
             {
                 Vector3 dt, dp;
-                if (t == null || simulated.Contains(t) || !_eff.TryGetValue(t.name, out dt)) continue;
+                if (t == null || fixedBones.Contains(t) || !_eff.TryGetValue(t.name, out dt)) continue;
                 var p = t.parent;
                 if (p == null) continue;
                 if (!_eff.TryGetValue(p.name, out dp)) dp = Inherited(p);
@@ -398,11 +447,11 @@ namespace SfMorph
                 Matrix4x4 bp;
                 Vector3 local;
                 if (bindOf.TryGetValue(p, out bp) || c.Bind.TryGetValue(p, out bp)) local = bp.MultiplyVector(delta);          // bind pose: mesh -> parent
-                else if (meshSpace != null) local = p.InverseTransformVector(meshSpace.TransformVector(delta)); // static, unskinned parent
+                else if (meshSpace != null) local = p.InverseTransformVector(meshSpace.TransformVector(delta)); // static rig root above the skeleton
                 else continue;
                 _jointLocal[t] = local;
             }
-            simulatedCount = simulated.Count;
+            simulatedCount = fixedBones.Count;
         }
         int simulatedCount;
 
@@ -431,7 +480,7 @@ namespace SfMorph
 
         // ---- textures ----
 
-        static readonly string[] AlbedoProps = { "_BaseColorMap", "_BaseMap", "_MainTex", "_AlbedoMap", "_Albedo", "_DiffuseMap", "_Diffuse" };
+        static readonly string[] AlbedoProps = { "_ColorMap", "_BaseColorMap", "_BaseMap", "_MainTex", "_AlbedoMap", "_Albedo", "_DiffuseMap", "_Diffuse" };
         static readonly string[] NormalProps = { "_NormalMap", "_BumpMap" };
 
         void ApplyTextures(Character c, MorphSet set)
@@ -520,6 +569,7 @@ namespace SfMorph
             if (!destroy) return;
             foreach (var m in _clones.Values) if (m != null) UnityEngine.Object.Destroy(m);
             _clones.Clear();
+            _data.Clear();
         }
     }
 
@@ -532,6 +582,37 @@ namespace SfMorph
         Dictionary<long, List<int>> _grid;
         const float Cell = 0.02f;
         public int Count { get { return _p.Count; } }
+
+        readonly Dictionary<string, Matrix4x4> _bindByName = new Dictionary<string, Matrix4x4>();
+
+        public static SkinRef Load(string skinPath, string bindPath)
+        {
+            if (!File.Exists(skinPath) || !File.Exists(bindPath)) return null;
+            var inv = CultureInfo.InvariantCulture;
+            var s = new SkinRef();
+            var lines = File.ReadAllLines(skinPath);
+            int i = 0, n = -1;
+            for (; i < lines.Length; i++) if (lines[i].StartsWith("vertices ")) { n = int.Parse(lines[i].Substring(9), inv); i++; break; }
+            if (n < 0 || lines.Length - i < n) throw new Exception("skin.txt truncated");
+            for (int k = 0; k < n; k++)
+            {
+                var f = lines[i + k].Split(' ');
+                Func<int, Vector3> v3 = o => new Vector3(float.Parse(f[o], inv), float.Parse(f[o + 1], inv), float.Parse(f[o + 2], inv));
+                s._p.Add(v3(0)); s._n.Add(v3(3)); s._d.Add(v3(6)); s._dn.Add(v3(9));
+            }
+            foreach (var raw in File.ReadAllLines(bindPath))
+            {
+                var f = raw.Split('\t');
+                if (f.Length < 2 || f[0].StartsWith("#")) continue;
+                var v = f[1].Split(' ');
+                if (v.Length != 16) continue;
+                var m = new Matrix4x4();
+                for (int k = 0; k < 16; k++) m[k / 4, k % 4] = float.Parse(v[k], inv);
+                s._bindByName[f[0]] = m;
+            }
+            s.Index();
+            return s;
+        }
 
         public void Add(SkinnedMeshRenderer r, MeshData d, MeshMorph m)
         {
@@ -570,27 +651,36 @@ namespace SfMorph
             }
             int best = -1;
             for (int i = 0; i < bones.Length && i < d.Bind.Length; i++)
-                if (bones[i] != null && _bind.ContainsKey(bones[i]) && (best < 0 || sum[i] > sum[best])) best = i;
+                if (bones[i] != null && (_bind.ContainsKey(bones[i]) || _bindByName.ContainsKey(bones[i].name)) && (best < 0 || sum[i] > sum[best])) best = i;
             if (best < 0) return false;
-            toSkin = _bind[bones[best]].inverse * d.Bind[best];
+            Matrix4x4 b;
+            if (!_bind.TryGetValue(bones[best], out b)) b = _bindByName[bones[best].name];
+            toSkin = b.inverse * d.Bind[best];
             return true;
         }
 
         // Per vertex: the weighted delta of the nearest skin vertices; then, where the shape would put the skin through
         // the cloth (cloth was outside the skin and isn't any more), pushed out along the new skin normal.
-        public Vector3[] Follow(Vector3[] pos, Matrix4x4 toSkin)
+        public void Follow(Vector3[] pos, Vector3[] nrm, Matrix4x4 toSkin, out Vector3[] outD, out Vector3[] outN)
         {
             var back = toSkin.inverse;
-            var outD = new Vector3[pos.Length];
+            outD = new Vector3[pos.Length];
+            outN = new Vector3[pos.Length];
             var idx = new int[4]; var dist = new float[4];
             for (int v = 0; v < pos.Length; v++)
             {
                 var p = toSkin.MultiplyPoint3x4(pos[v]);
                 int found = Nearest(p, idx, dist);
                 if (found == 0) continue;
-                Vector3 dsum = Vector3.zero; float wsum = 0f;
-                for (int k = 0; k < found; k++) { float w = 1f / (dist[k] + 0.002f); w *= w; dsum += _d[idx[k]] * w; wsum += w; }
+                Vector3 dsum = Vector3.zero, nsum = Vector3.zero; float wsum = 0f;
+                for (int k = 0; k < found; k++) { float w = 1f / (dist[k] + 0.002f); w *= w; dsum += _d[idx[k]] * w; nsum += _dn[idx[k]] * w; wsum += w; }
                 var dd = dsum / wsum;
+                if (nrm != null && v < nrm.Length)  // the skin's normal change, carried over (outfit body variants are skin too)
+                {
+                    var fn0 = toSkin.MultiplyVector(nrm[v]).normalized;
+                    var fn1 = (fn0 + nsum / wsum).normalized;
+                    outN[v] = back.MultiplyVector(fn1).normalized * nrm[v].magnitude - nrm[v];
+                }
                 int n0 = idx[0];
                 var nb = _n[n0]; var pb = _p[n0];
                 float h0 = Vector3.Dot(p - pb, nb);
@@ -601,7 +691,6 @@ namespace SfMorph
                 if (h1 < want) p1 += nb1 * (want - h1);
                 outD[v] = back.MultiplyVector(p1 - p);
             }
-            return outD;
         }
 
         int Nearest(Vector3 p, int[] idx, float[] dist)

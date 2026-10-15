@@ -189,6 +189,19 @@ def closeups():
         render(os.path.join(CHK, 'close_%s.png' % name), cams, (900, 900))
 
 
+def posetest():
+    import math
+    P = np.load(os.path.join(CHK, 'posetest.npz'))
+    names = sorted({k.split('|')[0] for k in P.files})
+    clear()
+    for key, dx in (('orig', -0.9), ('nojoints', 0.0), ('joints', 0.9)):
+        for n in names:
+            make_obj(n + '_' + key, u2b(P[n + '|' + key], dx), P[n + '|faces'])
+    cams = {'front': camera('cf', (0, 6, 0.9), (math.radians(90), 0, math.radians(180)), 3.0),
+            'quarter': camera('cq', (4.2, 4.2, 1.0), (math.radians(90), 0, math.radians(135)), 3.6)}
+    render(os.path.join(CHK, 'posetest.png'), cams, (2400, 1000))
+
+
 def debug():
     import math
     clear()
@@ -201,6 +214,8 @@ def debug():
 
 if __name__ == '__main__':
     t0 = time.time()
+    if '--posetest' in ARGS:
+        posetest(); sys.exit(0)
     if '--debug' in ARGS:
         debug(); closeups(); sys.exit(0)
     renders()

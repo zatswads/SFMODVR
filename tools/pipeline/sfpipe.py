@@ -294,6 +294,19 @@ def main():
         for b in sorted(joint_off):
             o = joint_off[b]; p = bind_pos[b]
             f.write('%s\t%s\t%.6f %.6f %.6f\t%.6f %.6f %.6f\n' % (b, skel[b]['parent'] if b in skel else '-', p[0], p[1], p[2], o[0], o[1], o[2]))
+    # Her whole fitted skin (welded) and every bone's bind pose in the common bind space: what clothes, outfit body
+    # variants (uniform_upperBody_normal replaces her upper body when she's dressed) and any unconverted mesh follow
+    # in the game, whichever of her meshes the scene uses.
+    with open(os.path.join(a.out, 'skin.txt'), 'w', encoding='utf-8', newline='\n') as f:
+        f.write('# her skin, welded, common bind space: position, normal, offset, normal delta\n')
+        f.write('vertices %d\n' % nw)
+        dn = wn1 - wn0
+        for i in range(nw):
+            f.write('%.6g %.6g %.6g %.4g %.4g %.4g %.6g %.6g %.6g %.4g %.4g %.4g\n' % (tuple(wc[i]) + tuple(wn0[i]) + tuple(wd[i]) + tuple(dn[i])))
+    with open(os.path.join(a.out, 'binds.txt'), 'w', encoding='utf-8', newline='\n') as f:
+        f.write('# bone\tbind pose (mesh -> bone), 16 values row by row, common bind space\n')
+        for b in sorted(canon):
+            f.write('%s\t%s\n' % (b, ' '.join('%.7g' % x for x in canon[b].ravel())))
     thumb = os.path.join(a.vam, 'thumb.jpg')
     if os.path.exists(thumb):
         shutil.copyfile(thumb, os.path.join(a.out, 'thumb.jpg'))
@@ -308,7 +321,7 @@ def main():
         for n in FIT:  # her skin: clothes follow the nearest of these vertices in the game
             f.write('skin\t%s\n' % n)
     np.savez_compressed(os.path.join(chk, 'stage.npz'),
-                        vam_v=vam_v, vam_f=vam.faces, vam_g=vam.face_group, vam_uv=vam.uv, vam_vn=vam.vn * vsign,
+                        vam_v=vam_v, vam_eyes=np.array([vj['lEye'], vj['rEye']]), vam_f=vam.faces, vam_g=vam.face_group, vam_uv=vam.uv, vam_vn=vam.vn * vsign,
                         vam_groups=np.array(vam.groups), names=np.array([m.name for m in results]),
                         dbg_wp=wp, dbg_x0=x0, dbg_xfit=xfit, dbg_wf=wf, dbg_lab=hlab, dbg_match=wmatch,
                         **{'%s|%s' % (m.name, k): getattr(m, k) for m in results

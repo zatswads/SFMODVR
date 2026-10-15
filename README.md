@@ -41,6 +41,20 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.6.2:
+- Picking a character in the uniform scene looked badly wrong: dressed, the game swaps her upper body for
+  `uniform_upperBody_normal` (and a uniform nipple mesh), which the loader treated as clothes following "the skin" — but
+  only the skin meshes present in the scene, so her torso and arms followed her face, legs and feet (nails floated off
+  the fingers). The pipeline now stores her whole fitted skin and all bind poses (`skin.txt`, `binds.txt`); body variants,
+  clothes and anything unconverted follow that, whatever the scene uses, and get the skin's normal changes too.
+  Re-run `tools/pipeline/run.ps1` for characters made with 0.6.0/0.6.1.
+- Bones under the face rig, eyelid and thigh-skin drivers (no bind pose for their parent) were moved in their parent's
+  animated frame; they now keep their ancestors' offset. Joint moves only use bind poses.
+- Skin colour: the game's skin shader (`Shader Graphs/Skin`) keeps its colour in `_ColorMap`; the baked albedo goes there now
+  (0.6.0 only set the normal map). Bake: VaM's eyelids (often caught mid-blink) no longer paint dark smudges on her open
+  eyes; missed pixels get the character's own skin tone.
+- No more full rebuild every few seconds: mesh data is cached, and each rebuild logs why (renderers added/removed, a mesh swapped).
+
 0.6.0:
 - Characters tab: converted VaM characters as cards (thumbnail + name). The shape goes onto readable copies of her
   meshes (built from the GPU readback, since the game's meshes are GPU-only) as a blendshape with a 0–100 % slider,

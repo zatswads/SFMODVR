@@ -123,6 +123,12 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
     # --- source: VaM skin, one material slot per VaM material ---------------------------------------
     keep = [i for i, g in enumerate(groups) if g in VAM_SKIN]
     m = np.isin(Z['vam_g'], keep)
+    # VaM's eyelids (often caught mid-blink) sit where her open eyes are: left out, her lids get the skin average
+    if 'vam_eyes' in Z.files:
+        cen = Z['vam_v'][Z['vam_f']].mean(1)
+        for e in Z['vam_eyes']:
+            r = np.linalg.norm(cen - e, axis=1)
+            m &= ~((r < 0.017) & (cen[:, 2] > e[2] - 0.004))
     vf = Z['vam_f'][m][:, ::-1]
     vg = Z['vam_g'][m]
     src = make_obj('vam_src', u2b(Z['vam_v']), vf, Z['vam_uv'])
@@ -144,6 +150,18 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
     src.data.polygons.foreach_set('material_index', mi)
     # skin tone for pixels no ray reaches (inner folds): mean of the torso texture
     fill = (0.8, 0.62, 0.52, 1.0)
+    for g in ('Face', 'Torso'):  # Yin's own average skin tone for what no ray reaches
+        sl = vmats.get(g, {})
+        if '_MainTex' in sl:
+            im = load_image(os.path.join(vamdir, sl['_MainTex']), False, log)
+            w, h = im.size
+            px = np.empty(w * h * 4, np.float32); im.pixels.foreach_get(px)
+            px = px.reshape(-1, 4)[::97]
+            px = px[(px[:, 0] > 0.3) & (px[:, 0] < 0.98)]  # skin, not the black/white borders
+            if len(px):
+                fill = tuple(np.median(px, axis=0)[:3]) + (1.0,)
+                log('fill colour from %s: %s' % (g, np.round(fill[:3], 3)))
+                break
 
     written = []
     for mat, meshes in TARGETS.items():
