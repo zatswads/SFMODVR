@@ -97,7 +97,7 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
-## 0.8.0 (limb yield, planted lock, hands, Embody hands)
+## 0.8.3 (limb yield, planted lock, hands, Embody hands)
 
 Install `dist/SfMorph.dll` (+ `dist/sfmorph_shaders` unchanged). Log first: `Grip: left trigger from VR_HandController.activateValue_left`
 (and right); `PhysicsHands: finger conform: fan 8 steps x 2 probes ...`; `PhysicsHands: drawn offset fade on ...`; `Her body: yield sources
@@ -124,6 +124,30 @@ few mm, axis change small). Headset:
 11. Embody snap with "Face the view to: His chest": your arms line up with his; View turn/tilt/roll act at once and don't add up.
 12. Strength 2x-4x: bigger trailing, still settles, no pops (planted hands/feet still held).
 13. Palm on her thigh / butt / forearm: the hand stops about at the skin (thigh ~1.4 cm in, butt ~2.3, forearm ~0.4), not 3 cm inside.
+## 0.8.1 (contact visuals v2)
+
+Install `dist/SfMorph.dll` + `dist/sfmorph_shaders` (new kernels; the old bundle logs "bundle has no v2 kernels ... v1 imprint"). Log: per GPU
+renderer `GPU contact: baked <name>: ...` (classes, bend joints, ms), `GPU contact: v2 on (...)`, `first v2 frame` (renderers, dispatches,
+CPU ms) and the `Tissue: caps at softness ...` line; no "v1" fallback warnings; `Skin marks:` sheet lines (which albedo property on
+reika_body, "normal via Wrinkles" with Body wrinkles on); `Ripple: impact #...`; `Bend:` first bulge per joint. Headset:
+(1) physics hand flat on her lower belly: a soft dimple with a rounded rim, no steps or hand-shaped cut-out, depth ~1.5-2 cm at Softness 50 %,
+the shading darkens into the dent; Dent edge 5 mm = the old hard edge; Shading toggle off = flat-lit dent; (2) fingertip on her shin and
+forearm: a few mm only; on a glute it sinks deeper and the hand meets more resistance as it goes in; (3) standing at rest: no dents on the
+inner thighs or her sides; thighs pressed together / kneeling (calf on thigh) / arm against her breast: both sides flatten, Her own limbs off
+= the old interpenetration; (4) elbow bent ~90 deg: biceps visibly fuller; sitting: thigh tops thicker, a shallow lower-belly fold; Bend 0 =
+none; (5) slap her butt (Reactions on): reddish mark at the spot fading over ~15 s; a firm 2 s press on a glute leaves a pale print, then
+redness; Marks off clears them; idle ~70 s: "idle, slots restored" and the Characters tab skin toggle still works; (6) a hard slap or the
+partner's pelvis thrusting: a ring travels ~15 cm through the flesh and dies within ~1 s, breasts kick a little on a breast slap; Ripple 0 =
+none; (7) fps with everything on vs GPU contact off (expect < 1 ms at Balanced); Fidelity still playable; (8) press a breast / the tattoo: the
+areola and tattoo stay on the skin (log: `overlays follow the body under them: ...`); (9) Wrinkles (Debug off): broad soft folds, not thin
+lines. Send the log + screenshots.
+
+## 0.8.2 (reactions fixes)
+
+Reactions on, outside and inside sex/foreplay mode: slaps give a sound and a voice (log "-> moan" or "-> voice clip", the panel's "last:"
+line says why when not); caresses show in her eyes now and then; the 10 s summary lists skip reasons. Press "Diagnose sound and face" once
+and send the log block "Reactions diagnose": it says whether the test tone played (2D and through the game's sound-effect mixer), the
+mixer levels, our source's state and which Animator layers changed after the "moan" trigger.
 
 ## 0.7.9 (reactions, voice guard)
 

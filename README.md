@@ -41,7 +41,7 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
-0.8.0:
+0.8.3:
 - Her arm went "crazy like a Newton's cradle" on the slightest push. The push was a force on springs that were far too light (an
   arm weighed like 1/6 of a real one, under-damped), and it was measured after the limb had already moved: the arm yielded, the
   push dropped, the arm sprang back into the hand, got pushed again, and the shoulder and elbow each swung on their own spring
@@ -81,6 +81,68 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
   while you embody him (it pushed with the animation's hand, not yours).
 - With the soft zones off, her colliders were still inset for soft skin (2-4.5 cm), so the hands sank into her: the inset now follows
   the soft zones.
+0.8.2:
+- Reactions "didn't do anything" (0.7.9/0.8.0 logs: 200 touches, her voice played 0 times). Causes and fixes:
+  - Her voice was dropped outside the game's sex/foreplay mode, where most of the testing happened: now she voices there too with the game's
+    own moan clips on her voice source.
+  - The game's "dirty talk playing" flag never clears after a line, and its feeling-loop flag is on for long stretches of sex mode: both
+    blocked her voice. Now only dirty talk actually sounding holds back a caress or grope voice; slaps always get through (as the game's
+    own touch moan does), cutting a running moan when hard.
+  - All of the game's moan clips are padded to 4 s, which kept the moan source "playing" and forced a 4 s pause between reactions: the
+    tail now counts as silence after 1.8 s.
+  - A swing over several body parts reacted to its first (often weakest) contact: now to the strongest one.
+  - The slap sound was the game's hand-job stroking clip, 3D with a short range, and quieter for borderline hits: now the game's skin
+    impact (thrust) clips, louder, audible at arm's length, and one continuous strength from soft to too hard.
+  - Her face: slaps show the game's eye reactions plus the wince or a blink; caresses and gropes now show in her eyes too; her blush is
+    scaled to the material's range; the game's own expression level follows her excitement (feed the game's desire is now on).
+  - States flipped between startled and the others on every hit and spanking never raised her excitement: calmer now.
+- The game's sound-effect shuffle (sex/hand-job sounds) threw the same IndexOutOfRange / NullReference as its dirty talk: the voice guard
+  repairs it too.
+- Reactions tab: a "last:" line says what each touch did or why it stayed quiet, and "Diagnose sound and face" logs the whole audio
+  chain (listeners, mixer levels, sources), plays a test tone two ways and reports which face layers react: if you hear nothing,
+  press it and send the log.
+
+0.8.1:
+- A hand pressed on her (lower belly especially) made jagged, hand-shaped cut-outs with sharp steps and went too deep: the GPU contact moved
+  only the vertices inside a hand's capsule, each to the capsule's surface along its own normal, with nothing outside the rim (a wall at
+  the rim sampled at ~7 mm vertex spacing), left the shading of the undented skin (the dent read as a hole) and capped the depth at 2-4.5 cm
+  on every soft vertex on top of what the soft zones already pressed. Now the press is a smooth field over her skin: the depth inside the
+  hand, then a skirt that falls off over ~15 mm around it whatever the mesh resolution (Dent edge), smoothed, with the pressed flesh rising
+  in a low rim around the dent (Rim bulge), and the skin's shading tilted into the dent (bent normals), so it reads as pressed flesh.
+- Anatomical flesh: how far each part gives follows her anatomy (about 23 mm on the glutes, 24 on the breasts, 18 on the lower belly,
+  10-16 on the thighs, 9 on the calf but 4 over the shin, 7-10 on the upper arm, 2-4 over bone at the default 50 % Softness; Dent depth
+  scales it all; approximate on purpose, for look and feel). A press follows the hand exactly at first, then stiffens smoothly toward
+  that depth instead of stopping at a hard edge;
+  the soft zones' springs are per part (breasts softest and the most jiggly, glutes deep and soft, belly medium, outer thigh firm), and a
+  physics hand meets resistance that rises as the flesh compresses (a fingertip sinks into a glute, stops quickly on a shin).
+- Her own body squashes where it touches: thighs together, a calf against the thigh when kneeling, an arm against her breast and side
+  (her upper arms and calves are contacts now; a limb never dents the part it belongs to). The partner's pelvis and thighs press her too,
+  not only his hands (Physics -> "The partner's body presses her too").
+- Bend bulges: her biceps thicken as the elbow bends, the back of the thigh and the calf as the knee bends, the thigh tops when the hip
+  flexes, and a shallow fold forms in the lower belly when she sits (Bend bulges; mm per part in the config file).
+- Marks: a hand pressed on her glutes, thighs, belly or breasts leaves a print (pale for a moment after the hand lifts, then reddish) that
+  fades over ~15 s (Marks fade), and slaps (Reactions on) leave redness at the spot, also on the 0.7.9 per-zone slaps; through Wrinkles'
+  normal map when Body wrinkles are on. Nothing is changed in her textures while no mark is showing.
+- Ripple: an impact (a slap, the partner's pelvis thrusting against her glutes or thighs) sends a damped ring through her flesh from the
+  point of impact, and a breast impact also kicks the game's breast physics briefly (Ripple on impact).
+- Overlay meshes lying on her skin (areola caps, tattoo, the vulva rim) move exactly with the skin under them in a dent (they used to get
+  their own dent: the areola could z-fight or a tattoo float). Her own limbs only cost GPU time while they actually touch her.
+- Wrinkles looked like stretch marks: each fold was a thin crease line on flat skin. Now compressed skin rolls into broad rounded ridges
+  between narrow creases. On her face the folds stay subtle: her skin shader's subsurface scattering blurs fine normal-map detail out of
+  the diffuse light (they show mostly in highlights); a darker crease in the skin colour would make them read, planned separately.
+- Character shapes with body-slider morphs: the soft zones now take her rest shape from every non-corrective blendshape (the character and
+  the body sliders) and rebuild when one of them moves.
+- Install both dist/SfMorph.dll and dist/sfmorph_shaders (the shader bundle has new kernels; with the old bundle the GPU contact stays the
+  0.7.9 one and the log says so).
+
+0.8.0:
+- Characters → Body sliders, like the ispinox Claire VaM scene: Fitness, Body Type, Waist, Hip, Breasts and Breast Under on a
+  converted character, each 0-100 % from that character's own setting; plus Skin Tone (lighter/darker through the tint) and Gloss.
+  The sliders stay greyed until the character has slider data: export the VaM character again with "Export morphs for SF" (the
+  updated tools/vam/SfExport.cs) and re-run tools/pipeline/run.ps1.
+- Joint correctives (VaM's pJCM morphs): the shoulder, collar, elbow, hip and knee bends get the VaM character's corrective shapes
+  as her joints swing, measured from VaM's rest pose. "Joint correctives" toggle under the sliders.
+- Clothes follow the sliders and correctives like they follow the base shape.
 
 0.7.9:
 - Physics hands still stuttered in 0.7.8 (the log: the pull at its limit in 87-99 % of steps in free air, the drawn hand jittering by

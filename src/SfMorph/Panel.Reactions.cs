@@ -38,15 +38,17 @@ namespace SfMorph
             bool zoneSides = ZoneHasSide[zone];
             bool expOpen = _expOpen;
             Reactions react = _body.React;
-            string status = react.Status, stateLine = react.StateLine, bars = react.Bars, guardStatus = react.GuardStatus;
+            string status = react.Status, stateLine = react.StateLine, bars = react.Bars, guardStatus = react.GuardStatus, lastLine = react.LastLine;
             float e = react.E, p = react.P;
+            bool bridge = react.BridgeFound, diagBusy = react.DiagBusy, diagRan = react.DiagRan;
 
             GUI.enabled = who == null;
             bool on = GUILayout.Toggle(reactOn, " She reacts to touch: caress, grope, slaps (voice, face, flinch, slap sound, blush)");
             GUI.enabled = true;
             if (who == null && on != reactOn) _p.ReactOn.Value = on;
-            if (who != null) { GUILayout.Label("    off: " + who, _off); GameVoiceBlock(guardOff, guard, guardStatus); return; }
+            if (who != null) { GUILayout.Label("    off: " + who, _off); GameVoiceBlock(guardOff, guard, guardStatus, react, bridge, diagBusy, diagRan); return; }
             if (reactOn && status.Length > 0) GUILayout.Label(status, status.StartsWith("off") ? _off : _hint);
+            if (reactOn && lastLine.Length > 0) GUILayout.Label(lastLine, _hint);
 
             float sens = Slider("Sensitivity", sensCfg * 100f, 0f, 100f, "0", 50f, null, " %") / 100f;
             if (Mathf.Abs(sens - sensCfg) > 0.0001f) _p.ReactSensitivity.Value = sens;
@@ -85,7 +87,7 @@ namespace SfMorph
                 if (tfd != feed) _p.ReactFeedDesire.Value = tfd;
             }
             else GUILayout.Label("    off: " + sub, _off);
-            GUILayout.Label("Face: a wince or blink when there is no voice. Gaze away: she looks away for a moment after a hard hit. " +
+            GUILayout.Label("Face: the game's own eye reaction on slaps, with a wince or blink alongside when no moan carries the face. Gaze away: she looks away for a moment after a hard hit. " +
                             "Feed: touch also raises the game's own desire gauge.", _hint);
 
             GUI.enabled = sub == null && voice;
@@ -177,7 +179,7 @@ namespace SfMorph
                 }
             }
 
-            GameVoiceBlock(guardOff, guard, guardStatus);
+            GameVoiceBlock(guardOff, guard, guardStatus, react, bridge, diagBusy, diagRan);
             GUILayout.Label("Caress: a hand resting or stroking (about a quarter second, light). Grope: pressing hard (20 N or 1.5 cm deep). " +
                             "Slaps: by how fast the hand arrives (soft 1.2, hard 2.3, too hard 4.5 m/s at 50 % sensitivity). " +
                             "Excitement (tier 0 to 4) rises with touch and fades after ten quiet seconds; pain rises with hard slaps. " +
@@ -185,15 +187,24 @@ namespace SfMorph
         }
 
         // The game's dirty-talk voice error repair: independent of the reactions toggle, only needs her.
-        void GameVoiceBlock(string whoOff, bool guard, string guardStatus)
+        void GameVoiceBlock(string whoOff, bool guard, string guardStatus, Reactions react, bool bridge, bool diagBusy, bool diagRan)
         {
             GUILayout.Label("Game voice", _bold);
             GUI.enabled = whoOff == null;
-            bool g = GUILayout.Toggle(guard, " Repair the game's dirty-talk voice error (IndexOutOfRange every frame)");
+            bool g = GUILayout.Toggle(guard, " Repair the game's voice shuffle errors (dirty talk and sex sound effects)");
             GUI.enabled = true;
             if (whoOff == null && g != guard) _p.VoiceGuard.Value = g;
             if (whoOff != null) { GUILayout.Label("    off: " + whoOff, _off); return; }
             if (guard && guardStatus.Length > 0) GUILayout.Label(guardStatus, guardStatus.StartsWith("off") ? _off : _hint);
+
+            // one-off probe of the sound and face chain (writes a block to LogOutput.log)
+            GUI.enabled = bridge && !diagBusy;
+            if (GUILayout.Button(diagBusy ? "Diagnosing (about 3 s)..." : "Diagnose sound and face")) react.Diagnose();
+            GUI.enabled = true;
+            if (!bridge) GUILayout.Label("    off: her game link is not found yet (turn on Reactions or the repair above and stay in the game scene)", _off);
+            else if (diagBusy) GUILayout.Label("Listen for two short beeps and a slap; she may wince once.", _hint);
+            else if (diagRan) GUILayout.Label("Diagnose ran: see LogOutput.log, 'Reactions diagnose'", _hint);
+            else GUILayout.Label("Plays a test tone and one slap clip, sets the moan trigger once, and logs what the audio and face chain looks like.", _hint);
         }
 
         // A label with - / + buttons and the value; returns the new value.

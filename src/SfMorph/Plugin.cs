@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.8.0";
+        public const string Version = "0.8.3";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -39,7 +39,11 @@ namespace SfMorph
         // 0.7.9 reactions
         internal ConfigEntry<bool> ReactOn, ReactVoice, ReactFace, ReactFlinch, ReactSound, ReactBlush, ReactBlushBody, ReactGaze, ReactFeedDesire, ReactAuto, ReactClimax, VoiceGuard;
         internal ConfigEntry<float> ReactSensitivity, ReactCooldown, ReactVolume, ReactBlushGain, ReactVoicePitchVar;
-        internal ConfigEntry<int> ReactVoiceMode, ReactLog;
+        internal ConfigEntry<int> ReactVoiceMode, ReactLog, ReactConfigRev;
+        // 0.8.0 contact visuals v2 (GPU contact: dent edge, rim bulge, bent normals, self-contact, partner body, bend bulges, ripple, skin marks)
+        internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn;
+        internal ConfigEntry<float> ContactSkirt, ContactBulge, ContactDepth, BendBulge, BendBicepsMm, BendKneeMm, BendCalfMm, BendHipMm, BendBellyFoldMm,
+            RippleAmount, RippleSpeed, RippleWavelength, RippleDamping, MarksRedness, MarksFade, MarksAo;
         internal ConfigEntry<Vector3> LeftHandPos, LeftHandRot, RightHandPos, RightHandRot;
         internal ConfigEntry<string> PanelRect;
         internal ConfigEntry<int> Tab;
@@ -65,6 +69,26 @@ namespace SfMorph
             OverlapSpine = Config.Bind("Motion", "Spine", 1f, new ConfigDescription("Overlap amount on the spine.", new AcceptableValueRange<float>(0f, 1f)));
             Gravity = Config.Bind("Physics", "Gravity", 0.5f, new ConfigDescription("Soft zones settle toward the floor as she moves (breasts most, thighs least): they hang when she stands, flatten on her back, drop when she bends over. 0 off.", new AcceptableValueRange<float>(0f, 1f)));
             GpuContactOn = Config.Bind("Physics", "GpuContact", true, "Per-vertex contact on the GPU (shader bundle sfmorph_shaders next to the DLL): her skin is pressed exactly around hands and fingers.");
+            ContactSkirt = Config.Bind("Physics", "ContactSkirt", 0.015f, new ConfigDescription("GPU contact: how far around a hand the skin still follows the dent (metres; 0.005 = the old hard edge).", new AcceptableValueRange<float>(0.005f, 0.04f)));
+            ContactBulge = Config.Bind("Physics", "ContactBulge", 0.6f, new ConfigDescription("GPU contact: how much the pressed skin bulges up around the dent (0 none).", new AcceptableValueRange<float>(0f, 1f)));
+            ContactNormals = Config.Bind("Physics", "ContactNormals", true, "GPU contact: the skin's shading follows the dent (bent normals), so a press reads as pressed flesh.");
+            ContactDepth = Config.Bind("Physics", "ContactDepth", 1f, new ConfigDescription("GPU contact: depth scale of the per-vertex dent on soft parts (1 = 1-2.5 cm by Softness; bony parts stay at 2-8 mm).", new AcceptableValueRange<float>(0.3f, 2f)));
+            SelfContact = Config.Bind("Physics", "SelfContact", true, "Her own limbs press her skin: thighs together, calf on thigh when kneeling, arm on breast and side.");
+            PartnerBody = Config.Bind("Physics", "PartnerBody", true, "The partner's pelvis and thighs press her skin too (not only his hands).");
+            BendBulge = Config.Bind("Physics", "BendBulge", 0.6f, new ConfigDescription("Muscles and flesh bulge when joints bend: biceps with the elbow, thigh and calf with the knee, thigh tops and a belly fold when sitting (0 off).", new AcceptableValueRange<float>(0f, 1f)));
+            BendBicepsMm = Config.Bind("Physics", "BendBicepsMm", 8f, new ConfigDescription("Biceps bulge at a fully bent elbow (mm, before BendBulge).", new AcceptableValueRange<float>(0f, 20f)));
+            BendKneeMm = Config.Bind("Physics", "BendKneeMm", 8f, new ConfigDescription("Back-of-thigh bulge at a fully bent knee (mm).", new AcceptableValueRange<float>(0f, 20f)));
+            BendCalfMm = Config.Bind("Physics", "BendCalfMm", 6f, new ConfigDescription("Calf bulge at a fully bent knee (mm).", new AcceptableValueRange<float>(0f, 20f)));
+            BendHipMm = Config.Bind("Physics", "BendHipMm", 5f, new ConfigDescription("Thigh-top bulge when the hip flexes (sitting, mm).", new AcceptableValueRange<float>(0f, 20f)));
+            BendBellyFoldMm = Config.Bind("Physics", "BendBellyFoldMm", 5f, new ConfigDescription("Lower-belly fold when both hips flex (mm).", new AcceptableValueRange<float>(0f, 20f)));
+            RippleAmount = Config.Bind("Physics", "Ripple", 0.6f, new ConfigDescription("An impact (a slap, a thrust against her glutes or thighs) sends a ripple through her flesh (0 off).", new AcceptableValueRange<float>(0f, 1f)));
+            RippleSpeed = Config.Bind("Physics", "RippleSpeed", 1f, new ConfigDescription("How fast the ripple travels (m/s).", new AcceptableValueRange<float>(0.3f, 3f)));
+            RippleWavelength = Config.Bind("Physics", "RippleWavelength", 0.07f, new ConfigDescription("Distance between ripple crests (m).", new AcceptableValueRange<float>(0.03f, 0.15f)));
+            RippleDamping = Config.Bind("Physics", "RippleDamping", 0.3f, new ConfigDescription("Seconds for a ripple to fade to a third.", new AcceptableValueRange<float>(0.1f, 1f)));
+            SkinMarksOn = Config.Bind("Physics", "SkinMarks", true, "A hand pressed on her glutes, thighs, belly or breasts leaves a fading print; slaps leave redness.");
+            MarksRedness = Config.Bind("Physics", "MarksRedness", 0.5f, new ConfigDescription("How red marks get (0 only the pressed shading).", new AcceptableValueRange<float>(0f, 1f)));
+            MarksFade = Config.Bind("Physics", "MarksFade", 15f, new ConfigDescription("Seconds for redness to fade to a third.", new AcceptableValueRange<float>(3f, 60f)));
+            MarksAo = Config.Bind("Physics", "MarksAo", 0.5f, new ConfigDescription("How much a live press darkens the skin (pressed-flesh shading).", new AcceptableValueRange<float>(0f, 1f)));
             GateHidden = Config.Bind("Physics", "GateHidden", true, "Hands that aren't drawn (a hidden partner, controller models replaced by the physics hands) don't touch her.");
             BreastColliders = Config.Bind("Physics", "BreastColliders", 1, new ConfigDescription("Hands push the game's own breast physics: 0 off, 1 the main breast chains, 2 every breast DynamicBone.", new AcceptableValueRange<int>(0, 2)));
             OverlapRipple = Config.Bind("Motion", "Ripple", 0.5f, new ConfigDescription("Motion travels down the chains: a fast turn of the torso swings the head and arms a little later (0 off).", new AcceptableValueRange<float>(0f, 1f)));
@@ -118,10 +142,10 @@ namespace SfMorph
             ReactOn = Config.Bind("Reactions", "On", false, "She reacts to touch: caress, grope and slaps (voice, face, flinch, slap sound, blush). Needs soft zones or physics hands.");
             ReactSensitivity = Config.Bind("Reactions", "Sensitivity", 0.5f, new ConfigDescription("0: only hard slaps count; 1: light taps too. At 0.5 a soft slap starts at 1.2 m/s, a hard one at 2.3, too hard at 4.5.", new AcceptableValueRange<float>(0f, 1f)));
             ReactCooldown = Config.Bind("Reactions", "Cooldown", 1.5f, new ConfigDescription("Seconds between her voice reactions at excitement tier 2 (shorter when more excited).", new AcceptableValueRange<float>(0.5f, 5f)));
-            ReactVoice = Config.Bind("Reactions", "Voice", true, "She moans in reaction (only in sex or foreplay mode, never over dialogue or dirty talk).");
+            ReactVoice = Config.Bind("Reactions", "Voice", true, "She moans in reaction (the game's moan in sex or foreplay mode, her own clips and breaths elsewhere; never over dialogue or dirty talk).");
             ReactVoiceMode = Config.Bind("Reactions", "VoiceMode", 0, new ConfigDescription("0 the game picks the moan, 1 a moan chosen by intensity from her voice library.", new AcceptableValueRange<int>(0, 1)));
             ReactVoicePitchVar = Config.Bind("Reactions", "VoicePitchVar", 0.04f, new ConfigDescription("Random pitch change of the moans chosen by intensity (plus/minus).", new AcceptableValueRange<float>(0f, 0.15f)));
-            ReactFace = Config.Bind("Reactions", "Face", true, "Her face reacts (wince, blink) when there is no voice.");
+            ReactFace = Config.Bind("Reactions", "Face", true, "Her face reacts to touch: the game's own eye reaction on slaps (and soft ones on caresses and gropes), with a wince or blink alongside when no moan carries the face.");
             ReactFlinch = Config.Bind("Reactions", "Flinch", true, "Her body swings and her soft zones jiggle after a slap (needs the limb push slider above 0).");
             ReactSound = Config.Bind("Reactions", "Sound", true, "A slap sound at the spot of a slap.");
             ReactVolume = Config.Bind("Reactions", "Volume", 0.6f, new ConfigDescription("Slap sound volume.", new AcceptableValueRange<float>(0f, 1f)));
@@ -129,11 +153,19 @@ namespace SfMorph
             ReactBlushBody = Config.Bind("Reactions", "BlushBody", false, "Her body skin reddens too, at half strength.");
             ReactBlushGain = Config.Bind("Reactions", "BlushGain", 0.6f, new ConfigDescription("How strong the redness is.", new AcceptableValueRange<float>(0f, 2f)));
             ReactGaze = Config.Bind("Reactions", "Gaze", false, "She looks away for a moment after a hard hit.");
-            ReactFeedDesire = Config.Bind("Reactions", "FeedDesire", false, "Touch also raises the game's own desire gauge (at most every 3 s, in sex or foreplay mode).");
+            ReactFeedDesire = Config.Bind("Reactions", "FeedDesire", true, "Touch also raises the game's own desire gauge, which drives its escalating face (at most every 3 s, in sex or foreplay mode).");
+            ReactConfigRev = Config.Bind("Reactions", "ConfigRev", 0, new ConfigDescription("Internal: one-time config migrations already applied. Do not change.", new AcceptableValueRange<int>(0, 100), "Advanced"));
             ReactAuto = Config.Bind("Reactions", "AutoState", true, "States (aroused, startled, guarded, afterglow) change by themselves.");
             ReactClimax = Config.Bind("Reactions", "AllowClimax", false, "At full excitement she climaxes (cosmetic: three moans, then afterglow).");
-            VoiceGuard = Config.Bind("Reactions", "VoiceGuard", true, "Repair the game's dirty-talk voice error (IndexOutOfRange in PlayRandomVoice every frame). Works without Reactions.");
+            VoiceGuard = Config.Bind("Reactions", "VoiceGuard", true, "Repair the game's voice shuffle errors (IndexOutOfRange / NullReference in PlayRandomVoice, for dirty talk and the sex sound effects) by rebuilding the stale shuffle. Works without Reactions.");
             ReactLog = Config.Bind("Reactions", "Log", 1, new ConfigDescription("0 quiet, 1 the first 20 events then every 10th, 2 every event.", new AcceptableValueRange<int>(0, 2)));
+            // one-time migration: FeedDesire used to default to false; the game's own escalating face follows its desire gauge, so it is switched on once
+            if (ReactConfigRev.Value < 1)
+            {
+                bool wasOff = !ReactFeedDesire.Value;
+                ReactFeedDesire.Value = true; ReactConfigRev.Value = 1;
+                if (wasOff) Logger.LogInfo("Config migration: [Reactions] FeedDesire turned on (revision 1)");
+            }
             Logger.LogInfo("SF Body Morphs " + Version + ": panel on " + PanelKey.Value + ", looks in " + Store.Dir);
             // The game destroys plugin components; a hidden object of our own keeps running.
             var go = new GameObject("SfMorphRunner") { hideFlags = HideFlags.HideAndDontSave };

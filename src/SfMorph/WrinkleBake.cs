@@ -333,6 +333,23 @@ namespace SfMorph
 
         // ---- weld ----
 
+        // 0.8.0: ContactBake welds with the same quantised rest-position key and reads GPU-only meshes through the same cache.
+        internal static ulong WeldKey(Vector3 p) { return Quant(p); }
+
+        internal static MeshData CachedMeshData(Mesh m, out string error)
+        {
+            error = null;
+            MeshData d;
+            if (!GpuCache.TryGetValue(m, out d) || d.Pos == null || d.Pos.Length != m.vertexCount)
+            {
+                foreach (var k in new List<Mesh>(GpuCache.Keys)) if (k == null) GpuCache.Remove(k);
+                d = MeshData.Read(m, out error);
+                if (d == null) { error = "mesh read back failed: " + error; return null; }
+                GpuCache[m] = d;
+            }
+            return d;
+        }
+
         static ulong Quant(Vector3 p)
         {
             return Q(p.x) | (Q(p.y) << 21) | (Q(p.z) << 42);
