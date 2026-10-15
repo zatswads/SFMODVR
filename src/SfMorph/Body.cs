@@ -464,6 +464,7 @@ namespace SfMorph
         public readonly Embody Embody = new Embody();
         readonly EmbodySettings _emb = new EmbodySettings();
         readonly HandsSettings _hands = new HandsSettings();
+        readonly HerBodySettings _hb = new HerBodySettings();
         public readonly Overlap Overlap = new Overlap();
         public GpuContact Gpu;              // null until loaded (the shader bundle next to the DLL)
         bool _gpuTried, _gpuOn;
@@ -524,6 +525,13 @@ namespace SfMorph
                     try { c.Soft.Release(); } catch { }
                 }
                 if (_p.Apply.Value && !c.Look.Empty && c.Root != null) Apply(c);
+                // her segments (shared by the physics hands and the pushes): after our bone changes, before Overlap reads the pushes
+                if (c == her && (physics || physHands))
+                {
+                    _hb.On = true; _hb.PushByTouch = _p.HandsPushByTouch.Value; _hb.Softness = _p.Softness.Value; _hb.Caps = Contacts();
+                    try { HerBody.Update(c, _hb); }
+                    catch (Exception e) { Plugin.Log.LogError("Her body failed, rebuilding: " + e); try { HerBody.Release(); } catch { } }
+                }
                 // her secondary motion after our bone changes, before the soft points read her bones
                 if (c == her && _p.Apply.Value)
                 {
@@ -547,6 +555,7 @@ namespace SfMorph
                     {
                         _hands.On = true; _hands.Collide = _p.HandsCollide.Value; _hands.Mesh = _p.HandsMesh.Value;
                         _hands.ShowColliders = _p.ShowSoftPoints.Value; _hands.Softness = _p.Softness.Value;
+                        _hands.HullColliders = _p.HandsHull.Value; _hands.Friction = _p.HandsFriction.Value; _hands.JointedFingers = _p.HandsJointed.Value;
                         _hands.HideVisual = _p.EmbodyOn.Value && _p.EmbodyHands.Value != 0;   // his own hands are shown then
                         _hands.LeftPos = _p.LeftHandPos.Value; _hands.LeftRot = _p.LeftHandRot.Value; _hands.RightPos = _p.RightHandPos.Value; _hands.RightRot = _p.RightHandRot.Value;
                         try { PhysicsHands.Update(c, _hands); _physHandsOn = true; }
@@ -579,6 +588,8 @@ namespace SfMorph
             if ((!physics || her == null) && _gpuOn) { _gpuOn = false; try { if (Gpu != null) Gpu.Release(); } catch { } Gpu = null; _gpuTried = false; }
             // off, or she's gone (scene change): give the controllers, layers and her capsules back
             if (!physHands && _physHandsOn) { _physHandsOn = false; try { PhysicsHands.Release(); } catch { } }
+            // her segments are needed by Physics or the physics hands; with neither (or without her) they go
+            if (!(physics || physHands) && _hb.On) { _hb.On = false; try { HerBody.Release(); } catch { } }
             // Embody last: his head and arms after the animation, the view after everything that moves him
             if (embody)
             {
@@ -859,6 +870,8 @@ namespace SfMorph
             Gpu = null; _gpuOn = false; _gpuTried = false;
             WrinkleOff();
             try { PhysicsHands.Release(); } catch { }
+            try { HerBody.Release(); } catch { }
+            _hb.On = false;
             try { VrHands.Release(); } catch { }
         }
     }

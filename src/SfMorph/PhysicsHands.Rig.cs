@@ -26,9 +26,8 @@ namespace SfMorph
         {
             if (herBone == null || !_herBuilt) return false;
             float t = Time.fixedTime, win = 2.5f * Time.fixedDeltaTime + 0.01f;
-            for (int i = 0; i < _segs.Count; i++)
-                if (string.Equals(_segs[i].Name, herBone, StringComparison.Ordinal)) return t - _segs[i].TouchT <= win;
-            return false;
+            var g = HerBody.Find(herBone);
+            return g != null && t - g.TouchT <= win;
         }
 
         // ---- tuning (from the design) ----

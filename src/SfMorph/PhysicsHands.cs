@@ -13,6 +13,10 @@ namespace SfMorph
         public bool On = false, Collide = true, HideVisual = false, ShowColliders = false;
         public int Mesh = 0;           // 0 the game's own hands (extracted from the player's body), 1 simple primitives
         public float Softness = 0.5f;  // 0..1, how deep her soft zones may yield (also how much her colliders are inset)
+        // 0.7.8 (plumbed from the config, used by the hull / friction / finger packages): convex-hull body colliders instead of capsules,
+        // how much her skin grips the hands (0..1), simulated finger bodies on joints
+        public bool HullColliders = true, JointedFingers = true;
+        public float Friction = 0.8f;
         // Controller -> wrist (m, degrees), in the controller's axes, shared with Embody: the position is where the wrist sits
         // relative to the tracked pose; the rotation is added on top of an automatic alignment (fingers along the controller's
         // forward, thumb along its up, palm toward the body's midline), so zero is the natural grip.
@@ -1048,253 +1052,53 @@ namespace SfMorph
             hd.R.Clear(); hd.Was.Clear(); hd.Seen.Clear(); hd.NextScan = 0f;
         }
 
-        // ================= her body: kinematic capsules =================
+        // ================= her body: kinematic colliders (the geometry lives in HerBody.cs) =================
 
-        sealed class Seg
+        // The PhysX half of one of her segments (HerBody.Seg): the rigidbody and collider that follow her bones. The hull fields are for
+        // the convex-hull colliders of the 0.7.8 hull package (unused until then).
+#pragma warning disable 649   // hull fields: filled by the hull package
+        sealed class SegBody
         {
-            public string Name, Owner;
-            public Transform A, B;                  // B null: a sphere around LocalCenter (in A's space)
-            public bool Soft, Sphere;
-            public Vector3 LocalCenter;
-            public float RSkin, RDef, RBase, Ratio = 1f, BuildScale = 1f, H;
-            public int Verts;
-            public GameObject Go; public Transform T; public Rigidbody Rb; public CapsuleCollider Col;
-            public Vector3 LastPos; public bool Placed;
+            public HerBody.Seg S;
+            public GameObject Go; public Transform T; public Rigidbody Rb; public CapsuleCollider Cap;
+            public SphereCollider Sph; public MeshCollider Hull; public Mesh HullMesh;
+            public bool HullOk, HullTried; public float CookedInset;
+            public float RBase, Ratio = 1f, H;      // capsule radius at the current softness; her bone's scale since the build; capsule height
+            public Vector3 ScaleWritten, LastPos; public bool Placed;
             public GameObject Mark;
-            public float TouchT = -100f;           // Time.fixedTime of the last contact with a hand collider (see TouchingHer)
-            public bool Drop;                      // build: a sphere that found too few vertices to be placed (breast): not made
-            // 0.7.7 contact impulses (NoteContact adds during the physics step, StepHer publishes and zeroes at the next fixed step)
-            public Vector3 ImpSum, ImpPt;          // sum of |impulse| * normal-toward-the-hand; sum of contact point * |impulse|
-            public float ImpW, ImpWL, ImpWR;       // sum of |impulse|; the same split by the hand that gave it
-            public Vector3 PushForce, PushPoint;   // published: the force on HER over the last fixed step (N, world) and where it acted
-            public bool PushRight, PushLogged;
         }
+#pragma warning restore 649
 
-        sealed class SegDef
-        {
-            public string Name, A, B, Owner, AAlt; public bool Soft, AllDesc; public float Def, Pct;
-            // alt: the bone to use when A doesn't exist; pct: which percentile of the vertex distances is the skin radius (0.4 keeps
-            // the collider inside the skin; breasts use 0.6 so a hand stops at the visible surface of a round shape)
-            public SegDef(string n, string a, string b, string o, bool soft, float def, bool all = false, string alt = null, float pct = 0.4f)
-            { Name = n; A = a; B = b; Owner = o; Soft = soft; Def = def; AllDesc = all; AAlt = alt; Pct = pct; }
-        }
-
-        // Her capsule names (what TouchingHer takes): pelvis, spine, chest, neck, head, thigh_L, thigh_R, calf_L, calf_R,
-        // upperarm_L, upperarm_R, forearm_L, forearm_R, butt_L, butt_R, breast_L, breast_R (those whose bones were found).
-        static readonly SegDef[] HerDefs =
-        {
-            new SegDef("pelvis", "Hip_L", "Hip_R", "Root_M", true, 0.10f),
-            new SegDef("spine", "Spine1_M", "Chest_M", "Spine1_M", true, 0.10f),
-            new SegDef("chest", "Chest_M", "Neck_M", "Chest_M", true, 0.11f),
-            new SegDef("neck", "Neck_M", "Head_M", "Neck_M", false, 0.05f),
-            new SegDef("head", "Head_M", null, "Head_M", false, 0.095f, true),
-            new SegDef("thigh_L", "Hip_L", "Knee_L", "Hip_L", true, 0.085f),
-            new SegDef("thigh_R", "Hip_R", "Knee_R", "Hip_R", true, 0.085f),
-            new SegDef("calf_L", "Knee_L", "Ankle_L", "Knee_L", false, 0.055f),
-            new SegDef("calf_R", "Knee_R", "Ankle_R", "Knee_R", false, 0.055f),
-            new SegDef("upperarm_L", "Shoulder_L", "Elbow_L", "Shoulder_L", false, 0.045f),
-            new SegDef("upperarm_R", "Shoulder_R", "Elbow_R", "Shoulder_R", false, 0.045f),
-            new SegDef("forearm_L", "Elbow_L", "Wrist_L", "Elbow_L", false, 0.035f),
-            new SegDef("forearm_R", "Elbow_R", "Wrist_R", "Elbow_R", false, 0.035f),
-            new SegDef("butt_L", "Butt_L", null, "Butt_L", true, 0.09f),
-            new SegDef("butt_R", "Butt_R", null, "Butt_R", true, 0.09f),
-            // 0.7.7: the breasts, which no other segment owned (hands sank to the chest capsule). The sphere follows the DB-driven
-            // LowerBreast (UpperBreast is the DynamicBone root and never moves); its vertices are everything skinned below UpperBreast.
-            new SegDef("breast_L", "Left_LowerBreast", null, "Left_UpperBreast", true, 0.06f, all: true, alt: "Left_UpperBreast", pct: 0.6f),
-            new SegDef("breast_R", "Right_LowerBreast", null, "Right_UpperBreast", true, 0.06f, all: true, alt: "Right_UpperBreast", pct: 0.6f),
-        };
-
-        static readonly List<Seg> _segs = new List<Seg>();
-        static readonly Dictionary<Collider, Seg> _segOfCol = new Dictionary<Collider, Seg>();
+        static readonly List<SegBody> _bodies = new List<SegBody>();
+        static readonly Dictionary<Collider, SegBody> _segOfCol = new Dictionary<Collider, SegBody>();
         static GameObject _herGo;
-        static Transform _herRoot;
-        static bool _herBuilt, _herDirty;
-        static float _herNext, _herSoftness = -1f, _herUnit = 1f;
+        static bool _herBuilt;                    // the bodies exist (HerBody has the geometry)
+        static int _herVersion = -1;              // HerBody.BuildVersion the bodies were made from
+        static float _herNext, _herSoftness = -1f;
         static string _herNote = "";
+        static bool _herBuiltSeen; static string _herNoteSeen = "";   // what the status line last said about HerBody
 
-        static Transform FindBone(Character her, string name)
-        {
-            Transform t;
-            if (her.Bones.TryGetValue(name, out t) && t != null) return t;
-            foreach (var c in her.Root.GetComponentsInChildren<Transform>(true))
-                if (c != null && c.name == name && !c.name.StartsWith(SoftZones.Prefix, StringComparison.Ordinal)) return c;
-            return null;
-        }
-
-        static string Stem(string n)
-        {
-            if (n.EndsWith("_L", StringComparison.Ordinal) || n.EndsWith("_R", StringComparison.Ordinal) || n.EndsWith("_M", StringComparison.Ordinal)) n = n.Substring(0, n.Length - 2);
-            return n;
-        }
-
-        // The bone and the helper bones of the same part below it (HipPart1_L under Hip_L), or everything below it.
-        static void Owned(Transform t, string stem, bool all, HashSet<Transform> into)
-        {
-            into.Add(t);
-            for (int i = 0; i < t.childCount; i++)
-            {
-                var c = t.GetChild(i);
-                if (c.name.StartsWith(SoftZones.Prefix, StringComparison.Ordinal)) continue;
-                if (all || c.name.StartsWith(stem, StringComparison.Ordinal)) Owned(c, stem, all, into);
-            }
-        }
-
-        static float Inset(Seg g, float softness) { return g.Soft ? Mathf.Lerp(0.02f, 0.045f, Mathf.Clamp01(softness)) : 0.008f; }
-
-        static void BuildHer(Character her, HandsSettings s)
+        // One body per HerBody segment: a capsule (spheres are capsules of length 0) at the skin radius minus the inset.
+        static void BuildHerBodies(HandsSettings s)
         {
             DestroyHer();
-            _herRoot = her.Root;
-            _herDirty = false;
-            var segs = new List<Seg>();
-            foreach (var d in HerDefs)
-            {
-                var a = FindBone(her, d.A);
-                if (a == null && d.AAlt != null)
-                {
-                    a = FindBone(her, d.AAlt);
-                    if (a != null) LogOnce("heralt" + d.Name, "her collider " + d.Name + ": " + d.A + " not found, following " + d.AAlt + " instead");
-                }
-                var b = d.B != null ? FindBone(her, d.B) : null;
-                if (a == null || (d.B != null && b == null)) { LogOnce("hermiss" + d.Name, "her collider " + d.Name + ": bone " + (a == null ? d.A : d.B) + " not found, skipped"); continue; }
-                segs.Add(new Seg { Name = d.Name, Owner = d.Owner, A = a, B = b, Sphere = d.B == null, Soft = d.Soft, RDef = d.Def, RSkin = d.Def });
-            }
-            if (segs.Count < 4) { _herNote = "her: only " + segs.Count + " bones found"; _herNext = Time.unscaledTime + 10f; _herRoot = null; return; }
-
-            // skin radii from her body meshes: weights >= .5 on the part's bones, distance to the segment axis (bind space)
-            var posOf = new Dictionary<Transform, Vector3>();
-            var bindOfBone = new Dictionary<Transform, Matrix4x4>();
-            foreach (var r in her.Renderers)
-            {
-                if (r == null || r.sharedMesh == null) continue;
-                var bs = r.bones; Matrix4x4[] bp;
-                try { bp = r.sharedMesh.bindposes; } catch (Exception) { continue; }
-                for (int i = 0; i < bs.Length && i < bp.Length; i++)
-                    if (bs[i] != null && !posOf.ContainsKey(bs[i])) { posOf[bs[i]] = bp[i].inverse.MultiplyPoint3x4(Vector3.zero); bindOfBone[bs[i]] = bp[i]; }
-            }
-            // mesh units -> metres: the thigh's length in the bind pose against its length now (only trusted when clearly different units)
-            _herUnit = 1f;
-            Vector3 pa, pb;
-            var hipL = FindBone(her, "Hip_L"); var kneeL = FindBone(her, "Knee_L");
-            if (hipL != null && kneeL != null && posOf.TryGetValue(hipL, out pa) && posOf.TryGetValue(kneeL, out pb) && (pa - pb).magnitude > 1e-4f)
-            {
-                float ratio = (hipL.position - kneeL.position).magnitude / (pa - pb).magnitude;
-                if (Mathf.Abs(ratio - 1f) > 0.5f) _herUnit = ratio;
-                Plugin.Log.LogInfo("PhysicsHands: her skin units: thigh " + (pa - pb).magnitude.ToString("0.###") + " in the bind pose, " + (hipL.position - kneeL.position).magnitude.ToString("0.###") + " m now -> factor " + _herUnit.ToString("0.###"));
-            }
-            var segOf = new Dictionary<Transform, int>();
-            for (int i = 0; i < segs.Count; i++)
-            {
-                var owner = FindBone(her, segs[i].Owner);
-                if (owner == null) continue;
-                var set = new HashSet<Transform>();
-                Owned(owner, Stem(owner.name), Array.Find(HerDefs, q => q.Name == segs[i].Name).AllDesc, set);
-                bool claim = segs[i].Name.StartsWith("breast_", StringComparison.Ordinal);   // the breast bones are the breast's even if another part's stem matched them
-                foreach (var t in set) if (claim || !segOf.ContainsKey(t)) segOf[t] = i;
-            }
-            var pts = new List<Vector3>[segs.Count];
-            for (int i = 0; i < pts.Length; i++) pts[i] = new List<Vector3>();
-            int bodies = 0;
-            foreach (var r in her.Renderers)
-            {
-                if (r == null || r.sharedMesh == null || !r.sharedMesh.name.ToLowerInvariant().Contains("body")) continue;
-                string err;
-                var d = MeshData.Read(r.sharedMesh, out err);
-                if (d == null || d.Weights == null || d.Pos == null) { Plugin.Log.LogWarning("PhysicsHands: her skin '" + r.sharedMesh.name + "' unreadable (" + (err ?? "no weights") + ")"); continue; }
-                bodies++;
-                var bs = r.bones;
-                var segOfIdx = new int[bs.Length];
-                for (int i = 0; i < bs.Length; i++)
-                {
-                    var t = bs[i];
-                    while (t != null && t.name.StartsWith(SoftZones.Prefix, StringComparison.Ordinal)) t = t.parent;   // helper bones count for their real bone
-                    int si;
-                    segOfIdx[i] = t != null && segOf.TryGetValue(t, out si) ? si : -1;
-                }
-                var acc = new float[segs.Count];
-                for (int v = 0; v < d.Pos.Length && v < d.Weights.Length; v++)
-                {
-                    Array.Clear(acc, 0, acc.Length);
-                    var w = d.Weights[v];
-                    if (w.boneIndex0 < segOfIdx.Length && segOfIdx[w.boneIndex0] >= 0) acc[segOfIdx[w.boneIndex0]] += w.weight0;
-                    if (w.boneIndex1 < segOfIdx.Length && segOfIdx[w.boneIndex1] >= 0) acc[segOfIdx[w.boneIndex1]] += w.weight1;
-                    if (w.boneIndex2 < segOfIdx.Length && segOfIdx[w.boneIndex2] >= 0) acc[segOfIdx[w.boneIndex2]] += w.weight2;
-                    if (w.boneIndex3 < segOfIdx.Length && segOfIdx[w.boneIndex3] >= 0) acc[segOfIdx[w.boneIndex3]] += w.weight3;
-                    for (int i = 0; i < acc.Length; i++) if (acc[i] >= 0.5f) { pts[i].Add(d.Pos[v]); break; }
-                }
-            }
-            var sbLog = new StringBuilder("PhysicsHands: her colliders from " + bodies + " body meshes:");
-            for (int i = 0; i < segs.Count; i++)
-            {
-                var g = segs[i];
-                var list = pts[i];
-                g.Verts = list.Count;
-                var dists = new List<float>(list.Count);
-                if (g.Sphere)
-                {
-                    Vector3 c = Vector3.zero;
-                    foreach (var p in list) c += p;
-                    if (list.Count > 0) c /= list.Count;
-                    Matrix4x4 bind;
-                    // LowerBreast may move with the breast physics yet carry no skin weights (no bind pose): then follow the fallback bone
-                    // (UpperBreast, the chain root: placed right, just without the jiggle) instead of dropping the breast collider
-                    if (list.Count >= 8 && !bindOfBone.ContainsKey(g.A))
-                    {
-                        var sd = Array.Find(HerDefs, q => q.Name == g.Name);
-                        var alt = sd != null && sd.AAlt != null ? FindBone(her, sd.AAlt) : null;
-                        if (alt != null && bindOfBone.ContainsKey(alt))
-                        {
-                            LogOnce("herbind" + g.Name, "her collider " + g.Name + ": " + g.A.name + " has no bind pose, following " + alt.name + " instead");
-                            g.A = alt;
-                        }
-                    }
-                    if (list.Count >= 8 && bindOfBone.TryGetValue(g.A, out bind))
-                    {
-                        g.LocalCenter = bind.MultiplyPoint3x4(c);
-                        foreach (var p in list) dists.Add((p - c).magnitude);
-                    }
-                }
-                else if (posOf.TryGetValue(g.A, out pa) && posOf.TryGetValue(g.B, out pb))
-                {
-                    Vector3 ab = pb - pa; float l2 = ab.sqrMagnitude;
-                    foreach (var p in list)
-                    {
-                        float t = l2 > 1e-10f ? Mathf.Clamp01(Vector3.Dot(p - pa, ab) / l2) : 0f;
-                        dists.Add((p - (pa + ab * t)).magnitude);
-                    }
-                }
-                if (dists.Count >= 12)
-                {
-                    dists.Sort();
-                    var def = Array.Find(HerDefs, q => q.Name == g.Name);
-                    g.RSkin = dists[(int)((def != null ? def.Pct : 0.4f) * (dists.Count - 1))] * _herUnit;
-                }
-                else if (g.Sphere && g.Name.StartsWith("breast_", StringComparison.Ordinal)) g.Drop = true;   // no vertices: a sphere at the bone's origin would be a guess
-                float inset = Inset(g, s.Softness);
-                g.RBase = Mathf.Max(0.012f, g.RSkin - inset);
-                if (g.Drop) { sbLog.Append("\n  ").Append(g.Name).Append(" (").Append(g.A.name).Append(" sphere): only ").Append(g.Verts).Append(" verts under ").Append(g.Owner).Append(", not made"); continue; }
-                sbLog.Append("\n  ").Append(g.Name).Append(" (").Append(g.A.name).Append(g.B != null ? "->" + g.B.name : " sphere" + (g.Owner != g.A.name ? ", owner " + g.Owner : "")).Append("): ")
-                     .Append(g.Verts).Append(" verts, skin r ").Append(g.RSkin.ToString("0.000")).Append(dists.Count >= 12 ? "" : " (default)")
-                     .Append(", inset ").Append(inset.ToString("0.000")).Append(" -> r ").Append(g.RBase.ToString("0.000")).Append(g.Soft ? " [soft zone]" : "");
-            }
-            Plugin.Log.LogInfo(sbLog.ToString());
-
+            _herVersion = HerBody.BuildVersion;
             _herGo = new GameObject(Pfx + "_her");
-            foreach (var g in segs)
+            foreach (var g in HerBody.Segs)
             {
-                if (g.Drop) continue;
-                g.BuildScale = Mathf.Max(1e-4f, Mathf.Abs(g.A.lossyScale.x));
-                g.Go = new GameObject(HerPfx + g.Name);
-                g.Go.layer = _layerHer;
-                g.T = g.Go.transform;
-                g.T.SetParent(_herGo.transform, false);
-                g.Col = g.Go.AddComponent<CapsuleCollider>();
-                g.Col.direction = 1; g.Col.radius = g.RBase; g.Col.height = 2f * g.RBase;
-                g.Rb = g.Go.AddComponent<Rigidbody>();
-                g.Rb.isKinematic = true; g.Rb.useGravity = false;
-                g.Rb.interpolation = RigidbodyInterpolation.None;
-                _segs.Add(g);
-                _segOfCol[g.Col] = g;
+                var b = new SegBody { S = g };
+                b.RBase = Mathf.Max(0.012f, g.RSkin - HerBody.Inset(g, s.Softness));
+                b.Go = new GameObject(HerPfx + g.Name);
+                b.Go.layer = _layerHer;
+                b.T = b.Go.transform;
+                b.T.SetParent(_herGo.transform, false);
+                b.Cap = b.Go.AddComponent<CapsuleCollider>();
+                b.Cap.direction = 1; b.Cap.radius = b.RBase; b.Cap.height = 2f * b.RBase;
+                b.Rb = b.Go.AddComponent<Rigidbody>();
+                b.Rb.isKinematic = true; b.Rb.useGravity = false;
+                b.Rb.interpolation = RigidbodyInterpolation.None;
+                _bodies.Add(b);
+                _segOfCol[b.Cap] = b;
             }
             _herBuilt = true;
             _herSoftness = s.Softness;
@@ -1306,74 +1110,46 @@ namespace SfMorph
         static void DestroyHer()
         {
             RemoveHerMarkers();
-            foreach (var g in _segs) if (g.Go != null) UnityEngine.Object.Destroy(g.Go);
-            _segs.Clear();
+            foreach (var b in _bodies) if (b.Go != null) UnityEngine.Object.Destroy(b.Go);
+            _bodies.Clear();
             _segOfCol.Clear();
             if (_herGo != null) UnityEngine.Object.Destroy(_herGo);
-            _herGo = null; _herRoot = null; _herBuilt = false;
+            _herGo = null; _herBuilt = false; _herVersion = -1;
+            HerBody.ClearPhys();   // no bodies, no contacts: the last push must not linger in HerBody
             _statusDirty = true;
-        }
-
-        // The impulses summed since the last fixed step -> the force on her over that step (the hand's push is the opposite of the
-        // normal that points at the hand), then the sums restart. Kept for PushOn until the next step.
-        static void PublishPush(Seg g)
-        {
-            float dt = Time.fixedDeltaTime;
-            if (g.ImpW > 1e-6f && dt > 0f)
-            {
-                Vector3 f = -g.ImpSum / dt;
-                if (Finite(f))
-                {
-                    g.PushForce = f; g.PushPoint = g.ImpPt / g.ImpW; g.PushRight = g.ImpWR > g.ImpWL;
-                    if (!g.PushLogged && f.sqrMagnitude >= 0.2f * 0.2f)
-                    {
-                        g.PushLogged = true;
-                        Plugin.Log.LogInfo("PhysicsHands: first push on her " + g.Name + ": " + f.magnitude.ToString("0.0") + " N by the " + (g.PushRight ? "right" : "left") + " hand");
-                    }
-                }
-                else g.PushForce = Vector3.zero;
-            }
-            else g.PushForce = Vector3.zero;
-            g.ImpSum = g.ImpPt = Vector3.zero; g.ImpW = g.ImpWL = g.ImpWR = 0f;
         }
 
         // Her live bones -> the kinematic capsules (MovePosition/MoveRotation so a moving hand feels her motion).
         static void StepHer()
         {
             if (!_herBuilt) return;
-            for (int i = 0; i < _segs.Count; i++)
+            float fdt = Time.fixedDeltaTime;
+            for (int i = 0; i < _bodies.Count; i++)
             {
-                var g = _segs[i];
-                PublishPush(g);
-                if (g.A == null || (!g.Sphere && g.B == null) || g.Go == null) { _herDirty = true; continue; }
-                Vector3 p; Quaternion q = Quaternion.identity; float len = 0f;
-                if (g.Sphere) p = g.A.TransformPoint(g.LocalCenter);
-                else
-                {
-                    Vector3 a = g.A.position, d = g.B.position - a;
-                    len = d.magnitude;
-                    if (!(len > 1e-4f) || !Finite(d)) continue;
-                    p = a + d * 0.5f;
-                    q = Quaternion.FromToRotation(Vector3.up, d / len);
-                }
-                if (!Finite(p)) continue;
-                float ratio = Mathf.Abs(g.A.lossyScale.x) / g.BuildScale;
-                if (Mathf.Abs(ratio - g.Ratio) > 0.01f) g.Ratio = ratio;   // her bones were scaled: the skin got fatter or thinner
-                float r = g.RBase * g.Ratio;
+                var b = _bodies[i];
+                var g = b.S;
+                HerBody.PublishPhys(g, fdt);
+                if (g.A == null || (!g.Sphere && g.B == null) || b.Go == null) { HerBody.MarkDirty(); continue; }
+                Vector3 p, sc; Quaternion q;
+                if (!HerBody.SegPose(g, out p, out q, out sc)) continue;
+                float len = g.Sphere ? 0f : sc.y * g.Len0;
+                float ratio = sc.x;
+                if (Mathf.Abs(ratio - b.Ratio) > 0.01f) b.Ratio = ratio;   // her bones were scaled: the skin got fatter or thinner
+                float r = b.RBase * b.Ratio;
                 float h = Mathf.Max(2f * r, len + 2f * r);
-                if (Mathf.Abs(r - g.Col.radius) > 1e-4f || Mathf.Abs(h - g.H) > 1e-3f)
+                if (Mathf.Abs(r - b.Cap.radius) > 1e-4f || Mathf.Abs(h - b.H) > 1e-3f)
                 {
-                    g.Col.radius = r; g.Col.height = h; g.H = h;
-                    if (g.Mark != null) g.Mark.transform.localScale = new Vector3(2f * r, h * 0.5f, 2f * r);
+                    b.Cap.radius = r; b.Cap.height = h; b.H = h;
+                    if (b.Mark != null) b.Mark.transform.localScale = new Vector3(2f * r, h * 0.5f, 2f * r);
                 }
-                if (!g.Placed || (p - g.LastPos).sqrMagnitude > 0.25f)
+                if (!b.Placed || (p - b.LastPos).sqrMagnitude > 0.25f)
                 {
-                    g.T.SetPositionAndRotation(p, q);
-                    g.Rb.position = p; g.Rb.rotation = q;
-                    g.Placed = true;
+                    b.T.SetPositionAndRotation(p, q);
+                    b.Rb.position = p; b.Rb.rotation = q;
+                    b.Placed = true;
                 }
-                else { g.Rb.MovePosition(p); g.Rb.MoveRotation(q); }
-                g.LastPos = p;
+                else { b.Rb.MovePosition(p); b.Rb.MoveRotation(q); }
+                b.LastPos = p;
             }
         }
 
@@ -1438,18 +1214,18 @@ namespace SfMorph
         static void AddHerMarkers()
         {
             if (_matHer == null) _matHer = MarkMat(new Color(1f, 0.5f, 0.1f, 1f));
-            foreach (var g in _segs)
+            foreach (var b in _bodies)
             {
-                if (g.Go == null || g.Mark != null) continue;
-                g.Mark = NewMarker(g.T, PrimitiveType.Capsule, _matHer);
-                float r = g.Col.radius, h = Mathf.Max(2f * r, g.Col.height);
-                g.Mark.transform.localScale = new Vector3(2f * r, h * 0.5f, 2f * r);
+                if (b.Go == null || b.Mark != null) continue;
+                b.Mark = NewMarker(b.T, PrimitiveType.Capsule, _matHer);
+                float r = b.Cap.radius, h = Mathf.Max(2f * r, b.Cap.height);
+                b.Mark.transform.localScale = new Vector3(2f * r, h * 0.5f, 2f * r);
             }
         }
 
         static void RemoveHerMarkers()
         {
-            foreach (var g in _segs) if (g.Mark != null) { UnityEngine.Object.Destroy(g.Mark); g.Mark = null; }
+            foreach (var b in _bodies) if (b.Mark != null) { UnityEngine.Object.Destroy(b.Mark); b.Mark = null; }
         }
 
         static void SetDebug(bool on)
@@ -1486,38 +1262,19 @@ namespace SfMorph
             {
                 var col = c.collider;
                 if (ReferenceEquals(col, null) || col == null) return;
-                Seg g;
-                if (!_segOfCol.TryGetValue(col, out g)) return;
+                SegBody b;
+                if (!_segOfCol.TryGetValue(col, out b)) return;
+                var g = b.S;
                 float t = Time.fixedTime;
                 g.TouchT = t;
                 _handTouchT[left ? 0 : 1] = t;
-                AddImpulse(g, left, c);
+                HerBody.AddImpulse(g, left, c);
                 if (!enter) return;
                 _enters++;
                 if (_contacts.Add((left ? "L:" : "R:") + g.Name))
                     Plugin.Log.LogInfo("PhysicsHands: first contact " + (left ? "left" : "right") + " hand with her " + g.Name + " (" + c.relativeVelocity.magnitude.ToString("0.00") + " m/s, " + c.contactCount + " points)");
             }
             catch (Exception) { }
-        }
-
-        // 0.7.7: the impulse this contact gave her segment during the last physics step, along the contact normal oriented to point at the
-        // hand (Unity's normal sign convention isn't worth trusting: the hand collider's centre is always on the hand's side of the
-        // contact point), and where it acted. Summed over every hand collider touching the segment; StepHer turns it into PushForce.
-        static void AddImpulse(Seg g, bool left, Collision c)
-        {
-            if (c.contactCount < 1) return;
-            float mag = c.impulse.magnitude;
-            if (!(mag > 0f) || float.IsInfinity(mag)) return;
-            var cp = c.GetContact(0);
-            Vector3 n = cp.normal;
-            var mine = cp.thisCollider;   // the hand collider (the one in c.collider is hers)
-            if (mine == c.collider) mine = cp.otherCollider;   // in case the sides come the other way round
-            if (ReferenceEquals(mine, null) || mine == null) return;
-            if (Vector3.Dot(n, mine.transform.position - cp.point) < 0f) n = -n;
-            g.ImpSum += n * mag;
-            g.ImpPt += cp.point * mag;
-            g.ImpW += mag;
-            if (left) g.ImpWL += mag; else g.ImpWR += mag;
         }
 
         static void Teleport(Hand h, Vector3 p, Quaternion q)
@@ -1539,24 +1296,7 @@ namespace SfMorph
         // ================= per fixed step =================
 
         // Runner.FixedUpdate: the palm follows the target by a force-capped pull and a PD torque, the fingers get their joint
-        // targets; her capsules follow her bones. Before the physics step.
-        // 0.7.7: the push a physics hand gave one of her segments ("forearm_L", "upperarm_R", ...) over the last fixed step: the force ON
-        // HER (N, world) and where it acted. false when nothing pushed it (or below 0.2 N).
-        public static bool PushOn(string seg, out Vector3 point, out Vector3 forceOnHer)
-        {
-            point = Vector3.zero; forceOnHer = Vector3.zero;
-            if (seg == null || !_herBuilt) return false;
-            for (int i = 0; i < _segs.Count; i++)
-            {
-                var g = _segs[i];
-                if (!string.Equals(g.Name, seg, StringComparison.Ordinal)) continue;
-                if (g.PushForce.sqrMagnitude < 0.2f * 0.2f) return false;
-                point = g.PushPoint; forceOnHer = g.PushForce;
-                return true;
-            }
-            return false;
-        }
-
+        // targets; her capsules follow her bones. Before the physics step. (The pushes the hands give her: HerBody.PushOn.)
         public static void FixedStep()
         {
             if (!Active && !_herBuilt) return;
@@ -1734,11 +1474,12 @@ namespace SfMorph
             }
 
             // her body
-            if (s.Collide && her != null && her.Root != null)
+            // (the geometry is HerBody's: built by Body while Physics or the hands are on; the bodies follow its BuildVersion)
+            if (s.Collide && her != null && her.Root != null && HerBody.Built)
             {
-                if (!_herBuilt && now >= _herNext || (_herBuilt && (_herRoot != her.Root || _herDirty)))
+                if ((!_herBuilt && now >= _herNext) || (_herBuilt && _herVersion != HerBody.BuildVersion))
                 {
-                    try { BuildHer(her, s); }
+                    try { BuildHerBodies(s); }
                     catch (Exception e)
                     {
                         Plugin.Log.LogError("PhysicsHands: her colliders failed: " + e);
@@ -1750,10 +1491,11 @@ namespace SfMorph
                 if (_herBuilt && Mathf.Abs(s.Softness - _herSoftness) > 0.02f)
                 {
                     _herSoftness = s.Softness;   // the soft zones' inset follows the softness setting
-                    foreach (var g in _segs) g.RBase = Mathf.Max(0.012f, g.RSkin - Inset(g, s.Softness));
+                    foreach (var b in _bodies) b.RBase = Mathf.Max(0.012f, b.S.RSkin - HerBody.Inset(b.S, s.Softness));
                 }
             }
             else if (_herBuilt) DestroyHer();
+            if (HerBody.Built != _herBuiltSeen || !ReferenceEquals(HerBody.Note, _herNoteSeen)) { _herBuiltSeen = HerBody.Built; _herNoteSeen = HerBody.Note; _statusDirty = true; }
 
             // hands every frame
             if (_left != null) UpdateHand(_left, cl, s, dt, now);
@@ -1776,8 +1518,8 @@ namespace SfMorph
             var sb = new StringBuilder("on: ");
             AppendHand(sb, _left, "L"); sb.Append(", "); AppendHand(sb, _right, "R");
             if (!s.Collide) sb.Append("; collisions off (visual only)");
-            else if (_herBuilt) sb.Append("; her ").Append(_segs.Count).Append(" colliders");
-            else sb.Append("; ").Append(_herNote.Length > 0 ? _herNote : (her == null ? "her: not found" : "her: building"));
+            else if (_herBuilt) sb.Append("; her ").Append(_bodies.Count).Append(" colliders");
+            else sb.Append("; ").Append(_herNote.Length > 0 ? _herNote : HerBody.Note.Length > 0 ? HerBody.Note : (her == null ? "her: not found" : "her: building"));
             sb.Append("; layers ").Append(_layerHand).Append('/').Append(_layerHer).Append("; grip ").Append(Grip.Source.Length > 0 ? Grip.Source : "none yet");
             return sb.ToString();
         }

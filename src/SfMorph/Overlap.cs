@@ -33,10 +33,10 @@ namespace SfMorph
     //  - PLANTED LOCK: a hand/foot that stands still in the animation (or still relative to a partner/her own capsule it is near) is
     //    pinned to the animation's position by a two-bone IK (Ik.TwoBone) after the springs, so the elbow/knee swings and the
     //    hand/foot stays put (a hand resting on him does not slide when the arm lags).
-    //  - LIMB PUSH: the physics hands push her arms (PhysicsHands.PushOn): a torque about the elbow/shoulder drives a second spring state
+    //  - LIMB PUSH: hands push her arms (HerBody.PushOn): a torque about the elbow/shoulder drives a second spring state
     //    (Qp) that is multiplied onto the written rotation. The contact fade removes only the lag term, never the push.
     //
-    // Her capsule names read from PhysicsHands (HerDefs): upperarm_L/R, forearm_L/R (arms), thigh_L/R, calf_L/R, head, neck, chest, spine.
+    // Her segment names read from HerBody (HerBody.Defs): upperarm_L/R, forearm_L/R (arms), thigh_L/R, calf_L/R, head, neck, chest, spine.
     // Contact fades (0.15 s): arms by TouchingHer("upperarm_X"/"forearm_X"); legs by Soft.Touching("thighOut_X"/"thighIn_X"/"glute_X");
     // head by TouchingHer("head"/"neck"); spine by TouchingHer("spine"/"chest") or Soft.Touching("belly") (small addition to the spec,
     // so a held head or torso is not wobbled under the hand).
@@ -88,7 +88,7 @@ namespace SfMorph
         };
         static readonly string[] EffLabel = { "left hand", "right hand", "left foot", "right foot" };
         static readonly string[] EffShort = { "L hand", "R hand", "L foot", "R foot" };
-        // PhysicsHands segment names for the push, [side*2] upperarm, [side*2+1] forearm (no per-frame string building)
+        // HerBody segment names for the push, [side*2] upperarm, [side*2+1] forearm (no per-frame string building)
         static readonly string[] PushSeg = { "upperarm_L", "forearm_L", "upperarm_R", "forearm_R" };
 
         class B
@@ -221,7 +221,7 @@ namespace SfMorph
 
             // Limb push torques (arms), from the physics hands' last fixed step.
             // (independent of the overlap amount: with Overlap 0 the arms still yield to a push and spring back to the animation)
-            bool pushable = _lp > 0f && PhysicsHands.Active;
+            bool pushable = _lp > 0f && HerBody.PushActive;
             if (pushable) PushPass();
 
             int driven = 0;
@@ -504,19 +504,19 @@ namespace SfMorph
             {
                 var ef = _effs[sd];
                 if (ef == null) continue;
-                Vector3 pt, f;
-                if (PhysicsHands.PushOn(PushSeg[sd * 2 + 1], out pt, out f) && Ok(pt) && Ok(f))
+                Vector3 pt, f; string by;
+                if (HerBody.PushOn(PushSeg[sd * 2 + 1], out pt, out f, out by) && Ok(pt) && Ok(f))
                 {
                     var tE = Vector3.Cross(pt - ef.M.T.position, f);
                     var tS = Vector3.Cross(pt - ef.A.T.position, f) * 0.5f;
                     AddTau(ef.M, tE); AddTau(ef.A, tS);
-                    NotePush(sd * 2 + 1, tE.magnitude);
+                    NotePush(sd * 2 + 1, tE.magnitude, by);
                 }
-                if (PhysicsHands.PushOn(PushSeg[sd * 2], out pt, out f) && Ok(pt) && Ok(f))
+                if (HerBody.PushOn(PushSeg[sd * 2], out pt, out f, out by) && Ok(pt) && Ok(f))
                 {
                     var tS = Vector3.Cross(pt - ef.A.T.position, f);
                     AddTau(ef.A, tS);
-                    NotePush(sd * 2, tS.magnitude);
+                    NotePush(sd * 2, tS.magnitude, by);
                 }
             }
         }
@@ -530,12 +530,12 @@ namespace SfMorph
             if (m > PushTauMax) b.TauW *= PushTauMax / m;
         }
 
-        void NotePush(int seg, float nm)
+        void NotePush(int seg, float nm, string by)
         {
             _pushBits |= 1 << seg;
             if (_loggedPush[seg]) return;
             _loggedPush[seg] = true;
-            Plugin.Log.LogInfo("Overlap: " + PushSeg[seg] + " pushed by your physics hand (" + nm.ToString("0.0") + " N*m)");
+            Plugin.Log.LogInfo("Overlap: " + PushSeg[seg] + " pushed by " + by + " (" + nm.ToString("0.0") + " N*m)");
         }
 
         bool Touch(Character her, int g)

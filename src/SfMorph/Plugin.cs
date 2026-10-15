@@ -25,6 +25,9 @@ namespace SfMorph
         internal ConfigEntry<float> OverlapRipple, ArmsBounce, LegsBounce, HeadBounce, SpineBounce, HandsLimbPush;
         internal ConfigEntry<int> BreastColliders;
         internal ConfigEntry<bool> KeysUnfocused, Apply, Physics, ShowSoftPoints, EmbodyOn, EmbodyHideHead, HandsOn, HandsCollide, GpuContactOn;
+        // 0.7.8 hands: convex-hull body colliders, pushes from hands that aren't physics hands, friction, jointed fingers
+        internal ConfigEntry<bool> HandsHull, HandsPushByTouch, HandsJointed;
+        internal ConfigEntry<float> HandsFriction;
         internal ConfigEntry<float> UiScale, Softness, Springiness, Gravity, OverlapAmount, OverlapArms, OverlapLegs, OverlapHead, OverlapSpine;
         internal ConfigEntry<int> EmbodyHands, EmbodyView, EmbodyPartner, HandsMesh, Quality;
         // 0.7.4 procedural skin wrinkles
@@ -63,7 +66,11 @@ namespace SfMorph
             HeadBounce = Config.Bind("Motion", "HeadBounce", 0.6f, new ConfigDescription("How much the head and neck overshoot and settle.", new AcceptableValueRange<float>(0f, 1f)));
             SpineBounce = Config.Bind("Motion", "SpineBounce", 0.3f, new ConfigDescription("How much the spine overshoots and settles.", new AcceptableValueRange<float>(0f, 1f)));
             OverlapPlanted = Config.Bind("Motion", "PlantedLock", true, "Planted hands and feet stay where the animation puts them while the rest of the limb trails.");
-            HandsLimbPush = Config.Bind("Hands", "LimbPush", 0.5f, new ConfigDescription("Your physics hands push her arms aside; the pose springs back (0 off).", new AcceptableValueRange<float>(0f, 1f)));
+            HandsLimbPush = Config.Bind("Hands", "LimbPush", 0.5f, new ConfigDescription("Hands push her limbs, head and spine aside; the pose springs back (0 off).", new AcceptableValueRange<float>(0f, 1f)));
+            HandsPushByTouch = Config.Bind("Hands", "PushByTouch", true, "Hands that aren't physics hands (your hand models, the partner's hands) push her limbs by how deep they are in her; physics hands push by contact force.");
+            HandsHull = Config.Bind("Hands", "HullColliders", true, "Her body colliders follow her skin's shape (convex hulls) instead of capsules.");
+            HandsFriction = Config.Bind("Hands", "Friction", 0.8f, new ConfigDescription("How much your hands grip her skin: a resting hand is carried along when she moves (0 slides freely).", new AcceptableValueRange<float>(0f, 1f)));
+            HandsJointed = Config.Bind("Hands", "JointedFingers", true, "Fingers are simulated bodies on joints (off: posed by the grip only, like 0.7.0).");
             ShowSoftPoints = Config.Bind("Physics", "ShowSoftPoints", false, "Small markers on the soft points (green at rest, red touched) and the contact capsules, to see what touches what.");
             WrinkOn = Config.Bind("Wrinkles", "On", false, "Procedural skin wrinkles: folds appear in her skin's normal map where the skin compresses (expressions, bending), computed on the GPU (shader bundle sfmorph_shaders next to the DLL).");
             WrinkStrength = Config.Bind("Wrinkles", "Strength", 1f, new ConfigDescription("How deep the folds look (0 none, 2 strong).", new AcceptableValueRange<float>(0f, 2f)));
