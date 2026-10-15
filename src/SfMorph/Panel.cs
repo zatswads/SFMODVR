@@ -262,9 +262,13 @@ namespace SfMorph
         static readonly string[] ViewModes = { "Game camera", "Snap to his eyes", "Follow his eyes" };
         static readonly string[] Partners = { "Player", "Other man" };
 
+        static readonly string[] HandMeshes = { "Game hands", "Simple" };
+
         void VrTab(Character c)
         {
             PhysicsSection(c);
+            GUILayout.Space(10);
+            HandsSection(c);
             GUILayout.Space(10);
             GUILayout.Label("Embody", _bold);
             string off = !c.Female || c.IsPlayer ? "only with the game's woman in the scene" : null;
@@ -307,6 +311,25 @@ namespace SfMorph
             else if (c.Morph.Status.Length > 0) GUILayout.Label(c.Morph.Status, c.Morph.Status.StartsWith("off") ? _off : _hint);
             GUILayout.Label("Clothes follow the skin by its nearest vertex and are pushed out where the new shape would poke through. " +
                             "Her height stays the game's (the VaM character is scaled to her eye height), so scenes still line up.", _hint);
+        }
+
+        void HandsSection(Character c)
+        {
+            GUILayout.Label("VR hands", _bold);
+            string off = !c.Female || c.IsPlayer ? "only with the game's woman in the scene" : null;
+            GUI.enabled = off == null;
+            bool on = GUILayout.Toggle(_p.HandsOn.Value, " Physics hands instead of the controller models (they collide and press her skin)");
+            GUI.enabled = true;
+            if (off == null && on != _p.HandsOn.Value) _p.HandsOn.Value = on;
+            if (off != null) { GUILayout.Label("off: " + off, _off); return; }
+            GUI.enabled = _p.HandsOn.Value;
+            int mesh = GUILayout.Toolbar(_p.HandsMesh.Value, HandMeshes);
+            if (mesh != _p.HandsMesh.Value) _p.HandsMesh.Value = mesh;
+            bool col = GUILayout.Toggle(_p.HandsCollide.Value, " Stop at her body (the skin gives first, then resistance)");
+            if (col != _p.HandsCollide.Value) _p.HandsCollide.Value = col;
+            GUI.enabled = true;
+            if (_p.HandsOn.Value && PhysicsHands.Status.Length > 0) GUILayout.Label(PhysicsHands.Status, PhysicsHands.Status.StartsWith("off") ? _off : _hint);
+            GUILayout.Label("Grip curls the fingers. Hand position/rotation offsets per controller: [Embody] Left/RightHandOffset in sfmodvr.sfmorph.cfg.", _hint);
         }
 
         void PhysicsSection(Character c)

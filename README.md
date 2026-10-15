@@ -41,6 +41,25 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.7.0:
+- New **VR** tab (Physics, VR hands, Embody).
+- Soft zones felt like "only jiggle" in 0.6.3: your own VR hands had no colliders (the hand finder matched UI objects named
+  'HandJob_Panel'), and DynamicBone's pendulum turned a push into a sideways slide. Now:
+  - Your hands are found through the game's own `VR_HandController` (UI objects are skipped), with partner hands and her own
+    forearms, hands and thighs as before.
+  - The zones are VaM-style soft points (3-7 per zone) under the skin, each a damped spring: a hand pushes the skin in by up to
+    2-4.5 cm (Softness), it springs back, and nearby points bulge a little. Springiness lags them behind her own motion
+    (secondary motion). Weights are still split, so untouched she deforms exactly as before.
+  - "Show soft points" draws markers (green at rest, red touched) and the contact capsules; the panel shows live contacts.
+- **VR hands**: physics-driven hands in place of the controller models: the game's own hands (or simple shapes), following
+  your controllers 1:1 in free air, stopping at her body after the skin gives (her body as capsules sized from her skin),
+  fingers curling with grip. They only collide with her (two unused physics layers) and press her soft zones.
+- **Embody**: see through the partner's eyes. The game's own POV camera can end up elsewhere, so the view is ours: snap to
+  his eyes, or follow them (position only; you turn your own head). His head can be hidden, and his left, right or both hands
+  follow your controllers (two-bone IK on his arms). Everything is given back when turned off.
+- Log: a one-time `VR rig survey` (VR rig, partner rigs, cameras, IK components) and `Physics survey` (layers, fixed step),
+  so the next round doesn't need guesses.
+
 0.6.3:
 - Physics (Characters tab): soft zones, so hands and limbs press into her instead of clipping through. Her glutes,
   outer and inner thighs, belly and breasts (front and side) get helper bones under the skin, simulated by the game's own

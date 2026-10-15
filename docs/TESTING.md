@@ -53,3 +53,15 @@ helper bones (`zone@bone(weight)`), meshes and collider counts, and `Soft zones:
 by bone names, hands and finger segments). In the headset: a hand pressed on her thigh and glute dents the skin and it springs
 back; thighs pressed together flatten a little; she jiggles slightly when she moves (Springiness 0 = none); Physics off,
 Apply off and picking/removing a character give her exact look back (no stray bones, no broken skinning).
+
+## VR tab (0.7.0)
+
+Log first: `VR rig survey:` (what the VR rig, Player and BadGuy are made of), `VrHands: your hands: ...` (must not be "none
+found"), `Soft zones on 'Reika'` (zones, points, helpers), `Physics hands:` lines (layers, grip source, mesh extraction),
+`Embody:` lines (rig root, partner, head axes, hand frame). In the headset:
+- Soft zones (Physics on, Show soft points on): touching her glute/thigh/belly/breast with your controller turns markers red and
+  the skin dents and springs back; the status line counts contacts.
+- VR hands on: controller models gone, hands there instead, 1:1 with your controllers in the air, fingers curl with grip, the
+  hand stops at her body after the skin gives (no passing through), no jitter while resting on her.
+- Embody on (Follow): the view sits at his eyes and stays there through his animation; his head is not in the way; his hands
+  follow your controllers (try Left, Right, Both); turning it off puts the view and his head back.

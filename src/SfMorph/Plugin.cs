@@ -21,9 +21,9 @@ namespace SfMorph
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
-        internal ConfigEntry<bool> KeysUnfocused, Apply, Physics, ShowSoftPoints, EmbodyOn, EmbodyHideHead;
+        internal ConfigEntry<bool> KeysUnfocused, Apply, Physics, ShowSoftPoints, EmbodyOn, EmbodyHideHead, HandsOn, HandsCollide;
         internal ConfigEntry<float> UiScale, Softness, Springiness;
-        internal ConfigEntry<int> EmbodyHands, EmbodyView, EmbodyPartner;
+        internal ConfigEntry<int> EmbodyHands, EmbodyView, EmbodyPartner, HandsMesh;
         internal ConfigEntry<Vector3> LeftHandPos, LeftHandRot, RightHandPos, RightHandRot;
         internal ConfigEntry<string> PanelRect;
         internal ConfigEntry<int> Tab;
@@ -46,10 +46,13 @@ namespace SfMorph
             EmbodyHideHead = Config.Bind("Embody", "HideHead", true, "Hide his head so it doesn't block the view.");
             EmbodyView = Config.Bind("Embody", "View", 2, new ConfigDescription("0 the game's camera, 1 snap to his eyes once, 2 follow his eyes.", new AcceptableValueRange<int>(0, 2)));
             EmbodyPartner = Config.Bind("Embody", "Partner", 0, new ConfigDescription("0 the player, 1 the other man (badGuy).", new AcceptableValueRange<int>(0, 1)));
+            HandsOn = Config.Bind("Hands", "PhysicsHands", false, "Replace the VR controller models with physics-driven hands that collide with her and press her soft zones.");
+            HandsMesh = Config.Bind("Hands", "Mesh", 0, new ConfigDescription("0 the game's own (male) hands, 1 simple shapes.", new AcceptableValueRange<int>(0, 1)));
+            HandsCollide = Config.Bind("Hands", "CollideWithHer", true, "The hands stop at her body (after the skin gives) instead of passing through.");
             LeftHandPos = Config.Bind("Embody", "LeftHandOffset", new Vector3(-0.0325f, -0.0379f, -0.1012f), "Controller -> his left hand position offset (m, controller space). Quest Touch default.");
-            LeftHandRot = Config.Bind("Embody", "LeftHandRotation", new Vector3(-90f, 90f, 0f), "Controller -> his left hand rotation (degrees).");
+            LeftHandRot = Config.Bind("Embody", "LeftHandRotation", Vector3.zero, "Controller -> his left hand rotation (degrees), added to the automatic alignment (fingers along the controller, thumb up).");
             RightHandPos = Config.Bind("Embody", "RightHandOffset", new Vector3(0.0325f, -0.0379f, -0.1012f), "Controller -> his right hand position offset (m).");
-            RightHandRot = Config.Bind("Embody", "RightHandRotation", new Vector3(-90f, -90f, 0f), "Controller -> his right hand rotation (degrees).");
+            RightHandRot = Config.Bind("Embody", "RightHandRotation", Vector3.zero, "Controller -> his right hand rotation (degrees), added to the automatic alignment.");
             Logger.LogInfo("SF Body Morphs " + Version + ": panel on " + PanelKey.Value + ", looks in " + Store.Dir);
             // The game destroys plugin components; a hidden object of our own keeps running.
             var go = new GameObject("SfMorphRunner") { hideFlags = HideFlags.HideAndDontSave };
@@ -91,6 +94,14 @@ namespace SfMorph
                 }
             }
             catch (Exception e) { Fail(e); }
+        }
+
+        // Physics hands follow the controllers with velocities, so they move in the physics step.
+        void FixedUpdate()
+        {
+            if (_broken) return;
+            try { PhysicsHands.FixedStep(); }
+            catch (Exception e) { Plugin.Log.LogError("Physics hands failed, turned off: " + e); _p.HandsOn.Value = false; try { PhysicsHands.Release(); } catch { } }
         }
 
         // Fallback only: in LateUpdate the game's physics may already have run for this frame.

@@ -234,7 +234,7 @@ namespace SfMorph
                 else
                 {
                     if (c.Dirty) Store.SaveCharacter(c.Key, c.Look); // character gone: keep unsaved edits
-                    try { c.Soft.Release(); } catch { }               // our clones and the colliders on others
+                    try { c.Soft.Release(); } catch { }               // our clones (the bones went with her)
                 }
             Found.Clear();
             // Keys (file names) must be unique: two copies of one character are "Name" and "Name 2".
@@ -246,7 +246,10 @@ namespace SfMorph
                 Character c;
                 if (!old.TryGetValue(root, out c) || !Same(c.Renderers, list)) c = Build(root, list, c, used);
                 Found.Add(c);
+                old.Remove(root);
             }
+            // characters gone or with no active renderers: our soft-zone clones and bones go back now, not when they return
+            foreach (var c in old.Values) try { c.Soft.Release(); } catch { }
             var eyes = new List<Vector3>();
             foreach (var cam in Camera.allCameras) if (cam.stereoEnabled || cam == Camera.main) eyes.Add(cam.transform.position);
             int women = 0;
@@ -438,8 +441,11 @@ namespace SfMorph
 
         public readonly Embody Embody = new Embody();
         readonly EmbodySettings _emb = new EmbodySettings();
+        readonly HandsSettings _hands = new HandsSettings();
+        readonly List<SoftCapsule> _caps = new List<SoftCapsule>();
+        int _capsVr = -1, _capsPh = -1;
         float _nextHands;
-        bool _handsOn, _embodyOn;
+        bool _handsOn, _embodyOn, _physHandsOn, _capsPhWas;
 
         public void ApplyAll()
         {
@@ -449,7 +455,8 @@ namespace SfMorph
             foreach (var c in Found) if (her == null && c.Female && !c.IsPlayer && c.Root != null) her = c;
             bool physics = _p.Apply.Value && _p.Physics.Value && her != null;
             bool embody = _p.EmbodyOn.Value && her != null;
-            if (physics || embody)
+            bool physHands = _p.HandsOn.Value && her != null;
+            if (physics || embody || physHands)
             {
                 if (Time.unscaledTime >= _nextHands)   // hands/controllers come and go with scenes: every 2 s, cheap when unchanged
                 {
@@ -477,9 +484,27 @@ namespace SfMorph
                     try { c.Soft.Release(); } catch { }
                 }
                 if (_p.Apply.Value && !c.Look.Empty && c.Root != null) Apply(c);
+                // the physics hands' visual pose for this frame (the soft points read their capsules)
+                if (c == her)
+                {
+                    if (physHands)
+                    {
+                        _hands.On = true; _hands.Collide = _p.HandsCollide.Value; _hands.Mesh = _p.HandsMesh.Value;
+                        _hands.ShowColliders = _p.ShowSoftPoints.Value; _hands.Softness = _p.Softness.Value;
+                        _hands.HideVisual = _p.EmbodyOn.Value && _p.EmbodyHands.Value != 0;   // his own hands are shown then
+                        _hands.LeftPos = _p.LeftHandPos.Value; _hands.LeftRot = _p.LeftHandRot.Value; _hands.RightPos = _p.RightHandPos.Value; _hands.RightRot = _p.RightHandRot.Value;
+                        try { PhysicsHands.Update(c, _hands); _physHandsOn = true; }
+                        catch (Exception e)
+                        {
+                            Plugin.Log.LogError("Physics hands failed, turned off: " + e);
+                            _p.HandsOn.Value = false;
+                            try { PhysicsHands.Release(); } catch { }
+                        }
+                    }
+                }
                 // the soft points after her bones carry our changes, before the game's physics and IK
                 if (physics && c == her)
-                    try { c.Soft.Simulate(Time.deltaTime, VrHands.Capsules, _p.Softness.Value, _p.Springiness.Value, _p.ShowSoftPoints.Value); }
+                    try { c.Soft.Simulate(Time.deltaTime, Contacts(), _p.Softness.Value, _p.Springiness.Value, _p.ShowSoftPoints.Value); }
                     catch (Exception e)
                     {
                         Plugin.Log.LogError("Soft zones on '" + c.Key + "' failed, physics turned off: " + e);
@@ -488,6 +513,8 @@ namespace SfMorph
                     }
             }
             Release();
+            // off, or she's gone (scene change): give the controllers, layers and her capsules back
+            if (!physHands && _physHandsOn) { _physHandsOn = false; try { PhysicsHands.Release(); } catch { } }
             // Embody last: his head and arms after the animation, the view after everything that moves him
             if (embody)
             {
@@ -504,6 +531,23 @@ namespace SfMorph
                 }
             }
             else if (_embodyOn) { _embodyOn = false; try { Embody.Release(); } catch { } }
+        }
+
+        // What can touch her: VrHands' capsules, with the physics hands in place of the controllers while they're on.
+        List<SoftCapsule> Contacts()
+        {
+            bool ph = PhysicsHands.Active;
+            int pv = ph ? PhysicsHands.Version : -1;
+            if (ph != _capsPhWas) { _capsPhWas = ph; VrHands.Version++; }   // a different capsule set: no contact velocities from the old one
+            if (!ph) return VrHands.Capsules;
+            if (_capsVr == VrHands.Version && _capsPh == pv) return _caps;
+            _capsVr = VrHands.Version; _capsPh = pv;
+            _caps.Clear();
+            foreach (var k in VrHands.Capsules) if (k.Kind != "vr") _caps.Add(k);
+            _caps.AddRange(PhysicsHands.Capsules);
+            VrHands.Version++;   // the soft points re-read capsule endpoints (their contact velocities) when this changes
+            _capsVr = VrHands.Version;
+            return _caps;
         }
 
         void Apply(Character c)
@@ -560,9 +604,11 @@ namespace SfMorph
                     _posTargets.Add(kv.Key);
                 }
 
+            var hidden = Embody.HiddenHead;   // Embody owns his head's scale while hiding it (two trackers would spiral)
             foreach (var kv in _net)
             {
                 var tr = kv.Key;
+                if (tr == hidden) continue;
                 ScaleTrack t;
                 var s = tr.localScale;
                 if (!_scales.TryGetValue(tr, out t)) { t = new ScaleTrack { T = tr, Rest = s, Last = new Vector3(float.NaN, 0, 0) }; _scales[tr] = t; }
@@ -660,6 +706,7 @@ namespace SfMorph
             Release();
             foreach (var c in Found) { try { c.Soft.Release(); } catch { } try { c.Morph.Release(); } catch { } }
             try { Embody.Release(); } catch { }
+            try { PhysicsHands.Release(); } catch { }
             try { VrHands.Release(); } catch { }
         }
     }

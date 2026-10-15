@@ -334,21 +334,45 @@ namespace SfMorph
                 }
             }
             if (caps.Count == 0) { Plugin.Log.LogInfo("VrHands: VR_HandController " + (left ? "left" : "right") + " '" + a.name + "' gave no capsules (" + how + ")"); return false; }
-            // The tracked node: an ancestor named like an XR controller, else the animator itself.
-            var tracked = TrackedAncestor(a.transform, left) ?? a.transform;
+            // The tracked node: an ancestor carrying a tracking component, else one named like an XR controller, else the animator itself.
+            string src;
+            var tracked = TrackedAncestor(a.transform, left, out src);
+            if (tracked == null) { tracked = a.transform; src = "hand model (offsets may need zeroing)"; }
             if (left) { LeftController = tracked; _vrSrcL = "VR_HandController"; } else { RightController = tracked; _vrSrcR = "VR_HandController"; }
             Plugin.Log.LogInfo("VrHands: your " + (left ? "left" : "right") + " hand from VR_HandController." + (left ? "controller_left" : "controller_right")
                                + " '" + PathOf(a.transform) + "': " + how + ", " + caps.Count + " capsules (" + fingers + " finger segments); tracked node '"
-                               + PathOf(tracked) + "'");
+                               + PathOf(tracked) + "' [" + src + "]");
             return true;
         }
 
-        // The XR controller above the hand model, when it is obviously the tracked node ("LeftHand Controller", "Left Controller").
-        static Transform TrackedAncestor(Transform t, bool left)
+        // The type name of a component on t that marks it as the tracked node (TrackedPoseDriver, XRController, ActionBasedController),
+        // or null. Looked at on detection only, never per frame.
+        static string TrackerType(Transform t)
+        {
+            foreach (var c in t.GetComponents<Component>())
+            {
+                if (c == null) continue;
+                string n = c.GetType().Name;
+                if (n.Contains("TrackedPoseDriver") || n.Contains("XRController") || n.Contains("ActionBasedController")) return n;
+            }
+            return null;
+        }
+
+        // The XR controller above the hand model: an ancestor (within 6 levels) with a tracking component first, else one named
+        // like a controller ("LeftHand Controller", "Left Controller"). src says which.
+        static Transform TrackedAncestor(Transform t, bool left, out string src)
         {
             int n = 0;
+            for (var p = t.parent; p != null && n < 6; p = p.parent, n++)
+            {
+                if (p is RectTransform) continue;
+                string ty = TrackerType(p);
+                if (ty != null) { src = "tracked node (" + ty + ")"; return p; }
+            }
+            n = 0;
             for (var p = t.parent; p != null && n < 4; p = p.parent, n++)
-                if (IsControllerName(p.name, left) && !(p is RectTransform)) return p;
+                if (IsControllerName(p.name, left) && !(p is RectTransform)) { src = "named controller"; return p; }
+            src = "";
             return null;
         }
 
@@ -410,7 +434,9 @@ namespace SfMorph
             Add(caps, t, t.position - fwd * 0.03f, t.position + fwd * 0.09f, VrController, "XR controller", "vr");
             if (caps.Count == 0) return false;
             if (left) { LeftController = t; _vrSrcL = "XR controller"; } else { RightController = t; _vrSrcR = "XR controller"; }
-            Plugin.Log.LogInfo("VrHands: your " + (left ? "left" : "right") + " hand from the XR controller '" + PathOf(t) + "': 1 capsule along its forward (fallback)");
+            string ty = TrackerType(t);
+            Plugin.Log.LogInfo("VrHands: your " + (left ? "left" : "right") + " hand from the XR controller '" + PathOf(t) + "': 1 capsule along its forward (fallback); tracked node ["
+                               + (ty != null ? "tracked node (" + ty + ")" : "named controller") + "]");
             return true;
         }
 

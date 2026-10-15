@@ -125,6 +125,157 @@ namespace SfMorph
             if (!l.Contains(t)) l.Add(t);
         }
 
+        // ---- 0.7.0 (Embody): the partner, the game's VR state and the VR camera ----
+        // The game's own VR POV (PlayerController.vrPovActive) is unreliable: sometimes the camera is not at his
+        // eyes but elsewhere. So Embody reads these only to find the camera rig and to explain what it sees in
+        // the log; the view is aligned by us, never by asking the game.
+
+        // A game object found once with FindObjectOfType, kept, and searched for again (at most every 2 s) only
+        // when it is gone, so per-frame callers never search.
+        sealed class Seen { public Type T; public UnityEngine.Object Obj; public float Next; }
+        static readonly Seen _seenMove = new Seen(), _seenPlayer = new Seen(), _seenCamSys = new Seen(), _seenVrProc = new Seen();
+        static bool _types2Looked;
+        static Camera _vrCam;
+        static float _nextVrCam;
+        public static string VrCameraSource = "";
+
+        static void Types2()
+        {
+            if (_types2Looked) return;
+            _types2Looked = true;
+            Types();
+            _seenMove.T = _move;
+            foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (a.GetName().Name != "Assembly-CSharp") continue;
+                _seenPlayer.T = a.GetType("PlayerController");
+                _seenCamSys.T = a.GetType("Camera_system");
+                _seenVrProc.T = a.GetType("VR_GameProcess_System");
+            }
+            Plugin.Log.LogInfo("Game rig (VR): " + (_seenPlayer.T != null ? "PlayerController " : "") + (_seenCamSys.T != null ? "Camera_system " : "")
+                               + (_seenVrProc.T != null ? "VR_GameProcess_System" : "") + (_seenPlayer.T == null && _seenCamSys.T == null && _seenVrProc.T == null ? "none of the VR types found" : ""));
+        }
+
+        // The scene's instance of a game type (null for a static class or when absent).
+        static UnityEngine.Object Instance(Seen s)
+        {
+            if (s.T == null || !typeof(UnityEngine.Object).IsAssignableFrom(s.T)) return null;
+            if (s.Obj != null) return s.Obj;
+            if (Time.unscaledTime < s.Next) return null;
+            s.Next = Time.unscaledTime + 2f;
+            s.Obj = UnityEngine.Object.FindObjectOfType(s.T);
+            return s.Obj;
+        }
+
+        // A field or property of a game object, static or instance (the VR_* classes may be either).
+        internal static object Field(object holder, Type t, string name)
+        {
+            if (t == null) return null;
+            const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+            var f = t.GetField(name, all);
+            if (f != null) return f.IsStatic ? f.GetValue(null) : (holder != null ? f.GetValue(holder) : null);
+            var p = t.GetProperty(name, all);
+            var m = p != null ? p.GetGetMethod(true) : null;
+            if (m == null || m.GetParameters().Length != 0) return null;
+            return m.IsStatic ? m.Invoke(null, null) : (holder != null ? m.Invoke(holder, null) : null);
+        }
+
+        internal static Transform AsTransform(object o)
+        {
+            var go = o as GameObject;
+            if (go != null) return go.transform;
+            var c = o as Component;
+            return c != null ? c.transform : null;
+        }
+
+        internal static Camera AsCamera(object o)
+        {
+            var cam = o as Camera;
+            if (cam != null) return cam;
+            var go = o as GameObject;
+            if (go != null) return go.GetComponentInChildren<Camera>(true);
+            var c = o as Component;
+            return c != null ? c.GetComponentInChildren<Camera>(true) : null;
+        }
+
+        // Cached MovePlayerAndGirl.player (0) / .badGuy (1); null when absent. Cheap enough to call every second.
+        public static GameObject Partner(int which)
+        {
+            Types2();
+            var m = Instance(_seenMove);
+            return m == null ? null : Get(m, which == 1 ? "badGuy" : "player") as GameObject;
+        }
+
+        // The game's PlayerController (vrCameraType, vrPovActive, vr_PovCamera_Location, camera_vrCam, vr_Camera_Mov), or null.
+        public static UnityEngine.Object PlayerController()
+        {
+            Types2();
+            return Instance(_seenPlayer);
+        }
+
+        // VR_GameProcess_System.VR_Mode: the object holding the XR rig, hands and UI, or null.
+        public static GameObject VrMode()
+        {
+            Types2();
+            var t = AsTransform(Field(Instance(_seenVrProc), _seenVrProc.T, "VR_Mode"));
+            return t != null ? t.gameObject : null;
+        }
+
+        // A named field of the PlayerController as a transform (vr_PovCamera_Location, vr_Camera_Mov, camera_vrCam).
+        public static Transform PlayerTransform(string field)
+        {
+            var pc = PlayerController();
+            return pc == null ? null : AsTransform(Field(pc, pc.GetType(), field));
+        }
+
+        // "vrCameraType='...', vrPovActive=..." for logs that explain who may be moving the camera.
+        public static string PovInfo()
+        {
+            var pc = PlayerController();
+            if (pc == null) return "PlayerController not found";
+            var t = pc.GetType();
+            return "vrCameraType='" + Field(pc, t, "vrCameraType") + "', vrPovActive=" + Field(pc, t, "vrPovActive");
+        }
+
+        // The camera that renders to the headset: a stereo camera the game names (PlayerController.camera_vrCam,
+        // Camera_system.camera_VRCam), else any stereo camera, else the named ones, else the main camera.
+        // Cached, searched again at most every 2 s; the source is in VrCameraSource.
+        public static Camera VrCamera()
+        {
+            float now = Time.unscaledTime;
+            if (_vrCam != null && now < _nextVrCam && _vrCam.isActiveAndEnabled) return _vrCam;
+            _nextVrCam = now + 2f;
+            Types2();
+            var pc = Instance(_seenPlayer);
+            var cs = Instance(_seenCamSys);
+            var named = new[] { AsCamera(pc != null ? Field(pc, pc.GetType(), "camera_vrCam") : null),
+                                AsCamera(Field(cs, _seenCamSys.T, "camera_VRCam")) };
+            var src = new[] { "PlayerController.camera_vrCam", "Camera_system.camera_VRCam" };
+            Camera best = null; string how = "";
+            for (int i = 0; i < named.Length && best == null; i++)
+                if (named[i] != null && named[i].isActiveAndEnabled && named[i].stereoEnabled) { best = named[i]; how = src[i] + " (stereo)"; }
+            if (best == null)
+                foreach (var c in Camera.allCameras)
+                    if (c != null && c.stereoEnabled) { best = c; how = "the stereo camera"; break; }
+            for (int i = 0; i < named.Length && best == null; i++)
+                if (named[i] != null && named[i].isActiveAndEnabled) { best = named[i]; how = src[i] + " (not stereo: no headset?)"; }
+            if (best == null) { best = Camera.main; how = "Camera.main"; }
+            if (best != _vrCam)
+                Plugin.Log.LogInfo("Embody: VR camera is " + (best != null ? "'" + PathOf(best.transform) + "'" : "missing") + " from " + how);
+            _vrCam = best;
+            VrCameraSource = how;
+            return best;
+        }
+
+        // "Root/Child/Leaf" for logs.
+        public static string PathOf(Transform t)
+        {
+            if (t == null) return "(none)";
+            var s = t.name;
+            for (var p = t.parent; p != null; p = p.parent) s = p.name + "/" + s;
+            return s;
+        }
+
         static object Get(object o, string name)
         {
             if (o == null) return null;
