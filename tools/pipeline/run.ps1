@@ -52,7 +52,17 @@ function Newest($dir) {
     $d.FullName
 }
 $vamRoot = Join-Path $Vam 'Saves\PluginData\SfExport'
-if (-not $GameExport) { $GameExport = Newest (Join-Path $Game 'BepInEx\config\SfMorphs\export') }
+# Her meshes come from the newest export that has her full body (an export made while she's dressed has the outfit's
+# body variants instead); her original skin textures from the newest export that has textures.txt (any outfit).
+$exportRoot = Join-Path $Game 'BepInEx\config\SfMorphs\export'
+$bodyMeshes = 'reika_upperBody_normal.obj', 'reika_lowerBody_normal.obj', 'reika_foot.obj', 'reika_face_a.obj'
+$allExports = Get-ChildItem -Directory $exportRoot -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+if (-not $GameExport) {
+    $full = $allExports | Where-Object { $d = $_.FullName; -not ($bodyMeshes | Where-Object { -not (Test-Path (Join-Path $d $_)) }) } | Select-Object -First 1
+    $GameExport = if ($full) { $full.FullName } else { Newest $exportRoot }
+}
+$texExport = $allExports | Where-Object { Test-Path (Join-Path $_.FullName 'textures.txt') } | Select-Object -First 1
+$TextureExport = if ($texExport) { $texExport.FullName } else { $GameExport }
 $rows = Get-Content (Join-Path $GameExport 'meshes.txt') | Where-Object { $_ -and -not $_.StartsWith('#') }
 if (-not $rows) { throw "meshes.txt in $GameExport lists no meshes: export her again with SfMorph 0.5.1 or newer" }
 $morphs = if ($OutRoot) { $OutRoot } else { Join-Path $Game 'BepInEx\config\SfMorphs\morphs' }
@@ -137,7 +147,7 @@ function Convert-Export($exportDir, $charName, $quiet) {
         Set-Content $runLog "VaM export : $exportDir`nGame export: $GameExport`nOutput     : $out" -Encoding UTF8
         Get-ChildItem $out -File -Filter '*.morph.txt' -ErrorAction SilentlyContinue | Remove-Item
         foreach ($stale in 'summary.txt', 'stage.npz') { Remove-Item (Join-Path $out "_check\$stale") -ErrorAction SilentlyContinue }
-        Write-Host "VaM export : $exportDir`nGame export: $GameExport`nOutput     : $out"
+        Write-Host "VaM export : $exportDir`nGame export: $GameExport (textures: $TextureExport)`nOutput     : $out"
         $ErrorActionPreference = 'Continue'   # (Windows PowerShell 5.1 turns native stderr into errors otherwise)
         & $py.FullName (Join-Path $here 'sfpipe.py') --game $GameExport --vam $exportDir --out $out --name $charName 2>&1 | ForEach-Object {
             $t = "$_"; Add-Content $runLog $t -Encoding UTF8
@@ -154,7 +164,7 @@ function Convert-Export($exportDir, $charName, $quiet) {
         }
         $args2 = @('-b', '--factory-startup', '--python-exit-code', '1', '-P', (Join-Path $here 'blend.py'), '--', '--out', $out, '--vam', $exportDir, '--size', $TextureSize)
         if ($NoBake) { $args2 += '--no-bake' }
-        $env:SFP_GAME_EXPORT = $GameExport   # bake.py: her original textures (textures.txt) for the face-only seam blend
+        $env:SFP_GAME_EXPORT = $TextureExport   # bake.py: her original textures (textures.txt) for the face-only seam blend
         & $Blender @args2 2>&1 | ForEach-Object {
             $t = "$_"; Add-Content $runLog $t -Encoding UTF8
             if ($t -match '^\[blend\]' -and (-not $quiet -or $t -match 'WARN|baked|done in')) { Write-Host $t }

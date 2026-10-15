@@ -555,10 +555,18 @@ def face_only(Z, names, out, size, make_obj, u2b, log):
     her = srgb_to_lin(read_pixels(her_col, res, log)[:, :, :3])
     vam = srgb_to_lin(read_pixels(vam_a, res, log)[:, :, :3])
     band = (mask > BAND_LO) & (mask < BAND_HI)
+    # skin pixels only: her face texture has dark hair strands at the sides of the neck band (they read her tone 40 %
+    # too dark), so drop dark/very saturated texels on both sides and compare medians
+    def skin(a):
+        lum = a @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+        return (lum > 0.12) & (lum < 0.95) & (a.max(-1) - a.min(-1) < 0.6 * np.maximum(a.max(-1), 1e-4))
+    band &= skin(her) & skin(vam)
     nb = int(band.sum())
     gain = np.ones(3, np.float32)
     if nb >= 200:
-        mh = her[band].mean(0); mv = vam[band].mean(0)
+        # what's on screen: her neck = her x tint; the face-only face = vam x gain (it's divided by the tint, then the
+        # game multiplies the tint back), so the gain matches vam to her x tint
+        mh = np.median(her[band] * t, axis=0); mv = np.median(vam[band], axis=0)
         gain = np.clip(mh / np.maximum(mv, 1e-4), *GAIN_RANGE)
         gain = (gain ** TONE_STRENGTH).astype(np.float32)
         log('face-only: tone shift over %d band pixels: her mean %s, VaM mean %s -> gain %s' % (
