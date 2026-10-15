@@ -221,6 +221,7 @@ namespace SfMorph
         MorphSet _set;
         List<SkinnedMeshRenderer> _builtFor;
         bool _texOn;
+        int _texKey;   // which skins are on: 1 = face, 2 = body
         float _nextCheck;
         string _status = "";
         public string Status
@@ -252,7 +253,7 @@ namespace SfMorph
             if (!rebuild && Time.unscaledTime >= _nextCheck)
             {
                 _nextCheck = Time.unscaledTime + 2f;
-                if (_texOn && look.MorphSkin) ApplyTextures(c, set);  // re-apply if DefaultSetting() put its own back
+                if (_texOn) ApplyTextures(c, set, _texKey);  // re-apply if DefaultSetting() put its own back
             }
             if (rebuild) Build(c, set);
 
@@ -278,8 +279,14 @@ namespace SfMorph
                 }
             }
             HideMeshes(c, set);
-            if (look.MorphSkin && !_texOn) { ApplyTextures(c, set); _texOn = true; }
-            else if (!look.MorphSkin && _texOn) { RestoreTextures(); _texOn = false; }
+            // face and body skins switch separately (the face's texture alone gives the likeness on her body's skin)
+            int key = (look.MorphSkin ? 1 : 0) | (look.MorphSkinBody ? 2 : 0);
+            if (key != (_texOn ? _texKey : 0))
+            {
+                if (_texOn) RestoreTextures();
+                _texOn = key != 0; _texKey = key;
+                if (_texOn) ApplyTextures(c, set, key);
+            }
         }
 
         string _why = "";
@@ -341,7 +348,7 @@ namespace SfMorph
             {
                 ReleaseMeshes(true); RestoreTextures(); ShowHidden(); _texOn = false; _set = set;
                 foreach (var t in _tex.Values) if (t != null) UnityEngine.Object.Destroy(t);
-                _tex.Clear(); _badTex.Clear();
+                _tex.Clear(); _badTex.Clear(); _texInfo.Clear();
             }
             _builtFor = new List<SkinnedMeshRenderer>(c.Renderers);
             // renderers that left her (hidden clothes, swapped parts) get their own mesh back
@@ -568,10 +575,21 @@ namespace SfMorph
 
         static readonly string[] AlbedoProps = { "_ColorMap", "_BaseColorMap", "_BaseMap", "_MainTex", "_AlbedoMap", "_Albedo", "_DiffuseMap", "_Diffuse" };
         static readonly string[] NormalProps = { "_NormalMap", "_BumpMap" };
+        static readonly string[] SmoothProps = { "_SmoothnessMap" };
 
-        void ApplyTextures(Character c, MorphSet set)
+        // Normal maps stay uncompressed (DXT5 normals band on skin); a later config may turn compression on.
+        public static bool CompressNormals = false;
+        // The character's gloss as the skin's smoothness map: off until we know how the game's skin shader reads
+        // _SmoothnessMap (VaM gloss maps are dark; applied blindly they can make her skin look dull).
+        public static bool UseSmoothness = false;
+        readonly Dictionary<string, string> _texInfo = new Dictionary<string, string>();   // cache key -> "8192², 2.1 s"
+        double _loadMs;                                                                     // load+compress time of this ApplyTextures call
+        static readonly HashSet<string> _loggedNoProp = new HashSet<string>();
+
+        void ApplyTextures(Character c, MorphSet set, int key)
         {
             var done = new List<string>();
+            _loadMs = 0;
             foreach (var r in c.Renderers)
             {
                 if (r == null) continue;
@@ -581,27 +599,38 @@ namespace SfMorph
                     var mname = mat.name.Replace(" (Instance)", "").Trim();
                     foreach (var t in set.Textures)
                     {
+                        if (((t[0].IndexOf("face", StringComparison.OrdinalIgnoreCase) >= 0) ? 1 : 2) is int part && (key & part) == 0) continue;
                         if (t[0] != mname) continue;
                         if (_loggedMats.Add(mname))
                             Plugin.Log.LogInfo("Material '" + mname + "' (" + mat.shader.name + ") textures: " + string.Join(", ", mat.GetTexturePropertyNames()));
-                        bool normal = t[1] == "normal";
+                        string kind = t[1] == "normal" ? "normal" : t[1] == "smooth" ? "smooth" : "albedo";
+                        if (kind == "smooth" && !UseSmoothness) continue;
+                        bool normal = kind == "normal";
                         string prop = null;
-                        foreach (var pn in normal ? NormalProps : AlbedoProps) if (mat.HasProperty(pn)) { prop = pn; break; }
-                        if (prop == null) continue;
-                        var tex = Load(set, t[2], normal);
+                        foreach (var pn in normal ? NormalProps : kind == "smooth" ? SmoothProps : AlbedoProps) if (mat.HasProperty(pn)) { prop = pn; break; }
+                        if (prop == null)
+                        {
+                            if (_loggedNoProp.Add(mname + "|" + kind)) Plugin.Log.LogInfo("Material '" + mname + "' has no property for the " + kind + " texture " + t[2] + "; skipped");
+                            continue;
+                        }
+                        string info;
+                        var tex = Load(set, t[2], kind, out info);
                         if (_loggedProps.Add(mname)) LogProps(mname, mat);
-                        if (tex != null && !normal) WhiteTint(mat);
+                        if (tex != null && kind == "albedo") WhiteTint(mat);
                         if (tex == null || mat.GetTexture(prop) == tex) continue;
                         Dictionary<string, Saved> sv;
                         if (!_saved.TryGetValue(mat, out sv)) { sv = new Dictionary<string, Saved>(); _saved[mat] = sv; }
                         if (!sv.ContainsKey(prop)) sv[prop] = new Saved { Tex = mat.GetTexture(prop), Keyword = mat.IsKeywordEnabled("_NORMALMAP") };
                         mat.SetTexture(prop, tex);
                         if (normal) mat.EnableKeyword("_NORMALMAP");
-                        done.Add(mname + "." + prop);
+                        done.Add(mname + "." + prop + " [" + kind + "] (" + info + ")");
                     }
                 }
             }
             if (done.Count > 0) Plugin.Log.LogInfo("Character '" + set.Name + "' textures: " + string.Join(", ", done.ToArray()));
+            if (_loadMs > 3000.0)
+                Plugin.Log.LogInfo("Loading the textures took " + (_loadMs / 1000.0).ToString("0.0", CultureInfo.InvariantCulture)
+                                   + " s; the bake size can be lowered with run.ps1 -TextureSize 4096");
         }
 
         static readonly string[] TintProps = { "_SkinColor", "_BaseColor", "_Color" };
@@ -646,21 +675,62 @@ namespace SfMorph
             catch (Exception e) { Plugin.Log.LogWarning("Couldn't list the properties of '" + mname + "': " + e.Message); }
         }
 
-        Texture2D Load(MorphSet set, string file, bool normal)
+        // kind: albedo (sRGB, DXT5), smooth (linear, DXT5), normal (linear, uncompressed unless CompressNormals).
+        // Loaded readable, compressed, then made non-readable. Any failure skips the texture (never applied).
+        Texture2D Load(MorphSet set, string file, string kind, out string info)
         {
             var key = set.Dir + "|" + file;
             Texture2D t;
-            if (_tex.TryGetValue(key, out t) && t != null) return t;
+            info = "";
+            if (_tex.TryGetValue(key, out t) && t != null)
+            {
+                string cached;
+                if (_texInfo.TryGetValue(key, out cached)) info = cached;
+                return t;
+            }
             if (_badTex.Contains(key)) return null;
             var path = set.TexturePath(file);
             if (!File.Exists(path)) { _badTex.Add(key); Plugin.Log.LogWarning("Missing " + path); return null; }
-            t = new Texture2D(2, 2, TextureFormat.RGBA32, true, normal) { name = "SfMorph " + file, anisoLevel = 4 };
-            if (!t.LoadImage(File.ReadAllBytes(path), true))
+            bool linear = kind != "albedo";
+            bool compress = kind == "normal" ? CompressNormals : true;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            t = null;
+            try
             {
-                UnityEngine.Object.Destroy(t); _badTex.Add(key);
-                Plugin.Log.LogWarning("Couldn't decode " + path); return null;
+                t = new Texture2D(2, 2, TextureFormat.RGBA32, true, linear) { name = "SfMorph " + file, anisoLevel = 8 };
+                if (!t.LoadImage(File.ReadAllBytes(path), false))   // readable: Compress needs the pixels
+                {
+                    UnityEngine.Object.Destroy(t); _badTex.Add(key);
+                    Plugin.Log.LogWarning("Couldn't decode " + path + "; skipped"); return null;
+                }
+                string note = "";
+                if (compress)
+                {
+                    if (t.width % 4 == 0 && t.height % 4 == 0)
+                    {
+                        t.Compress(true);
+                        if (t.format == TextureFormat.RGBA32) note = ", not compressed";
+                    }
+                    else note = ", not compressed (size not a multiple of 4)";
+                }
+                t.Apply(false, true);   // upload and drop the CPU copy
+                sw.Stop();
+                double ms = sw.Elapsed.TotalMilliseconds;
+                _loadMs += ms;
+                info = (t.width == t.height ? t.width + "²" : t.width + "x" + t.height) + ", "
+                       + (ms / 1000.0).ToString("0.0", CultureInfo.InvariantCulture) + " s" + note;
+                if (note.Length > 0) Plugin.Log.LogWarning(file + ": " + info);
+            }
+            catch (Exception e)
+            {
+                if (t != null) UnityEngine.Object.Destroy(t);
+                _badTex.Add(key);
+                Plugin.Log.LogWarning("Couldn't load/compress " + path + " (" + e.Message + "); skipped");
+                info = "";
+                return null;
             }
             _tex[key] = t;
+            _texInfo[key] = info;
             return t;
         }
 

@@ -89,6 +89,28 @@ class Surface:
         return bp, best, bf
 
 
+def _zheight(srf, p, k=16):
+    """Surface height at the (x, y) of points p: z of the front-most triangle of srf that covers it (triangles seen from
+    +z, barycentric in xy). Returns (z, found)."""
+    k = min(k, len(srf.f))
+    _, idx = srf.tree.query(p, k=k)
+    idx = idx.reshape(len(p), k)
+    zbest = np.full(len(p), -np.inf)
+    for j in range(k):
+        t = srf.f[idx[:, j]]
+        a, b, c = srf.v[t[:, 0]], srf.v[t[:, 1]], srf.v[t[:, 2]]
+        den = (b[:, 1] - c[:, 1]) * (a[:, 0] - c[:, 0]) + (c[:, 0] - b[:, 0]) * (a[:, 1] - c[:, 1])
+        den = np.where(np.abs(den) < 1e-14, 1e-14, den)
+        u = ((b[:, 1] - c[:, 1]) * (p[:, 0] - c[:, 0]) + (c[:, 0] - b[:, 0]) * (p[:, 1] - c[:, 1])) / den
+        v = ((c[:, 1] - a[:, 1]) * (p[:, 0] - c[:, 0]) + (a[:, 0] - c[:, 0]) * (p[:, 1] - c[:, 1])) / den
+        w = 1 - u - v
+        inside = (u >= -1e-6) & (v >= -1e-6) & (w >= -1e-6)
+        z = u * a[:, 2] + v * b[:, 2] + w * c[:, 2]
+        better = inside & (z > zbest)
+        zbest[better] = z[better]
+    return zbest, np.isfinite(zbest)
+
+
 def nonrigid_icp(x0, faces, normals_fn, surfaces, lab, log, stiff=None, nodata=None,
                  alphas=(40, 20, 10, 5, 2.5, 1.2, 0.6, 0.3, 0.15), inner=3,
                  dmax=(0.15, 0.10, 0.07, 0.05, 0.035, 0.025, 0.018, 0.013, 0.01), min_dot=0.5):
@@ -286,25 +308,143 @@ def relax_project(x, faces, x_rest, surfaces, lab, normals_fn, match, movable, i
     return x
 
 
-def surface_attach(v, skin_v, skin_f, skin_d, sign=1.0):
-    """Overlays lying on the skin (areola disc, nails, tattoo/hair decals): each vertex keeps its spot on the
-    skin (closest triangle, barycentric) and its height above it along the triangle normal."""
-    srf = Surface(skin_v, skin_f, np.zeros((len(skin_f), 3)))
-    q, dist, fi = srf.nearest(v, k=12)
+def _bary(skin_v, skin_f, p, fi):
+    """Barycentric coordinates (bu, bv, bw) of points p (on or near triangles fi)."""
     tri = skin_f[fi]
     a, b, c = skin_v[tri[:, 0]], skin_v[tri[:, 1]], skin_v[tri[:, 2]]
-    v0, v1, v2 = b - a, c - a, q - a
+    v0, v1, v2 = b - a, c - a, p - a
     d00 = np.einsum('ij,ij->i', v0, v0); d01 = np.einsum('ij,ij->i', v0, v1); d11 = np.einsum('ij,ij->i', v1, v1)
     d20 = np.einsum('ij,ij->i', v2, v0); d21 = np.einsum('ij,ij->i', v2, v1)
     den = np.maximum(d00 * d11 - d01 * d01, 1e-30)
-    bv = (d11 * d20 - d01 * d21) / den; bw = (d00 * d21 - d01 * d20) / den; bu = 1 - bv - bw
-    def frame(p):
+    bv = (d11 * d20 - d01 * d21) / den; bw = (d00 * d21 - d01 * d20) / den
+    return 1 - bv - bw, bv, bw
+
+
+def surface_attach(v, skin_v, skin_f, skin_d, sign=1.0, vn0=None, vn1=None):
+    """Overlays lying on the skin (nails, tattoo/hair decals): each vertex keeps its spot on the skin (closest triangle,
+    barycentric) and its height above it, along the skin normal there.
+    vn0, vn1: the skin's vertex normals before and after the fit (one per skin vertex, already facing outwards): the
+    frame uses their barycentric interpolation, so a bumpy or folded face-normal field cannot tear the overlay. Without
+    them the triangle face normal (times sign) is used."""
+    srf = Surface(skin_v, skin_f, np.zeros((len(skin_f), 3)))
+    q, dist, fi = srf.nearest(v, k=12)
+    tri = skin_f[fi]
+    bu, bv, bw = _bary(skin_v, skin_f, q, fi)
+    use_vn = vn0 is not None and vn1 is not None
+
+    def frame(p, vn):
         A, B, C = p[tri[:, 0]], p[tri[:, 1]], p[tri[:, 2]]
-        n = np.cross(B - A, C - A) * sign
-        n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-20)
+        if use_vn:
+            n = vn[tri[:, 0]] * bu[:, None] + vn[tri[:, 1]] * bv[:, None] + vn[tri[:, 2]] * bw[:, None]
+        else:
+            n = np.cross(B - A, C - A) * sign
+        n = n / np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-20)
         return A * bu[:, None] + B * bv[:, None] + C * bw[:, None], n
-    p0, n0 = frame(skin_v)
-    p1, n1 = frame(skin_v + skin_d)
+    p0, n0 = frame(skin_v, vn0)
+    p1, n1 = frame(skin_v + skin_d, vn1)
     h = np.einsum('ij,ij->i', v - p0, n0)
     tang = (v - p0) - h[:, None] * n0
     return p1 + tang + h[:, None] * n1 - v
+
+
+def _vnormals(v, f):
+    n = np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]])
+    out = np.zeros_like(v)
+    for k in range(3):
+        np.add.at(out, f[:, k], n)
+    return out / np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-20)
+
+
+def cap_attach(v, faces, skin_v, skin_d, target, scale=0.008, ramp=0.008, relief=1.0, reach=0.04, log=None):
+    """Offsets for a cap that fills a hole in the skin (her nipple overlay: areola, nipple and the breast tip; the skin
+    mesh has no vertices under it). Nearest-skin attachment cannot place such a cap: its vertices are up to 3 cm from the
+    rim and every rim triangle gives a different frame (the overlay tears). Instead:
+      1. the cap's smooth shape S (implicit cotangent smoothing at the given scale, border fixed) is moved by the harmonic
+         interpolation of the fitted skin's offsets at the cap's border (the border vertices sit on skin vertices);
+      2. S is put onto the target surface (VaM's own skin there: its height at the same x, y, within reach), blended in
+         over ramp metres from the border;
+      3. her relief (the cap minus S, along her normals: the nipple's bump) is added back along the new normals.
+    skin_v, skin_d: fitted skin vertices and offsets (bind); target: fit.Surface of the VaM skin."""
+    # work on the welded cap (UV seams split vertices; they must move together)
+    widx, nw = weld(v)
+    cnt = np.bincount(widx, minlength=nw).astype(float)
+    vw = np.zeros((nw, 3)); np.add.at(vw, widx, v); vw /= cnt[:, None]
+    fw = widx[faces]
+    fw = fw[(fw[:, 0] != fw[:, 1]) & (fw[:, 1] != fw[:, 2]) & (fw[:, 2] != fw[:, 0])]
+    d = _cap_attach(vw, fw, skin_v, skin_d, target, scale, ramp, relief, reach, log)
+    return d[widx] + (vw[widx] - v)
+
+
+def _cot_laplacian(v, f):
+    """Cotangent Laplacian (positive semi-definite, weights clamped at 1e-3 so slivers stay harmless) and the lumped
+    vertex areas."""
+    n = len(v)
+    I, J, W = [], [], []
+    area = np.zeros(n)
+    for k in range(3):
+        i, j, o = f[:, k], f[:, (k + 1) % 3], f[:, (k + 2) % 3]
+        a, b = v[i] - v[o], v[j] - v[o]
+        cr = np.linalg.norm(np.cross(a, b), axis=1)
+        cot = np.einsum('ij,ij->i', a, b) / np.maximum(cr, 1e-18)
+        w = 0.5 * np.maximum(cot, 1e-3)
+        I += [i, j]; J += [j, i]; W += [w, w]
+        if k == 0:
+            tri = 0.5 * cr
+            for c in range(3):
+                np.add.at(area, f[:, c], tri / 3)
+    I = np.concatenate(I); J = np.concatenate(J); W = np.concatenate(W)
+    Wm = sp.coo_matrix((W, (I, J)), shape=(n, n)).tocsr()
+    return (sp.diags(np.asarray(Wm.sum(1)).ravel()) - Wm).tocsr(), np.maximum(area, 1e-12)
+
+
+def _cap_attach(v, faces, skin_v, skin_d, target, scale, ramp, relief, reach, log):
+    n = len(v)
+    # border: edges that belong to one triangle
+    e = np.sort(np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]]), axis=1)
+    ue, cnt = np.unique(e, axis=0, return_counts=True)
+    border = np.zeros(n, bool); border[ue[cnt == 1].ravel()] = True
+    Lc, Ma = _cot_laplacian(v, faces)
+    Bi = np.flatnonzero(border); Ii = np.flatnonzero(~border)
+    S = v.copy()
+    if len(Ii):
+        # implicit smoothing of the cap, border fixed: (M + t Lc) S = M v, t = scale^2 (scale: the size of the bumps that
+        # count as relief)
+        A = (sp.diags(Ma[Ii]) + scale ** 2 * Lc[Ii][:, Ii]).tocsc()
+        rhs = Ma[Ii, None] * v[Ii] - scale ** 2 * (Lc[Ii][:, Bi] @ v[Bi])
+        solve = spla.factorized(A)
+        for k in range(3):
+            S[Ii, k] = solve(rhs[:, k])
+    # 1. displacement of the cap: harmonic (inverse edge length weights) between the fitted skin's offsets at its
+    # border (the border vertices sit on skin vertices), so it cannot wiggle or overshoot the rim's own strain
+    skin_tree = cKDTree(skin_v)
+    Lap = Lc
+    Bi = np.flatnonzero(border); Ii = np.flatnonzero(~border)
+    D = np.zeros((n, 3))
+    if len(Bi):
+        dB = skin_d[skin_tree.query(v[Bi])[1]]
+        D[Bi] = dB
+        if len(Ii):
+            A = (Lap[Ii][:, Ii] + 1e-9 * sp.eye(len(Ii))).tocsc()
+            rhs = -(Lap[Ii][:, Bi] @ dB)
+            solve = spla.factorized(A)
+            for k in range(3):
+                D[Ii, k] = solve(rhs[:, k])
+    s1 = S + D
+    # 2. onto the target surface (its height at the cap's own x, y: the cap faces forward), from the border inwards
+    zt, found = _zheight(target, s1)
+    dist = np.abs(zt - s1[:, 2])
+    ok = found & (dist < reach)
+    q = s1.copy(); q[ok, 2] = zt[ok]
+    el = np.linalg.norm(v[faces[:, 0]] - v[faces[:, 1]], axis=1)
+    g = sp.coo_matrix((np.r_[el, el], (np.r_[faces[:, 0], faces[:, 1]], np.r_[faces[:, 1], faces[:, 0]])), shape=(n, n)).tocsr()
+    hop = sp.csgraph.dijkstra(g, directed=False, indices=np.flatnonzero(border), min_only=True) if border.any() else np.full(n, np.inf)
+    w = np.clip(hop / ramp, 0, 1); w = w * w * (3 - 2 * w)
+    w = np.where(ok, w, 0.0)
+    base = s1 + (q - s1) * w[:, None]
+    # 3. her relief along the normals
+    b = np.einsum('ij,ij->i', v - S, _vnormals(v, faces))
+    out = base + relief * b[:, None] * _vnormals(base, faces)
+    if log:
+        log('  cap: %d vertices, %d on the border, %d snapped to the VaM surface (mean move %.2f mm), relief %.2f..%.2f mm' % (
+            n, border.sum(), (w > 0).sum(), 1000 * np.linalg.norm((q - s1)[w > 0], axis=1).mean() if (w > 0).any() else 0, 1000 * b.min(), 1000 * b.max()))
+    return out - v

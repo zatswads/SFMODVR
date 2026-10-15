@@ -10,7 +10,7 @@ SF Body Morphs character pipeline: a VaM character's shape and skin onto her, fo
 
 Paths are remembered in %LOCALAPPDATA%\SfMorph\pipeline.json (-NoSave: not this time), so later runs need nothing.
 Inputs: the VaM export(s) above and the newest folder in <Game>\BepInEx\config\SfMorphs\export\ (override with
--VamExport / -GameExport). Output: <Game>\BepInEx\config\SfMorphs\morphs\<Name>\ (the game loads it from there; override
+-VamExport / -GameExport). -TextureSize is the body's texture size (default 8192; face and foot get half): albedo, normal and smoothness maps. Output: <Game>\BepInEx\config\SfMorphs\morphs\<Name>\ (the game loads it from there; override
 the parent with -OutRoot), with _check\summary.txt (PASS/WARN lines), _check\report.txt and before/after renders.
 -All keeps going when a character fails and ends with a table; a failed character has no character.txt, so the game
 ignores it and the next -All tries it again.
@@ -23,7 +23,7 @@ param(
     [string]$VamExport,
     [string]$GameExport,
     [string]$OutRoot,
-    [int]$TextureSize = 4096,
+    [int]$TextureSize = 8192,
     [switch]$NoBake,
     [switch]$All,
     [switch]$Force,

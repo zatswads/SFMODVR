@@ -1,10 +1,11 @@
 """SF Body Morphs character pipeline, Blender stage: before/after renders and texture bake.
 
-    blender -b --factory-startup -P blend.py -- --out <morph dir> --vam <SfExport dir> [--no-bake] [--size 4096]
+    blender -b --factory-startup -P blend.py -- --out <morph dir> --vam <SfExport dir> [--no-bake] [--size 8192]
     blender -b --factory-startup -P blend.py -- --replay <replay.npz>     (offline pose replay from replay.py: original | converted)
 
 Reads <out>/_check/stage.npz written by sfpipe.py. Renders go to <out>/_check/*.png; baked textures to
-<out>/tex_<material>_albedo.png and _normal.png (her UV layout, for SfMorph's loader).
+<out>/tex_<material>_albedo.jpg, _normal.png and _smooth.png (her UV layout, for SfMorph's loader). --size is the
+body's texture size (face and foot get half of it).
 """
 import os
 import sys
@@ -24,7 +25,7 @@ def arg(name, default=None):
 
 OUT = arg('--out')
 VAMDIR = arg('--vam')
-SIZE = int(arg('--size', '4096'))
+SIZE = int(arg('--size', '8192'))
 REPLAY = arg('--replay')
 CHK = os.path.join(OUT, '_check') if OUT else os.path.dirname(os.path.abspath(REPLAY or '.'))
 if REPLAY:   # the replay needs no stage.npz
@@ -253,7 +254,7 @@ def append_summary(rows):
         with open(path, encoding='utf-8') as f:
             lines = [l for l in f.read().splitlines() if l]
     head = lines[0] if lines and lines[0].startswith('#') else '# ' + os.path.basename(os.path.normpath(OUT))
-    body = [l for l in lines if not l.startswith('#')] + rows
+    body = [l for l in lines if not l.startswith('#') and 'textures baked:' not in l and not l.startswith('WARN  bake:')] + rows
     npass = sum(l.startswith('PASS') for l in body)
     head = head.split(':')[0] + ': %d PASS, %d WARN' % (npass, len(body) - npass)
     with open(path, 'w', encoding='utf-8', newline=chr(10)) as f:
@@ -278,12 +279,14 @@ if __name__ == '__main__':
         rows.append('WARN  renders failed (%s: %s); the morph and textures are not affected' % (type(e).__name__, e))
     if '--no-bake' not in ARGS:
         import bake
+        tb = time.time()
         try:
             written, warns = bake.run(Z, NAMES, OUT, VAMDIR, SIZE, make_obj, u2b, clear, log)
         except Exception as e:  # noqa: BLE001
             written, warns = [], ['bake stopped (%s: %s)' % (type(e).__name__, e)]
             log('WARN: ' + warns[0])
-        rows.append(('PASS  ' if len(written) >= 6 else 'WARN  ') + 'textures baked: %d of 6 (albedo and normal for body, face, foot)' % len(written))
+        log('baked %d textures in %.0f s' % (len(written), time.time() - tb))
+        rows.append(('PASS  ' if len(written) >= 9 else 'WARN  ') + 'textures baked: %d of 9 (albedo, normal, smooth x body, face, foot)' % len(written))
         rows += ['WARN  bake: ' + w for w in warns]
     append_summary(rows)
     log('done in %.0f s' % (time.time() - t0))

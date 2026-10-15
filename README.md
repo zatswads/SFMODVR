@@ -41,6 +41,18 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.7.4:
+- Breasts follow the character: her nipple mesh is a cap over a hole in her upper body; it is now fitted as a cap
+  (harmonic from the fitted rim, snapped to the character's skin, her nipple relief kept) instead of being glued to
+  half-fitted skin (it tore: edges stretched 22x). Breast projection matches the character within 1 mm.
+- Face skin and body skin textures switch separately (Characters tab): facial likeness only = Body 0 %, Face 100 %,
+  face skin on, body skin off.
+- Sharper skin: 8K body texture (VaM's texel density), 4K face and feet, compressed on load (load time logged).
+  The character's gloss is baked as a smoothness map but not applied yet (off until we know how the skin shader reads it).
+- Pose check tools: the Characters tab records 6 s of her animation; tools/pipeline/replay.py replays it on her and the
+  character offline with renders and metrics.
+Re-run tools/pipeline/run.ps1 for existing characters.
+
 0.7.3:
 - Per-vertex contact on the GPU: a compute shader (dist/sfmorph_shaders, copy it next to SfMorph.dll) presses her skinned
   vertices out of your hands, fingers and the partner's hands right after Unity skins her and before anything renders, so the

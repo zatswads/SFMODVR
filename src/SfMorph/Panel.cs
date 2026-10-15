@@ -322,8 +322,13 @@ namespace SfMorph
             GUILayout.Label("Face: the character's face and head. Body: her figure (lower it if the body looks too heavy in her animations).", _hint);
             bool j = GUILayout.Toggle(c.Look.MorphJoints, " Move her joints to the new shape (limbs bend in the right place)");
             if (j != c.Look.MorphJoints) { c.Look.MorphJoints = j; _body.Touch(c); }
-            bool sk = GUILayout.Toggle(c.Look.MorphSkin, " Skin textures baked from the VaM character");
+            GUILayout.BeginHorizontal();
+            bool sk = GUILayout.Toggle(c.Look.MorphSkin, " Face skin texture", GUILayout.Width(200));
             if (sk != c.Look.MorphSkin) { c.Look.MorphSkin = sk; _body.Touch(c); }
+            bool skb = GUILayout.Toggle(c.Look.MorphSkinBody, " Body skin texture");
+            if (skb != c.Look.MorphSkinBody) { c.Look.MorphSkinBody = skb; _body.Touch(c); }
+            GUILayout.EndHorizontal();
+            GUILayout.Label("Facial likeness only: Body 0 %, Face 100 %, face skin on, body skin off.", _hint);
             if (!_p.Apply.Value) GUILayout.Label("off: 'Apply changes' is off", _off);
             else if (c.Morph.Status.Length > 0) GUILayout.Label(c.Morph.Status, c.Morph.Status.StartsWith("off") ? _off : _hint);
             GUILayout.Label("Clothes follow the skin by its nearest vertex and are pushed out where the new shape would poke through. " +
