@@ -175,7 +175,7 @@ StructuredBuffer<float4> _Waves;     // 2 per wave: (origin xyz world, age s), (
 RWStructuredBuffer<uint> _Hits;      // [0]: canonical vertices Depth found pressed (read back: her own limbs run the full chain only while they touch)
 StructuredBuffer<int> _Map;          // ApplyMap: per vertex of an overlay mesh (areola, tattoo...) the body canonical vertex under it, -1 = its own field
 StructuredBuffer<float4> _ParentGrad;// ApplyMap: the body renderer's _Grad of this frame
-uint _WaveCount, _TanOff, _NoField, _MarkOn, _ParentOn, _OwnOn;
+uint _WaveCount, _TanOff, _NoField, _MarkOn, _ParentOn, _OwnOn, _CountHits;
 float _SoftScale, _Depth;            // Tissue.SoftScale(softness), ContactSettings.Depth: cap = (hard + soft x _SoftScale) x _Depth
 float _SkirtLen, _Bulge, _BulgeCap, _NormalBend, _Dt, _MarkGain, _MarkFade, _DentFade, _WaveAmt;
 float4 _BendAmt0, _BendAmt1, _BendAmt2;   // 9 slot amplitudes (m): [0..3], [4..7], [8]
@@ -250,7 +250,7 @@ void Depth(uint3 id : SV_DispatchThreadID)
         depth = max(depth, s);
     }
     _FieldOut[v] = depth > 0.0 && cap > 1e-6 ? Press(depth, cap) : 0.0;
-    if (depth > 0.0) InterlockedAdd(_Hits[0], 1u);
+    if (_CountHits != 0u && depth > 0.0) InterlockedAdd(_Hits[0], 1u);   // only when the count is read back (one address: keep atomics rare)
 }
 
 // Dilate: the skirt. A vertex takes the largest neighbour value decayed by the distance to it, so the dent's edge falls off over _SkirtLen

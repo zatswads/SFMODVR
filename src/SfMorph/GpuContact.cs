@@ -101,7 +101,7 @@ namespace SfMorph
             PBendAmt0 = Shader.PropertyToID("_BendAmt0"), PBendAmt1 = Shader.PropertyToID("_BendAmt1"), PBendAmt2 = Shader.PropertyToID("_BendAmt2"),
             PDisc = Shader.PropertyToID("_Disc"), PDiscAmt = Shader.PropertyToID("_DiscAmt"),
             PHits = Shader.PropertyToID("_Hits"), PMap = Shader.PropertyToID("_Map"), PParentGrad = Shader.PropertyToID("_ParentGrad"),
-            PParentOn = Shader.PropertyToID("_ParentOn"), POwnOn = Shader.PropertyToID("_OwnOn");
+            PParentOn = Shader.PropertyToID("_ParentOn"), POwnOn = Shader.PropertyToID("_OwnOn"), PCountHits = Shader.PropertyToID("_CountHits");
         static readonly uint[] ZeroHits = new uint[1];
         const int SelfHitHold = 30;               // frames a positive probe keeps the full chain on (readbacks arrive 1-3 frames late)
 
@@ -417,7 +417,7 @@ namespace SfMorph
             s.Bake = b;
             s.V2 = true;
             s.MarkUntil = 0f;
-            s.SelfHits = 0; s.HitFrame = -1000;
+            s.SelfHits = 0; s.HitFrame = -1000; s.HitInflight = false;
             if (s.OnHits == null)
             {
                 var st = s;
@@ -769,10 +769,9 @@ namespace SfMorph
                     }
                 if (v2 && _set.Marks && (s.Depth || s.DiscMask != 0)) s.MarkUntil = now + 4f * Mathf.Max(3f, _set.MarkFade);   // pressure or a slap: fade for 4 time constants
                 // marks switched off: wipe what is left once, so switching them on again doesn't bring back an old print
-                s.ClearMarks = v2 && !_set.Marks && s.MarkUntil > 0f;
-                if (s.ClearMarks) s.MarkUntil = 0f;
-                s.MarkOn = v2 && _set.Marks && now < s.MarkUntil;
                 bool work = s.Depth || s.Bend || s.Wave || s.DiscMask != 0;
+                s.ClearMarks = v2 && !_set.Marks && s.MarkUntil > 0f && !work;   // on the first frame without other work; MarkUntil cleared once it dispatched
+                s.MarkOn = v2 && _set.Marks && now < s.MarkUntil;
                 s.Decay = v2 && !work && (s.MarkOn || s.ClearMarks);
                 s.Work = work;
                 s.MapOnly = false;
@@ -904,7 +903,12 @@ namespace SfMorph
             cs.SetInt(PStride, s.Stride); cs.SetInt(PPosOff, s.PosOff); cs.SetInt(PNrmOff, s.NrmOff); cs.SetInt(PTanOff, s.TanOff);
             cs.SetMatrix(PToWorld, toWorld); cs.SetMatrix(PToLocal, toWorld.inverse);
             cs.SetFloat(PNormalBend, _set.Normals ? 1f : 0f);
-            if (s.MapOnly) return ApplyFinal(s, vb, groups, false);   // nothing of its own: follow the body
+            if (s.MapOnly)   // nothing of its own: follow the body (and keep its marks fading / wipe them)
+            {
+                int m = 0;
+                if (s.Decay) m += DecayMarks(s, groups, dt);
+                return m + ApplyFinal(s, vb, groups, false);
+            }
             float skirt = Mathf.Max(0.003f, _set.Skirt);
             cs.SetFloat(PSkirt, skirt); cs.SetFloat(PBulge, _set.Bulge); cs.SetFloat(PBulgeCap, 0.004f);
             cs.SetFloat(PSoftScale, softScale); cs.SetFloat(PDepth, depthMul); cs.SetFloat(PMargin, _margin);
@@ -915,6 +919,7 @@ namespace SfMorph
                 // runs only while they really touch
                 bool count = s.CapN > s.CapN1;
                 if (count && !s.HitInflight) s.HitsBuf.SetData(ZeroHits);
+                cs.SetInt(PCountHits, count ? 1 : 0);
                 cs.SetBuffer(_kDepth, PVerts, vb); cs.SetBuffer(_kDepth, PCanon, s.CanonBuf); cs.SetBuffer(_kDepth, PTissue, s.TissueBuf);
                 cs.SetBuffer(_kDepth, PClass, s.ClassBuf); cs.SetBuffer(_kDepth, PCaps, _capBuf); cs.SetBuffer(_kDepth, PFieldOut, A);
                 cs.SetBuffer(_kDepth, PHits, s.HitsBuf);
@@ -924,13 +929,7 @@ namespace SfMorph
             }
             if (s.Decay || (s.Probe && !s.Work))
             {
-                if (s.Decay)
-                {
-                    cs.SetFloat(PDt, s.ClearMarks ? 1e4f : dt);   // a huge step wipes them
-                    cs.SetBuffer(_kDecay, PCanon, s.CanonBuf); cs.SetBuffer(_kDecay, PMarks, s.MarksBuf);
-                    cs.Dispatch(_kDecay, groups, 1, 1); n++;
-                    cs.SetFloat(PDt, dt);
-                }
+                if (s.Decay) n += DecayMarks(s, groups, dt);
                 return n;
             }
             if (s.Depth)
@@ -963,6 +962,18 @@ namespace SfMorph
             n += ApplyFinal(s, vb, groups, true);
             s.ChainRan = true;
             return n;
+        }
+
+        // Marks fading with nothing pressing, or wiped (marks switched off: a huge step), then MarkUntil cleared.
+        int DecayMarks(RendState s, int groups, float dt)
+        {
+            var cs = _cs;
+            cs.SetFloat(PDt, s.ClearMarks ? 1e4f : dt);
+            cs.SetBuffer(_kDecay, PCanon, s.CanonBuf); cs.SetBuffer(_kDecay, PMarks, s.MarksBuf);
+            cs.Dispatch(_kDecay, groups, 1, 1);
+            cs.SetFloat(PDt, dt);
+            if (s.ClearMarks) s.MarkUntil = 0f;
+            return 1;
         }
 
         // The last step: Apply, or ApplyMap for an overlay with a body under it (its mapped vertices take the body's Grad of this frame when the
