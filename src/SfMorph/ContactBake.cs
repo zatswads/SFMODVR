@@ -38,6 +38,8 @@ namespace SfMorph
         public int[][] SubTris;       // per submesh triangle index list
         public float AvgEdge;         // mean rest edge length (m)
         public float MetresPerUv;     // sqrt(sum 3D triangle area / sum UV triangle area); 0 without UVs
+        public Vector3[] WorldP;      // V: where each vertex was at bake time (CPU skin with the bones then, no blendshapes; NaN = unskinned). GpuContact
+                                      // maps overlay meshes (areola caps, tattoo, vulva rim) onto the body vertex under them with it
         public string Note = "";
 
         // ---- bone classes (design 1.3): id, side in the id's parity for the paired ones (even = left) ----
@@ -308,10 +310,27 @@ namespace SfMorph
             int bendVerts = 0;
             if (N != null && her != null) bendVerts = BakeBend(frame, bind, P, N, cls, canon, mpu, bend, out bendNote);
 
+            // 7. a CPU skin with the current bones (no blendshapes: the overlays carry the same "follow" deltas as the body under them, so leaving
+            // them out on both keeps them matched): GpuContact's overlay -> body map
+            var wp = new Vector3[V];
+            var bm = new Matrix4x4[bones.Length];
+            for (int i = 0; i < bones.Length; i++) bm[i] = bones[i] != null && i < bind.Length ? bones[i].localToWorldMatrix * bind[i] : Matrix4x4.zero;
+            for (int v = 0; v < V; v++)
+            {
+                var w = W[v];
+                Vector3 acc = Vector3.zero;
+                float sum = 0f;
+                if (w.weight0 > 0f && w.boneIndex0 < bm.Length) { acc += bm[w.boneIndex0].MultiplyPoint3x4(P[v]) * w.weight0; sum += w.weight0; }
+                if (w.weight1 > 0f && w.boneIndex1 < bm.Length) { acc += bm[w.boneIndex1].MultiplyPoint3x4(P[v]) * w.weight1; sum += w.weight1; }
+                if (w.weight2 > 0f && w.boneIndex2 < bm.Length) { acc += bm[w.boneIndex2].MultiplyPoint3x4(P[v]) * w.weight2; sum += w.weight2; }
+                if (w.weight3 > 0f && w.boneIndex3 < bm.Length) { acc += bm[w.boneIndex3].MultiplyPoint3x4(P[v]) * w.weight3; sum += w.weight3; }
+                wp[v] = sum > 0.5f ? acc / sum : new Vector3(float.NaN, float.NaN, float.NaN);
+            }
+
             var res = new ContactBake
             {
                 R = r, Mesh = m, V = V, CanonCount = groups, Canon = canon, AdjOff = adjOff, AdjV = adjV, Tissue = tissue, Class = cls, Bend = bend,
-                BendCount = bendVerts, Uv = uv, SubTris = subs.ToArray(), AvgEdge = avgEdge, MetresPerUv = mPerUv
+                BendCount = bendVerts, Uv = uv, SubTris = subs.ToArray(), AvgEdge = avgEdge, MetresPerUv = mPerUv, WorldP = wp
             };
             sw.Stop();
             var sb = new StringBuilder();

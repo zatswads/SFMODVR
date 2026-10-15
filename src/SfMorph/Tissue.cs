@@ -13,7 +13,7 @@ namespace SfMorph
     // - Floor: the share of Soft a vertex of this class gets outside the soft-zone areas (bone-near parts of the class stay firmer).
     // Progressive resistance: flesh is soft first and stiffens as it compresses (fat lobules flatten, then fascia and muscle take the
     // load). Depth follows the press exactly up to Knee x cap, then saturates smoothly toward the cap (Press); the resistance a hand feels
-    // rises with the square of how compressed the part is (Resist), so a fingertip sinks easily into a glute and stops quickly on a shin.
+    // rises faster than linearly with how compressed the part is (Resist), so a fingertip sinks easily into a glute and stops quickly on a shin.
     internal static class Tissue
     {
         // bone classes (design 1.3): 0 none, 1 pelvis, 2 spine, 3 chest, 4 neck, 5 head, 6/7 thigh, 8/9 calf, 10/11 foot, 12/13 upper arm,
@@ -48,12 +48,13 @@ namespace SfMorph
             return k + r * Tanh((pen - k) / r);
         }
 
-        // 0..1 resistance of compressed flesh: (dent / cap)^2 (soft first, stiff near the cap).
+        // 0..1 resistance of compressed flesh: halfway between linear and (dent / cap)^2 (soft first, stiff near the cap, but a hand is felt
+        // from the first millimetres: pure squared let a physics hand sink half the depth at almost full force).
         public static float Resist(float dent, float cap)
         {
             if (!(cap > 0f)) return 1f;
             float f = Mathf.Clamp01(dent / cap);
-            return f * f;
+            return 0.5f * (f + f * f);
         }
 
         static float Tanh(float x) { float e = Mathf.Exp(-2f * Mathf.Abs(x)); float t = (1f - e) / (1f + e); return x < 0f ? -t : t; }

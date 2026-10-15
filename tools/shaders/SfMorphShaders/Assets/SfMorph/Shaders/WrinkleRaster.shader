@@ -181,11 +181,12 @@ Shader "SfMorph/WrinkleRaster"
                 return o;
             }
 
-            // fold profile h(p) = 0.45 sin(2 pi p) exp(-8 sin^2(pi p)); returns h'(p)
+            // fold profile (0.8.1): compressed skin rolls into broad rounded ridges between narrow creases,
+            // h(p) = -0.3 (cos(2 pi p) + 0.25 cos(4 pi p)): creases at whole p, ridges between. The 0.7.4 profile was a thin isolated
+            // crease on flat skin, which read as stretch marks. Returns h'(p) (peak ~2.4, the old one ~2.8).
             float ProfileSlope(float p)
             {
-                float s = sin(PI * p), s2 = sin(2.0 * PI * p);
-                return 0.45 * exp(-8.0 * s * s) * PI * (2.0 * cos(2.0 * PI * p) - 8.0 * s2 * s2);
+                return 0.3 * PI * (2.0 * sin(2.0 * PI * p) + sin(4.0 * PI * p));
             }
 
             float4 frag(V2F i) : SV_Target

@@ -22,6 +22,7 @@
 #pragma kernel Apply
 #pragma kernel MarkDisc
 #pragma kernel MarksDecay
+#pragma kernel ApplyMap
 
 RWByteAddressBuffer _Verts;          // skinned output: per vertex _Stride bytes, position at _PosOff, normal at _NrmOff
 uint _Stride, _PosOff, _NrmOff, _Count;
@@ -171,7 +172,10 @@ StructuredBuffer<float> _FieldW;     // Compose: wide field (the rim bulge is wi
 RWStructuredBuffer<float4> _Marks;   // per canonical vertex: x redness 0..1, y live pressure 0..1, z lingering dent (m)
 RWStructuredBuffer<float4> _Grad;    // 2 per vertex: [2v] = (tangential gradient of the field, world; field value), [2v+1] = (inward direction, world; 1)
 StructuredBuffer<float4> _Waves;     // 2 per wave: (origin xyz world, age s), (A m, c m/s, lambda m, tau s)
-uint _WaveCount, _TanOff, _NoField, _MarkOn;
+RWStructuredBuffer<uint> _Hits;      // [0]: canonical vertices Depth found pressed (read back: her own limbs run the full chain only while they touch)
+StructuredBuffer<int> _Map;          // ApplyMap: per vertex of an overlay mesh (areola, tattoo...) the body canonical vertex under it, -1 = its own field
+StructuredBuffer<float4> _ParentGrad;// ApplyMap: the body renderer's _Grad of this frame
+uint _WaveCount, _TanOff, _NoField, _MarkOn, _ParentOn, _OwnOn;
 float _SoftScale, _Depth;            // Tissue.SoftScale(softness), ContactSettings.Depth: cap = (hard + soft x _SoftScale) x _Depth
 float _SkirtLen, _Bulge, _BulgeCap, _NormalBend, _Dt, _MarkGain, _MarkFade, _DentFade, _WaveAmt;
 float4 _BendAmt0, _BendAmt1, _BendAmt2;   // 9 slot amplitudes (m): [0..3], [4..7], [8]
@@ -246,6 +250,7 @@ void Depth(uint3 id : SV_DispatchThreadID)
         depth = max(depth, s);
     }
     _FieldOut[v] = depth > 0.0 && cap > 1e-6 ? Press(depth, cap) : 0.0;
+    if (depth > 0.0) InterlockedAdd(_Hits[0], 1u);
 }
 
 // Dilate: the skirt. A vertex takes the largest neighbour value decayed by the distance to it, so the dent's edge falls off over _SkirtLen
@@ -290,8 +295,8 @@ void Smooth(uint3 id : SV_DispatchThreadID)
 
 float BendAmt(float slot)
 {
+    if (slot < -0.5) return 0.0;
     int j = (int)(slot + 0.5);
-    if (j < 0) return 0.0;
     if (j < 4) return _BendAmt0[j];
     if (j < 8) return _BendAmt1[j - 4];
     return _BendAmt2.x;
@@ -322,7 +327,7 @@ void Compose(uint3 id : SV_DispatchThreadID)
             float4 p = _Waves[2 * i + 1];
             float r = length(pw - o.xyz);
             float x = r - p.y * o.w;
-            wave += p.x * exp(-o.w / p.w) * exp(-r / 0.12) * exp(-2.0 * x * x / (p.z * p.z)) * cos(6.2831853 * x / p.z);
+            wave += p.x * exp(-o.w / p.w) * exp(-r / 0.12) * exp(-2.0 * x * x / (p.z * p.z)) * -cos(6.2831853 * x / p.z);   // the impact point dips (a trough at x = 0), the ring rises around it
         }
         wave *= _WaveAmt * saturate(t.y / 0.016);   // fleshy skin ripples (breast, glute), bony skin does not
     }
@@ -381,14 +386,39 @@ void Grad(uint3 id : SV_DispatchThreadID)
 
 // Apply: every vertex moves by its canonical's field value along the canonical's inward direction (welded copies stay together), its normal
 // is tilted by the gradient (the surface slopes toward the dent: n + grad D), the tangent re-orthogonalised. Reads only itself and _Grad.
+void ApplyCore(uint v, float4 g0, float4 g1);
+
 [numthreads(64, 1, 1)]
 void Apply(uint3 id : SV_DispatchThreadID)
 {
     uint v = id.x;
     if (v >= _Count) return;
     uint c = _Canon[v];
-    float4 g0 = _Grad[2 * c];
-    float4 g1 = _Grad[2 * c + 1];
+    ApplyCore(v, _Grad[2 * c], _Grad[2 * c + 1]);
+}
+
+// ApplyMap: an overlay mesh lying on the body (areola caps, tattoo, the vulva rim) moves exactly like the body vertex under it (its own field
+// would differ: different weld, skirt and bulge -> the decal floats or sinks, the areola rim z-fights); vertices with no body vertex within a few
+// mm use their own chain's Grad. _ParentOn 0: the body did not run this frame (mapped vertices stay); _OwnOn 0: this mesh ran no chain of its own.
+[numthreads(64, 1, 1)]
+void ApplyMap(uint3 id : SV_DispatchThreadID)
+{
+    uint v = id.x;
+    if (v >= _Count) return;
+    int m = _Map[v];
+    if (m >= 0)
+    {
+        if (_ParentOn == 0u) return;
+        ApplyCore(v, _ParentGrad[2 * (uint)m], _ParentGrad[2 * (uint)m + 1]);
+        return;
+    }
+    if (_OwnOn == 0u) return;
+    uint c = _Canon[v];
+    ApplyCore(v, _Grad[2 * c], _Grad[2 * c + 1]);
+}
+
+void ApplyCore(uint v, float4 g0, float4 g1)
+{
     float D = g0.w;
     float3 g = g0.xyz;
     bool moved = abs(D) >= 1e-6;

@@ -70,8 +70,18 @@ namespace SfMorph
             public bool V2;
             public int TanOff = -1;               // byte offset of the tangent (Float32x4) in the skinned buffer, -1 = none
             public float MarkUntil;               // marks keep fading until then (4 x MarkFade after the last pressure or slap)
+            // her own limbs / the partner's body only (no hand near): Depth runs alone as a probe and counts pressed vertices (HitsBuf, read back);
+            // the full chain runs only while that count was > 0 recently. A standing pose with her arms near her sides costs one dispatch.
+            public GraphicsBuffer HitsBuf;
+            public int SelfHits, HitFrame = -1000;
+            public bool HitInflight, ClearMarks;
+            public Action<AsyncGPUReadbackRequest> OnHits;
+            // overlay meshes (areola caps, tattoo, vulva rim) lying on the body: each vertex follows the body vertex under it (ApplyMap)
+            public RendState Parent;
+            public GraphicsBuffer MapBuf;
+            public int Mapped;
             // this frame's plan
-            public bool Run, NeedCalib, IsV2, Imprint1, Depth, Bend, Wave, MarkOn, Decay, Work;
+            public bool Run, NeedCalib, IsV2, Imprint1, Depth, Bend, Wave, MarkOn, Decay, Work, Probe, SelfOnly, ChainRan, MapOnly;
             public int DiscMask, CapOff, CapN, CapN1;
         }
 
@@ -89,14 +99,18 @@ namespace SfMorph
             PBulgeCap = Shader.PropertyToID("_BulgeCap"), PNormalBend = Shader.PropertyToID("_NormalBend"), PDt = Shader.PropertyToID("_Dt"), PMarkGain = Shader.PropertyToID("_MarkGain"),
             PMarkFade = Shader.PropertyToID("_MarkFade"), PDentFade = Shader.PropertyToID("_DentFade"), PWaveAmt = Shader.PropertyToID("_WaveAmt"),
             PBendAmt0 = Shader.PropertyToID("_BendAmt0"), PBendAmt1 = Shader.PropertyToID("_BendAmt1"), PBendAmt2 = Shader.PropertyToID("_BendAmt2"),
-            PDisc = Shader.PropertyToID("_Disc"), PDiscAmt = Shader.PropertyToID("_DiscAmt");
+            PDisc = Shader.PropertyToID("_Disc"), PDiscAmt = Shader.PropertyToID("_DiscAmt"),
+            PHits = Shader.PropertyToID("_Hits"), PMap = Shader.PropertyToID("_Map"), PParentGrad = Shader.PropertyToID("_ParentGrad"),
+            PParentOn = Shader.PropertyToID("_ParentOn"), POwnOn = Shader.PropertyToID("_OwnOn");
+        static readonly uint[] ZeroHits = new uint[1];
+        const int SelfHitHold = 30;               // frames a positive probe keeps the full chain on (readbacks arrive 1-3 frames late)
 
         static readonly string[] SpaceNames = { "pending", "rootBone", "transform", "identity", "rootBone (unscaled)" };
 
         bool _bundleHeld;                     // we hold a ShaderBundle reference
         ComputeShader _cs;
         int _kSmoke, _kImprint;
-        int _kDepth, _kDilate, _kSmooth, _kCompose, _kGrad, _kApply, _kDisc, _kDecay;   // 0.8.0 v2 kernels
+        int _kDepth, _kDilate, _kSmooth, _kCompose, _kGrad, _kApply, _kDisc, _kDecay, _kApplyMap;   // 0.8.0 v2 kernels
         bool _v2Kernels, _v2Failed, _loggedFirstV2;
         ComputeBuffer _capBuf, _waveBuf;
         readonly CapData[] _capArr = new CapData[CapBufCount];
@@ -151,9 +165,9 @@ namespace SfMorph
                 string miss = "";
                 g._kDepth = Kernel(g._cs, "Depth", ref miss); g._kDilate = Kernel(g._cs, "Dilate", ref miss); g._kSmooth = Kernel(g._cs, "Smooth", ref miss);
                 g._kCompose = Kernel(g._cs, "Compose", ref miss); g._kGrad = Kernel(g._cs, "Grad", ref miss); g._kApply = Kernel(g._cs, "Apply", ref miss);
-                g._kDisc = Kernel(g._cs, "MarkDisc", ref miss); g._kDecay = Kernel(g._cs, "MarksDecay", ref miss);
+                g._kDisc = Kernel(g._cs, "MarkDisc", ref miss); g._kDecay = Kernel(g._cs, "MarksDecay", ref miss); g._kApplyMap = Kernel(g._cs, "ApplyMap", ref miss);
                 g._v2Kernels = miss.Length == 0;
-                Plugin.Log.LogInfo("GPU contact: bundle loaded, kernels Smoke=" + g._kSmoke + " Imprint=" + g._kImprint + (g._v2Kernels ? ", v2: Depth Dilate Smooth Compose Grad Apply MarkDisc MarksDecay" : ""));
+                Plugin.Log.LogInfo("GPU contact: bundle loaded, kernels Smoke=" + g._kSmoke + " Imprint=" + g._kImprint + (g._v2Kernels ? ", v2: Depth Dilate Smooth Compose Grad Apply MarkDisc MarksDecay ApplyMap" : ""));
                 if (!g._v2Kernels) Plugin.Log.LogWarning("GPU contact: bundle has no v2 kernels (old sfmorph_shaders?): v1 imprint (missing:" + miss + ")");
                 g._capBuf = new ComputeBuffer(CapBufCount, 48, ComputeBufferType.Structured);
                 g._waveBuf = new ComputeBuffer(2 * Ripple.MaxWaves, 16, ComputeBufferType.Structured);
@@ -213,6 +227,7 @@ namespace SfMorph
                         SetupMesh(s, mask, z.ZoneFor(r));
                     }
                 RemoveRenderers(keep);
+                if (_v2Kernels && !_v2Failed) BuildMaps();
                 if (_v2Kernels && !_v2Failed && her != null) BendPose.Bind(her);
                 UpdateStatus();
                 int baked = 0;
@@ -222,6 +237,93 @@ namespace SfMorph
                                        + ", bend " + BendPose.Joints + " joints)" : "off for now: no renderer baked, v1 imprint"));
             }
             catch (Exception e) { Plugin.Log.LogError("GPU contact: sync failed, turned off: " + e); GoDead("error"); }
+        }
+
+        const float MapDist = 0.005f;   // an overlay vertex follows a body vertex within 5 mm of it (areola caps sit ~1 mm above the breast)
+
+        static bool IsBodyMesh(RendState s)
+        {
+            string n = s.Name ?? "";
+            return n.IndexOf("body", StringComparison.OrdinalIgnoreCase) >= 0 && n.IndexOf("uterus", StringComparison.OrdinalIgnoreCase) < 0;
+        }
+
+        static long Cell(Vector3 p) { return CellKey(Mathf.FloorToInt(p.x * 100f), Mathf.FloorToInt(p.y * 100f), Mathf.FloorToInt(p.z * 100f)); }
+        static long CellKey(int x, int y, int z) { return ((long)x * 73856093L) ^ ((long)y * 19349663L) ^ ((long)z * 83492791L); }
+
+        // Overlay meshes (every v2 renderer that isn't a body mesh) onto the body: per overlay vertex the nearest body canonical vertex within MapDist
+        // (positions from the bakes' CPU skin, same pose), the parent = the body mesh most of its vertices found. Runs once per Sync (allocates then only).
+        void BuildMaps()
+        {
+            var bodies = new List<RendState>();
+            for (int i = 0; i < _rs.Count; i++)
+            {
+                var r = _rs[i];
+                r.Parent = null; r.Mapped = 0; Rel(ref r.MapBuf);
+                if (r.V2 && r.Bake != null && r.Bake.WorldP != null && IsBodyMesh(r)) bodies.Add(r);
+            }
+            if (bodies.Count == 0) return;
+            var grid = new Dictionary<long, List<int>>[bodies.Count];
+            for (int b = 0; b < bodies.Count; b++)
+            {
+                var g = new Dictionary<long, List<int>>();
+                var bk = bodies[b].Bake;
+                for (int v = 0; v < bk.V; v++)
+                {
+                    if (bk.Canon[v] != (uint)v) continue;
+                    var p = bk.WorldP[v];
+                    if (float.IsNaN(p.x)) continue;
+                    long key = Cell(p);
+                    List<int> l;
+                    if (!g.TryGetValue(key, out l)) { l = new List<int>(4); g[key] = l; }
+                    l.Add(v);
+                }
+                grid[b] = g;
+            }
+            var sb = new StringBuilder();
+            for (int i = 0; i < _rs.Count; i++)
+            {
+                var r = _rs[i];
+                if (!r.V2 || r.Bake == null || r.Bake.WorldP == null || IsBodyMesh(r)) continue;
+                var bk = r.Bake;
+                var best = new int[bk.V];
+                var bestBody = new int[bk.V];
+                var votes = new int[bodies.Count];
+                for (int v = 0; v < bk.V; v++)
+                {
+                    best[v] = -1; bestBody[v] = -1;
+                    var p = bk.WorldP[v];
+                    if (float.IsNaN(p.x)) continue;
+                    float bd = MapDist * MapDist;
+                    for (int b = 0; b < bodies.Count; b++)
+                    {
+                        var wp = bodies[b].Bake.WorldP;
+                        int cx = Mathf.FloorToInt(p.x * 100f), cy = Mathf.FloorToInt(p.y * 100f), cz = Mathf.FloorToInt(p.z * 100f);
+                        for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) for (int dz = -1; dz <= 1; dz++)
+                        {
+                            long key = CellKey(cx + dx, cy + dy, cz + dz);
+                            List<int> l;
+                            if (!grid[b].TryGetValue(key, out l)) continue;
+                            for (int k = 0; k < l.Count; k++)
+                            {
+                                float d2 = (wp[l[k]] - p).sqrMagnitude;
+                                if (d2 < bd) { bd = d2; best[v] = l[k]; bestBody[v] = b; }
+                            }
+                        }
+                    }
+                    if (bestBody[v] >= 0) votes[bestBody[v]]++;
+                }
+                int pb = 0;
+                for (int b = 1; b < bodies.Count; b++) if (votes[b] > votes[pb]) pb = b;
+                if (votes[pb] < 8) continue;
+                var map = new int[bk.V];
+                int mapped = 0;
+                for (int v = 0; v < bk.V; v++) { map[v] = bestBody[v] == pb ? best[v] : -1; if (map[v] >= 0) mapped++; }
+                try { r.MapBuf = Upload(map, bk.V, 4); }
+                catch (Exception e) { Plugin.Log.LogWarning("GPU contact: overlay map of " + r.Name + " failed: " + e.Message); continue; }
+                r.Parent = bodies[pb]; r.Mapped = mapped;
+                sb.Append(sb.Length > 0 ? ", " : "").Append(r.Name).Append(" -> ").Append(bodies[pb].Name).Append(' ').Append(mapped).Append('/').Append(bk.V);
+            }
+            if (sb.Length > 0) Plugin.Log.LogInfo("GPU contact: overlays follow the body under them: " + sb);
         }
 
         RendState Find(SkinnedMeshRenderer r)
@@ -304,6 +406,7 @@ namespace SfMorph
                 s.FieldA = Upload(zeroF, V, 4); s.FieldB = Upload(zeroF, V, 4); s.FieldC = Upload(zeroF, V, 4); s.FieldD = Upload(zeroF, V, 4);
                 s.MarksBuf = Upload(new Vector4[V], V, 16);
                 s.GradBuf = Upload(new Vector4[2 * V], 2 * V, 16);
+                s.HitsBuf = Upload(ZeroHits, 1, 4);
             }
             catch (Exception e)
             {
@@ -314,6 +417,18 @@ namespace SfMorph
             s.Bake = b;
             s.V2 = true;
             s.MarkUntil = 0f;
+            s.SelfHits = 0; s.HitFrame = -1000;
+            if (s.OnHits == null)
+            {
+                var st = s;
+                st.OnHits = req =>
+                {
+                    st.HitInflight = false;
+                    if (!st.Alive || req.hasError || st.HitsBuf == null) return;
+                    try { var d = req.GetData<uint>(); st.SelfHits = d.Length > 0 ? (int)d[0] : 0; st.HitFrame = Time.frameCount; }
+                    catch (Exception) { }
+                };
+            }
             BakeVersion++;
             Plugin.Log.LogInfo("GPU contact: baked " + s.Name + ": " + b.Note);
         }
@@ -326,6 +441,9 @@ namespace SfMorph
             bool had = s.Bake != null;
             Rel(ref s.CanonBuf); Rel(ref s.AdjOffBuf); Rel(ref s.AdjVBuf); Rel(ref s.TissueBuf); Rel(ref s.ClassBuf); Rel(ref s.BendBuf);
             Rel(ref s.FieldA); Rel(ref s.FieldB); Rel(ref s.FieldC); Rel(ref s.FieldD); Rel(ref s.MarksBuf); Rel(ref s.GradBuf);
+            Rel(ref s.HitsBuf); Rel(ref s.MapBuf);
+            s.Parent = null; s.Mapped = 0;
+            for (int i = 0; i < _rs.Count; i++) if (_rs[i].Parent == s) { _rs[i].Parent = null; Rel(ref _rs[i].MapBuf); _rs[i].Mapped = 0; }
             s.Bake = null;
             s.V2 = false;
             if (had) BakeVersion++;
@@ -429,8 +547,10 @@ namespace SfMorph
                         self++;
                     }
                     else if (isBody) pb++;
-                    _wcA[n] = a; _wcB[n] = b; _wcR[n] = c.Radius; _wcMask[n] = mask; _wcV2Only[n] = isSelf || isBody;
-                    float ext = c.Radius + _margin;
+                    // her own hand: the capsule (22 mm) is about twice a palm's half-thickness; a hand hanging at her side would dimple the thigh by a cm
+                    float rad = kind == "hand" ? c.Radius * 0.6f : c.Radius;
+                    _wcA[n] = a; _wcB[n] = b; _wcR[n] = rad; _wcMask[n] = mask; _wcV2Only[n] = isSelf || isBody;
+                    float ext = rad + _margin;
                     _wcMin[n] = new Vector3(Mathf.Min(a.x, b.x) - ext, Mathf.Min(a.y, b.y) - ext, Mathf.Min(a.z, b.z) - ext);
                     _wcMax[n] = new Vector3(Mathf.Max(a.x, b.x) + ext, Mathf.Max(a.y, b.y) + ext, Mathf.Max(a.z, b.z) + ext);
                     n++;
@@ -634,7 +754,10 @@ namespace SfMorph
                     capUsed += s.CapN;
                 }
                 s.Imprint1 = !v2 && s.Space > 0 && s.CapN1 > 0;
-                s.Depth = v2 && s.CapN > 0;
+                // only her own limbs / the partner's body in reach: probe (Depth alone, counting pressed vertices) until a probe found some
+                s.SelfOnly = v2 && s.CapN > 0 && s.CapN1 == 0;
+                s.Depth = v2 && s.CapN > 0 && (!s.SelfOnly || (s.SelfHits > 0 && frame - s.HitFrame <= SelfHitHold));
+                s.Probe = s.SelfOnly && !s.Depth;
                 s.Bend = v2 && BendPose.Any && s.Bake.BendCount > 0;
                 s.Wave = v2 && nWaves > 0 && WaveReaches(b, nWaves);
                 s.DiscMask = 0;
@@ -645,23 +768,37 @@ namespace SfMorph
                         if (b.SqrDistance(new Vector3(_discArr[d].x, _discArr[d].y, _discArr[d].z)) <= rr * rr) s.DiscMask |= 1 << d;
                     }
                 if (v2 && _set.Marks && (s.Depth || s.DiscMask != 0)) s.MarkUntil = now + 4f * Mathf.Max(3f, _set.MarkFade);   // pressure or a slap: fade for 4 time constants
+                // marks switched off: wipe what is left once, so switching them on again doesn't bring back an old print
+                s.ClearMarks = v2 && !_set.Marks && s.MarkUntil > 0f;
+                if (s.ClearMarks) s.MarkUntil = 0f;
                 s.MarkOn = v2 && _set.Marks && now < s.MarkUntil;
                 bool work = s.Depth || s.Bend || s.Wave || s.DiscMask != 0;
-                s.Decay = v2 && !work && s.MarkOn;
+                s.Decay = v2 && !work && (s.MarkOn || s.ClearMarks);
                 s.Work = work;
+                s.MapOnly = false;
                 if (s.Depth || s.Imprint1) anyContact = true;
-                s.Run = s.NeedCalib || s.Imprint1 || smoke != 0f || work || s.Decay;
+                s.Run = s.NeedCalib || s.Imprint1 || smoke != 0f || work || s.Decay || s.Probe;
                 if (s.Run && (s.Imprint1 || work || s.Decay)) active++;
+            }
+            // an overlay whose body moves this frame runs at least its ApplyMap (it follows the body even with no work of its own)
+            for (int i = 0; i < _rs.Count; i++)
+            {
+                var s = _rs[i];
+                var par = s.Parent;
+                if (par == null || !s.IsV2 || s.Work) continue;
+                if (par.IsV2 && par.Work && par.Run && s.R != null && s.R.enabled && s.R.gameObject.activeInHierarchy && s.Ok) { s.MapOnly = true; s.Run = true; }
             }
             if (capUsed > 0) _capBuf.SetData(_capArr, 0, 0, capUsed);
             ActiveRenderers = active;
             Contact = anyContact;
 
             int dispatches = 0, v2Count = 0;
+            for (int i = 0; i < _rs.Count; i++) _rs[i].ChainRan = false;
+            for (int pass = 0; pass < 2; pass++)   // bodies (and everything without a parent) first: an overlay's ApplyMap reads its body's Grad of this frame
             for (int i = 0; i < _rs.Count; i++)
             {
                 var s = _rs[i];
-                if (!s.Run) continue;
+                if (!s.Run || (s.Parent != null) != (pass == 1)) continue;
                 using (var vb = s.R.GetVertexBuffer())
                 {
                     if (vb == null)
@@ -692,7 +829,7 @@ namespace SfMorph
                         _cs.Dispatch(_kImprint, groups, 1, 1);
                         dispatches++;
                     }
-                    if (s.IsV2 && (s.Work || s.Decay))
+                    if (s.IsV2 && (s.Work || s.Decay || s.Probe || s.MapOnly))
                     {
                         try { dispatches += RunV2(s, vb, nWaves, dt, softScale, depthMul); v2Count++; }
                         catch (Exception e) { V2Fail("chain on " + s.Name, e); }
@@ -763,26 +900,42 @@ namespace SfMorph
             cs.SetFloat(PDt, dt);
             cs.SetFloat(PMarkFade, Mathf.Max(0.5f, _set.MarkFade)); cs.SetFloat(PMarkGain, _set.MarkGain); cs.SetFloat(PDentFade, 1.5f);
             cs.SetInt(PMarkOn, s.MarkOn ? 1 : 0);
-            if (s.Decay)
-            {
-                cs.SetBuffer(_kDecay, PCanon, s.CanonBuf); cs.SetBuffer(_kDecay, PMarks, s.MarksBuf);
-                cs.Dispatch(_kDecay, groups, 1, 1);
-                return 1;
-            }
             Matrix4x4 toWorld = ToWorld(s);
             cs.SetInt(PStride, s.Stride); cs.SetInt(PPosOff, s.PosOff); cs.SetInt(PNrmOff, s.NrmOff); cs.SetInt(PTanOff, s.TanOff);
             cs.SetMatrix(PToWorld, toWorld); cs.SetMatrix(PToLocal, toWorld.inverse);
+            cs.SetFloat(PNormalBend, _set.Normals ? 1f : 0f);
+            if (s.MapOnly) return ApplyFinal(s, vb, groups, false);   // nothing of its own: follow the body
             float skirt = Mathf.Max(0.003f, _set.Skirt);
-            cs.SetFloat(PSkirt, skirt); cs.SetFloat(PBulge, _set.Bulge); cs.SetFloat(PBulgeCap, 0.004f); cs.SetFloat(PNormalBend, _set.Normals ? 1f : 0f);
+            cs.SetFloat(PSkirt, skirt); cs.SetFloat(PBulge, _set.Bulge); cs.SetFloat(PBulgeCap, 0.004f);
             cs.SetFloat(PSoftScale, softScale); cs.SetFloat(PDepth, depthMul); cs.SetFloat(PMargin, _margin);
             GraphicsBuffer A = s.FieldA, B = s.FieldB;
+            if (s.Depth || s.Probe)
+            {
+                // Depth (also the probe): counts the pressed vertices; read back while her own limbs / his body are in reach, so the full chain
+                // runs only while they really touch
+                bool count = s.CapN > s.CapN1;
+                if (count && !s.HitInflight) s.HitsBuf.SetData(ZeroHits);
+                cs.SetBuffer(_kDepth, PVerts, vb); cs.SetBuffer(_kDepth, PCanon, s.CanonBuf); cs.SetBuffer(_kDepth, PTissue, s.TissueBuf);
+                cs.SetBuffer(_kDepth, PClass, s.ClassBuf); cs.SetBuffer(_kDepth, PCaps, _capBuf); cs.SetBuffer(_kDepth, PFieldOut, A);
+                cs.SetBuffer(_kDepth, PHits, s.HitsBuf);
+                cs.SetInt(PCapCount, s.CapN); cs.SetInt(PCapOff, s.CapOff);
+                cs.Dispatch(_kDepth, groups, 1, 1); n++;
+                if (count && !s.HitInflight) { s.HitInflight = true; AsyncGPUReadback.Request(s.HitsBuf, s.OnHits); }
+            }
+            if (s.Decay || (s.Probe && !s.Work))
+            {
+                if (s.Decay)
+                {
+                    cs.SetFloat(PDt, s.ClearMarks ? 1e4f : dt);   // a huge step wipes them
+                    cs.SetBuffer(_kDecay, PCanon, s.CanonBuf); cs.SetBuffer(_kDecay, PMarks, s.MarksBuf);
+                    cs.Dispatch(_kDecay, groups, 1, 1); n++;
+                    cs.SetFloat(PDt, dt);
+                }
+                return n;
+            }
             if (s.Depth)
             {
                 int iters = Mathf.Clamp(Mathf.CeilToInt(3f * skirt / Mathf.Max(0.001f, s.Bake.AvgEdge)), 2, 10);
-                cs.SetBuffer(_kDepth, PVerts, vb); cs.SetBuffer(_kDepth, PCanon, s.CanonBuf); cs.SetBuffer(_kDepth, PTissue, s.TissueBuf);
-                cs.SetBuffer(_kDepth, PClass, s.ClassBuf); cs.SetBuffer(_kDepth, PCaps, _capBuf); cs.SetBuffer(_kDepth, PFieldOut, A);
-                cs.SetInt(PCapCount, s.CapN); cs.SetInt(PCapOff, s.CapOff);
-                cs.Dispatch(_kDepth, groups, 1, 1); n++;
                 GraphicsBuffer cur = A, oth = B;
                 for (int i = 0; i < iters; i++) { Pass(_kDilate, vb, s, cur, oth, groups); n++; var t = cur; cur = oth; oth = t; }
                 Pass(_kSmooth, vb, s, cur, oth, groups); Pass(_kSmooth, vb, s, oth, s.FieldC, groups);        // narrow -> C
@@ -807,9 +960,30 @@ namespace SfMorph
             cs.SetBuffer(_kGrad, PVerts, vb); cs.SetBuffer(_kGrad, PCanon, s.CanonBuf); cs.SetBuffer(_kGrad, PAdjOff, s.AdjOffBuf); cs.SetBuffer(_kGrad, PAdjV, s.AdjVBuf);
             cs.SetBuffer(_kGrad, PFieldIn, A); cs.SetBuffer(_kGrad, PGrad, s.GradBuf);
             cs.Dispatch(_kGrad, groups, 1, 1); n++;
-            cs.SetBuffer(_kApply, PVerts, vb); cs.SetBuffer(_kApply, PCanon, s.CanonBuf); cs.SetBuffer(_kApply, PGrad, s.GradBuf);
-            cs.Dispatch(_kApply, groups, 1, 1); n++;
+            n += ApplyFinal(s, vb, groups, true);
+            s.ChainRan = true;
             return n;
+        }
+
+        // The last step: Apply, or ApplyMap for an overlay with a body under it (its mapped vertices take the body's Grad of this frame when the
+        // body ran its chain, the rest its own when `own`).
+        int ApplyFinal(RendState s, GraphicsBuffer vb, int groups, bool own)
+        {
+            var cs = _cs;
+            var par = s.Parent;
+            if (par == null || s.MapBuf == null || par.GradBuf == null)
+            {
+                if (!own) return 0;
+                cs.SetBuffer(_kApply, PVerts, vb); cs.SetBuffer(_kApply, PCanon, s.CanonBuf); cs.SetBuffer(_kApply, PGrad, s.GradBuf);
+                cs.Dispatch(_kApply, groups, 1, 1);
+                return 1;
+            }
+            cs.SetBuffer(_kApplyMap, PVerts, vb); cs.SetBuffer(_kApplyMap, PCanon, s.CanonBuf); cs.SetBuffer(_kApplyMap, PGrad, s.GradBuf);
+            cs.SetBuffer(_kApplyMap, PMap, s.MapBuf); cs.SetBuffer(_kApplyMap, PParentGrad, par.GradBuf);
+            cs.SetInt(PParentOn, par.ChainRan ? 1 : 0); cs.SetInt(POwnOn, own ? 1 : 0);
+            if (!par.ChainRan && !own) return 0;
+            cs.Dispatch(_kApplyMap, groups, 1, 1);
+            return 1;
         }
 
         // Dilate / Smooth: canonical vertices of `src` -> `dst`.

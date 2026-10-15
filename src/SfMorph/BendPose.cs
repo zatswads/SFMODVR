@@ -127,10 +127,10 @@ namespace SfMorph
             for (int i = 0; i < Slots; i++) Amt[i] = 0f;
             for (int side = 0; side < 2; side++)
             {
-                if (_ok[side]) Amt[side] = s.BicepsMm * 0.001f * Sm(10f, 95f, _theta[side]) * k;
+                if (_ok[side]) Amt[side] = s.BicepsMm * 0.001f * Sm(20f, 95f, _theta[side]) * k;
                 if (_ok[2 + side])
                 {
-                    float kn = Sm(10f, 110f, _theta[2 + side]) * k;
+                    float kn = Sm(20f, 110f, _theta[2 + side]) * k;
                     Amt[2 + side] = s.KneeMm * 0.001f * kn;
                     Amt[6 + side] = s.CalfMm * 0.001f * kn;
                 }
@@ -141,6 +141,7 @@ namespace SfMorph
             int sig = 0;
             for (int i = 0; i < Slots; i++)
             {
+                if (Amt[i] < 0.0005f) Amt[i] = 0f;   // under half a millimetre: nothing to see, and no chain to run for it every frame
                 if (Amt[i] > mx) mx = Amt[i];
                 sig = sig * 31 + Mathf.RoundToInt(Amt[i] * 2000f);   // 0.5 mm steps
                 if (Amt[i] > 0.001f && !_logged[i])
@@ -151,7 +152,7 @@ namespace SfMorph
                                        + ", hip " + _theta[4].ToString("0") + "/" + _theta[5].ToString("0") + " deg)");
                 }
             }
-            Any = mx > 0.0001f;
+            Any = mx > 0f;
             // the panel line: rebuilt when the amplitudes change by >= 0.5 mm, at most twice a second
             float now = Time.unscaledTime;
             if (sig != _statSig && now >= _nextStatus)

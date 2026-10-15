@@ -90,6 +90,7 @@ namespace SfMorph
         // An impact from outside the soft zones (Reactions: a slap). speed m/s, dir = into her (world), bone = the wave follows it.
         public static void Impact(Vector3 point, Vector3 dir, float speed, Transform bone, string by)
         {
+            if (_s == null) return;   // not running (physics off / released): a slap now must not become a wave when it comes back
             if (!Finite(point) || !(speed > 0f)) return;
             if (!Finite(dir) || dir.sqrMagnitude < 1e-8f) dir = Vector3.forward;
             if (_pendN == _pend.Length)
