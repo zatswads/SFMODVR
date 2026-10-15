@@ -33,10 +33,12 @@ namespace SfMorph
     //  - PLANTED LOCK: a hand/foot that stands still in the animation (or still relative to a partner/her own capsule it is near) is
     //    pinned to the animation's position by a two-bone IK (Ik.TwoBone) after the springs, so the elbow/knee swings and the
     //    hand/foot stays put (a hand resting on him does not slide when the arm lags).
-    //  - LIMB PUSH: hands push her arms (HerBody.PushOn): a torque about the elbow/shoulder drives a second spring state
-    //    (Qp) that is multiplied onto the written rotation. The contact fade removes only the lag term, never the push.
+    //  - LIMB PUSH: a hand (physics hand, hand model or partner; HerBody.PushOn) pushes any of her segments: a torque about the
+    //    bones that carry it (PushMaps) drives a second spring state (Qp) that is multiplied onto the written rotation. 0.7.8: every
+    //    bone but the wrists and ankles pushes, with per-region inertia and clamp, and a tanh knee on the torque so a hand held
+    //    inside her settles short of the hard stop. The contact fade removes only the lag term, never the push.
     //
-    // Her segment names read from HerBody (HerBody.Defs): upperarm_L/R, forearm_L/R (arms), thigh_L/R, calf_L/R, head, neck, chest, spine.
+    // Her segment names read from HerBody (HerBody.SegNames): upperarm_L/R, forearm_L/R (arms), thigh_L/R, calf_L/R, head, neck, chest, spine.
     // Contact fades (0.15 s): arms by TouchingHer("upperarm_X"/"forearm_X"); legs by Soft.Touching("thighOut_X"/"thighIn_X"/"glute_X");
     // head by TouchingHer("head"/"neck"); spine by TouchingHer("spine"/"chest") or Soft.Touching("belly") (small addition to the spec,
     // so a held head or torso is not wobbled under the hand).
@@ -56,8 +58,32 @@ namespace SfMorph
         // planted lock
         const float PlantDist = 0.08f, StillSpeed = 0.04f, StillHold = 0.08f, PlantFade = 0.15f;
 
-        // limb push (C2.5)
-        const float PushInertia = 0.01f, PushClampDeg = 30f, PushTauMax = 6f, PushOmegaMax = 20f;
+        // limb push: per region {arms, legs, head, spine} inertia (kg*m^2 equivalent) and hard-stop angle; torque cap and rate cap are common
+        const float PushTauMax = 6f, PushOmegaMax = 20f;
+        static readonly float[] PushInertiaR = { 0.01f, 0.03f, 0.015f, 0.06f };
+        static readonly float[] PushClampDegR = { 30f, 20f, 15f, 10f };
+        // Knee: the push spring is  alpha = tau/I - K*theta - C*omega  (the kick adds tau/I*dt to OmegaP, SpringStep adds -K*theta), so
+        // the resting angle under a steady torque is theta = tau/(I*K). The torque is run through knee*tanh(tau/knee) with
+        // knee = 0.8 * clamp[rad] * I * K, which makes theta = 0.8*clamp*tanh(tau/knee): linear for small pushes, asymptote 0.8 clamp,
+        // never the hard stop. Arm (I 0.01, K 392 at Elbow_X defaults): knee 1.64 N*m; 60 N on a forearm (torque capped at PushTauMax 6)
+        // -> tanh(3.7) = 1.00 -> 24 deg of 30; a 5 N brush (0.75 N*m at 0.15 m) -> tanh(0.46) = 0.43 -> 10 deg.
+        const float KneeFrac = 0.8f;
+
+        // Segment -> bone torque shares (bone names are Overlap bones, segments HerBody.SegNames). Torque about the bone's origin:
+        // tau = Share * cross(point - bone.position, force on her). pelvis, butt_L/R push nothing: Root_M is never moved.
+        struct PushMap { public string Seg, Bone; public float Share; public PushMap(string s, string b, float f) { Seg = s; Bone = b; Share = f; } }
+        static readonly PushMap[] PushMaps =
+        {
+            new PushMap("upperarm_L", "Shoulder_L", 1f), new PushMap("forearm_L", "Elbow_L", 1f), new PushMap("forearm_L", "Shoulder_L", 0.5f),
+            new PushMap("upperarm_R", "Shoulder_R", 1f), new PushMap("forearm_R", "Elbow_R", 1f), new PushMap("forearm_R", "Shoulder_R", 0.5f),
+            new PushMap("thigh_L", "Hip_L", 1f), new PushMap("calf_L", "Knee_L", 1f), new PushMap("calf_L", "Hip_L", 0.5f),
+            new PushMap("thigh_R", "Hip_R", 1f), new PushMap("calf_R", "Knee_R", 1f), new PushMap("calf_R", "Hip_R", 0.5f),
+            new PushMap("head", "Head_M", 1f), new PushMap("head", "Neck_M", 0.5f), new PushMap("neck", "Neck_M", 1f),
+            new PushMap("chest", "Chest_M", 1f), new PushMap("chest", "Spine1_M", 0.5f), new PushMap("spine", "Spine1_M", 1f),
+            new PushMap("breast_L", "Chest_M", 0.5f), new PushMap("breast_L", "Spine1_M", 0.25f),
+            new PushMap("breast_R", "Chest_M", 0.5f), new PushMap("breast_R", "Spine1_M", 0.25f),
+        };
+        struct PushRes { public int Seg; public B Bone; public float Share; }
 
         // groups: 0 arm L, 1 arm R, 2 leg L, 3 leg R, 4 head, 5 spine; region (weight slot): arms 0, legs 1, head 2, spine 3
         static readonly string[] GroupLabel = { "arm L", "arm R", "thigh L", "thigh R", "head", "spine" };
@@ -88,8 +114,6 @@ namespace SfMorph
         };
         static readonly string[] EffLabel = { "left hand", "right hand", "left foot", "right foot" };
         static readonly string[] EffShort = { "L hand", "R hand", "L foot", "R foot" };
-        // HerBody segment names for the push, [side*2] upperarm, [side*2+1] forearm (no per-frame string building)
-        static readonly string[] PushSeg = { "upperarm_L", "forearm_L", "upperarm_R", "forearm_R" };
 
         class B
         {
@@ -98,7 +122,7 @@ namespace SfMorph
             public bool Init, HasLast;
             // ripple: parent's world rotation last frame and its angular velocity; PState 0 none, 1 rotation known, 2 rotation and velocity known
             public Quaternion PW = Quaternion.identity; public Vector3 POmega; public int PState;
-            // limb push (arm Shoulder/Elbow only): offset rotation in the parent's frame, its angular velocity, this frame's torque (world)
+            // limb push (every bone but wrists/ankles): offset rotation in the parent's frame, its angular velocity, this frame's torque (world)
             public bool CanPush, PushLive; public Quaternion Qp = Quaternion.identity; public Vector3 OmegaP, TauW;
         }
 
@@ -123,9 +147,17 @@ namespace SfMorph
         readonly float[] _fs = new float[4];
         readonly bool[] _loggedFade = new bool[6];
         readonly bool[] _loggedReset = new bool[3];
-        readonly bool[] _loggedPush = new bool[4];
+        readonly bool[] _loggedPush = new bool[HerBody.SegNames.Length];
         float _ripple, _lp;
-        int _pushBits;
+        uint _pushBits;                                   // bit per HerBody segment index pushed this frame
+        PushRes[] _pushRes = new PushRes[0];              // PushMaps resolved to bones at build (missing bones skipped)
+        // one PushOn per distinct segment per frame (stamped by _pushPass), cached for the maps that share it
+        readonly int[] _pushStamp = new int[HerBody.SegNames.Length];
+        readonly bool[] _pushHas = new bool[HerBody.SegNames.Length];
+        readonly Vector3[] _pushPt = new Vector3[HerBody.SegNames.Length];
+        readonly Vector3[] _pushF = new Vector3[HerBody.SegNames.Length];
+        readonly string[] _pushBy = new string[HerBody.SegNames.Length];
+        int _pushPass;
         bool _loggedDriven;
         long _sig = -1;
         readonly StringBuilder _sb = new StringBuilder(160);
@@ -153,10 +185,19 @@ namespace SfMorph
                     scan.TryGetValue(sp.Name, out t);
                 }
                 if (t == null) { missing.Append(missing.Length > 0 ? ", " : "").Append(sp.Name); continue; }
-                bool push = sp.Name.StartsWith("Shoulder_") || sp.Name.StartsWith("Elbow_");
+                bool push = !sp.Name.StartsWith("Wrist_") && !sp.Name.StartsWith("Ankle_");
                 _bones.Add(new B { T = t, P = t.parent, Group = sp.Group, F = sp.F, CanPush = push });
             }
             if (missing.Length > 0) Plugin.Log.LogInfo("Overlap: bones not found, skipped: " + missing);
+            var res = new List<PushRes>(PushMaps.Length);
+            for (int i = 0; i < PushMaps.Length; i++)
+            {
+                int si = Array.IndexOf(HerBody.SegNames, PushMaps[i].Seg);
+                B pb = FindB(PushMaps[i].Bone);
+                if (si >= 0 && pb != null && pb.CanPush) res.Add(new PushRes { Seg = si, Bone = pb, Share = PushMaps[i].Share });
+            }
+            _pushRes = res.ToArray();
+            for (int i = 0; i < _pushStamp.Length; i++) { _pushStamp[i] = 0; _pushHas[i] = false; }
             for (int e = 0; e < _effs.Length; e++)
             {
                 var n = EffNames[e];
@@ -190,7 +231,7 @@ namespace SfMorph
             }
             _ripple = Mathf.Clamp01(s.Ripple);
             _lp = Mathf.Clamp01(s.LimbPush);
-            _pushBits = 0;
+            _pushBits = 0u;
 
             // Contact per group (only for regions that are on); fade in 0.15 s.
             for (int g = 0; g < 6; g++)
@@ -219,8 +260,8 @@ namespace SfMorph
                 Detect(ef, s, dt, reset);
             }
 
-            // Limb push torques (arms), from the physics hands' last fixed step.
-            // (independent of the overlap amount: with Overlap 0 the arms still yield to a push and spring back to the animation)
+            // Limb push torques (every segment in PushMaps), from HerBody.PushOn (physics hands' contact force, or the geometric push of
+            // hand models and partners). Independent of the overlap amount: with Overlap 0 a pushed limb still yields and springs back.
             bool pushable = _lp > 0f && HerBody.PushActive;
             if (pushable) PushPass();
 
@@ -232,7 +273,7 @@ namespace SfMorph
                 int rg = GroupRegion[b.Group];
                 float wReq = _region[rg];
                 Quaternion cur = tr.localRotation;
-                // An arm bone with a push in progress (or a torque this frame) keeps running at region weight 0: the lag term stays off (w = 0 below,
+                // A bone with a push in progress (or a torque this frame) keeps running at region weight 0: the lag term stays off (w = 0 below,
                 // the written rotation is the animation's target) and only the push offset Qp is added on top. With no push and no lag the bone
                 // is left alone (exactly the game's animation).
                 bool pushWake = wReq <= 0f && b.CanPush && pushable && (b.PushLive || b.TauW.sqrMagnitude > 1e-8f);
@@ -314,9 +355,14 @@ namespace SfMorph
 
                 // Push kick: torque (world) -> the parent's frame (Qp is premultiplied onto the bone's local rotation).
                 bool pushOn = b.CanPush && _lp > 0f;
+                float pInertia = PushInertiaR[rg], pClampDeg = PushClampDegR[rg];
                 if (pushOn && b.TauW.sqrMagnitude > 1e-8f && b.P != null && n > 0)
                 {
-                    b.OmegaP += (Quaternion.Inverse(b.P.rotation) * b.TauW) * (dt / PushInertia);
+                    // the knee (see PushInertiaR): soft-saturate the torque at 0.8 of the clamp angle's equilibrium torque
+                    float knee = Mathf.Deg2Rad * pClampDeg * KneeFrac * pInertia * b.K;
+                    float tm = b.TauW.magnitude;
+                    if (tm > 1e-6f && knee > 1e-6f) b.TauW *= knee * (float)Math.Tanh(tm / knee) / tm;
+                    b.OmegaP += (Quaternion.Inverse(b.P.rotation) * b.TauW) * (dt / pInertia);
                     float po = b.OmegaP.magnitude;
                     if (po > PushOmegaMax) b.OmegaP *= PushOmegaMax / po;
                     b.PushLive = true;
@@ -341,7 +387,7 @@ namespace SfMorph
                 if (b.PushLive)
                 {
                     float pa = Quaternion.Angle(Quaternion.identity, b.Qp);
-                    if (pa > PushClampDeg) { b.Qp = Quaternion.RotateTowards(Quaternion.identity, b.Qp, PushClampDeg); b.OmegaP = Vector3.zero; }   // no wind-up against the clamp
+                    if (pa > pClampDeg) { b.Qp = Quaternion.RotateTowards(Quaternion.identity, b.Qp, pClampDeg); b.OmegaP = Vector3.zero; }   // no wind-up against the clamp
                     else if (pa < 0.05f && b.OmegaP.sqrMagnitude < 1e-4f) { b.Qp = Quaternion.identity; b.OmegaP = Vector3.zero; b.PushLive = false; }
                 }
                 if (float.IsNaN(b.PW.x) || float.IsNaN(b.POmega.x)) { b.PW = Quaternion.identity; b.POmega = Vector3.zero; b.PState = 0; }
@@ -374,7 +420,12 @@ namespace SfMorph
             {
                 _loggedDriven = true;
                 _sb.Length = 0;
-                for (int i = 0; i < _bones.Count; i++) _sb.Append(i > 0 ? ", " : "").Append(_bones[i].T.name);
+                bool firstB = true;
+                for (int i = 0; i < _bones.Count; i++)
+                {
+                    if (!(_region[GroupRegion[_bones[i].Group]] > 0f)) continue;     // the same test that counts `driven`
+                    _sb.Append(firstB ? "" : ", ").Append(_bones[i].T.name); firstB = false;
+                }
                 Plugin.Log.LogInfo("Overlap: v2 (ripple, planted lock, push) driving " + driven + " bones: " + _sb);
             }
             SetStatus(driven);
@@ -497,27 +548,24 @@ namespace SfMorph
 
         // ---- limb push ----
 
-        // forearm_X: torque about Elbow_X, and half of the force's torque about Shoulder_X; upperarm_X: about Shoulder_X.
+        // PushMaps: for each (segment, bone) the segment's push as a torque about the bone's origin. One PushOn per distinct segment per frame.
         void PushPass()
         {
-            for (int sd = 0; sd < 2; sd++)
+            _pushPass++;
+            for (int i = 0; i < _pushRes.Length; i++)
             {
-                var ef = _effs[sd];
-                if (ef == null) continue;
-                Vector3 pt, f; string by;
-                if (HerBody.PushOn(PushSeg[sd * 2 + 1], out pt, out f, out by) && Ok(pt) && Ok(f))
+                var r = _pushRes[i];
+                int sg = r.Seg;
+                if (_pushStamp[sg] != _pushPass)
                 {
-                    var tE = Vector3.Cross(pt - ef.M.T.position, f);
-                    var tS = Vector3.Cross(pt - ef.A.T.position, f) * 0.5f;
-                    AddTau(ef.M, tE); AddTau(ef.A, tS);
-                    NotePush(sd * 2 + 1, tE.magnitude, by);
+                    _pushStamp[sg] = _pushPass;
+                    Vector3 pt, f; string by;
+                    bool ok = HerBody.PushOn(sg, out pt, out f, out by) && Ok(pt) && Ok(f);
+                    _pushHas[sg] = ok; _pushPt[sg] = pt; _pushF[sg] = f; _pushBy[sg] = by;
+                    if (ok) NotePush(sg, Vector3.Cross(pt - r.Bone.T.position, f).magnitude, by);   // first map of a segment = its main bone
                 }
-                if (HerBody.PushOn(PushSeg[sd * 2], out pt, out f, out by) && Ok(pt) && Ok(f))
-                {
-                    var tS = Vector3.Cross(pt - ef.A.T.position, f);
-                    AddTau(ef.A, tS);
-                    NotePush(sd * 2, tS.magnitude, by);
-                }
+                if (!_pushHas[sg]) continue;
+                AddTau(r.Bone, Vector3.Cross(_pushPt[sg] - r.Bone.T.position, _pushF[sg]) * r.Share);
             }
         }
 
@@ -532,10 +580,10 @@ namespace SfMorph
 
         void NotePush(int seg, float nm, string by)
         {
-            _pushBits |= 1 << seg;
+            _pushBits |= 1u << seg;
             if (_loggedPush[seg]) return;
             _loggedPush[seg] = true;
-            Plugin.Log.LogInfo("Overlap: " + PushSeg[seg] + " pushed by " + by + " (" + nm.ToString("0.0") + " N*m)");
+            Plugin.Log.LogInfo("Overlap: " + HerBody.SegNames[seg] + " pushed by " + by + " (" + nm.ToString("0.0") + " N*m)");
         }
 
         bool Touch(Character her, int g)
@@ -571,12 +619,12 @@ namespace SfMorph
             if (driven == 0)
             {
                 Status = _bones.Count == 0 ? "off: no chain bones found" : "off (Amount 0)";
-                if (_pushBits != 0)
+                if (_pushBits != 0u)
                 {
                     _sb.Length = 0; _sb.Append(Status);
                     bool f1 = true;
-                    for (int sg = 0; sg < 4; sg++)
-                        if ((_pushBits & (1 << sg)) != 0) { _sb.Append(f1 ? "; pushed: " : ", ").Append(PushSeg[sg]); f1 = false; }
+                    for (int sg = 0; sg < _pushStamp.Length; sg++)
+                        if ((_pushBits & (1u << sg)) != 0u) { _sb.Append(f1 ? "; pushed: " : ", ").Append(HerBody.SegNames[sg]); f1 = false; }
                     Status = _sb.ToString();
                 }
                 return;
@@ -588,8 +636,8 @@ namespace SfMorph
             for (int e = 0; e < _effs.Length; e++)
                 if ((planted & (1 << e)) != 0) { _sb.Append(first ? "; planted: " : ", ").Append(EffShort[e]); first = false; }
             first = true;
-            for (int sg = 0; sg < 4; sg++)
-                if ((_pushBits & (1 << sg)) != 0) { _sb.Append(first ? "; pushed: " : ", ").Append(PushSeg[sg]); first = false; }
+            for (int sg = 0; sg < _pushStamp.Length; sg++)
+                if ((_pushBits & (1u << sg)) != 0u) { _sb.Append(first ? "; pushed: " : ", ").Append(HerBody.SegNames[sg]); first = false; }
             first = true;
             for (int g = 0; g < 6; g++)
                 if ((fade & (1 << g)) != 0) { _sb.Append(first ? "; faded: " : ", ").Append(GroupLabel[g]).Append(" contact"); first = false; }
@@ -607,6 +655,7 @@ namespace SfMorph
             _bones.Clear();
             for (int i = 0; i < _effs.Length; i++) _effs[i] = null;
             _root = null; _her = null; _sig = -1;
+            _pushRes = new PushRes[0];
             Status = "";
         }
     }
