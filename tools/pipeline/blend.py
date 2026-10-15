@@ -1,6 +1,7 @@
 """SF Body Morphs character pipeline, Blender stage: before/after renders and texture bake.
 
     blender -b --factory-startup -P blend.py -- --out <morph dir> --vam <SfExport dir> [--no-bake] [--size 4096]
+    blender -b --factory-startup -P blend.py -- --replay <replay.npz>     (offline pose replay from replay.py: original | converted)
 
 Reads <out>/_check/stage.npz written by sfpipe.py. Renders go to <out>/_check/*.png; baked textures to
 <out>/tex_<material>_albedo.png and _normal.png (her UV layout, for SfMorph's loader).
@@ -24,9 +25,13 @@ def arg(name, default=None):
 OUT = arg('--out')
 VAMDIR = arg('--vam')
 SIZE = int(arg('--size', '4096'))
-CHK = os.path.join(OUT, '_check')
-Z = np.load(os.path.join(CHK, 'stage.npz'))
-NAMES = [str(n) for n in Z['names']]
+REPLAY = arg('--replay')
+CHK = os.path.join(OUT, '_check') if OUT else os.path.dirname(os.path.abspath(REPLAY or '.'))
+if REPLAY:   # the replay needs no stage.npz
+    Z, NAMES = None, []
+else:
+    Z = np.load(os.path.join(CHK, 'stage.npz'))
+    NAMES = [str(n) for n in Z['names']]
 
 # Her skin materials baked from VaM's skin (her material -> which of her meshes' submeshes carry it)
 BAKE = ['reika_body', 'reika_face_a']
@@ -202,6 +207,34 @@ def posetest():
     render(os.path.join(CHK, 'posetest.png'), cams, (2400, 1000))
 
 
+def replay():
+    """replay.py's <out>/replay.npz: for each stored frame, original (left) | converted (right), front and 3/4 views.
+    Written next to the npz as replay_f<frame>_<front|quarter>.png."""
+    import math
+    P = np.load(REPLAY)
+    names = [str(n) for n in P['names']]
+    base = os.path.splitext(os.path.abspath(REPLAY))[0]
+    for k, fi in enumerate(P['frames']):
+        keys = [n for n in names if '%d|%s|orig' % (k, n) in P.files]
+        if not keys:
+            continue
+        allv = np.concatenate([P['%d|%s|orig' % (k, n)] for n in keys]).astype(np.float64)
+        lo, hi = allv.min(0), allv.max(0)
+        c = u2b(((lo + hi) / 2)[None])[0]
+        ext = hi - lo
+        half = max(ext[0], ext[2]) * 0.6 + 0.05          # the two figures sit 2*half apart along the screen's horizontal axis
+        scale = max(2 * half + max(ext[0], ext[2]) * 1.1, ext[1] * 1.1 * 2)
+        for view, right, loc, rz in (('front', (-1.0, 0.0), (0, 6, 0), 180), ('quarter', (-0.70711, 0.70711), (4.2, 4.2, 0), 135)):
+            clear()
+            for key, sgn in (('orig', -1), ('conv', 1)):
+                for n in keys:
+                    v = u2b(P['%d|%s|%s' % (k, n, key)].astype(np.float64)) - c
+                    v[:, 0] += sgn * half * right[0]; v[:, 1] += sgn * half * right[1]
+                    make_obj('%s_%s' % (n, key), v, P['faces|' + n])
+            cam = camera('c' + view, (loc[0], loc[1], 0 if len(loc) < 3 else loc[2]), (math.radians(90), 0, math.radians(rz)), scale)
+            render(base + '_f%d.png' % fi, {view: cam}, (2400, 1200))
+
+
 def debug():
     import math
     clear()
@@ -231,6 +264,8 @@ def append_summary(rows):
 
 if __name__ == '__main__':
     t0 = time.time()
+    if REPLAY:
+        replay(); sys.exit(0)
     if '--posetest' in ARGS:
         posetest(); sys.exit(0)
     if '--debug' in ARGS:
