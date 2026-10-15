@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.7.9";
+        public const string Version = "0.8.0";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -26,7 +26,8 @@ namespace SfMorph
         internal ConfigEntry<int> BreastColliders;
         internal ConfigEntry<bool> KeysUnfocused, Apply, Physics, ShowSoftPoints, EmbodyOn, EmbodyHideHead, HandsOn, HandsCollide, GpuContactOn;
         // 0.7.8 hands: convex-hull body colliders, pushes from hands that aren't physics hands, friction, jointed fingers
-        internal ConfigEntry<bool> HandsHull, HandsPushByTouch, HandsPushByPartner, HandsJointed;
+        internal ConfigEntry<bool> HandsHull, HandsPushByTouch, HandsPushByPartner, HandsJointed, HandsDrawnFade, HandsFingerConform, EmbodyNeutralFingers, EmbodyElbowAvoid;
+        internal ConfigEntry<float> HandsRestCurl;
         internal ConfigEntry<float> HandsFriction;
         internal ConfigEntry<float> UiScale, Softness, Springiness, Gravity, OverlapAmount, OverlapArms, OverlapLegs, OverlapHead, OverlapSpine;
         internal ConfigEntry<int> EmbodyHands, EmbodyView, EmbodyPartner, HandsMesh, Quality;
@@ -70,12 +71,15 @@ namespace SfMorph
             HeadBounce = Config.Bind("Motion", "HeadBounce", 0.6f, new ConfigDescription("How much the head and neck overshoot and settle.", new AcceptableValueRange<float>(0f, 1f)));
             SpineBounce = Config.Bind("Motion", "SpineBounce", 0.3f, new ConfigDescription("How much the spine overshoots and settles.", new AcceptableValueRange<float>(0f, 1f)));
             OverlapPlanted = Config.Bind("Motion", "PlantedLock", true, "Planted hands and feet stay where the animation puts them while the rest of the limb trails.");
-            HandsLimbPush = Config.Bind("Hands", "LimbPush", 0.5f, new ConfigDescription("Hands push her limbs, head and spine aside; the pose springs back (0 off).", new AcceptableValueRange<float>(0f, 1f)));
-            HandsPushByPartner = Config.Bind("Hands", "PushByPartner", false, "The partner's animated hands push her too (off: only your hands and the partner you embody; his animations often hold her arms, and a push would move them out of his grip).");
+            HandsLimbPush = Config.Bind("Hands", "LimbPush", 0.5f, new ConfigDescription("Her limbs, head and spine yield to a hand that presses into them and settle back without bouncing (0 off, 0.5 natural, 1 twice as far).", new AcceptableValueRange<float>(0f, 1f)));
+            HandsPushByPartner = Config.Bind("Hands", "PushByPartner", false, "The partner's animated hands push her too (not the one you embody: his hands are your controllers; his animations often hold her arms, and a push would move them out of his grip).");
             HandsPushByTouch = Config.Bind("Hands", "PushByTouch", true, "Hands that aren't physics hands (your hand models, the partner's hands) push her limbs by how deep they are in her; physics hands push by contact force.");
             HandsHull = Config.Bind("Hands", "HullColliders", true, "Her body colliders follow her skin's shape (convex hulls) instead of capsules.");
             HandsFriction = Config.Bind("Hands", "Friction", 0.5f, new ConfigDescription("How much your hands grip her skin: a resting hand is carried along when she moves (0 slides freely). Sliding and sticking friction are the same (0.75 x this), so a hand drags instead of clinging and breaking loose.", new AcceptableValueRange<float>(0f, 1f)));
             HandsJointed = Config.Bind("Hands", "JointedFingers", true, "Fingers are simulated bodies on joints (off: posed by the grip only, like 0.7.0).");
+            HandsDrawnFade = Config.Bind("Hands", "DrawnOffsetFade", true, "The drawn physics hand is exactly the controller in free air; the blocked displacement fades in on contact (off: always the physics pose, for comparing).");
+            HandsFingerConform = Config.Bind("Hands", "FingerConform", true, "Fingers close until they touch her and sink in by the part's softness (off: the grip alone poses them).");
+            HandsRestCurl = Config.Bind("Hands", "RestCurl", 0.25f, new ConfigDescription("How much the fingers curl with nothing pressed (0 flat, 1 a fist). Physics hands and his hands.", new AcceptableValueRange<float>(0f, 1f)));
             ShowSoftPoints = Config.Bind("Physics", "ShowSoftPoints", false, "Small markers on the soft points (green at rest, red touched) and the contact capsules, to see what touches what.");
             WrinkOn = Config.Bind("Wrinkles", "On", false, "Procedural skin wrinkles: folds appear in her skin's normal map where the skin compresses (expressions, bending), computed on the GPU (shader bundle sfmorph_shaders next to the DLL).");
             WrinkStrength = Config.Bind("Wrinkles", "Strength", 1f, new ConfigDescription("How deep the folds look (0 none, 2 strong).", new AcceptableValueRange<float>(0f, 2f)));
@@ -93,6 +97,8 @@ namespace SfMorph
             EmbodyOn = Config.Bind("Embody", "On", false, "See through the partner's eyes (VR), his head hidden, his hands on your controllers.");
             EmbodyHands = Config.Bind("Embody", "Hands", 3, new ConfigDescription("His hands follow the controllers: 0 none, 1 left, 2 right, 3 both.", new AcceptableValueRange<int>(0, 3)));
             EmbodyHideHead = Config.Bind("Embody", "HideHead", true, "Hide his head so it doesn't block the view.");
+            EmbodyNeutralFingers = Config.Bind("Embody", "NeutralFingers", true, "His fingers rest in a neutral pose instead of the animation's; the trigger curls the index finger, the grip clasps the others and stops on her skin.");
+            EmbodyElbowAvoid = Config.Bind("Embody", "ElbowAvoid", true, "His elbow swings around her instead of his arm passing through her.");
             EmbodyView = Config.Bind("Embody", "View", 2, new ConfigDescription("0 the game's camera, 1 snap to his eyes once, 2 follow his eyes.", new AcceptableValueRange<int>(0, 2)));
             EmbodyPartner = Config.Bind("Embody", "Partner", 0, new ConfigDescription("0 the player, 1 the other man (badGuy).", new AcceptableValueRange<int>(0, 1)));
             HandsOn = Config.Bind("Hands", "PhysicsHands", false, "Replace the VR controller models with physics-driven hands that collide with her and press her soft zones.");

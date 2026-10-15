@@ -666,6 +666,10 @@ namespace SfMorph
             Status = _sb.ToString();
         }
 
+        // 0.8.0 (design-0.8.0 section 1): puts the animation's rotation back on bones the animation did not rewrite this frame, so
+        // HerBody's yield query sees the animation's pose, not last frame's yield. Stub until P2.
+        public void Unwind() { }
+
         // package C (0.7.9 reactions): a linear impulse (N*s, world) on her segment `segIndex` (HerBody.SegNames) at `point` (world), as
         // an angular impulse on every bone that carries the segment (PushMaps), applied at the next Update's push kick.
         // Units: impulse N*s at lever arm r (m) = angular impulse J = share * cross(point - bone, impulse) in N*m*s; the push spring turns

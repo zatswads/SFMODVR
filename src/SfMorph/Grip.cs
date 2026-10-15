@@ -15,6 +15,8 @@ namespace SfMorph
     internal static class Grip
     {
         public static float Left, Right;
+        // 0.8.0: the trigger (VR_HandController.activateValue_*), 0..1, read in the same Update
+        public static float TriggerLeft, TriggerRight;
         public static string Source = "";
 
         const BindingFlags Any = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;

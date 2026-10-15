@@ -533,6 +533,16 @@ namespace SfMorph
                     try { c.Soft.Release(); } catch { }
                 }
                 if (_p.Apply.Value && !c.Look.Empty && c.Root != null) Apply(c);
+                // her segments BEFORE Overlap (0.8.0): the yield is measured against the animation's pose, so a limb that already yielded
+                // does not feed its own displacement back (the 0.7.8/0.7.9 Newton's cradle). Overlap.Unwind puts the animation's rotation
+                // back on bones the animation did not rewrite this frame, so the query never sees last frame's yield.
+                if (c == her && (physics || physHands))
+                {
+                    if (_overlapOn) Overlap.Unwind();
+                    _hb.On = true; _hb.PushByTouch = _p.HandsPushByTouch.Value; _hb.PushByPartner = _p.HandsPushByPartner.Value; _hb.Embodied = embody && Embody != null ? Embody.PartnerRoot : null; _hb.Softness = _p.Softness.Value; _hb.Caps = Contacts();
+                    try { HerBody.Update(c, _hb); }
+                    catch (Exception e) { Plugin.Log.LogError("Her body failed, retrying in 10 s: " + e); try { HerBody.Fail(); } catch { } }
+                }
                 // her secondary motion after our bone changes, before the soft points read her bones
                 if (c == her && _p.Apply.Value)
                 {
@@ -549,15 +559,6 @@ namespace SfMorph
                         try { Overlap.Release(); } catch { }
                     }
                 }
-                // her segments (shared by the physics hands and the pushes): AFTER Overlap wrote her bones, so a hand's depth is measured
-                // against the limb where it is (already pushed aside): the push falls off as the limb yields and it settles where the hand
-                // just touches, instead of pushing on forever against the animation's pose. Overlap uses these pushes next frame.
-                if (c == her && (physics || physHands))
-                {
-                    _hb.On = true; _hb.PushByTouch = _p.HandsPushByTouch.Value; _hb.PushByPartner = _p.HandsPushByPartner.Value; _hb.Embodied = embody && Embody != null ? Embody.PartnerRoot : null; _hb.Softness = _p.Softness.Value; _hb.Caps = Contacts();
-                    try { HerBody.Update(c, _hb); }
-                    catch (Exception e) { Plugin.Log.LogError("Her body failed, retrying in 10 s: " + e); try { HerBody.Fail(); } catch { } }
-                }
                 // the physics hands' visual pose for this frame (the soft points read their capsules)
                 if (c == her)
                 {
@@ -566,6 +567,7 @@ namespace SfMorph
                         _hands.On = true; _hands.Collide = _p.HandsCollide.Value; _hands.Mesh = _p.HandsMesh.Value;
                         _hands.ShowColliders = _p.ShowSoftPoints.Value; _hands.Softness = _p.Softness.Value;
                         _hands.HullColliders = _p.HandsHull.Value; _hands.Friction = _p.HandsFriction.Value; _hands.JointedFingers = _p.HandsJointed.Value;
+                        _hands.DrawnOffsetFade = _p.HandsDrawnFade.Value; _hands.FingerConform = _p.HandsFingerConform.Value; _hands.RestCurl = _p.HandsRestCurl.Value;
                         _hands.HideVisual = _p.EmbodyOn.Value && _p.EmbodyHands.Value != 0;   // his own hands are shown then
                         _hands.LeftPos = _p.LeftHandPos.Value; _hands.LeftRot = _p.LeftHandRot.Value; _hands.RightPos = _p.RightHandPos.Value; _hands.RightRot = _p.RightHandRot.Value;
                         try { PhysicsHands.Update(c, _hands); _physHandsOn = true; }
@@ -627,6 +629,7 @@ namespace SfMorph
             {
                 _emb.On = true; _emb.Hands = _p.EmbodyHands.Value; _emb.HideHead = _p.EmbodyHideHead.Value; _emb.View = _p.EmbodyView.Value;
                 _emb.Partner = _p.EmbodyPartner.Value;
+                _emb.NeutralFingers = _p.EmbodyNeutralFingers.Value; _emb.ElbowAvoid = _p.EmbodyElbowAvoid.Value; _emb.RestCurl = _p.HandsRestCurl.Value;
                 _emb.LeftPos = _p.LeftHandPos.Value; _emb.LeftRot = _p.LeftHandRot.Value; _emb.RightPos = _p.RightHandPos.Value; _emb.RightRot = _p.RightHandRot.Value;
                 try { Embody.Update(her, Found, _emb); _embodyOn = true; }
                 catch (Exception e)

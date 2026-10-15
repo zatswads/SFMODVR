@@ -13,6 +13,9 @@ namespace SfMorph
         public bool HideHead;
         public int View;           // 0 the game's camera, 1 snap once to his eyes, 2 follow his eyes (position only)
         public int Partner;        // 0 MovePlayerAndGirl.player, 1 .badGuy
+        // 0.8.0: his fingers rest neutral (trigger = index, grip = clasp that stops on her), his elbow swings around her, the rest curl
+        public bool NeutralFingers = true, ElbowAvoid = true;
+        public float RestCurl = 0.25f;
         // Controller -> his wrist (m, degrees), in the controller's axes. The position is where the wrist sits relative to the
         // tracked pose (Quest Touch, from Embody for VaM); the right hand is the left mirrored. The rotation is added to an
         // automatic hand alignment (fingers along the controller's forward, thumb along its up, palm toward the body's midline;
@@ -24,6 +27,9 @@ namespace SfMorph
     internal class Embody
     {
         public string Status = "";
+        // 0.8.0 (design-0.8.0 section 6.3): his hands at the CONTROLLER (the IK target), only for arms Embody drives this frame and only
+        // while !PhysicsHands.Active. Stub until P3.
+        internal static int FillGhost(WorldCap[] into, int start, int max) { return 0; }
         // True while Embody's IK wrote that arm of his this frame (or last frame: callers that run before the apply step see
         // the previous frame's write). False as soon as the arm is given back.
         public bool DrivesArm(bool left)

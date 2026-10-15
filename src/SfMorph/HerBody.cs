@@ -41,6 +41,15 @@ namespace SfMorph
     }
 
     // What the integrator hands HerBody every frame (Body fills it from the config).
+    // 0.8.0: a contact capsule in WORLD space for this frame (no Transform): the physics hands' and Embody's ghosts for her yield
+    internal struct WorldCap
+    {
+        public Vector3 A, B; public float R;
+        public int Hand;                // 0 left, 1 right, -1 unknown (which of YOUR hands it stands for)
+        public string By;               // "your left physics hand", "your left hand (Player)": never built per frame
+        public CapSource Src;           // for the Live gate / Reactions naming; may be null (= always live)
+    }
+
     internal class HerBodySettings
     {
         public bool On, PushByTouch = true;
@@ -101,6 +110,9 @@ namespace SfMorph
 #pragma warning disable 649   // fields the 0.7.8 hull / geometric push / follow packages fill
         public sealed class Seg
         {
+            // 0.8.0 yield (filled by the yield query, before Overlap): deepest penetration of any source into the skin shape (m, after
+            // the skin give), the pen-weighted contact point and unit direction INTO her, who; zero/null when none
+            public float YieldPen; public Vector3 YieldPt, YieldN; public string YieldBy; public int YieldHand; public float YieldW;
             public int Index;                       // into Defs / SegNames
             public SegDef Def;
             public string Name, Owner;
@@ -1112,6 +1124,26 @@ namespace SfMorph
 
         // The push on one of her segments over the last step: the force ON HER (N, world), where it acted, and who pushed ("your right
         // physics hand", "Player", ...). The physics hands' contact force (PhysF) and the geometric push (GeoF) add up; false below 0.2 N.
+        // ---- 0.8.0 yield and analytic queries (design-0.8.0 sections 2, 3.1, 3.2; stubs until P2) ----
+        public static bool YieldOn(int segIndex, out Vector3 point, out Vector3 normalIntoHer, out float pen, out string by, out int hand)
+        {
+            point = Vector3.zero; normalIntoHer = Vector3.zero; pen = 0f; by = null; hand = -1; return false;
+        }
+        // curl units (0..1 of a full curl): how far a clasp may sink past first contact on this segment, before Softness
+        public static float ClaspGive(int segIndex) { return 0.1f; }
+        // deepest segment for a sphere (p, r) against the skin shapes (RSkin * rr, no give): depth > 0 inside; false = none within r
+        public static bool SkinDepth(Vector3 p, float r, out int segIndex, out float depth, out Vector3 normalIntoHer)
+        {
+            segIndex = -1; depth = 0f; normalIntoHer = Vector3.zero; return false;
+        }
+        // max penetration of a capsule into the skin shapes, 0 when none; skipSegBits = segments to ignore (1u << Seg.Index)
+        public static float CapsuleDepth(Vector3 a, Vector3 b, float r, uint skipSegBits, out int segIndex, out Vector3 normalIntoHer)
+        {
+            segIndex = -1; normalIntoHer = Vector3.zero; return 0f;
+        }
+        public static uint SegBit(string segName) { return 0u; }    // 0 when not built
+        public static int HandsSegBits;                              // forearm_L/R + the wrists' owners: never 'her own hands' for CapsuleDepth callers
+
         public static bool PushOn(string seg, out Vector3 point, out Vector3 forceOnHer, out string by)
         {
             return PushOn(Find(seg), out point, out forceOnHer, out by);

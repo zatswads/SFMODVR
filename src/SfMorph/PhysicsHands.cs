@@ -17,6 +17,9 @@ namespace SfMorph
         // how much her skin grips the hands (0..1), simulated finger bodies on joints
         public bool HullColliders = true, JointedFingers = true;
         public float Friction = 0.5f;
+        // 0.8.0: the drawn hand is the controller in free air (offset faded in on contact), fingers conform to her skin, the rest curl
+        public bool DrawnOffsetFade = true, FingerConform = true;
+        public float RestCurl = 0.25f;
         // Controller -> wrist (m, degrees), in the controller's axes, shared with Embody: the position is where the wrist sits
         // relative to the tracked pose; the rotation is added on top of an automatic alignment (fingers along the controller's
         // forward, thumb along its up, palm toward the body's midline), so zero is the natural grip.
@@ -58,6 +61,12 @@ namespace SfMorph
         public static Vector3 LeftDp, RightDp;
         public static Quaternion LeftDq = Quaternion.identity, RightDq = Quaternion.identity;
         public static readonly List<SoftCapsule> Capsules = new List<SoftCapsule>();
+
+        // 0.8.0 (design-0.8.0 section 5.6): this side's capsules at the CONTROLLER target pose (not the blocked body), for her yield.
+        // Writes at most `max` entries from `start`; returns the count written; 0 when not Active or no controller.
+        internal static int FillGhost(WorldCap[] into, int start, int max) { return 0; }
+        // -1 when the collider is not one of her segment colliders
+        internal static int SegIndexOf(Collider c) { return -1; }
 
         const BindingFlags Any = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         const string Pfx = "SfPhys";

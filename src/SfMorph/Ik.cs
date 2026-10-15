@@ -14,6 +14,9 @@ namespace SfMorph
 
         // Rotates root and mid (world rotations, slerped by w from what they are now toward the solved ones) so that `end` reaches
         // `target`, and slerps end.rotation toward endRot by w. w 0 = untouched, 1 = exact (up to ReachClamp). false = nothing done.
+        // 0.8.0: the pole rotated about dir (unit) by degrees (Embody's elbow swivel). Stub until P2.
+        public static Vector3 SwivelPole(Vector3 pole, Vector3 dir, float degrees) { return pole; }
+
         public static bool TwoBone(Transform root, Transform mid, Transform end, Vector3 target, Quaternion endRot, float w)
         {
             if (root == null || mid == null || end == null || !(w > 0f)) return false;
