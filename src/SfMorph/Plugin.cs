@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.7.8";
+        public const string Version = "0.7.9";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -26,7 +26,7 @@ namespace SfMorph
         internal ConfigEntry<int> BreastColliders;
         internal ConfigEntry<bool> KeysUnfocused, Apply, Physics, ShowSoftPoints, EmbodyOn, EmbodyHideHead, HandsOn, HandsCollide, GpuContactOn;
         // 0.7.8 hands: convex-hull body colliders, pushes from hands that aren't physics hands, friction, jointed fingers
-        internal ConfigEntry<bool> HandsHull, HandsPushByTouch, HandsJointed;
+        internal ConfigEntry<bool> HandsHull, HandsPushByTouch, HandsPushByPartner, HandsJointed;
         internal ConfigEntry<float> HandsFriction;
         internal ConfigEntry<float> UiScale, Softness, Springiness, Gravity, OverlapAmount, OverlapArms, OverlapLegs, OverlapHead, OverlapSpine;
         internal ConfigEntry<int> EmbodyHands, EmbodyView, EmbodyPartner, HandsMesh, Quality;
@@ -71,6 +71,7 @@ namespace SfMorph
             SpineBounce = Config.Bind("Motion", "SpineBounce", 0.3f, new ConfigDescription("How much the spine overshoots and settles.", new AcceptableValueRange<float>(0f, 1f)));
             OverlapPlanted = Config.Bind("Motion", "PlantedLock", true, "Planted hands and feet stay where the animation puts them while the rest of the limb trails.");
             HandsLimbPush = Config.Bind("Hands", "LimbPush", 0.5f, new ConfigDescription("Hands push her limbs, head and spine aside; the pose springs back (0 off).", new AcceptableValueRange<float>(0f, 1f)));
+            HandsPushByPartner = Config.Bind("Hands", "PushByPartner", false, "The partner's animated hands push her too (off: only your hands and the partner you embody; his animations often hold her arms, and a push would move them out of his grip).");
             HandsPushByTouch = Config.Bind("Hands", "PushByTouch", true, "Hands that aren't physics hands (your hand models, the partner's hands) push her limbs by how deep they are in her; physics hands push by contact force.");
             HandsHull = Config.Bind("Hands", "HullColliders", true, "Her body colliders follow her skin's shape (convex hulls) instead of capsules.");
             HandsFriction = Config.Bind("Hands", "Friction", 0.5f, new ConfigDescription("How much your hands grip her skin: a resting hand is carried along when she moves (0 slides freely). Sliding and sticking friction are the same (0.75 x this), so a hand drags instead of clinging and breaking loose.", new AcceptableValueRange<float>(0f, 1f)));

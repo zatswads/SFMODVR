@@ -430,10 +430,15 @@ namespace SfMorph
             float lp = Slider("Push her limbs", push * 100f, 0f, 100f, "0", 50f, off == null ? null : "off: " + off, " %") / 100f;
             if (off == null && Mathf.Abs(lp - _p.HandsLimbPush.Value) > 0.0001f) _p.HandsLimbPush.Value = lp;
             string byOff = off ?? (push > 0f ? null : "push is 0");
+            bool byTouch = _p.HandsPushByTouch.Value;
+            string partnerOff = byOff ?? (byTouch ? null : "other hands don't push");
             GUI.enabled = byOff == null;
-            bool touch = GUILayout.Toggle(_p.HandsPushByTouch.Value, " Other hands push too (your hand models, the partner), by how deep they are");
+            bool touch = GUILayout.Toggle(byTouch, " Other hands push too (your hand models, the partner you embody), by how deep they are");
+            GUI.enabled = partnerOff == null;
+            bool partner = GUILayout.Toggle(_p.HandsPushByPartner.Value, "   ...and the partner's animated hands (his animations often hold her: off keeps her in his grip)");
             GUI.enabled = true;
             if (byOff == null && touch != _p.HandsPushByTouch.Value) _p.HandsPushByTouch.Value = touch;
+            if (partnerOff == null && partner != _p.HandsPushByPartner.Value) _p.HandsPushByPartner.Value = partner;
             if (byOff != null) GUILayout.Label("    off: " + byOff, _off);
             if (off == null && HerBody.Status.Length > 0) GUILayout.Label(HerBody.Status, HerBody.Status.StartsWith("off") ? _off : _hint);
             GUILayout.Label("Push: a hand that presses into an arm, leg, her head or torso moves it aside and the pose springs back (never past 30/20/15/10 degrees). " +

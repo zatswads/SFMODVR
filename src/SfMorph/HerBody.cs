@@ -44,6 +44,10 @@ namespace SfMorph
     internal class HerBodySettings
     {
         public bool On, PushByTouch = true;
+        // partner hands: animation-driven, often resting on or holding her (his hands around her arms): they only push with
+        // PushByPartner, except the partner you embody (his hands are your controllers then)
+        public bool PushByPartner;
+        public Transform Embodied;
         public float Softness = 0.5f;           // 0..1: how much her soft zones give (the inset of the collision shapes)
         public List<SoftCapsule> Caps;           // Body.Contacts(): what can touch her this frame
     }
@@ -906,6 +910,7 @@ namespace SfMorph
 
         // Which capsules can push her geometrically: your hand models and the partner's hands (the physics hands push through contact
         // impulses; her own capsules never push her). Decided when the capsule set changes, not per frame.
+        static bool _catPartner; static Transform _catEmb;
         static void Categorise(List<SoftCapsule> caps)
         {
             int n = caps.Count;
@@ -913,7 +918,8 @@ namespace SfMorph
             for (int i = 0; i < n; i++)
             {
                 var c = caps[i];
-                bool ok = c.T != null && ((c.Kind == "vr" && c.Owner != "PhysicsHands") || c.Kind == "partner");
+                bool ok = c.T != null && ((c.Kind == "vr" && c.Owner != "PhysicsHands")
+                                          || (c.Kind == "partner" && (_catPartner || (_catEmb != null && c.T.IsChildOf(_catEmb)))));
                 if (ok && Root != null && c.T.IsChildOf(Root)) ok = false;
                 _cat[i] = (byte)(ok ? 1 : 0);
             }
@@ -958,7 +964,8 @@ namespace SfMorph
             var caps = s.Caps;
             if (!s.PushByTouch || caps == null || caps.Count == 0) { _pN = -1; return; }
             int n = caps.Count;
-            if (n != _catN || VrHands.Version != _catVer || !ReferenceEquals(caps, _catList) || !ReferenceEquals(Root, _catRoot)) Categorise(caps);
+            if (n != _catN || VrHands.Version != _catVer || !ReferenceEquals(caps, _catList) || !ReferenceEquals(Root, _catRoot)
+                || s.PushByPartner != _catPartner || !ReferenceEquals(s.Embodied, _catEmb)) { _catPartner = s.PushByPartner; _catEmb = s.Embodied; Categorise(caps); }
             bool reset = n != _pN || VrHands.Version != _pVer;
             if (_pA.Length < n) { int m = Mathf.Max(n, _pA.Length * 2); _pA = new Vector3[m]; _pB = new Vector3[m]; _pOk = new bool[m]; reset = true; }
             if (reset) { Array.Clear(_pOk, 0, _pOk.Length); _pN = n; _pVer = VrHands.Version; }   // a different capsule set: no velocities from the old one

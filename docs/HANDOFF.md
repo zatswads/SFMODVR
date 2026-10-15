@@ -1,7 +1,7 @@
 # SF Body Morphs — handoff
 
-State at **0.7.8** (branch `main`). 0.7.8 (physics-hand follow fix, hull colliders, pushes from any hand on limbs/spine/head, friction,
-Physics/VR tabs) built, not yet run in the game. 0.7.7 ran once (log 2026-10-15 14:51): GPU contact and wrinkles load and run; the
+State at **0.7.9** (branch `main`). 0.7.9 (reactions and states, Reactions tab, dirty-talk voice guard) and 0.7.8 (physics-hand follow fix,
+hull colliders, pushes from any hand on limbs/spine/head, friction, Physics/VR tabs) built, not yet run in the game. 0.7.7 ran once (log 2026-10-15 14:51): GPU contact and wrinkles load and run; the
 physics hands stuttered (fixed in 0.7.8). GPU contact (0.7.3) and wrinkles (0.7.5) never ran before 0.7.7: the bundle lacked its
 AssetBundle object (the bundle project's Packages/manifest.json must list com.unity.modules.assetbundle; build.ps1 checks it).
 
@@ -68,7 +68,9 @@ commit them). Toolchain: `apt-get update && apt-get install -y mono-mcs mono-dev
 | `Wrinkles.cs` / `WrinkleBake.cs` | Skin wrinkles (0.7.5): CPU bake per renderer (neutral = bind pose + blendshapes + bone scale, weld groups, CSR adjacency, rest frames, UV Jacobians, patches) → `Wrinkles.compute` (TriStrain from live skinned edges, VertexGather with attack/release + axis hysteresis) before GpuContact's Imprint (BeforeImprint / own PlayerLoop step) → `WrinkleRaster.shader` (UV-space slope raster, blend into a copy of her `_NormalMap`, debug tint, _FlipY self-test). `ShaderBundle.cs`/`RawTarget.cs` are shared ref counts. |
 | `Embody.cs` | Embody (0.7.0): partner rig (Player/BadGuy), view snap/follow by moving the XR rig root (undone exactly), head hidden (scale 0.001, tracker), two-bone arm IK to the controllers with automatic hand frame, override detection in `Application.onBeforeRender`. |
 | `SoftZones.cs` | Physics (0.6.3): per zone (glutes, thighs in/out, belly, breast front/side) a rest point under her skin, helper pairs (anchor = DynamicBone root with an excluded second child so it is never re-aimed, soft = simulated particle hanging along the skin) under each bone that weights the zone, weights split w → w(1-f) + w f, bind poses appended (follow `MorphState.BindVersion`); readable clones of the game's meshes when no character is on, MorphState's clones extended in place otherwise (`SoftZones.Original` keeps MorphState cloning the game's mesh); DynamicBoneCollider capsules on partner hands (humanoid Animator or bone names), her forearms/hands/thighs; never adds children to game DynamicBone chain bones with < 2 children. |
-| `Panel.cs` | F8 window: character buttons, tabs Body (collapsible groups) / Bones / Presets / Characters / Physics (soft zones, motion, pushes, wrinkles) / VR (Embody, VR hands, contacts), filter + 80-row cap, greyed rows with reasons. |
+| `Reactions.cs` | Reactions (0.7.9): per HerBody segment a touch classifier (physics-hand contact ENTER speed per hand `HitVn`, hand-model/partner approach speed `GeoVn`, force, duration -> brush/caress/grope/soft/hard/too-hard slap, sensitivity scales the 1.2/2.3/4.5 m/s thresholds), 10 zones, excitement E (tiers) and pain P with decay, states Idle/Aroused/Startled/Guarded/Climax/Afterglow (auto or buttons), the director (voice chance + arbiter + tier gap, face, flinch via `Overlap.Kick`/`SoftZones.Kick`, slap sound, blush pump, gaze-away envelope, desire feed), test buttons, logs. |
+| `ReactionsGame.cs` | The game bridge for reactions, all by reflection (audio types too: UnityEngine.AudioModule isn't referenced): FacialFunction (MoanFunction, Blink, anim, facialLayer, functionPause), LadyVoice_Function gates, Sound_Function sources, GameSetting/SexMode/SexMode_State_System (desire gauge), voice library banks (Moan by length, Exhale_f32/f64/f128), SFX clips, own 3D slap AudioSource on the game's SFX mixer group, blush (`_BlushPower`) and look-at weight trackers, and the dirty-talk guard (rebuilds dirtyTalkVoice/dirtyTalkPlayNum only when PlayRandomVoice would throw). |
+| `Panel.cs` | F8 window: character buttons, tabs Body (collapsible groups) / Bones / Presets / Characters / Physics (soft zones, motion, pushes, wrinkles) / VR (Embody, VR hands, contacts) / Reactions (`Panel.Reactions.cs`: toggles, states, tests, voice guard), filter + 80-row cap, greyed rows with reasons. |
 
 ### How changes are applied (keep this model)
 
@@ -120,8 +122,11 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
   animation now push her limbs by up to the knee angle (PushByTouch); the extrapolation lead (first-contact speeds plausible).
 - GPU floor: 0.7.8 keeps it on body meshes only (C#). The shader-side normal guard (SoftDeform.compute Imprint: skip floor-only vertices
   when the capsule axis lies behind the skin) waits for the next bundle rebuild.
-- 0.7.9 planned: reactions and states (design in the session notes: design-0.7.9-reactions.md; research-vammoan.md; game API in
-  survey-game-reactions.md), incl. a guard for the game's own LadyVoice_Function.PlayRandomVoice IndexOutOfRange spam.
+- 0.7.9 to check: the bridge line ("Reactions: FacialFunction ...") lists nothing important missing; slap tiers feel right at 50 %
+  sensitivity (log speeds); flinch not a jerk (kick cap 0.08 x torque cap); blush range of _BlushPower (logged base) vs BlushGain;
+  the voice guard stops the IndexOutOfRange spam. Deferred: per-zone redness marks, reaction_enter_Eye ids, breast DynamicBone
+  force pulse, mood_num meaning (experimental steppers log the Animator's parameters). Design/research: design-0.7.9-reactions.md,
+  research-vammoan.md, survey-game-reactions.md in the session notes.
 
 - 0.3.0 untested in game: jitter gone? which helper sliders visibly do something (helper bones may carry few
   skin weights); check the `sliders:` line for each slider's bones, parents and child counts.

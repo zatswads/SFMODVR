@@ -41,6 +41,33 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.7.9:
+- Physics hands still stuttered in 0.7.8 (the log: the pull at its limit in 87-99 % of steps in free air, the drawn hand jittering by
+  ~8 mm and ~6 deg): the follow force and turning torque were sized for the whole hand (palm and fingers) but applied to the palm
+  alone, so the palm got up to twice the intended push and 7-14 times the intended spin before its finger joints shared it, and both
+  overshot every physics step. Now the hand gets a velocity change that removes only part of the error each step, applied to every
+  body of the hand at once, so it cannot overshoot. The 10 s log line shows the follow error and how often it flips (should be rare).
+- The partner's animated hands no longer push her limbs by default: his animations often hold her arms, and the 0.7.8 push moved
+  them out of his grip (log: 35-40 N on her upper arms by Player). Physics → Pushes → "...and the partner's animated hands" turns it
+  back on; the partner you embody still pushes (his hands are your controllers then).
+- Reactions (new Reactions tab, off by default): she reacts to how she is touched, modelled on VaM's moan plugin and the
+  Virtual Sweetheart scene. Each hand contact on a body part is a brush, caress (resting/stroking), grope (pressing hard) or a
+  soft, hard or too-hard slap by how fast the hand arrives (1.2 / 2.3 / 4.5 m/s at 50 % sensitivity). Physics hands, your hand
+  models and the partner's hands all count; her own limbs and hidden hands don't.
+  - Responses, each with its own toggle: her voice through the game's own touch moan (or the plugin picks short gasps to long
+    moans by intensity, with a little pitch variety; a breath for a caress), the moan face or a blink when the voice must stay
+    quiet, a flinch (the limb swings and springs back, the skin jiggles), a slap sound at the spot (the game's sound-effect clips
+    and volume), a blush on her cheeks that rises with excitement and after a slap and fades over ~20 s, and optionally she looks
+    away after a hard slap or the game's own desire gauge rises.
+  - Her voice never talks over the game's dialogue, kiss or scripted lines; during dirty talk only slaps get a moan (the game
+    pauses its dirty talk for it); voice only in sex/foreplay mode.
+  - States: excitement (tiers 1-4) rises with touch and fades after ten quiet seconds; pain from hard slaps makes her guarded (less
+    voice, bigger flinches); a hard slap startles her; optional climax and afterglow. Buttons set a state; test buttons fire any
+    reaction on any body part without touching her.
+- The game's dirty-talk voice error (LadyVoice_Function.PlayRandomVoice IndexOutOfRange every frame, ~150-190 per 10 s in the
+  logs, also restarting her dirty-talk face each frame) is repaired: when the game's play order no longer fits the current voice
+  list it is rebuilt (Reactions tab → Game voice, on by default, independent of the reactions).
+
 0.7.8:
 - Physics hands stuttered and floated: the palm chased a controller pose that only changes once per rendered frame with a
   one-step "close the whole gap now" pull at the 50 Hz physics rate, so on every second step it braked to a stop and

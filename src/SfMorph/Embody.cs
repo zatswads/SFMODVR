@@ -96,6 +96,8 @@ namespace SfMorph
 
         readonly Dictionary<GameObject, Rig> _rigs = new Dictionary<GameObject, Rig>();
         Rig _rig;
+        // the partner rig we embody (null when off): his hands follow your controllers then, so HerBody lets them push her
+        public Transform PartnerRoot { get { return _rig != null && _rig.Go != null ? _rig.Go.transform : null; } }
         EmbodySettings _cur;
         bool _active, _failed, _subscribed, _snapPending;
         int _partnerIdx = -1;

@@ -554,7 +554,7 @@ namespace SfMorph
                 // just touches, instead of pushing on forever against the animation's pose. Overlap uses these pushes next frame.
                 if (c == her && (physics || physHands))
                 {
-                    _hb.On = true; _hb.PushByTouch = _p.HandsPushByTouch.Value; _hb.Softness = _p.Softness.Value; _hb.Caps = Contacts();
+                    _hb.On = true; _hb.PushByTouch = _p.HandsPushByTouch.Value; _hb.PushByPartner = _p.HandsPushByPartner.Value; _hb.Embodied = embody && Embody != null ? Embody.PartnerRoot : null; _hb.Softness = _p.Softness.Value; _hb.Caps = Contacts();
                     try { HerBody.Update(c, _hb); }
                     catch (Exception e) { Plugin.Log.LogError("Her body failed, retrying in 10 s: " + e); try { HerBody.Fail(); } catch { } }
                 }

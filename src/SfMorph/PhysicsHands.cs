@@ -68,6 +68,10 @@ namespace SfMorph
         // step. MaxFf caps the sampled speed, MaxGapV the speed the gap term may add. A target that moves more than JumpBase + JumpSpeed *
         // frame time in one frame is the game moving the rig the controllers hang under (a POV cut), not the hand: the hand is carried along.
         const float GapGain = 25f, MaxLead = 0.06f, MaxFf = 4f, MaxGapV = 3f, JumpBase = 0.12f, JumpSpeed = 8f;
+        // 0.7.9 velocity-level follow: the fraction of the velocity error removed per step (< 1 so it can never overshoot into a
+        // step-to-step oscillation), the rotation gap gain (1/s) and its cap (rad/s), and the torque cap (N*m) turned into a per-step
+        // angular velocity cap through the hand's inertia
+        const float FollowGain = 0.7f, TurnGain = 0.6f, RotGapGain = 25f, MaxGapW = 10f, TorqueCap = 4f;
         const float HerMaxV = 4f;                  // sampled speed cap of her kinematic segments (m/s)
         const int CookPerFrame = 2;                // convex hulls cooked per rendered frame (the capsule collides until then)
 
@@ -774,6 +778,9 @@ namespace SfMorph
             public readonly Vector3[] TipLocal = new Vector3[5];       // the tip (capsule end), in that bone's space
             public readonly float[] TipR = new float[5];
             public float TotalMass = 0.35f, BadT, StuckT, SeenFixed = -1f, CapSum, ResistMax;
+            // 10 s diagnostics of the follow loops: velocity errors and how often they flip sign step to step (an oscillation at the
+            // step rate flips nearly every step; a healthy loop rarely does)
+            public float VErrSum, VErrMax, WErrSum, WErrMax; public int VFlipN, WFlipN; public Vector3 VErrPrev, WErrPrev; public bool ErrPrevOk;
             public int CapN, CapSat;
             public bool CurValid;
             // the target used at the last fixed step (for the visual offset) and the teleport rules
@@ -1580,6 +1587,7 @@ namespace SfMorph
         static void Teleport(Hand h, Vector3 p, Quaternion q)
         {
             var rb = h.Rb;
+            h.ErrPrevOk = false;
             if (!rb.isKinematic) { rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero; }
             rb.position = p; rb.rotation = q;
             h.PRoot.SetPositionAndRotation(p, q);
@@ -1602,6 +1610,7 @@ namespace SfMorph
         static void ShiftHand(Hand h, Vector3 tp, Quaternion tq)
         {
             var rb = h.Rb;
+            h.ErrPrevOk = false;
             Quaternion dq = tq * Quaternion.Inverse(h.Trk.Q);
             if (!Finite(dq)) { Teleport(h, tp, tq); return; }
             Vector3 rel = h.HaveFixed ? rb.position - h.FixedPos : Vector3.zero;   // from the target the last step aimed at, not the lead-free sample
@@ -1687,11 +1696,15 @@ namespace SfMorph
             if (_stepFrames > 0) sb.Append("; fixed steps/frame avg ").Append(((float)_stepSum / _stepFrames).ToString("0.0")).Append(" max ").Append(_stepMax);
             sb.Append("; rig shifts ").Append(_rigShifts);
             if (h.JitN > 0) sb.Append("; visual offset jitter avg ").Append((h.JitSum / h.JitN).ToString("0.0")).Append(" mm max ").Append(h.JitMax.ToString("0.0")).Append(" mm, rotation avg ").Append((h.JitQSum / h.JitN).ToString("0.00")).Append(" deg max ").Append(h.JitQMax.ToString("0.00")).Append(" deg");
+            sb.Append("; follow v err avg ").Append((h.VErrSum / h.CapN).ToString("0.00")).Append(" m/s max ").Append(h.VErrMax.ToString("0.00")).Append(", flips ").Append(Pct(h.VFlipN, h.CapN))
+              .Append("; spin err avg ").Append((h.WErrSum / h.CapN).ToString("0.0")).Append(" rad/s max ").Append(h.WErrMax.ToString("0.0")).Append(", flips ").Append(Pct(h.WFlipN, h.CapN))
+              .Append(" (velocity follow ").Append(FollowGain.ToString("0.0")).Append("/").Append(TurnGain.ToString("0.0")).Append(")");
             if (!h.RigOn) sb.Append("; fingers ").Append(_s != null && !_s.JointedFingers ? "kinematic (switched off)" : h.RigFailed ? "kinematic (fallback)" : "kinematic");
             Plugin.Log.LogInfo(sb.ToString());
             h.CapSum = 0f; h.CapN = 0; h.CapSat = 0; h.ResistMax = 0f;
             h.CapFreeN = h.CapTouchN = h.CapSatFree = h.CapSatTouch = 0; h.GapAtCapSum = 0f;
             h.JitSum = 0f; h.JitMax = 0f; h.JitN = 0; h.JitQSum = 0f; h.JitQMax = 0f;
+            h.VErrSum = h.VErrMax = h.WErrSum = h.WErrMax = 0f; h.VFlipN = h.WFlipN = 0;
         }
 
         static string Pct(int n, int of) { return of > 0 ? (100f * n / of).ToString("0") + "%" : "-"; }
@@ -1743,50 +1756,82 @@ namespace SfMorph
             }
             else h.FarTime = 0f;
 
-            // Compliant follow. Translation: the sampled target velocity plus the gap closed at GapGain per second (the gap term at most
-            // MaxGapV), 6 m/s at most, is asked for by a force, capped. The cap drops from 60 N to 12 N as her skin under the hand resists
-            // (SoftZones.LeftResist/RightResist, 0..1, written by the contact sim), so a pressed hand slows and stops instead of shoving through.
+            // Compliant follow at the VELOCITY level. Until 0.7.8 a force sized for the whole hand (palm + fingers, 0.70 kg) and a torque
+            // sized for its inertia (fingers by the parallel-axis term) were applied to the palm alone: the palm got up to 2x the intended
+            // velocity change and 7-14x the intended spin before the joints shared it with the fingers, so both loops oscillated at the step
+            // rate at their caps (the logs: "at the cap" 87-99 % in free air, the drawn hand jittering by mm and degrees). Now a velocity
+            // change of FollowGain/TurnGain (< 1) of the error is applied to EVERY body of the hand as one rigid motion: the realised gain is
+            // that constant whatever the joints do, and the loop cannot overshoot. Translation target: the sampled target velocity plus the
+            // gap closed at GapGain per second (at most MaxGapV). The per-step change is capped at fcap*dt/mass, i.e. the old force cap
+            // (60 N, down to 12 N as her skin under the hand resists: SoftZones.LeftResist/RightResist), so a pressed hand still stops.
             float resist = Mathf.Clamp01(h.Left ? SoftZones.LeftResist : SoftZones.RightResist);
             float fcap = Mathf.Lerp(60f, 12f, resist);
             Vector3 vGap = gap * GapGain;
             if (vGap.sqrMagnitude > MaxGapV * MaxGapV) vGap = vGap.normalized * MaxGapV;
             Vector3 vDes = h.Trk.V + vGap;
             if (vDes.sqrMagnitude > 36f) vDes = vDes.normalized * 6f;
-            Vector3 force = h.TotalMass * (vDes - rb.velocity) / dt;
-            float fm = force.magnitude;
-            bool capped = fm > fcap;
-            if (capped) force *= fcap / fm;
-            rb.AddForce(force, ForceMode.Force);
+            Vector3 vErr = vDes - rb.velocity;
+            Vector3 dv = vErr * FollowGain;
+            float dvCap = fcap * dt / Mathf.Max(h.TotalMass, 0.05f);   // 60 N -> 1.7 m/s per step at 0.70 kg, 12 N -> 0.34
+            float dvm = dv.magnitude;
+            bool capped = dvm > dvCap;
+            if (capped) dv *= dvCap / dvm;
             bool touching = Time.fixedTime - _handTouchT[h.Left ? 0 : 1] < 0.3f;   // same window as FingerStep
             h.CapSum += fcap; h.CapN++;
             if (touching) h.CapTouchN++; else h.CapFreeN++;
             if (capped) { h.CapSat++; h.GapAtCapSum += gap.magnitude; if (touching) h.CapSatTouch++; else h.CapSatFree++; }
             if (resist > h.ResistMax) h.ResistMax = resist;
 
-            // Rotation: PD torque tau = I * (kp * theta * axis - kd * omega) with I the hand's inertia (palm + the finger bodies by the
-            // parallel-axis term), clamped to 4 N*m. kp/kd are limited so the explicit step stays stable at slow fixed rates.
+            // Rotation: the same loop. Target spin = the controller's (Trk.W, feed-forward) plus the angle closed at RotGapGain per second;
+            // the per-step change is capped by TorqueCap through the hand's inertia about the axis of the change (palm + fingers).
             Quaternion dq = tq * Quaternion.Inverse(rq);
             if (dq.w < 0f) dq = new Quaternion(-dq.x, -dq.y, -dq.z, -dq.w);
             float ang; Vector3 axis;
             dq.ToAngleAxis(out ang, out axis);
             if (ang > 180f) ang -= 360f;
-            float kp = Mathf.Min(900f, 0.5f / (dt * dt)), kd = Mathf.Min(45f, 1.2f / dt);
-            // feed-forward: the damping acts on the angular velocity relative to the target's (Trk.W), so a steadily turning controller
-            // is followed without the lag a pure PD has
-            Vector3 alpha = (Finite(axis) ? axis * (ang * Mathf.Deg2Rad) * kp : Vector3.zero) - kd * (rb.angularVelocity - h.Trk.W);
-            Quaternion ir = rq * rb.inertiaTensorRotation;
-            Vector3 tau = ir * Vector3.Scale(Quaternion.Inverse(ir) * alpha, rb.inertiaTensor);
+            Vector3 wGap = Finite(axis) ? axis * (ang * Mathf.Deg2Rad * RotGapGain) : Vector3.zero;
+            if (wGap.sqrMagnitude > MaxGapW * MaxGapW) wGap = wGap.normalized * MaxGapW;
+            Vector3 wErr = h.Trk.W + wGap - rb.angularVelocity;
+            Vector3 dw = wErr * TurnGain;
             Vector3 com = rb.worldCenterOfMass;
-            for (int i = 0; i < h.Rig.Count; i++)
+            float dwm = dw.magnitude;
+            if (dwm > 1e-6f)
             {
-                var g = h.Rig[i];
-                if (g.Rb == null) continue;
-                Vector3 r = g.Rb.worldCenterOfMass - com;
-                tau += g.Rb.mass * (r.sqrMagnitude * alpha - r * Vector3.Dot(r, alpha));
+                Vector3 n = dw / dwm;
+                Quaternion ir = rq * rb.inertiaTensorRotation;
+                Vector3 nl = Quaternion.Inverse(ir) * n, it = rb.inertiaTensor;
+                float I = nl.x * nl.x * it.x + nl.y * nl.y * it.y + nl.z * nl.z * it.z;
+                for (int i = 0; i < h.Rig.Count; i++)
+                {
+                    var g = h.Rig[i];
+                    if (g.Rb == null || g.Rb.isKinematic) continue;
+                    Vector3 r = g.Rb.worldCenterOfMass - com;
+                    float rn = Vector3.Dot(r, n);
+                    I += g.Rb.mass * (r.sqrMagnitude - rn * rn);
+                }
+                float dwCap = TorqueCap * dt / Mathf.Max(I, 1e-5f);
+                if (dwm > dwCap) dw *= dwCap / dwm;
             }
-            float tm = tau.magnitude;
-            if (tm > 4f) tau *= 4f / tm;
-            if (Finite(tau)) rb.AddTorque(tau, ForceMode.Force);
+            if (!Finite(dv)) dv = Vector3.zero;
+            if (!Finite(dw)) dw = Vector3.zero;
+            rb.AddForce(dv, ForceMode.VelocityChange);
+            rb.AddTorque(dw, ForceMode.VelocityChange);
+            for (int i = 0; i < h.Rig.Count; i++)   // the fingers get the same rigid motion: nothing left for the joints to redistribute
+            {
+                var frb = h.Rig[i].Rb;
+                if (frb == null || frb.isKinematic) continue;
+                frb.AddForce(dv + Vector3.Cross(dw, frb.worldCenterOfMass - com), ForceMode.VelocityChange);
+                frb.AddTorque(dw, ForceMode.VelocityChange);
+            }
+            float ve = vErr.magnitude, we = wErr.magnitude;
+            h.VErrSum += ve; if (ve > h.VErrMax) h.VErrMax = ve;
+            h.WErrSum += we; if (we > h.WErrMax) h.WErrMax = we;
+            if (h.ErrPrevOk)
+            {
+                if (ve > 0.25f && h.VErrPrev.magnitude > 0.25f && Vector3.Dot(vErr, h.VErrPrev) < 0f) h.VFlipN++;
+                if (we > 2f && h.WErrPrev.magnitude > 2f && Vector3.Dot(wErr, h.WErrPrev) < 0f) h.WFlipN++;
+            }
+            h.VErrPrev = vErr; h.WErrPrev = wErr; h.ErrPrevOk = true;
 
             if (h.RigOn) FingerStep(h, dt);
         }

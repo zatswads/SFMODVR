@@ -97,6 +97,21 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.7.9 (reactions, voice guard)
+
+Hands first: physics hands idle in free air 20 s: the 10 s line shows "at the cap" free air near 0 %, "follow v err avg" <= 0.15 m/s
+with flips <= 10 %, spin flips <= 10 %, visual jitter avg <= 1 mm and <= 0.3 deg; the hands look steady. If flips stay high, try VR →
+Jointed fingers off and send that log too. Embody/partner: his animated hands holding her arms no longer move them.
+Log: `Reactions: FacialFunction ...` bridge line once (what was found/missing, voice banks, SFX clips, blush materials and base);
+`Voice guard: ...` when the game's dirty-talk order is rebuilt, and SfNr's "Unity error repeating ... IndexOutOfRange" lines stop.
+Headset (Reactions tab → on, a sex/foreplay scene): (1) medium spank on her butt: slap sound at the spot, hip/thigh swing and settle,
+glute jiggle, moan with face; again within 0.3 s: nothing; (2) hard spank: louder, bigger swing, cheeks redden and fade over ~20 s,
+pain rises; (3) several hard face slaps: guarded (status), less voice, bigger flinches; Gaze away on: she looks away a moment;
+(4) palm resting on her breast: a caress every 1.5 s with an occasional breath, excitement creeps; a hard press: one grope;
+(5) idle 15 s: excitement decays; outside sex mode: "voice idle (mode)", slaps still sound and flinch; (6) physics hands off, hand
+models (Other hands push too on): the same by your hand model; Embody: "by Player"; (7) test buttons per zone/tier and the state
+buttons; (8) Reactions off: blush and look-at back to the game's values; the voice guard still works.
+
 ## 0.7.8 (hand follow, hulls, pushes, tabs)
 
 Install `dist/SfMorph.dll` (+ `dist/sfmorph_shaders` unchanged). Log: `Her body: segments from N body meshes` with hull points per
