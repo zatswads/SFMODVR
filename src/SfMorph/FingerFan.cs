@@ -13,7 +13,7 @@ namespace SfMorph
         public const int Steps = 8;                                          // curl fractions 0, 1/7, ..., 1
         public const int ProbesPerStep = 2;                                  // [0] the tip, [1] the midpoint of the last capsule
         public const int MaxJoints = 3;
-        public const float EnterPad = 0.003f, ExitPad = 0.001f;              // hysteresis of the physics variant (m): enter R + 3 mm, stay R - 1 mm
+        public const float EnterPad = 0.003f, ExitPad = 0.001f;              // hysteresis of the physics variant (m): enter R + 3 mm, stay R + 4 mm
         public readonly Vector3[] Probe = new Vector3[Steps * ProbesPerStep];   // in the PALM (wrist) frame, metres
         // the joint origins per step (JointP[step * MaxJoints + j], palm frame), for Embody's ghost capsules; Joints = how many are valid
         public readonly Vector3[] JointP = new Vector3[Steps * MaxJoints];
@@ -87,7 +87,7 @@ namespace SfMorph
             return 1f;
         }
 
-        // physics variant (physics hands): CheckSphere on `herMask`, enter radius R + EnterPad, stay radius R - ExitPad on the probes of the
+        // physics variant (physics hands): CheckSphere on `herMask`, enter radius R + EnterPad, stay radius R + EnterPad + ExitPad (larger: real hysteresis) on the probes of the
         // step that touched last time (`prevStep`, -1 none): a fingertip hovering at the edge of her skin doesn't flip between touching and
         // not every frame. `segOf` maps the collider hit to a segment. Returns the contact curl in [0, 1] (1 = nothing within full curl);
         // `step` is the first step that touched (-1 none). Allocation-free: CheckSphere / SphereCast / OverlapSphereNonAlloc.
@@ -100,7 +100,7 @@ namespace SfMorph
             int hk = -1; Vector3 hp = Vector3.zero;
             for (int k = 0; k < Steps && hk < 0; k++)
             {
-                float rs = k == prevStep ? Mathf.Max(0.001f, r - ExitPad) : r + EnterPad;
+                float rs = k == prevStep ? r + EnterPad + ExitPad : r + EnterPad;   // stay radius LARGER than enter: leave at 4 mm, enter at 3
                 for (int q = 0; q < ProbesPerStep; q++)
                 {
                     Vector3 p = pos + rot * (Probe[k * ProbesPerStep + q] * scale);
@@ -116,9 +116,9 @@ namespace SfMorph
             }
             Vector3 ta = pos + rot * (Probe[(hk - 1) * ProbesPerStep] * scale), tb = pos + rot * (Probe[hk * ProbesPerStep] * scale);
             Vector3 d = tb - ta; float len = d.magnitude;
-            float frac = 0.5f;
+            float frac = 1f;                                  // a miss means the touch is at the far probe (the detection used r + EnterPad)
             RaycastHit hit;
-            if (len > 1e-5f && Physics.SphereCast(ta, r, d / len, out hit, len, herMask, QueryTriggerInteraction.Ignore))
+            if (len > 1e-5f && Physics.SphereCast(ta, r + EnterPad, d / len, out hit, len, herMask, QueryTriggerInteraction.Ignore))
             {
                 frac = Mathf.Clamp01(hit.distance / len);
                 if (segOf != null && hit.collider != null) segIndex = segOf(hit.collider);

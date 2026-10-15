@@ -303,16 +303,18 @@ namespace SfMorph
             GUILayout.Label("Embody", _bold);
             string off = !c.Female || c.IsPlayer ? "only with the game's woman in the scene" : null;
             GUI.enabled = off == null;
-            bool on = GUILayout.Toggle(_p.EmbodyOn.Value, " Embody him: see through his eyes, his hands on your controllers");
+            bool embOn = _p.EmbodyOn.Value;   // read before the toggle (and the view mode before its toolbar): the same rows in the Layout pass and the click pass
+            bool on = GUILayout.Toggle(embOn, " Embody him: see through his eyes, his hands on your controllers");
             GUI.enabled = true;
             if (off == null && on != _p.EmbodyOn.Value) _p.EmbodyOn.Value = on;
             if (off != null) { GUILayout.Label("off: " + off, _off); return; }
-            GUI.enabled = _p.EmbodyOn.Value;
+            GUI.enabled = embOn;
             int partner = GUILayout.Toolbar(_p.EmbodyPartner.Value, Partners);
             if (partner != _p.EmbodyPartner.Value) _p.EmbodyPartner.Value = partner;
             GUILayout.Label("View", _hint);
             GUILayout.BeginHorizontal();
-            int view = GUILayout.Toolbar(_p.EmbodyView.Value, ViewModes);
+            int viewWas = _p.EmbodyView.Value;
+            int view = GUILayout.Toolbar(viewWas, ViewModes);
             if (view != _p.EmbodyView.Value) _p.EmbodyView.Value = view;
             if (GUILayout.Button("Re-snap", GUILayout.Width(80))) _body.Embody.SnapView();
             GUILayout.EndHorizontal();
@@ -322,18 +324,18 @@ namespace SfMorph
             int handsWas = _p.EmbodyHands.Value;   // read before the controls: the same rows in the Layout pass and the click pass
             int hands = GUILayout.Toolbar(handsWas, HandModes);
             if (hands != _p.EmbodyHands.Value) _p.EmbodyHands.Value = hands;
-            string handOff = !_p.EmbodyOn.Value ? "Embody is off" : handsWas == 0 ? "his hands don't follow" : null;
+            string handOff = !embOn ? "Embody is off" : handsWas == 0 ? "his hands don't follow" : null;
             string elbowOff = handOff ?? (!(_p.Apply.Value && _p.Physics.Value) && !_p.HandsOn.Value ? "her body is not built (soft zones or physics hands)" : null);
             GUI.enabled = handOff == null;
-            bool nf = GUILayout.Toggle(_p.EmbodyNeutralFingers.Value, " Neutral fingers: trigger = index, grip = clasp that stops on her");
+            bool nf = GUILayout.Toggle(_p.EmbodyNeutralFingers.Value, " Neutral fingers: the grab button closes the hand, it stops on her");
             if (handOff == null && nf != _p.EmbodyNeutralFingers.Value) _p.EmbodyNeutralFingers.Value = nf;
             GUI.enabled = elbowOff == null;
             bool ea = GUILayout.Toggle(_p.EmbodyElbowAvoid.Value, " His elbow swings around her");
             if (elbowOff == null && ea != _p.EmbodyElbowAvoid.Value) _p.EmbodyElbowAvoid.Value = ea;
             GUI.enabled = true;
-            if (_p.EmbodyOn.Value && elbowOff != null) GUILayout.Label("    off: " + elbowOff, _off);
+            if (embOn && elbowOff != null) GUILayout.Label("    off: " + elbowOff, _off);
             // view alignment (acts at once: a change re-snaps the view)
-            string viewOff = !_p.EmbodyOn.Value ? "off: Embody is off" : _p.EmbodyView.Value == 0 ? "off: the view is the game's camera" : null;
+            string viewOff = !embOn ? "off: Embody is off" : viewWas == 0 ? "off: the view is the game's camera" : null;
             GUI.enabled = viewOff == null;
             GUILayout.BeginHorizontal();
             GUILayout.Label("Face the view to", GUILayout.Width(170));
@@ -347,7 +349,7 @@ namespace SfMorph
             if (viewOff == null && Mathf.Abs(vp - _p.EmbodyViewPitch.Value) > 0.01f) _p.EmbodyViewPitch.Value = vp;
             float vr = Slider("View roll", _p.EmbodyViewRoll.Value, -45f, 45f, "0", 0f, viewOff, " deg");
             if (viewOff == null && Mathf.Abs(vr - _p.EmbodyViewRoll.Value) > 0.01f) _p.EmbodyViewRoll.Value = vr;
-            if (_p.EmbodyOn.Value && _body.Embody.Status.Length > 0) GUILayout.Label(_body.Embody.Status, _body.Embody.Status.StartsWith("off") ? _off : _hint);
+            if (embOn && _body.Embody.Status.Length > 0) GUILayout.Label(_body.Embody.Status, _body.Embody.Status.StartsWith("off") ? _off : _hint);
             GUILayout.Label("The game's own POV camera can end up elsewhere; 'Follow his eyes' keeps your view at his eyes (position only, " +
                             "you turn your own head). A snap faces you the way his chest (or head) faces; turn/tilt/roll correct what is left " +
                             "(+ turn = right, + tilt = nose up; tilting the world can feel odd, keep it small). Hand offsets per controller: [Embody] in sfmodvr.sfmorph.cfg.", _hint);

@@ -1,6 +1,6 @@
 # SF Body Morphs — handoff
 
-State at **0.8.0** (branch `main`). 0.8.0 (limb yield instead of push springs, planted lock for every chain, inertia ripple, drawn physics hand = controller in free air, finger conform fan, trigger/grip fingers, Embody neutral fingers, clasp, hand stop and elbow swivel) built, not run in the game. 0.7.9 ran once (log 2026-10-15 19:40): the follow fix works (free-air flips 0-2 %, at the cap 0 %). 0.7.9 (reactions and states, Reactions tab, dirty-talk voice guard) and 0.7.8 (physics-hand follow fix,
+State at **0.8.0** (branch `main`). 0.8.0 (limb yield instead of push springs, planted lock for every chain, inertia ripple, drawn physics hand = controller in free air, finger conform fan, grab-button fingers, Embody neutral fingers, clasp, hand stop and elbow swivel) built, not run in the game. 0.7.9 ran once (log 2026-10-15 19:40): the follow fix works (free-air flips 0-2 %, at the cap 0 %). 0.7.9 (reactions and states, Reactions tab, dirty-talk voice guard) and 0.7.8 (physics-hand follow fix,
 hull colliders, pushes from any hand on limbs/spine/head, friction, Physics/VR tabs) built, not yet run in the game. 0.7.7 ran once (log 2026-10-15 14:51): GPU contact and wrinkles load and run; the
 physics hands stuttered (fixed in 0.7.8). GPU contact (0.7.3) and wrinkles (0.7.5) never ran before 0.7.7: the bundle lacked its
 AssetBundle object (the bundle project's Packages/manifest.json must list com.unity.modules.assetbundle; build.ps1 checks it).
@@ -99,7 +99,7 @@ pelvis → chest, forward = up × left (checked: toes in front of ankles), mappe
   CONTROLLER pose), `Embody.FillGhost` (his hands at the IK target; his animated capsules are excluded). PhysF/GeoF/Hit* stay for Reactions
   only; `Overlap.Kick` is a velocity impulse with realistic inertias.
 - Physics hands: drawn offset gated (smoothstep 5-15 mm / 4-10 deg, 1 while touching, attack 40 ms, release 250 ms; lost target > 5-10 cm
-  fades out); finger commands rest curl / trigger → index / grip → others / thumb max(grip, 0.6 trigger); conform per rendered frame on the
+  fades out); finger commands `lerp(rest curl, 1, grab)` for all five fingers (the grab button closes the whole hand: trigger by default, VR → Grab with); conform per rendered frame on the
   rigidbody pose, followers 0.5/0.75, give `HerBody.ClaspGive x (0.5 + Softness)`; finger material friction 0.15 Minimum.
 - Embody: neutral finger base from the bindposes (world rotations written top-down), clasp by `FingerFan.ConformAnalytic`, hand stop
   (3 iterations vs `HerBody.CapsuleDepth` with skin allowance, 12 Hz smoothing) when physics hands are off, elbow swivel (candidate pole

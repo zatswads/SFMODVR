@@ -65,13 +65,15 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 - Fingers close like VaM's DynamicLimbs: each finger's curl sweep is tested against her body from the palm (it can't feed back on
   itself), the finger stops where it touches and sinks in by the part's softness (breast/butt deep, shoulder/forearm barely), idle
   fingers follow the touching ones, low finger friction so tips slide. The hand rests in a relaxed curl (VR → Rest curl).
+- Pushing her forearm or calf moves her hand or foot now (the planted lock lets go while that part yields; an upper-arm or thigh push still
+  keeps the hand put). With physics hands off, Embody's hand stop, clasp and elbow swivel test her yielded skin, not the animation's.
 - Grab moved to the trigger (VR → Grab with: Trigger / Grip / Either): the grip is the game's menu button. It closes the whole hand,
   physics hands and his hands alike; the old index-only pointing pose is gone.
 - The hands sank into her before stopping (her soft colliders were inset a flat 2-4.5 cm, deeper than a thigh's flesh, so the hand
   showed inside her): the inset is now each part's tissue depth (butt/breast ~2.3 cm, belly ~1.8, thigh ~1.4, calf/upper arm ~0.9,
   forearm/neck ~0.4, head 0.3, scaled by Softness), the same depth Embody's hand may sink before it stops.
-- Embody: his fingers rest in a neutral pose (from his bind pose) instead of the animation's; trigger = index, grip = a clasp that
-  closes around what you hold (her shoulder, her breast) and stops on her skin, deeper on soft parts. The view now faces the way his
+- Embody: his fingers rest in a neutral pose (from his bind pose) instead of the animation's; the grab button (VR -> Grab with, the trigger by default)
+  closes the whole hand around what you hold (her shoulder, her breast) and it stops on her skin, deeper on soft parts. The view now faces the way his
   chest faces on a snap (his head is often turned in the animation, which put his arms off to one side of yours; VR → Face the view
   to), with View turn / tilt / roll sliders for what is left (a change re-snaps at once; tilt/roll never add up). With physics hands off his hand
   now stops at her skin (it passed straight through), and his elbow swings around her instead of his forearm passing through her.

@@ -292,7 +292,7 @@ namespace SfMorph
                 // grope: pressing hard (or deep) for 0.25 s, once, re-armed after 0.5 s of a light touch
                 bool pressing = force >= 20f * k || g.GeoDepth >= 0.015f * k || g.YieldPen >= 0.015f * k;   // 0.8.0: a yielded limb drops the contact force
                 _r[gi].PressT = pressing ? _r[gi].PressT + dt : 0f;
-                bool low = force < 10f && g.GeoDepth < 0.005f;
+                bool low = force < 10f && g.GeoDepth < 0.005f && g.YieldPen < 0.005f;
                 _r[gi].LowT = low ? _r[gi].LowT + dt : 0f;
                 if (_r[gi].LowT >= 0.5f) _r[gi].Pressed = false;
                 bool fired = false;

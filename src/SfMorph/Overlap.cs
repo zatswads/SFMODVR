@@ -70,6 +70,7 @@ namespace SfMorph
 
         // planted lock v2 (design 13.1): still / swinging speed (m/s) and how long each is held, ease up / down (s)
         const float PlantDist = 0.08f, StillSpeed = 0.15f, SwingSpeed = 0.5f, StillHold = 0.08f, SwingHold = 0.10f, PlantUp = 0.15f, PlantDown = 0.30f;
+        const float YieldDown = 0.10f;              // the pin lets go faster than a free swing: the yield attacks at 4-5 Hz
 
         // limb yield (design-0.8.0 section 3). Per region {arms, legs, head, spine}: the gain G (metres the contact point moves per metre of
         // penetration, at LimbPush 0.5), the soft cap Dmax of that displacement (metres) and the highest flinch angular velocity (rad/s)
@@ -178,6 +179,7 @@ namespace SfMorph
             public Vector3 AnimPos, AnimPrev; public Quaternion AnimRot;
             public bool HasPrev, AnimOk;
             public float StillT, FreeT, Planted = 1f, Target = 1f, Speed;   // Target 1 = pinned, 0 = free; Planted eases to it
+            public int DistalSeg = -1;                                        // forearm_X / calf_X of this chain (HerBody.SegNames index): a push on it releases the pin
             public int RefIdx;                                                // the frame that gave the least speed (RefName)
             public readonly Vector3[] RefPrev = new Vector3[5];               // the effector's animation position in each reference frame's space, last frame
             public readonly bool[] RefOk = new bool[5];
@@ -298,7 +300,12 @@ namespace SfMorph
             {
                 var n = EffNames[e];
                 B a = FindB(n[0]), m = FindB(n[1]), d = FindB(n[2]);
-                if (a != null && m != null && d != null) _effs[e] = new Eff { Group = e, A = a, M = m, E = d };
+                if (a != null && m != null && d != null)
+                {
+                    _effs[e] = new Eff { Group = e, A = a, M = m, E = d };
+                    string side = n[2].Substring(n[2].Length - 2);   // "_L" / "_R" from Wrist_L / Ankle_L
+                    _effs[e].DistalSeg = Array.IndexOf(HerBody.SegNames, (e < 2 ? "forearm" : "calf") + side);
+                }
             }
         }
 
@@ -819,6 +826,17 @@ namespace SfMorph
             if (best < StillSpeed) { e.StillT += dt; e.FreeT = 0f; if (e.StillT >= StillHold) newT = 1f; }
             else if (best < float.MaxValue && best > SwingSpeed) { e.FreeT += dt; e.StillT = 0f; if (e.FreeT >= SwingHold) newT = 0f; }
             else { e.StillT = 0f; e.FreeT = 0f; }
+            // 0.8.0: a push on the chain's distal segment (forearm / calf) must move the hand / foot: the pin lets go while that segment yields or
+            // the elbow / knee still carries yield (a kick too), or the IK would put the hand back and undo the yield. An upper-arm / thigh push
+            // keeps the pin: the elbow / knee bends, the hand / foot stays. Open loop: the yield never reads the pin, so this cannot oscillate.
+            bool distal = false;
+            if (_lp > 0f && HerBody.Built && e.DistalSeg >= 0)
+            {
+                Vector3 yp, yn; float ypen; string yby; int yh;
+                distal = HerBody.YieldOn(e.DistalSeg, out yp, out yn, out ypen, out yby, out yh) && ypen > YieldTouchPen;
+            }
+            if (!distal && e.M.CanYield && e.M.YieldLive && e.M.Yv.magnitude > 0.035f) distal = true;
+            if (distal) { newT = 0f; e.StillT = 0f; e.FreeT = 0f; }
             if (newT != e.Target)
             {
                 e.Target = newT;
@@ -829,10 +847,10 @@ namespace SfMorph
                     if (newT > 0f)
                         Plugin.Log.LogInfo("Overlap: " + EffLabel[e.Group] + " planted (still relative to " + RefName(e, bi) + ", " + best.ToString("0.00") + " m/s)");
                     else
-                        Plugin.Log.LogInfo("Overlap: " + EffLabel[e.Group] + " free (swinging " + (best < 1e5f ? best : 0f).ToString("0.0") + " m/s)");
+                        Plugin.Log.LogInfo("Overlap: " + EffLabel[e.Group] + " free (" + (distal ? "the " + (e.Group < 2 ? "forearm" : "calf") + " yields" : "swinging " + (best < 1e5f ? best : 0f).ToString("0.0") + " m/s") + ")");
                 }
             }
-            e.Planted = Mathf.MoveTowards(e.Planted, e.Target, dt / (e.Target > e.Planted ? PlantUp : PlantDown));
+            e.Planted = Mathf.MoveTowards(e.Planted, e.Target, dt / (e.Target > e.Planted ? PlantUp : (distal ? YieldDown : PlantDown)));
             e.PlantSum += e.Planted; e.PlantN++;
         }
 

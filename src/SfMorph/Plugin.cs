@@ -101,10 +101,10 @@ namespace SfMorph
             EmbodyHands = Config.Bind("Embody", "Hands", 3, new ConfigDescription("His hands follow the controllers: 0 none, 1 left, 2 right, 3 both.", new AcceptableValueRange<int>(0, 3)));
             EmbodyHideHead = Config.Bind("Embody", "HideHead", true, "Hide his head so it doesn't block the view.");
             EmbodyViewAlign = Config.Bind("Embody", "ViewAlign", 1, new ConfigDescription("What the view is turned to on a snap: 0 his head's yaw, 1 his chest's (his arms then sit where yours are even when his head is turned).", new AcceptableValueRange<int>(0, 1)));
-            EmbodyViewYaw = Config.Bind("Embody", "ViewYaw", 0f, new ConfigDescription("Turn correction of the view on a snap (degrees, + = to the left).", new AcceptableValueRange<float>(-90f, 90f)));
+            EmbodyViewYaw = Config.Bind("Embody", "ViewYaw", 0f, new ConfigDescription("Turn correction of the view on a snap (degrees, + = turn right).", new AcceptableValueRange<float>(-90f, 90f)));
             EmbodyViewPitch = Config.Bind("Embody", "ViewPitch", 0f, new ConfigDescription("Tilt correction of the world on a snap (degrees, + = nose up). Tilting the world can be uncomfortable: small values.", new AcceptableValueRange<float>(-45f, 45f)));
             EmbodyViewRoll = Config.Bind("Embody", "ViewRoll", 0f, new ConfigDescription("Roll correction of the world on a snap (degrees).", new AcceptableValueRange<float>(-45f, 45f)));
-            EmbodyNeutralFingers = Config.Bind("Embody", "NeutralFingers", true, "His fingers rest in a neutral pose instead of the animation's; the trigger curls the index finger, the grip clasps the others and stops on her skin.");
+            EmbodyNeutralFingers = Config.Bind("Embody", "NeutralFingers", true, "His fingers rest in a neutral pose instead of the animation's; the grab button (VR -> Grab with, the trigger by default) closes the whole hand and it stops on her skin.");
             EmbodyElbowAvoid = Config.Bind("Embody", "ElbowAvoid", true, "His elbow swings around her instead of his arm passing through her.");
             EmbodyView = Config.Bind("Embody", "View", 2, new ConfigDescription("0 the game's camera, 1 snap to his eyes once, 2 follow his eyes.", new AcceptableValueRange<int>(0, 2)));
             EmbodyPartner = Config.Bind("Embody", "Partner", 0, new ConfigDescription("0 the player, 1 the other man (badGuy).", new AcceptableValueRange<int>(0, 1)));

@@ -1075,7 +1075,7 @@ namespace SfMorph
                 g.YieldPen = 0f; g.YieldPt = Vector3.zero; g.YieldN = Vector3.zero; g.YieldBy = null; g.YieldHand = -1; g.YieldW = 0f;
             }
             _geoActive = false;
-            ShapesNow(s);                                   // also for SkinDepth / CapsuleDepth, whatever the sources are
+            ShapesNow();                                    // also for SkinDepth / CapsuleDepth, whatever the sources are
             var caps = s.Caps;
             bool listOn = s.PushByTouch && caps != null && caps.Count > 0;
             int n = listOn ? caps.Count : 0;
@@ -1155,7 +1155,7 @@ namespace SfMorph
         }
 
         // her segments' skin shapes in the world, once per frame: the axis, the radius the push / yield use (skin - give) and the skin radius
-        static void ShapesNow(HerBodySettings s)
+        static void ShapesNow()
         {
             for (int i = 0; i < Segs.Count; i++)
             {
@@ -1167,10 +1167,14 @@ namespace SfMorph
                 if (g.Sphere) { _sa[k] = _sb[k] = g.A.TransformPoint(g.LocalCenter); }
                 else { _sa[k] = g.A.position; _sb[k] = g.B.position; }
                 _srSkin[k] = g.RSkin * rr;
-                _sr[k] = _srSkin[k] - Mathf.Min(SkinGive, Inset(g, s.Softness, s.SoftZonesOn));   // the skin gives a little before the limb moves
+                _sr[k] = _srSkin[k] - Mathf.Min(SkinGive, Inset(g, Softness, SoftZonesOn));   // the skin gives a little before the limb moves
                 _sOk[k] = Finite(_sa[k]) && Finite(_sb[k]) && _sr[k] > 0.001f;
             }
         }
+
+        // 0.8.0: the skin shapes on her LIVE bones (after Overlap wrote the yield / lag): Embody's stop, clasp and swivel must see where her limb
+        // IS. GeoPush puts them back on the animation pose at the next frame's query, so the yield itself stays open-loop.
+        public static void RefreshShapes() { if (Built) ShapesNow(); }
 
         // The capsule's world velocity from last frame's endpoints (slot si), with the MaxCapSpeed clamp and without it; a jump is not motion.
         static void Velocity(int si, Vector3 a, Vector3 b, float invDt, out Vector3 va, out Vector3 vb, out Vector3 raA, out Vector3 raB)

@@ -13,7 +13,7 @@ namespace SfMorph
         public bool HideHead;
         public int View;           // 0 the game's camera, 1 snap once to his eyes, 2 follow his eyes (position only)
         public int Partner;        // 0 MovePlayerAndGirl.player, 1 .badGuy
-        // 0.8.0: his fingers rest neutral (trigger = index, grip = clasp that stops on her), his elbow swings around her, the rest curl
+        // 0.8.0: his fingers rest neutral (the grab button closes the whole hand and it stops on her), his elbow swings around her, the rest curl
         public bool NeutralFingers = true, ElbowAvoid = true;
         public float RestCurl = 0.25f;
         // how soft her body is (the Physics tab's Softness, 0..1): the clasp sinks past first contact by ClaspGive * (0.5 + Softness).
@@ -271,6 +271,7 @@ namespace SfMorph
             {
                 // No Head_M and no humanoid head: no eye point and nothing to hide, but the hands can still follow the controllers.
                 UndoHead(); UndoView();
+                HerBody.RefreshShapes();   // test his hand (stop, clasp, swivel) against her yielded skin, not the animation's
                 HandsStep(s);
                 if (now >= _nextStatus)
                 {
@@ -285,6 +286,7 @@ namespace SfMorph
             if (viewOn) { EyeNow(dt); ViewStep(s, dt); }
             else UndoView();
             HeadEnd(s.HideHead);
+            HerBody.RefreshShapes();           // her skin where her limb IS after Overlap's yield (the physics hands' swivel too)
             HandsStep(s);                      // after the view: the controllers ride on the rig we just moved
 
             if (now >= _nextStatus) { _nextStatus = now + 0.25f; Status = BuildStatus(s, who); }
@@ -1364,8 +1366,8 @@ namespace SfMorph
         }
 
         // Curls his fingers on top of a base pose: the simulated fingers of the physics hand when it has them (its curl angle per bone,
-        // applied about his own curl axis), else the commands (trigger = index, grip = the rest, stopping on her skin) or, with
-        // NeutralFingers off, the grip alone as in 0.7.x. The base is the neutral hand from the bind pose where we have it (world
+        // applied about his own curl axis), else the commands (every finger from the grab button, stopping on her skin) or, with
+        // NeutralFingers off, the grab button alone as in 0.7.x. The base is the neutral hand from the bind pose where we have it (world
         // rotations, top-down per finger so helper bones between do not matter), else the animation's own pose.
         // dt 0: no step (the pre-render pass writes the same pose again).
         void WriteFingers(Arm a, float dt)
@@ -1388,13 +1390,13 @@ namespace SfMorph
                 else if (dt > 0f) a.Curl += (grip - a.Curl) * (1f - Mathf.Exp(-CurlRate * dt));
             }
 
-            string src = (useSim ? "simulated" : cmdMode ? "trigger/grip" : "grip") + (neutral ? ", neutral base" : "");
+            string src = (useSim ? "simulated" : cmdMode ? "grab button" : "grab button alone") + (neutral ? ", neutral base" : "");
             if (src != a.FingerSrc)
             {
                 a.FingerSrc = src;
                 Plugin.Log.LogInfo("Embody: his " + a.Side + " fingers now follow " + (useSim ? "the physics hand's simulated fingers"
-                    : cmdMode ? "the controller trigger (index) and grip (Grip." + (left ? "Left" : "Right") + ", " + Grip.Source + ") with the clasp stopping on her"
-                    : "the controller grip (Grip." + (left ? "Left" : "Right") + ", " + Grip.Source + ")")
+                    : cmdMode ? "the grab button (Grip." + (left ? "Left" : "Right") + ", " + Grip.Source + ") with the clasp stopping on her"
+                    : "the grab button (Grip." + (left ? "Left" : "Right") + ", " + Grip.Source + ")")
                     + (neutral ? " on the neutral hand from the bind pose" : " on the animation's pose")
                     + (PhysicsHands.Active && !useSim ? " [its fingers are not valid]" : ""));
             }

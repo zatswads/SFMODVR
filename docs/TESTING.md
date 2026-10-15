@@ -114,7 +114,7 @@ few mm, axis change small). Headset:
 5. Planted lock on, Legs 0 %, Spine 100 %: her hands resting on her body / on him and her feet on the bed stay put while her torso lags;
    push a leg: the knee bends, the foot stays. Spine 0 %: head and arms still swing a little on thrusts and turns.
 6. Grip around her upper arm: fingers close until they touch and stop; squeeze fully: they sink a little, not to a fist; on her breast
-   deeper. Trigger only: the index curls; grip only: the others clasp, the thumb opposes; nothing pressed: a relaxed curl (Rest curl).
+   deeper. The grab button (trigger by default, VR → Grab with) closes the whole hand, thumb included; nothing pressed: a relaxed curl (Rest curl).
 7. Embody on, physics hands off: his fingers rest neutral (not the animation's); his hand stops at her skin (`Embody: his left hand stops
    at her skin ...`); clasp her shoulder: stops on the skin, deeper on her breast; reach across her: the elbow swings around her
    (`Embody: his left elbow swivels ...`); push her forearm with his hand: it yields (`... by your left hand (Player)`).

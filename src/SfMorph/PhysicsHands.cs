@@ -119,7 +119,7 @@ namespace SfMorph
         // forward) and closes the remaining gap at GapGain per second; the sample is extrapolated by at most MaxLead seconds to the fixed
         // step. MaxFf caps the sampled speed, MaxGapV the speed the gap term may add. A target that moves more than JumpBase + JumpSpeed *
         // frame time in one frame is the game moving the rig the controllers hang under (a POV cut), not the hand: the hand is carried along.
-        const float GapGain = 25f, MaxLead = 0.06f, MaxFf = 4f, MaxGapV = 3f, JumpBase = 0.06f, JumpSpeed = 3f;   // 0.8.0: 0.12 / 8 let a 0.4 m scene cut slip under the threshold (13.4)
+        const float GapGain = 25f, MaxLead = 0.06f, MaxFf = 4f, MaxGapV = 3f, JumpBase = 0.06f, JumpSpeed = 6f;   // 0.8.0: 0.12 / 8 let a 0.4 m scene cut slip under the threshold (13.4); 3 turned a hard slap (4.4 m/s) into a rig shift
         // 0.7.9 velocity-level follow: the fraction of the velocity error removed per step (< 1 so it can never overshoot into a
         // step-to-step oscillation), the rotation gap gain (1/s) and its cap (rad/s), and the torque cap (N*m) turned into a per-step
         // angular velocity cap through the hand's inertia
