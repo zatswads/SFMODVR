@@ -31,7 +31,7 @@ namespace SfMorph
     // frame. Nothing here allocates, searches or calls GetComponent per frame; every game member lives in ReactionsGame.
     internal sealed class Reactions
     {
-        public string Status = "", StateLine = "", Bars = "", GuardStatus = "";
+        public string Status = "", StateLine = "", Bars = "", GuardStatus = "", LastLine = "";
         public float E, P;
         public int Tier;
         public RState State;
@@ -97,14 +97,14 @@ namespace SfMorph
 
         readonly ReactionsGame _g = new ReactionsGame();
         readonly System.Random _rng = new System.Random();
-        readonly StringBuilder _sb = new StringBuilder(160), _resp = new StringBuilder(160);
+        readonly StringBuilder _sb = new StringBuilder(160), _resp = new StringBuilder(160), _last = new StringBuilder(200);
 
         // set when the reactions part of Update threw (logged once); Body turns ReactOn off and clears it. The voice guard is not affected.
         public bool Failed;
         bool _failLogged;
         Character _her; Transform _root; ReactionSettings _s; Overlap _ov;
         float _now, _nextRefresh, _nextGate, _nextSummary;
-        float _lastEvT = -100f, _lastStimT = -100f, _lastVoiceT = -100f, _lastBreathT = -100f, _lastFlinchT = -100f, _lastSlapT = -100f, _lastFaceT = -100f, _lastDesireT = -100f;
+        float _lastEvT = -100f, _lastStimT = -100f, _lastVoiceT = -100f, _lastBreathT = -100f, _lastFlinchT = -100f, _lastSlapT = -100f, _lastFaceT = -100f, _lastDesireT = -100f, _lastCaressFaceT = -100f;
         float _resetAt, _blink2At, _until, _guardHold, _climaxT0, _nextBreathAt, _lastStateLog = -100f, _startledAt = -100f;
         int _stChanges, _stSuppressed;
         bool _quiet;                       // set while a weaker hit of the same swing fires: no voice, sound or wince, only the rest
@@ -152,7 +152,7 @@ namespace SfMorph
             if (!s.On)
             {
                 if (_wasOn) { _wasOn = false; GiveBack(); ResetSession(); }
-                Status = "off: reactions are off"; StateLine = ""; Bars = ""; _stKey = int.MinValue; _slKey = int.MinValue; _barE = -1;
+                Status = "off: reactions are off"; StateLine = ""; Bars = ""; LastLine = ""; _stKey = int.MinValue; _slKey = int.MinValue; _barE = -1;
                 return;
             }
             _wasOn = true;
@@ -192,7 +192,7 @@ namespace SfMorph
             _her = null; _root = null; _s = null; _ov = null;
             _evN = 0; System.Array.Clear(_cnt, 0, _cnt.Length); _vPlayed = _vSkipped = _sfx = _flinch = 0; _nextSummary = 0f; _stChanges = _stSuppressed = 0; _why.Clear(); _nHits = 0;
             _slapFail = false; _bv = -1;
-            Status = ""; StateLine = ""; Bars = ""; GuardStatus = "";
+            Status = ""; StateLine = ""; Bars = ""; GuardStatus = ""; LastLine = "";
             _stKey = int.MinValue; _slKey = int.MinValue; _barE = -1; _barP = -1;
         }
 
@@ -210,7 +210,7 @@ namespace SfMorph
         {
             E = 0f; P = 0f; Tier = 0; State = RState.Idle; _wasGuarded = false;
             _flush = 0f; _gazeHold = 0f; _guardHold = 0f; _until = 0f; _climaxIdx = 3; _blink2At = 0f;
-            _lastEvT = -100f; _lastStimT = -100f; _lastVoiceT = -100f; _lastBreathT = -100f; _lastFlinchT = -100f; _lastSlapT = -100f; _lastFaceT = -100f; _lastDesireT = -100f;
+            _lastEvT = -100f; _lastStimT = -100f; _lastVoiceT = -100f; _lastBreathT = -100f; _lastFlinchT = -100f; _lastSlapT = -100f; _lastFaceT = -100f; _lastDesireT = -100f; _lastCaressFaceT = -100f;
             _startledAt = -100f; _nHits = 0; _quiet = false;
             System.Array.Clear(_zArr, 0, NZ); System.Array.Clear(_zCaress, 0, NZ); System.Array.Clear(_zGrope, 0, NZ); System.Array.Clear(_zAny, 0, NZ);
             ClearR();
@@ -425,7 +425,8 @@ namespace SfMorph
                 if (test) chance = 1f;
                 if (_quiet) { if (tier >= 3) { Skip("same swing"); Note("voice skipped (same swing)"); } }
                 else if (tier >= 3 && I < 0.12f && !test) { Skip("weak tap"); Note("voice skipped (weak tap)"); }
-                else if (chance >= 1f || Rand() < chance)
+                else if (!(chance >= 1f || Rand() < chance)) Note("no voice (chance " + chance.ToString("0.00") + ")");
+                else
                 {
                     if (_g.Found) _g.ReadGatesNow(_now);   // forced: ReadGates itself only reads every 0.1 s
                     bool cut = tier >= 4 && I >= 0.5f;
@@ -442,6 +443,12 @@ namespace SfMorph
                 }
             }
             if (tier >= 3 && s.Face && !_quiet) DoFace(tier, I, voiced);
+            else if (s.Face && !_quiet)
+            {
+                // a caress at excitement tier >= 1 sometimes shows in her eyes (own 4 s gap); a grope more often
+                if (tier == 1 && Tier >= 1 && _now - _lastCaressFaceT >= 4f && Rand() < 0.25f + 0.1f * Tier) { if (FaceSoft(1)) _lastCaressFaceT = _now; }
+                else if (tier == 2 && Rand() < 0.5f) FaceSoft(2);
+            }
 
             // flinch, slap sound, blush, gaze, the game's desire
             if (tier >= 3)
@@ -456,7 +463,7 @@ namespace SfMorph
                 }
                 if (s.Gaze && (tier >= 4 || wasGuarded)) _gazeHold = Mathf.Max(_gazeHold, _now + (tier >= 5 ? 1.5f : 0.4f));
             }
-            if (s.FeedDesire && tier >= 2 && _g.InSexMode && _now - _lastDesireT >= 3f) { _lastDesireT = _now; _g.FeedDesire(); Note("desire"); }
+            if (s.FeedDesire && (tier >= 2 || (tier == 1 && Tier >= 2)) && _g.InSexMode && _now - _lastDesireT >= 3f) { _lastDesireT = _now; _g.FeedDesire(); Note("desire"); }
 
             if (s.AutoState && s.AllowClimax && E >= 1f && State != RState.Climax && State != RState.Afterglow) EnterClimax();
 
@@ -476,6 +483,14 @@ namespace SfMorph
                    .Append("), P ").Append(P.ToString("0.00")).Append("; state ").Append(StateNames[(int)State]);
                 L(_sb.ToString());
             }
+
+            // the panel's "last:" line (built per event only)
+            _last.Length = 0;
+            _last.Append("last: ").Append(TierNames[tier]).Append(" on ").Append(ZoneNames[zone]).Append(" by ").Append(by != null ? by : "a hand");
+            if (test) _last.Append(" (test)");
+            _last.Append(" -> ").Append(_resp.Length > 0 ? _resp.ToString() : "no visible response");
+            _last.Append("  [E ").Append(E.ToString("0.00")).Append(", ").Append(_g.InSexMode ? "sex mode" : "outside sex mode").Append(']');
+            LastLine = _last.ToString();
         }
 
         void Skip(string why)
@@ -493,7 +508,7 @@ namespace SfMorph
             if (!_g.Found) return "no game link";
             if (!_g.HasMoan) return "no moan available";
             if (!_g.VoiceOn) return "voice off in the game";
-            if (!_g.InSexMode) return "not in sex or foreplay mode";
+            if (!_g.InSexMode && !_g.HasLibrary) return "no own voice clips (outside sex mode)";
             if (_g.FunctionPause || _g.FacialLayer == "off") return "game face paused";
             if (_g.DialoguePlaying) return _g.DialogueWhy.Length > 0 ? _g.DialogueWhy : "dialogue";
             bool slap = tier >= 3;
@@ -522,15 +537,16 @@ namespace SfMorph
         {
             int bank = Tier <= 1 ? 0 : Tier <= 3 ? 1 : 2;
             float pitch = 1f + (Rand() * 2f - 1f) * _s.VoicePitchVar;
-            bool pause = _g.DirtyTalkPause;
-            bool viaGame = !pause && (_s.VoiceMode == 0 || _g.DirtyTalkPlaying);   // MoanFunction does nothing while the pause is up
+            bool pause = _g.DirtyTalkPause, sex = _g.InSexMode;
+            // outside sex / foreplay mode our own clip plays and the Animator "moan" trigger is not set (it could stay queued there)
+            bool viaGame = sex && !pause && (_s.VoiceMode == 0 || _g.DirtyTalkPlaying);   // MoanFunction does nothing while the pause is up
             if (cut && (_g.MoanPlaying || _g.OwnVoicePlaying)) _g.StopMoan();
-            bool ok = viaGame ? _g.Moan() : _g.MoanClip(bank, pitch, _g.DirtyTalkPlaying);
-            if (!ok) ok = viaGame ? _g.MoanClip(bank, pitch, _g.DirtyTalkPlaying) : (!pause && _g.Moan());
+            bool ok = viaGame ? _g.Moan() : _g.MoanClip(bank, pitch, _g.DirtyTalkPlaying, sex);
+            if (!ok) ok = viaGame ? _g.MoanClip(bank, pitch, _g.DirtyTalkPlaying, true) : (sex && !pause && _g.Moan());
             if (ok)
             {
                 _lastVoiceT = _now; _resetAt = _now + 1f;
-                _moanKind = viaGame ? (_s.VoiceMode == 1 && !_g.DirtyTalkPlaying ? "moan (by intensity)" : "moan") : (pause ? "moan (own clip, the game's pause is up)" : "moan (by intensity)");
+                _moanKind = viaGame ? (_s.VoiceMode == 1 && !_g.DirtyTalkPlaying ? "moan (by intensity)" : "moan") : (!sex ? "moan (own clip, outside sex mode)" : pause ? "moan (own clip, the game's pause is up)" : "moan (by intensity)");
                 if (cut) _moanKind += ", cut";
             }
             return ok;
@@ -545,8 +561,19 @@ namespace SfMorph
             int k;
             if (_g.EyeReact(tier >= 5 ? 3 : tier >= 4 ? 2 : 1, out k)) { _lastFaceT = _now; Note("eye reaction " + k); return; }
             if (voiced) return;
-            if (tier >= 4 && I >= 0.3f) { if (_g.WinceTrigger()) { _lastFaceT = _now; _resetAt = _now + 1f; Note("wince"); } }
+            if (tier >= 4 && I >= 0.3f && _g.InSexMode) { if (_g.WinceTrigger()) { _lastFaceT = _now; _resetAt = _now + 1f; Note("wince"); } }
             else if (_g.Blink()) { _lastFaceT = _now; Note("blink"); }
+        }
+
+        // A soft face for caresses and gropes: the eye reaction (Lv1 / Lv2 ids) if the face layer allows it, else the game's blink. True = something happened.
+        bool FaceSoft(int level)
+        {
+            if (!_g.Found || _g.FunctionPause || _g.DialoguePlaying || _g.FacialLayer == "off" || _now - _lastFaceT < 0.5f) { Note("face skipped (paused or busy)"); return false; }
+            int k;
+            if (_g.EyeReact(level, out k)) { _lastFaceT = _now; Note("eye reaction " + k); return true; }
+            if (_g.Blink()) { _lastFaceT = _now; Note("blink"); return true; }
+            Note("face skipped (no eye reaction or blink)");
+            return false;
         }
 
         // The flinch (design 3.3): an angular impulse on the limb through Overlap and a velocity kick on her soft zones.
@@ -693,11 +720,12 @@ namespace SfMorph
 
             // blush: target = gain * (0.35 E + flush) (+ 0.3 in the climax), attack 2/s, fall 1/s
             _flush = Mathf.Max(0f, _flush - 0.03f * dt);
-            float target = s.Blush ? Mathf.Clamp01(s.BlushGain * (0.35f * E + _flush + (State == RState.Climax ? 0.3f : 0f))) : 0f;
+            // as a fraction of the material's _BlushPower range: E = 1 reaches BlushGain (60 % by default) of it, slaps and the climax add on top
+            float target = s.Blush ? Mathf.Clamp01(s.BlushGain * (E + (_flush + (State == RState.Climax ? 0.3f : 0f)) / 0.35f)) : 0f;
             _blushCur = Mathf.MoveTowards(_blushCur, target, (target > _blushCur ? 2f : 1f) * dt);
             if (_blushCur > 0f || _blushSent)
             {
-                _g.SetBlush(_blushCur, s.BlushBody ? _blushCur * 0.5f : 0f);
+                _g.SetBlush(_blushCur * _g.BlushRange, s.BlushBody ? _blushCur * 0.5f * _g.BlushRange : 0f);
                 _blushSent = _blushCur > 0f;
             }
 
@@ -786,7 +814,7 @@ namespace SfMorph
                     else if (!_g.Found) _sb.Append("voice off (the game's voice was not found: ").Append(_g.Missing).Append(')');
                     else if (!_g.HasMoan) _sb.Append("voice off (no moan found)");
                     else if (!_g.VoiceOn) _sb.Append("voice idle (voice is off in the game)");
-                    else if (!_g.InSexMode) _sb.Append("voice idle (not in sex or foreplay mode)");
+                    else if (!_g.InSexMode) _sb.Append(_g.HasLibrary ? "voice ok (own clips and breath outside sex mode)" : "voice idle (outside sex mode and no own voice clips)");
                     else _sb.Append(s.VoiceMode == 1 ? "voice ok (by intensity)" : "voice ok");
                     _sb.Append(s.Face ? ", face" : ", face off");
                     if (!s.Flinch) _sb.Append(", flinch off"); else if (s.LimbPush <= 0f) _sb.Append(", flinch (jiggle only: push is 0)"); else _sb.Append(", flinch");

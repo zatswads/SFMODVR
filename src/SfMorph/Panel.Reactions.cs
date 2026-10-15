@@ -38,7 +38,7 @@ namespace SfMorph
             bool zoneSides = ZoneHasSide[zone];
             bool expOpen = _expOpen;
             Reactions react = _body.React;
-            string status = react.Status, stateLine = react.StateLine, bars = react.Bars, guardStatus = react.GuardStatus;
+            string status = react.Status, stateLine = react.StateLine, bars = react.Bars, guardStatus = react.GuardStatus, lastLine = react.LastLine;
             float e = react.E, p = react.P;
 
             GUI.enabled = who == null;
@@ -47,6 +47,7 @@ namespace SfMorph
             if (who == null && on != reactOn) _p.ReactOn.Value = on;
             if (who != null) { GUILayout.Label("    off: " + who, _off); GameVoiceBlock(guardOff, guard, guardStatus); return; }
             if (reactOn && status.Length > 0) GUILayout.Label(status, status.StartsWith("off") ? _off : _hint);
+            if (reactOn && lastLine.Length > 0) GUILayout.Label(lastLine, _hint);
 
             float sens = Slider("Sensitivity", sensCfg * 100f, 0f, 100f, "0", 50f, null, " %") / 100f;
             if (Mathf.Abs(sens - sensCfg) > 0.0001f) _p.ReactSensitivity.Value = sens;

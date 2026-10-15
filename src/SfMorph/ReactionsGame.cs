@@ -35,6 +35,7 @@ namespace SfMorph
         public bool HasBreath;             // an Exhale clip array exists (Breath() works)
         public bool HasSfx;                // slap clips (sex_fast / sex_normal, else handJob_fast) and the soundEffect source exist (Slap() works)
         public bool HasEyeReact;           // ReactionFacialEnter_Eye / _Out_Eye and a non-empty DirtyTalk_Facial_Library id array exist (EyeReact() works)
+        public float BlushRange = 1f;     // upper end of the _BlushPower range of her skin materials (1 when unknown): SetBlush() adds up to this much
         public bool HasBlush;              // at least one of her materials has _BlushPower (SetBlush() works)
         public bool HasGaze;               // bipedIK.solvers.lookAt.IKPositionWeight found (SetGaze() works)
         public bool HasGauge;              // SexMode_State_System found (Desire is live, FeedDesire() works)
@@ -122,7 +123,7 @@ namespace SfMorph
             }
         }
 
-        sealed class BMat { public Material M; public bool Face; public float Base, Last; public bool Hold; }
+        sealed class BMat { public Material M; public bool Face; public float Base, Last; public bool Hold; public bool IsRange; public float Lo, Hi; }
 
         // ---- the bridged game objects (cached per session) ----
         Assembly _asm; bool _asmLooked;
@@ -734,6 +735,7 @@ namespace SfMorph
                         bool face = rn.Contains("face") || rn.Contains("head") || mn.Contains("face") || mn.Contains("head");
                         var bm = new BMat { M = m, Face = face, Base = m.GetFloat(_idBlush) };
                         bm.Last = bm.Base;
+                        bm.IsRange = PropRange(m, "_BlushPower", out bm.Lo, out bm.Hi);
                         _bm.Add(bm);
                         names.Add(m.name);
                         if (face) BlushFaceCount++; else BlushBodyCount++;
@@ -742,11 +744,44 @@ namespace SfMorph
             }
             catch (Exception e) { LogOnce("blushscan", "blush materials unreadable: " + e.Message); }
             HasBlush = _bm.Count > 0;
+            float rng = 0f;
+            for (int i = 0; i < _bm.Count; i++) if (_bm[i].IsRange && _bm[i].Hi > rng) rng = _bm[i].Hi;
+            BlushRange = rng > 0.01f ? rng : 1f;
             names.Sort(StringComparer.Ordinal);
             string sig = string.Join("|", names.ToArray());
             // logged when the set of materials changed (the order of a re-scan varies and is not a change)
             if (_bridgeLogged && sig != _blushSig) Log("blush materials re-read: " + BlushText());
             _blushSig = sig;
+        }
+
+        // The range of a shader Range property (Shader.GetPropertyRangeLimits through reflection: it only exists in newer Unity versions).
+        static bool PropRange(Material m, string prop, out float lo, out float hi)
+        {
+            lo = 0f; hi = 1f;
+            try
+            {
+                var sh = m.shader;
+                if (sh == null) return false;
+                var t = typeof(Shader);
+                var mCount = t.GetMethod("GetPropertyCount", Type.EmptyTypes);
+                var mName = t.GetMethod("GetPropertyName", new[] { typeof(int) });
+                var mType = t.GetMethod("GetPropertyType", new[] { typeof(int) });
+                var mLim = t.GetMethod("GetPropertyRangeLimits", new[] { typeof(int) });
+                if (mCount == null || mName == null || mType == null || mLim == null) return false;
+                int n = Convert.ToInt32(mCount.Invoke(sh, null));
+                var a = new object[1];
+                for (int i = 0; i < n; i++)
+                {
+                    a[0] = i;
+                    if ((string)mName.Invoke(sh, a) != prop) continue;
+                    if (Convert.ToInt32(mType.Invoke(sh, a)) != 3) return false;   // ShaderPropertyType.Range
+                    var v = (Vector2)mLim.Invoke(sh, a);
+                    lo = Mathf.Min(v.x, v.y); hi = Mathf.Max(v.x, v.y);
+                    return hi > lo;
+                }
+            }
+            catch (Exception) { }
+            return false;
         }
 
         string BlushText()
@@ -760,6 +795,8 @@ namespace SfMorph
                 string sh = "?";
                 try { sh = b.M.shader != null ? b.M.shader.name : "?"; } catch (Exception) { }
                 sb.Append(b.Face ? "face " : "body ").Append(b.M.name).Append(" base ").Append(b.Base.ToString("0.###")).Append(" [").Append(sh).Append(']');
+                if (b.IsRange) sb.Append(" range ").Append(b.Lo.ToString("0.###")).Append("..").Append(b.Hi.ToString("0.###"));
+                else sb.Append(" (not a Range property: scale 1)");
             }
             return sb.ToString();
         }
@@ -979,7 +1016,7 @@ namespace SfMorph
 
         // Mode 1: our own pick from bank 0 short / 1 mid / 2 long (draw-and-park 4) on the moan source at `pitch` (AudioSource.pitch, 1 = as
         // recorded), voice loop stopped, "moan" trigger for the mouth. The pitch is restored when the clip ends (ReadGates tick).
-        public bool MoanClip(int bank, float pitch, bool stopDirty)
+        public bool MoanClip(int bank, float pitch, bool stopDirty, bool trigger = true)
         {
             if (!Found || !HasLibrary || _srcMoan == null || Dead(_srcMoan)) return false;
             try
@@ -997,7 +1034,7 @@ namespace SfMorph
                 _miPlay.Invoke(_srcMoan, null);
                 if (_srcVoice != null && !Dead(_srcVoice) && _miStop != null) _miStop.Invoke(_srcVoice, null);
                 LastClip = clip; LastClipLength = ClipLen(clip) / Mathf.Max(0.5f, pitch);
-                if (HasAnim) { _anim.SetTrigger(_hMoan); MarkTrigger(); }
+                if (trigger && HasAnim) { _anim.SetTrigger(_hMoan); MarkTrigger(); }
                 return true;
             }
             catch (Exception e) { LogOnce("moanclip:" + e.GetType().Name, "own moan clip failed: " + e.Message); return false; }
@@ -1196,7 +1233,7 @@ namespace SfMorph
                         if (b.Hold) { b.M.SetFloat(_idBlush, b.Base); b.Hold = false; b.Last = b.Base; }
                         continue;
                     }
-                    float tgt = Mathf.Min(Mathf.Max(b.Base, 1f), b.Base + add);
+                    float tgt = Mathf.Min(Mathf.Max(b.Base, BlushRange), b.Base + add);
                     if (b.Hold ? Mathf.Abs(tgt - b.Last) > 0.002f : Mathf.Abs(tgt - cur) > 0.002f)
                     {
                         b.M.SetFloat(_idBlush, tgt); b.Last = tgt; b.Hold = true;
