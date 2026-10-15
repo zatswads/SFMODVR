@@ -648,6 +648,10 @@ namespace SfMorph
             Status = _sb.ToString();
         }
 
+        // package C (0.7.9 reactions): an angular impulse (N*s at `point`, world) on every bone that carries the segment (PushMaps),
+        // applied at the next Update's push kick. A no-op in R0.
+        public void Kick(int segIndex, Vector3 point, Vector3 impulseNs) { }
+
         // Gives back the animation's rotation on bones the animation did not rewrite, forgets everything.
         public void Release()
         {

@@ -6,8 +6,8 @@ namespace SfMorph
 {
     // Desktop-window panel (F8): pick the woman, then Body (VaM-style sliders by
     // body area), Bones (any skin bone), Presets and Characters (converted VaM characters), Physics (what her
-    // body does: soft zones, secondary motion, pushes, wrinkles) and VR (Embody, your hands, who touches her).
-    internal class Panel
+    // body does: soft zones, secondary motion, pushes, wrinkles) VR (Embody, your hands, who touches her) and Reactions (how she reacts to touch).
+    internal partial class Panel
     {
         readonly Plugin _p;
         readonly Body _body;
@@ -24,7 +24,7 @@ namespace SfMorph
         GUIStyle _hint, _bold, _off;
         const int MaxRows = 80; // IMGUI gets slow with hundreds of sliders; the filter narrows it
 
-        static readonly string[] Tabs = { "Body", "Bones", "Presets", "Characters", "Physics", "VR" };   // appended: the saved Tab indices 0-3 stay valid
+        static readonly string[] Tabs = { "Body", "Bones", "Presets", "Characters", "Physics", "VR", "Reactions" };   // appended: the saved Tab indices 0-3 stay valid
 
         public Panel(Plugin p, Body body)
         {
@@ -107,7 +107,8 @@ namespace SfMorph
                 case 2: PresetTab(_sel); break;
                 case 3: CharacterTab(_sel); break;
                 case 4: PhysicsTab(_sel); break;
-                default: VrTab(_sel); break;
+                case 5: VrTab(_sel); break;
+                default: ReactionsTab(_sel); break;
             }
             GUILayout.EndScrollView();
             GUI.DragWindow();
@@ -286,7 +287,6 @@ namespace SfMorph
             PushesSection(c);
             GUILayout.Space(10);
             WrinklesSection(c);
-            ReactionsSection(c);
         }
 
         void VrTab(Character c)
@@ -296,11 +296,6 @@ namespace SfMorph
             HandsSection(c);
             GUILayout.Space(10);
             ContactsSection(c);
-        }
-
-        // Impact reactions (package E) draw their rows here, below the wrinkles; nothing until then.
-        void ReactionsSection(Character c)
-        {
         }
 
         void EmbodySection(Character c)

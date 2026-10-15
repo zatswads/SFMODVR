@@ -119,6 +119,11 @@ namespace SfMorph
             public float HullRMin, HullRMax;        // radial extent of the hull (about the axis, or about the centre): for logs and markers
             public float TouchT = -100f;            // Time.fixedTime of the last contact with a hand collider (see PhysicsHands.TouchingHer)
             public Track Trk;                       // her bones' pose sampled per frame (0.7.8 package A)
+            // 0.7.9 reactions: the last physics-hand contact ENTER that was a new touch (no contact for 0.15 s before it)
+            public float HitT = -100f, HitVn, HitSpeed;   // Time.fixedTime; |normal component| and magnitude of Collision.relativeVelocity (m/s)
+            public Vector3 HitPt, HitDir;                 // contact point; direction INTO her (the opposite of AddImpulse's hand-facing normal)
+            public bool HitLeft;
+            public float GeoVn;                           // max approach speed (m/s) of any geometric capsule on this segment this frame (0 when none)
         }
 #pragma warning restore 649
 
@@ -946,7 +951,7 @@ namespace SfMorph
             for (int i = 0; i < Segs.Count; i++)
             {
                 var g = Segs[i];
-                g.GeoF = Vector3.zero; g.GeoPt = Vector3.zero; g.GeoW = 0f; g.GeoDepth = 0f; g.GeoBy = null; g.GeoName = null;
+                g.GeoF = Vector3.zero; g.GeoPt = Vector3.zero; g.GeoW = 0f; g.GeoDepth = 0f; g.GeoBy = null; g.GeoName = null; g.GeoVn = 0f;
             }
             _geoActive = false;
             var caps = s.Caps;
@@ -1009,6 +1014,7 @@ namespace SfMorph
                     if (pen <= 0f || dist < 1e-4f) continue;
                     Vector3 nrm = diff / dist;                             // into her
                     float vn = Mathf.Max(0f, Vector3.Dot(Vector3.Lerp(va, vb, t), nrm));
+                    if (vn > g.GeoVn) g.GeoVn = vn;
                     float mag = Mathf.Min(PushCapPerHand, PushStiffness * pen + PushDamp * vn);
                     Vector3 f = nrm * mag;
                     g.GeoF += f;

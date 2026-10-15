@@ -466,6 +466,8 @@ namespace SfMorph
         readonly HandsSettings _hands = new HandsSettings();
         readonly HerBodySettings _hb = new HerBodySettings();
         public readonly Overlap Overlap = new Overlap();
+        public readonly Reactions React = new Reactions();   // 0.7.9: her reactions to touch (the Reactions tab reads its status)
+        readonly ReactionSettings _rs = new ReactionSettings();
         public GpuContact Gpu;              // null until loaded (the shader bundle next to the DLL)
         bool _gpuTried, _gpuOn;
         public string GpuStatus { get { return Gpu != null ? Gpu.Status : _gpuTried ? (GpuContact.LastStatus.Length > 0 ? GpuContact.LastStatus : "GPU contact: off: shader bundle not loaded (see the log)") : ""; } }
@@ -478,7 +480,7 @@ namespace SfMorph
         // The panel's Recapture button: re-reads the neutral pose (settings.Recapture is true for exactly one Update after this).
         public void RequestWrinkleRecapture() { _wrRecapture = true; }
         readonly OverlapSettings _ovs = new OverlapSettings();
-        bool _overlapOn;
+        bool _overlapOn, _reactOn;
         readonly List<SoftCapsule> _caps = new List<SoftCapsule>();
         int _capsVr = -1, _capsPh = -1;
         float _nextHands;
@@ -575,6 +577,19 @@ namespace SfMorph
                         }
                     }
                 }
+                // her reactions: read what HerBody/PhysicsHands wrote this frame; a flinch is queued for Overlap's next frame, a jiggle lands in the Simulate below
+                if (c == her && (_p.ReactOn.Value || _p.VoiceGuard.Value))
+                {
+                    _rs.Fill(_p);
+                    try { React.Update(c, _rs, Time.deltaTime, Overlap); _reactOn = true; }
+                    catch (Exception e)
+                    {
+                        Plugin.Log.LogError("Reactions failed, turned off: " + e);
+                        _p.ReactOn.Value = false; _p.VoiceGuard.Value = false;
+                        try { React.Release(); } catch { }
+                        _reactOn = false;
+                    }
+                }
                 // the soft points after her bones carry our changes, before the game's physics and IK
                 if (physics && c == her)
                     try
@@ -592,6 +607,7 @@ namespace SfMorph
             }
             WrinkleStep(her);
             Release();
+            if ((her == null || !(_p.ReactOn.Value || _p.VoiceGuard.Value)) && _reactOn) { _reactOn = false; try { React.Release(); } catch { } }
             if ((her == null || !_p.Apply.Value) && _overlapOn) { _overlapOn = false; try { Overlap.Release(); } catch { } }
             if ((!physics || her == null) && _gpuOn) { _gpuOn = false; try { if (Gpu != null) Gpu.Release(); } catch { } Gpu = null; _gpuTried = false; }
             // off, or she's gone (scene change): give the controllers, layers and her capsules back
@@ -874,6 +890,8 @@ namespace SfMorph
             foreach (var c in Found) { try { c.Soft.Release(); } catch { } try { c.Morph.Release(); } catch { } }
             try { Embody.Release(); } catch { }
             try { Overlap.Release(); } catch { }
+            try { React.Release(); } catch { }
+            _reactOn = false;
             try { if (Gpu != null) Gpu.Release(); } catch { }
             Gpu = null; _gpuOn = false; _gpuTried = false;
             WrinkleOff();

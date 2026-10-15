@@ -1555,10 +1555,19 @@ namespace SfMorph
                 if (!_segOfCol.TryGetValue(col, out b)) return;
                 var g = b.S;
                 float t = Time.fixedTime;
+                bool fresh = t - g.TouchT > 0.15f;   // 0.7.9 reactions: a resting hand chatters enter/exit; only a contact after >= 0.15 s of none is an arrival
                 g.TouchT = t;
                 _handTouchT[left ? 0 : 1] = t;
                 HerBody.AddImpulse(g, left, c);
                 if (!enter) return;
+                if (fresh && c.contactCount > 0)
+                {
+                    var cp = c.GetContact(0);                     // allocation-free
+                    Vector3 n = cp.normal; var mine = cp.thisCollider == c.collider ? cp.otherCollider : cp.thisCollider;
+                    if (mine != null && Vector3.Dot(n, mine.bounds.center - cp.point) < 0f) n = -n;   // n points at the hand, as AddImpulse
+                    Vector3 rv = c.relativeVelocity;
+                    g.HitT = t; g.HitVn = Mathf.Abs(Vector3.Dot(rv, n)); g.HitSpeed = rv.magnitude; g.HitPt = cp.point; g.HitDir = -n; g.HitLeft = left;
+                }
                 _enters++;
                 if (_contacts.Add((left ? "L:" : "R:") + g.Name))
                     Plugin.Log.LogInfo("PhysicsHands: first contact " + (left ? "left" : "right") + " hand with her " + g.Name + " (" + c.relativeVelocity.magnitude.ToString("0.00") + " m/s, " + c.contactCount + " points)");

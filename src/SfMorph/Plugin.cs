@@ -34,6 +34,10 @@ namespace SfMorph
         internal ConfigEntry<bool> WrinkOn, WrinkFace, WrinkNeck, WrinkBody;
         internal ConfigEntry<float> WrinkStrength, WrinkThreshold, WrinkAttack, WrinkRelease, WrinkSpacingFace, WrinkSpacingBody, WrinkCullDistance;
         internal ConfigEntry<int> WrinkDebug, WrinkResolution;
+        // 0.7.9 reactions
+        internal ConfigEntry<bool> ReactOn, ReactVoice, ReactFace, ReactFlinch, ReactSound, ReactBlush, ReactBlushBody, ReactGaze, ReactFeedDesire, ReactAuto, ReactClimax, VoiceGuard;
+        internal ConfigEntry<float> ReactSensitivity, ReactCooldown, ReactVolume, ReactBlushGain, ReactVoicePitchVar;
+        internal ConfigEntry<int> ReactVoiceMode, ReactLog;
         internal ConfigEntry<Vector3> LeftHandPos, LeftHandRot, RightHandPos, RightHandRot;
         internal ConfigEntry<string> PanelRect;
         internal ConfigEntry<int> Tab;
@@ -97,6 +101,25 @@ namespace SfMorph
             LeftHandRot = Config.Bind("Embody", "LeftHandRotation", Vector3.zero, "Controller -> his left hand rotation (degrees), added to the automatic alignment (fingers along the controller, thumb up).");
             RightHandPos = Config.Bind("Embody", "RightHandOffset", new Vector3(0.0325f, -0.0379f, -0.1012f), "Controller -> his right hand position offset (m).");
             RightHandRot = Config.Bind("Embody", "RightHandRotation", Vector3.zero, "Controller -> his right hand rotation (degrees), added to the automatic alignment.");
+            ReactOn = Config.Bind("Reactions", "On", false, "She reacts to touch: caress, grope and slaps (voice, face, flinch, slap sound, blush). Needs soft zones or physics hands.");
+            ReactSensitivity = Config.Bind("Reactions", "Sensitivity", 0.5f, new ConfigDescription("0: only hard slaps count; 1: light taps too. At 0.5 a soft slap starts at 1.2 m/s, a hard one at 2.3, too hard at 4.5.", new AcceptableValueRange<float>(0f, 1f)));
+            ReactCooldown = Config.Bind("Reactions", "Cooldown", 1.5f, new ConfigDescription("Seconds between her voice reactions at excitement tier 2 (shorter when more excited).", new AcceptableValueRange<float>(0.5f, 5f)));
+            ReactVoice = Config.Bind("Reactions", "Voice", true, "She moans in reaction (only in sex or foreplay mode, never over dialogue or dirty talk).");
+            ReactVoiceMode = Config.Bind("Reactions", "VoiceMode", 0, new ConfigDescription("0 the game picks the moan, 1 a moan chosen by intensity from her voice library.", new AcceptableValueRange<int>(0, 1)));
+            ReactVoicePitchVar = Config.Bind("Reactions", "VoicePitchVar", 0.04f, new ConfigDescription("Random pitch change of the moans chosen by intensity (plus/minus).", new AcceptableValueRange<float>(0f, 0.15f)));
+            ReactFace = Config.Bind("Reactions", "Face", true, "Her face reacts (wince, blink) when there is no voice.");
+            ReactFlinch = Config.Bind("Reactions", "Flinch", true, "Her body swings and her soft zones jiggle after a slap (needs the limb push slider above 0).");
+            ReactSound = Config.Bind("Reactions", "Sound", true, "A slap sound at the spot of a slap.");
+            ReactVolume = Config.Bind("Reactions", "Volume", 0.6f, new ConfigDescription("Slap sound volume.", new AcceptableValueRange<float>(0f, 1f)));
+            ReactBlush = Config.Bind("Reactions", "Blush", true, "Her face reddens with excitement and after slaps.");
+            ReactBlushBody = Config.Bind("Reactions", "BlushBody", false, "Her body skin reddens too, at half strength.");
+            ReactBlushGain = Config.Bind("Reactions", "BlushGain", 0.6f, new ConfigDescription("How strong the redness is.", new AcceptableValueRange<float>(0f, 2f)));
+            ReactGaze = Config.Bind("Reactions", "Gaze", false, "She looks away for a moment after a hard hit.");
+            ReactFeedDesire = Config.Bind("Reactions", "FeedDesire", false, "Touch also raises the game's own desire gauge (at most every 3 s, in sex or foreplay mode).");
+            ReactAuto = Config.Bind("Reactions", "AutoState", true, "States (aroused, startled, guarded, afterglow) change by themselves.");
+            ReactClimax = Config.Bind("Reactions", "AllowClimax", false, "At full excitement she climaxes (cosmetic: three moans, then afterglow).");
+            VoiceGuard = Config.Bind("Reactions", "VoiceGuard", true, "Repair the game's dirty-talk voice error (IndexOutOfRange in PlayRandomVoice every frame). Works without Reactions.");
+            ReactLog = Config.Bind("Reactions", "Log", 1, new ConfigDescription("0 quiet, 1 the first 20 events then every 10th, 2 every event.", new AcceptableValueRange<int>(0, 2)));
             Logger.LogInfo("SF Body Morphs " + Version + ": panel on " + PanelKey.Value + ", looks in " + Store.Dir);
             // The game destroys plugin components; a hidden object of our own keeps running.
             var go = new GameObject("SfMorphRunner") { hideFlags = HideFlags.HideAndDontSave };

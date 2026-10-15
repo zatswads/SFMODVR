@@ -196,6 +196,10 @@ namespace SfMorph
             return any;
         }
 
+        // package C (0.7.9 reactions): wakes the soft helpers within `radius` of `point` with a velocity along `dir` (m/s, falling off with
+        // distance); called before Simulate in the same frame. A no-op in R0.
+        public void Kick(Vector3 point, Vector3 dir, float speed, float radius) { }
+
         // Every frame after Body applies (bones carry our scales), inside the apply step: the soft points' springs and contacts.
         // softness 0..1 (stiff..soft), spring 0..1 (0 = settles at once and doesn't lag her motion). quality (0..2) is accepted so the
         // caller can pass its setting along; the build's own quality (Update) decides the points, so nothing here depends on it.
