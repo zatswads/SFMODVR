@@ -9,6 +9,10 @@ namespace SfMorph
 #pragma warning disable 649   // filled by package A
         public bool Found;
         public string Missing = "";
+        // gates read by ReadGates (package B reads them; defaults until package A fills them)
+        public bool InSexMode, VoiceOn, SfxOn, DirtyTalkPlaying, DialoguePlaying, DirtyTalkPause, FunctionPause, MoanPlaying, HasMoan;
+        public string FacialLayer = "", GuardStatus = "", BridgeLine = "";
+        public float TouchReactionTime, Desire, LastClipLength;
 #pragma warning restore 649
 
         public bool Refresh(Character her, float now) { return false; }
