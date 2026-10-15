@@ -326,6 +326,13 @@ namespace SfMorph
             public Dictionary<int, PF> F = new Dictionary<int, PF>();  // vertex -> its points and fractions
         }
 
+        // Build gives up after Read() may have subdivided her meshes: give them back, but stay "built" for these renderers so Update does not retry every 0.5 s.
+        void GiveUp(Character c)
+        {
+            Teardown(false);
+            _builtFor = new List<SkinnedMeshRenderer>(c.Renderers);
+        }
+
         void Build(Character c, float softness, List<Character> everyone, string why, int quality)
         {
             var t0 = Time.realtimeSinceStartup;
@@ -355,7 +362,7 @@ namespace SfMorph
                 var src = Read(r, rs, problems);
                 if (src != null) srcs.Add(src);
             }
-            if (srcs.Count == 0) { Status = "off: none of her meshes could be read" + (problems.Count > 0 ? " (" + problems[0] + ")" : ""); Log(c, why, t0, problems); return; }
+            if (srcs.Count == 0) { GiveUp(c); Status = "off: none of her meshes could be read" + (problems.Count > 0 ? " (" + problems[0] + ")" : ""); Log(c, why, t0, problems); return; }
 
             // 2. one reference bind space: the biggest body mesh; the others mapped through a shared bone
             Src refSrc = null;
@@ -399,6 +406,7 @@ namespace SfMorph
             Vector3? hl = pos("Hip_L"), hr = pos("Hip_R"), pr = pos("Root_M"), ch = pos("Chest_M"), kl = pos("Knee_L");
             if (!hl.HasValue || !hr.HasValue || !pr.HasValue || !ch.HasValue)
             {
+                GiveUp(c);
                 Status = "off: her rig has no Hip_L/Hip_R/Root_M/Chest_M (not the game's woman?)";
                 Log(c, why, t0, problems);
                 return;
@@ -979,6 +987,8 @@ namespace SfMorph
             foreach (var kv in _rs)
             {
                 var r = kv.Key; var rs = kv.Value;
+                try
+                {
                 if (rs.Used && r != null) r.bones = rs.Bones;
                 if (rs.Mesh != null && (rs.Used || rs.Undo != null))
                 {
@@ -1004,9 +1014,10 @@ namespace SfMorph
                         }
                         else if (rs.Saved != null)
                         {
-                            rs.Mesh.boneWeights = rs.Saved;
+                            // only onto the mesh the weights were read from (same vertex count); never leave it half restored
+                            if (rs.Saved.Length == rs.Mesh.vertexCount) rs.Mesh.boneWeights = rs.Saved;
                             var bp = rs.Mesh.bindposes;
-                            if (bp.Length > rs.BaseCount) { var t = new Matrix4x4[rs.BaseCount]; Array.Copy(bp, t, rs.BaseCount); rs.Mesh.bindposes = t; }
+                            if (rs.BaseCount > 0 && bp.Length > rs.BaseCount) { var t = new Matrix4x4[rs.BaseCount]; Array.Copy(bp, t, rs.BaseCount); rs.Mesh.bindposes = t; }
                         }
                     }
                     else if (rs.Used)
@@ -1022,6 +1033,8 @@ namespace SfMorph
                     _origOf.Remove(rs.Mesh);
                     UnityEngine.Object.Destroy(rs.Mesh);
                 }
+                }
+                catch (Exception e) { Plugin.Log.LogWarning("Soft zones: giving back '" + (r != null ? r.name : "a renderer") + "': " + e.Message); }
             }
             _rs.Clear();
             foreach (var kv in _gameAdds) if (kv.Key != null) kv.Key.Remove(kv.Value);

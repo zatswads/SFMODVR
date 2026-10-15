@@ -1,0 +1,9 @@
+SfMorphShaders/Library/
+SfMorphShaders/Temp/
+SfMorphShaders/Logs/
+SfMorphShaders/UserSettings/
+SfMorphShaders/obj/
+SfMorphShaders/*.csproj
+SfMorphShaders/*.sln
+SfMorphShaders/Build/
+SfMorphShaders/Packages/packages-lock.json

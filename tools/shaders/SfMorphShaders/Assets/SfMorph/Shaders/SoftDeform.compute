@@ -1,0 +1,73 @@
+// SfMorph post-skinning soft contact deformer (0.7.3).
+// Runs on a SkinnedMeshRenderer's skinned vertex buffer (vertexBufferTarget |= Raw, GetVertexBuffer) after Unity's
+// skinning and before the cameras render: vertices of her soft areas are pressed out of the contact capsules (hands,
+// fingers, limbs) the way VaM's postSkinMorphs do, with a per-vertex softness mask and a depth limit. The same
+// displacement is applied to the previous-frame buffer (GetPreviousVertexBuffer) by the caller so HDRP's motion vectors
+// (and DLSS) stay right.
+#pragma kernel Smoke
+#pragma kernel Imprint
+
+RWByteAddressBuffer _Verts;          // skinned output: per vertex _Stride bytes, position at _PosOff, normal at _NrmOff
+uint _Stride, _PosOff, _NrmOff, _Count;
+float4x4 _ToWorld, _ToLocal;          // buffer space <-> world (the caller passes the renderer's skinning space)
+
+StructuredBuffer<float4> _CapA;      // xyz endpoint a (world), w radius (m)
+StructuredBuffer<float4> _CapB;      // xyz endpoint b (world)
+uint _CapCount;
+StructuredBuffer<float> _Mask;       // per vertex 0..1: how soft the skin is here (0 = rigid, untouched)
+float _Limit;                        // deepest press (m)
+float _Margin;                       // the skin yields this much before visible contact (m)
+float _SmokeOffset;                  // Smoke: metres along the normal
+
+float3 LoadF3(uint a) { return asfloat(_Verts.Load3(a)); }
+void StoreF3(uint a, float3 v) { _Verts.Store3(a, asuint(v)); }
+
+// Smoke test: every vertex moved along its normal; proves the buffer layout, the timing and the motion vectors.
+[numthreads(64, 1, 1)]
+void Smoke(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= _Count) return;
+    uint a = i * _Stride;
+    float3 p = LoadF3(a + _PosOff);
+    float3 n = normalize(LoadF3(a + _NrmOff));
+    StoreF3(a + _PosOff, p + n * _SmokeOffset);
+}
+
+// Imprint: a vertex inside a capsule (plus margin) moves inward along its own normal to the capsule's surface, at
+// most _Limit * mask deep; the capsule's profile becomes the dent's profile.
+[numthreads(64, 1, 1)]
+void Imprint(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= _Count) return;
+    float m = _Mask[i];
+    if (m <= 0.0) return;
+    uint a = i * _Stride;
+    float3 pl = LoadF3(a + _PosOff);
+    float3 nl = LoadF3(a + _NrmOff);
+    float3 p = mul(_ToWorld, float4(pl, 1)).xyz;
+    float3 nIn = -normalize(mul((float3x3)_ToWorld, nl));   // into the body
+    float depth = 0;
+    for (uint c = 0; c < _CapCount; c++)
+    {
+        float4 A = _CapA[c]; float3 b = _CapB[c].xyz;
+        float r = A.w + _Margin;
+        float3 ab = b - A.xyz;
+        float t = saturate(dot(p - A.xyz, ab) / max(dot(ab, ab), 1e-8));
+        float3 q = A.xyz + ab * t;
+        float3 u = p - q;
+        float d2 = dot(u, u);
+        if (d2 >= r * r) continue;
+        // distance to travel along nIn until the point leaves the sphere around q (good locally for a capsule)
+        float bq = dot(u, nIn);
+        float cq = d2 - r * r;
+        float disc = bq * bq - cq;
+        float s = disc > 0 ? -bq + sqrt(disc) : 0;
+        depth = max(depth, s);
+    }
+    if (depth <= 0) return;
+    depth = min(depth, _Limit * m);
+    float3 pw = p + nIn * depth;
+    StoreF3(a + _PosOff, mul(_ToLocal, float4(pw, 1)).xyz);
+}

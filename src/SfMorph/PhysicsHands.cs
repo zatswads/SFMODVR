@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using System.Reflection.Emit;
 using System.Text;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -21,27 +20,35 @@ namespace SfMorph
         public Vector3 RightPos = new Vector3(0.0325f, -0.0379f, -0.1012f), RightRot = Vector3.zero;
     }
 
-    // Collision events only reach scripts on the rigidbody's object, so this tiny component forwards them (log of first contacts).
+    // Collision events only reach scripts on the rigidbody's object, so this tiny component (on the palm and on every finger
+    // rigidbody) forwards them: first contacts for the log and the touch times behind PhysicsHands.TouchingHer.
     internal class PhysicsHandProbe : MonoBehaviour
     {
         public bool Left;
-        void OnCollisionEnter(Collision c) { PhysicsHands.NoteContact(Left, c); }
+        void OnCollisionEnter(Collision c) { PhysicsHands.NoteContact(Left, c, true); }
+        void OnCollisionStay(Collision c) { PhysicsHands.NoteContact(Left, c, false); }
     }
 
     // The user's VR hands as physics objects: a rigidbody palm with finger capsules that follows the controller by velocity,
     // collides with a kinematic capsule model of her body (private layers, nothing else in the scene feels them) and shows a
     // hand mesh that stays 1:1 with the controller in free air and shows the blocked displacement when pushing into her.
     // Her soft zones read the visual hand's capsules (Capsules). Nothing here runs per frame except cheap pose writes.
-    internal static class PhysicsHands
+    internal static partial class PhysicsHands
     {
         public static bool Active;                                  // hands are built: the integrator uses Capsules instead of VrHands' "vr" ones
         public static int Version;                                  // bumped whenever Capsules changes
         public static string Status = "";
         public static Transform LeftWrist, RightWrist;
-        // 0.7.2: the simulated fingers' local rotations (5 fingers x 3 bones, thumb first, in each bone's parent frame) for Embody.
+        // 0.7.2: the simulated fingers' local rotations (5 fingers x 3 bones: thumb, index, middle, ring, pinky x proximal, middle, distal;
+        // each in its bone's parent frame) and the same bones' rest local rotations, so Embody can apply delta = Inverse(rest) * current
+        // to his own finger bones. Valid (this frame) only while the hand is built and tracked; a missing bone reads identity/identity.
         public static readonly Quaternion[] LeftFingerLocal = new Quaternion[15], RightFingerLocal = new Quaternion[15];
+        public static readonly Quaternion[] LeftFingerRest = new Quaternion[15], RightFingerRest = new Quaternion[15];
         public static bool LeftFingersValid, RightFingersValid;
-        public static bool TouchingHer(string herBone) { return false; }   // 0.7.2 stub: a physics hand touches this capsule of hers              // the visual wrists (Embody's IK targets when it follows the hands)
+        // The signed curl (degrees, + = toward the palm) of each of those bones: the twist of Inverse(rest) * current about its curl axis.
+        public static readonly float[] LeftFingerCurlDeg = new float[15], RightFingerCurlDeg = new float[15];
+        // TouchingHer(name) lives in PhysicsHands.Rig.cs.
+        // The visual wrists (Embody's IK targets when it follows the hands).
         // Per hand, this frame: how far the physics body stands from the controller target (the displacement the visual pose gets).
         // Zero / identity when the hand is missing, kinematic (Collide off) or not built. Embody composes it into its wrist targets.
         public static Vector3 LeftDp, RightDp;
@@ -51,6 +58,7 @@ namespace SfMorph
         const BindingFlags Any = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         const string Pfx = "SfPhys";
         const string HerPfx = "SfPhysHer_";
+        const float PalmMass = 0.35f;
 
         // Sizes (metres, from the design).
         const float PalmR = 0.035f, FingerR = 0.011f, ThumbR = 0.0125f, FingerVisR = 0.0095f;
@@ -61,6 +69,7 @@ namespace SfMorph
 
         static bool _typesLooked;
         static Type _handType, _moveType;
+        internal static Type HandType { get { Types(); return _handType; } }
 
         static void Types()
         {
@@ -76,7 +85,7 @@ namespace SfMorph
                                + (_moveType != null ? ", MovePlayerAndGirl" : ", no MovePlayerAndGirl (primitive hands)"));
         }
 
-        static object Get(object o, string name)
+        internal static object Get(object o, string name)
         {
             if (o == null) return null;
             var uo = o as UnityEngine.Object;
@@ -126,7 +135,7 @@ namespace SfMorph
             return Get(_moveObj, "player") as GameObject;
         }
 
-        static Component HandController()
+        internal static Component HandController()
         {
             Types();
             if (_handType == null) return null;
@@ -173,6 +182,7 @@ namespace SfMorph
             public float Scale = 1f;                       // metres per root unit
             public Quaternion Align = Quaternion.identity; // wrist rotation = controller * offset * Align
             public readonly Vector3[] FAxis = new Vector3[5];   // curl axis per finger, root space
+            public readonly Vector3[] FDir = new Vector3[5];    // finger direction (first joint -> last), root space
             public readonly List<ShapeSpec> Cols = new List<ShapeSpec>(), Prims = new List<ShapeSpec>();
             public readonly List<CapSpec> Caps = new List<CapSpec>();
             public readonly List<Section> Sections = new List<Section>();
@@ -299,6 +309,7 @@ namespace SfMorph
                 Vector3 ax = Vector3.Cross(dir, normal);
                 if (ax.sqrMagnitude < 1e-8f) ax = Vector3.Cross(fwd, normal);
                 sp.FAxis[f] = ax.normalized;
+                sp.FDir[f] = dir;
             }
 
             // colliders: palm box + 2 capsules per finger (proximal; middle + distal to the tip)
@@ -706,21 +717,27 @@ namespace SfMorph
             public readonly List<GameObject> Marks = new List<GameObject>();
             public Quaternion[] Rest = new Quaternion[15];
             public Vector3[] AxisLocal = new Vector3[15];
+            public Vector3[] DirLocal = new Vector3[15];   // per finger*3+joint: the finger's direction in the bone's axes (joint secondary axis)
             public float Curl, AppliedCurl = -1f;
             public int BuiltMesh;
+            // the finger rig (PhysicsHands.Rig.cs)
+            public bool RigOn, RigFailed;
+            public readonly List<Fing> Rig = new List<Fing>();
+            public readonly Fing[] FingAt = new Fing[15];            // the rig's body per finger*3+joint (null: none)
+            public readonly Quaternion[] RelScratch = new Quaternion[15];
+            public readonly float[] FCurl = new float[5];             // per finger: the curl the joints are asked for (held by the tip-cast conform)
+            public readonly float[] FWritten = new float[5];
+            public readonly int[] TipBone = { -1, -1, -1, -1, -1 };    // the bone holding each finger's tip capsule
+            public readonly Vector3[] TipLocal = new Vector3[5];       // the tip (capsule end), in that bone's space
+            public readonly float[] TipR = new float[5];
+            public float TotalMass = 0.35f, BadT, StuckT, SeenFixed = -1f, CapSum, ResistMax;
+            public int CapN, CapSat;
+            public bool CurValid;
             // the target used at the last fixed step (for the visual offset) and the teleport rules
             public bool HaveFixed, HaveLast;
             public Vector3 FixedPos, LastTarget;
             public Quaternion FixedRot = Quaternion.identity;
             public float FarTime, NextUpgrade, NextMat;
-            // grip
-            public int GripKind;                  // 0 none, 1 VR_HandController field, 2 controller Animator parameter, 3 XR
-            public string GripDesc = "none";
-            public float NextGrip;
-            public Component GripOwner; public FieldInfo GripField; public Func<object, float> GripGet;
-            public Animator GripAnim; public int GripHash;
-            public object XrDev; public readonly object[] XrArgs = new object[2]; public int XrFail;
-            public bool GripWarned;
         }
 
         static Hand _left, _right;
@@ -842,13 +859,14 @@ namespace SfMorph
             }
             SetLayerRec(h.PRoot, _layerHand);
             var rb = h.PGo.AddComponent<Rigidbody>();
-            rb.mass = 1f; rb.useGravity = false; rb.drag = 0f; rb.angularDrag = 0f;
+            rb.mass = PalmMass; rb.useGravity = false; rb.drag = 0f; rb.angularDrag = 0f;
             rb.interpolation = RigidbodyInterpolation.None;
             rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
             rb.maxAngularVelocity = 50f; rb.maxDepenetrationVelocity = 2f;
-            rb.solverIterations = 12; rb.sleepThreshold = 0f;
+            rb.solverIterations = 16; rb.solverVelocityIterations = 4; rb.sleepThreshold = 0f;
             rb.centerOfMass = Vector3.zero;   // so the velocity we command is the wrist's
             h.Rb = rb;
+            h.TotalMass = PalmMass;
             h.PGo.AddComponent<PhysicsHandProbe>().Left = h.Left;
 
             // the visual: the same skeleton, posed at the (offset) controller target each frame
@@ -917,9 +935,25 @@ namespace SfMorph
                     Decompose(sp.Bones[bi].M, out p0, out rr, out sc);
                     h.Rest[i] = sp.Bones[bi].Rot;
                     h.AxisLocal[i] = Quaternion.Inverse(rr) * sp.FAxis[f];
+                    h.DirLocal[i] = Quaternion.Inverse(rr) * sp.FDir[f];
                 }
+            // the tip of each finger's last collider (conform casts start there), in its bone's space
+            for (int f = 0; f < 5; f++)
+            {
+                int lastBone = sp.Fin[f * 3 + 1] >= 0 ? sp.Fin[f * 3 + 1] : sp.Fin[f * 3];
+                if (lastBone < 0) continue;
+                foreach (var sh in sp.Cols)
+                {
+                    if (sh.Box || sh.Bone != lastBone) continue;
+                    h.TipBone[f] = lastBone;
+                    h.TipLocal[f] = h.PBones[lastBone].InverseTransformPoint(h.PRoot.TransformPoint(sh.B));
+                    h.TipR[f] = sh.R;
+                }
+            }
             h.Kin = false;
             h.CollideOn = true;
+            h.RigFailed = false;
+            EnableRig(h);
             if (_dbgOn) AddMarkers(h);
             _statusDirty = true;
         }
@@ -931,7 +965,7 @@ namespace SfMorph
             if (h.PGo != null) UnityEngine.Object.Destroy(h.PGo);
             if (h.VGo != null) UnityEngine.Object.Destroy(h.VGo);
             foreach (var m in h.Meshes) if (m != null) UnityEngine.Object.Destroy(m);
-            h.Meshes.Clear(); h.Rends.Clear(); h.Cols.Clear(); h.ColT.Clear();
+            h.Meshes.Clear(); h.Rends.Clear(); h.Cols.Clear(); h.ColT.Clear(); h.Rig.Clear(); h.RigOn = false;
             foreach (var sec in h.Spec.Sections) if (sec.Mesh != null) UnityEngine.Object.Destroy(sec.Mesh);
             h.PGo = h.VGo = null;
         }
@@ -955,168 +989,6 @@ namespace SfMorph
             }
             if (had || Capsules.Count > 0) Version++;
             Active = _left != null || _right != null;
-        }
-
-        // ================= grip =================
-
-        static Func<object, float> MakeGetter(FieldInfo f)
-        {
-            var t = f.FieldType;
-            if (t != typeof(float) && t != typeof(double) && t != typeof(int) && t != typeof(bool)) return null;
-            try
-            {
-                // a compiled getter, so reading the grip every frame doesn't box
-                var dm = new DynamicMethod("sfm_grip_" + f.Name, typeof(float), new[] { typeof(object) }, typeof(PhysicsHands).Module, true);
-                var il = dm.GetILGenerator();
-                il.Emit(OpCodes.Ldarg_0);
-                il.Emit(OpCodes.Castclass, f.DeclaringType);
-                il.Emit(OpCodes.Ldfld, f);
-                if (t != typeof(float)) il.Emit(OpCodes.Conv_R4);
-                il.Emit(OpCodes.Ret);
-                return (Func<object, float>)dm.CreateDelegate(typeof(Func<object, float>));
-            }
-            catch (Exception) { return null; }
-        }
-
-        static bool IsNumberType(Type t) { return t == typeof(float) || t == typeof(double) || t == typeof(int) || t == typeof(bool); }
-
-        static bool SideName(string n, bool left)
-        {
-            n = n.ToLowerInvariant();
-            return left ? n.Contains("left") || n.EndsWith("_l", StringComparison.Ordinal) : n.Contains("right") || n.EndsWith("_r", StringComparison.Ordinal);
-        }
-
-        // Source order: (1) VR_HandController.selectValue_left/right (or a field named grip*), (2) the controller Animator's
-        // grip/select/trigger float parameter, (3) XR InputDevices grip through reflection. Logged when chosen; retried every 2 s.
-        static void ResolveGrip(Hand h)
-        {
-            h.GripKind = 0; h.GripDesc = "none"; h.GripField = null; h.GripGet = null; h.GripAnim = null; h.XrDev = null;
-            var hc = HandController();
-            if (hc != null)
-            {
-                FieldInfo best = null; int bestScore = 0;
-                var cand = new StringBuilder();
-                foreach (var f in _handType.GetFields(Any))
-                {
-                    if (f.IsStatic || !IsNumberType(f.FieldType)) continue;
-                    var ln = f.Name.ToLowerInvariant();
-                    if (ln.Contains("select") || ln.Contains("grip") || ln.Contains("trigger")) cand.Append(cand.Length > 0 ? ", " : "").Append(f.Name);
-                    if (!SideName(f.Name, h.Left)) continue;
-                    int score = ln.Contains("selectvalue") ? 3 : ln.Contains("grip") ? 2 : 0;
-                    if (score > bestScore) { best = f; bestScore = score; }
-                }
-                if (!h.GripWarned && cand.Length > 0) LogOnce("gripfields", "VR_HandController numeric fields about select/grip/trigger: " + cand);
-                if (best != null)
-                {
-                    h.GripKind = 1; h.GripOwner = hc; h.GripField = best; h.GripGet = MakeGetter(best);
-                    h.GripDesc = "VR_HandController." + best.Name;
-                }
-                else
-                {
-                    var anim = Get(hc, h.Left ? "controller_left" : "controller_right") as Animator;
-                    if (anim != null)
-                    {
-                        string pick = null; int sc = 0;
-                        try
-                        {
-                            foreach (var p in anim.parameters)
-                            {
-                                if (p.type != AnimatorControllerParameterType.Float) continue;
-                                var ln = p.name.ToLowerInvariant();
-                                int score = ln.Contains("grip") ? 3 : ln.Contains("select") ? 2 : ln.Contains("trigger") ? 1 : 0;
-                                if (score > sc) { sc = score; pick = p.name; }
-                            }
-                        }
-                        catch (Exception) { }
-                        if (pick != null)
-                        {
-                            h.GripKind = 2; h.GripAnim = anim; h.GripHash = Animator.StringToHash(pick);
-                            h.GripDesc = "controller Animator parameter '" + pick + "'";
-                        }
-                    }
-                }
-            }
-            if (h.GripKind == 0 && XrInit())
-            {
-                try
-                {
-                    var dev = _xrGetAt.Invoke(null, new object[] { Enum.ToObject(_xrNode, h.Left ? 4 : 5) });
-                    var valid = dev.GetType().GetProperty("isValid").GetValue(dev, null);
-                    if (valid is bool && (bool)valid)
-                    {
-                        h.XrDev = dev; h.XrFail = 0;
-                        h.GripKind = 3; h.GripDesc = "XR InputDevices grip";
-                    }
-                }
-                catch (Exception) { }
-            }
-            if (h.GripKind != 0) Plugin.Log.LogInfo("PhysicsHands: " + (h.Left ? "left" : "right") + " grip from " + h.GripDesc);
-            else if (!h.GripWarned) { h.GripWarned = true; Plugin.Log.LogInfo("PhysicsHands: " + (h.Left ? "left" : "right") + " grip: no source found yet (hand stays open, retrying every 2 s)"); }
-            _statusDirty = true;
-        }
-
-        static int _xrState;   // 0 not looked, 1 usable, 2 not
-        static Type _xrNode;
-        static MethodInfo _xrGetAt, _xrTry;
-        static object _xrUsage;
-
-        static bool XrInit()
-        {
-            if (_xrState != 0) return _xrState == 1;
-            _xrState = 2;
-            try
-            {
-                Type di = null, node = null, cu = null, dev = null;
-                foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    if (!a.GetName().Name.StartsWith("UnityEngine", StringComparison.Ordinal)) continue;
-                    di = di ?? a.GetType("UnityEngine.XR.InputDevices");
-                    node = node ?? a.GetType("UnityEngine.XR.XRNode");
-                    cu = cu ?? a.GetType("UnityEngine.XR.CommonUsages");
-                    dev = dev ?? a.GetType("UnityEngine.XR.InputDevice");
-                }
-                if (di == null || node == null || cu == null || dev == null) return false;
-                _xrGetAt = di.GetMethod("GetDeviceAtXRNode", BindingFlags.Public | BindingFlags.Static);
-                var grip = cu.GetField("grip", BindingFlags.Public | BindingFlags.Static);
-                if (_xrGetAt == null || grip == null) return false;
-                _xrUsage = grip.GetValue(null);
-                foreach (var m in dev.GetMethods(BindingFlags.Public | BindingFlags.Instance))
-                {
-                    if (m.Name != "TryGetFeatureValue") continue;
-                    var ps = m.GetParameters();
-                    if (ps.Length == 2 && ps[0].ParameterType == grip.FieldType && ps[1].ParameterType == typeof(float).MakeByRefType()) { _xrTry = m; break; }
-                }
-                if (_xrTry == null) return false;
-                _xrNode = node;
-                _xrState = 1;
-            }
-            catch (Exception) { _xrState = 2; }
-            return _xrState == 1;
-        }
-
-        static float ReadGrip(Hand h, float now)
-        {
-            switch (h.GripKind)
-            {
-                case 1:
-                    if (h.GripOwner == null) { h.GripKind = 0; break; }
-                    try { return Mathf.Clamp01(h.GripGet != null ? h.GripGet(h.GripOwner) : Convert.ToSingle(h.GripField.GetValue(h.GripOwner))); }
-                    catch (Exception) { h.GripKind = 0; break; }
-                case 2:
-                    if (h.GripAnim == null) { h.GripKind = 0; break; }
-                    return Mathf.Clamp01(h.GripAnim.GetFloat(h.GripHash));
-                case 3:
-                    try
-                    {
-                        h.XrArgs[0] = _xrUsage; h.XrArgs[1] = 0f;   // a few small boxes per call: only on this last-resort source
-                        if ((bool)_xrTry.Invoke(h.XrDev, h.XrArgs)) { h.XrFail = 0; return Mathf.Clamp01((float)h.XrArgs[1]); }
-                        if (++h.XrFail > 120) h.GripKind = 0;
-                        return h.Curl;
-                    }
-                    catch (Exception) { h.GripKind = 0; break; }
-            }
-            if (now >= h.NextGrip) { h.NextGrip = now + 2f; ResolveGrip(h); }
-            return 0f;
         }
 
         // ================= controller models =================
@@ -1177,6 +1049,7 @@ namespace SfMorph
             public GameObject Go; public Transform T; public Rigidbody Rb; public CapsuleCollider Col;
             public Vector3 LastPos; public bool Placed;
             public GameObject Mark;
+            public float TouchT = -100f;           // Time.fixedTime of the last contact with a hand collider (see TouchingHer)
         }
 
         sealed class SegDef
@@ -1185,6 +1058,8 @@ namespace SfMorph
             public SegDef(string n, string a, string b, string o, bool soft, float def, bool all = false) { Name = n; A = a; B = b; Owner = o; Soft = soft; Def = def; AllDesc = all; }
         }
 
+        // Her capsule names (what TouchingHer takes): pelvis, spine, chest, neck, head, thigh_L, thigh_R, calf_L, calf_R,
+        // upperarm_L, upperarm_R, forearm_L, forearm_R, butt_L, butt_R (those whose bones were found).
         static readonly SegDef[] HerDefs =
         {
             new SegDef("pelvis", "Hip_L", "Hip_R", "Root_M", true, 0.10f),
@@ -1205,6 +1080,7 @@ namespace SfMorph
         };
 
         static readonly List<Seg> _segs = new List<Seg>();
+        static readonly Dictionary<Collider, Seg> _segOfCol = new Dictionary<Collider, Seg>();
         static GameObject _herGo;
         static Transform _herRoot;
         static bool _herBuilt, _herDirty;
@@ -1371,6 +1247,7 @@ namespace SfMorph
                 g.Rb.isKinematic = true; g.Rb.useGravity = false;
                 g.Rb.interpolation = RigidbodyInterpolation.None;
                 _segs.Add(g);
+                _segOfCol[g.Col] = g;
             }
             _herBuilt = true;
             _herSoftness = s.Softness;
@@ -1384,6 +1261,7 @@ namespace SfMorph
             RemoveHerMarkers();
             foreach (var g in _segs) if (g.Go != null) UnityEngine.Object.Destroy(g.Go);
             _segs.Clear();
+            _segOfCol.Clear();
             if (_herGo != null) UnityEngine.Object.Destroy(_herGo);
             _herGo = null; _herRoot = null; _herBuilt = false;
             _statusDirty = true;
@@ -1530,16 +1408,22 @@ namespace SfMorph
         static int _enters, _tpFar, _tpJump, _tpNan;
         static float _nextSummary;
 
-        internal static void NoteContact(bool left, Collision c)
+        // Enter / Stay from the probes on the palm and the finger rigidbodies: first contacts go to the log, every call stamps the touch time.
+        internal static void NoteContact(bool left, Collision c, bool enter)
         {
             try
             {
-                _enters++;
                 var col = c.collider;
-                string n = col != null ? col.name : "?";
-                if (n.StartsWith(HerPfx, StringComparison.Ordinal)) n = n.Substring(HerPfx.Length);
-                if (_contacts.Add((left ? "L:" : "R:") + n))
-                    Plugin.Log.LogInfo("PhysicsHands: first contact " + (left ? "left" : "right") + " hand with her " + n + " (" + c.relativeVelocity.magnitude.ToString("0.00") + " m/s, " + c.contactCount + " points)");
+                if (ReferenceEquals(col, null) || col == null) return;
+                Seg g;
+                if (!_segOfCol.TryGetValue(col, out g)) return;
+                float t = Time.fixedTime;
+                g.TouchT = t;
+                _handTouchT[left ? 0 : 1] = t;
+                if (!enter) return;
+                _enters++;
+                if (_contacts.Add((left ? "L:" : "R:") + g.Name))
+                    Plugin.Log.LogInfo("PhysicsHands: first contact " + (left ? "left" : "right") + " hand with her " + g.Name + " (" + c.relativeVelocity.magnitude.ToString("0.00") + " m/s, " + c.contactCount + " points)");
             }
             catch (Exception) { }
         }
@@ -1550,12 +1434,20 @@ namespace SfMorph
             if (!rb.isKinematic) { rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero; }
             rb.position = p; rb.rotation = q;
             h.PRoot.SetPositionAndRotation(p, q);
+            for (int i = 0; i < h.Rig.Count; i++)   // the fingers ride along on the transform hierarchy; their motion is dropped
+            {
+                var frb = h.Rig[i].Rb;
+                if (frb != null && !frb.isKinematic) { frb.velocity = Vector3.zero; frb.angularVelocity = Vector3.zero; }
+            }
+            if (h.Rig.Count > 0) Physics.SyncTransforms();
+            h.CurValid = false;
             h.FarTime = 0f;
         }
 
         // ================= per fixed step =================
 
-        // Runner.FixedUpdate: the palm follows the target by velocity; her capsules follow her bones. Before the physics step.
+        // Runner.FixedUpdate: the palm follows the target by a force-capped pull and a PD torque, the fingers get their joint
+        // targets; her capsules follow her bones. Before the physics step.
         public static void FixedStep()
         {
             if (!Active && !_herBuilt) return;
@@ -1575,12 +1467,21 @@ namespace SfMorph
                     if (_tpFar + _tpJump + _tpNan > 0 || _enters > 0)
                         Plugin.Log.LogInfo("PhysicsHands: last 10 s: " + _enters + " contact starts, teleports " + (_tpFar + _tpJump + _tpNan) + " (too far " + _tpFar + ", target jumped " + _tpJump + ", NaN " + _tpNan + ")");
                     _enters = _tpFar = _tpJump = _tpNan = 0;
+                    SummariseFcap(_left, "left"); SummariseFcap(_right, "right");
                 }
             }
             catch (Exception e)
             {
                 LogOnce("fixederr" + e.GetType().Name, "FixedStep error: " + e);
             }
+        }
+
+        static void SummariseFcap(Hand h, string side)
+        {
+            if (h == null || h.CapN == 0) return;
+            Plugin.Log.LogInfo("PhysicsHands: last 10 s " + side + " palm: force cap avg " + (h.CapSum / h.CapN).ToString("0.0") + " N, resist max " + h.ResistMax.ToString("0.00")
+                               + ", pull at the cap in " + (100f * h.CapSat / h.CapN).ToString("0") + "% of steps" + (h.RigOn ? "" : "; fingers " + (h.RigFailed ? "kinematic (fallback)" : "kinematic")));
+            h.CapSum = 0f; h.CapN = 0; h.CapSat = 0; h.ResistMax = 0f;
         }
 
         static void StepHand(Hand h, Transform ctl, Vector3 off, Vector3 rot, float dt)
@@ -1620,21 +1521,51 @@ namespace SfMorph
                 if (h.FarTime > 0.25f) { _tpFar++; Teleport(h, tp, tq); return; }
             }
             else h.FarTime = 0f;
-            Vector3 v = gap / dt * 0.9f;
-            if (v.sqrMagnitude > 36f) v = v.normalized * 6f;
+
+            // Compliant follow. Translation: the velocity that would close the gap in one step (6 m/s at most) is asked for by a
+            // force, capped. The cap drops from 60 N to 12 N as her skin under the hand resists (SoftZones.LeftResist/RightResist,
+            // 0..1, written by the contact sim), so a pressed hand slows and stops instead of shoving through.
+            float resist = Mathf.Clamp01(h.Left ? SoftZones.LeftResist : SoftZones.RightResist);
+            float fcap = Mathf.Lerp(60f, 12f, resist);
+            Vector3 vDes = gap / dt;
+            if (vDes.sqrMagnitude > 36f) vDes = vDes.normalized * 6f;
+            Vector3 force = h.TotalMass * (vDes - rb.velocity) / dt;
+            float fm = force.magnitude;
+            bool capped = fm > fcap;
+            if (capped) force *= fcap / fm;
+            rb.AddForce(force, ForceMode.Force);
+            h.CapSum += fcap; h.CapN++; if (capped) h.CapSat++; if (resist > h.ResistMax) h.ResistMax = resist;
+
+            // Rotation: PD torque tau = I * (kp * theta * axis - kd * omega) with I the hand's inertia (palm + the finger bodies by the
+            // parallel-axis term), clamped to 4 N*m. kp/kd are limited so the explicit step stays stable at slow fixed rates.
             Quaternion dq = tq * Quaternion.Inverse(rq);
             if (dq.w < 0f) dq = new Quaternion(-dq.x, -dq.y, -dq.z, -dq.w);
             float ang; Vector3 axis;
             dq.ToAngleAxis(out ang, out axis);
             if (ang > 180f) ang -= 360f;
-            Vector3 w = Finite(axis) ? axis * (ang * Mathf.Deg2Rad) / dt * 0.9f : Vector3.zero;
-            if (w.sqrMagnitude > 900f) w = w.normalized * 30f;
-            rb.velocity = v; rb.angularVelocity = w;
+            float kp = Mathf.Min(900f, 0.5f / (dt * dt)), kd = Mathf.Min(45f, 1.2f / dt);
+            Vector3 alpha = (Finite(axis) ? axis * (ang * Mathf.Deg2Rad) * kp : Vector3.zero) - kd * rb.angularVelocity;
+            Quaternion ir = rq * rb.inertiaTensorRotation;
+            Vector3 tau = ir * Vector3.Scale(Quaternion.Inverse(ir) * alpha, rb.inertiaTensor);
+            Vector3 com = rb.worldCenterOfMass;
+            for (int i = 0; i < h.Rig.Count; i++)
+            {
+                var g = h.Rig[i];
+                if (g.Rb == null) continue;
+                Vector3 r = g.Rb.worldCenterOfMass - com;
+                tau += g.Rb.mass * (r.sqrMagnitude * alpha - r * Vector3.Dot(r, alpha));
+            }
+            float tm = tau.magnitude;
+            if (tm > 4f) tau *= 4f / tm;
+            if (Finite(tau)) rb.AddTorque(tau, ForceMode.Force);
+
+            if (h.RigOn) FingerStep(h, dt);
         }
 
         // ================= per frame (the apply step) =================
 
         static bool _statusDirty;
+        static string _gripSeen = "";
 
         static void SetDisp(bool left, Vector3 dp, Quaternion dq)
         {
@@ -1645,6 +1576,7 @@ namespace SfMorph
         {
             SetDisp(true, Vector3.zero, Quaternion.identity);    // set again by UpdateHand below when the hand is dynamic
             SetDisp(false, Vector3.zero, Quaternion.identity);
+            LeftFingersValid = RightFingersValid = false;       // set again by UpdateHand for a tracked, built hand
             if (s == null || !s.On)
             {
                 if (_taken) Release();
@@ -1666,6 +1598,7 @@ namespace SfMorph
             _s = s;
             float now = Time.unscaledTime, dt = Time.deltaTime;
             if (now < _retryAt) return;
+            Grip.Update();   // idempotent within a frame: the integrator calls it earlier in the apply step
             if (!_layersApplied)
             {
                 string why = Prepare();
@@ -1721,6 +1654,7 @@ namespace SfMorph
             if (_left == null) RestoreHide(_hideL);
             if (_right == null) RestoreHide(_hideR);
 
+            if (Grip.Source != _gripSeen) { _gripSeen = Grip.Source; _statusDirty = true; }
             if (_statusDirty)
             {
                 _statusDirty = false;
@@ -1735,14 +1669,15 @@ namespace SfMorph
             if (!s.Collide) sb.Append("; collisions off (visual only)");
             else if (_herBuilt) sb.Append("; her ").Append(_segs.Count).Append(" colliders");
             else sb.Append("; ").Append(_herNote.Length > 0 ? _herNote : (her == null ? "her: not found" : "her: building"));
-            sb.Append("; layers ").Append(_layerHand).Append('/').Append(_layerHer);
+            sb.Append("; layers ").Append(_layerHand).Append('/').Append(_layerHer).Append("; grip ").Append(Grip.Source.Length > 0 ? Grip.Source : "none yet");
             return sb.ToString();
         }
 
         static void AppendHand(StringBuilder sb, Hand h, string side)
         {
             if (h == null) { sb.Append(side).Append(" none"); return; }
-            sb.Append(side).Append(' ').Append(h.Spec.Visual).Append(h.Fallback ? " (fallback)" : "").Append(", grip ").Append(h.GripDesc);
+            sb.Append(side).Append(' ').Append(h.Spec.Visual).Append(h.Fallback ? " (fallback)" : "").Append(h.RigOn ? ", jointed fingers" : ", kinematic fingers");
+
         }
 
         static void ManageHand(ref Hand slot, bool left, Transform ctl, HandsSettings s, float now)
@@ -1799,9 +1734,11 @@ namespace SfMorph
                 rb.isKinematic = false;
                 Teleport(h, p, q);
                 h.Kin = false;
+                if (!h.RigFailed) EnableRig(h);
             }
             else
             {
+                DisableRig(h);   // visual only: kinematic fingers posed by the curl, like the palm
                 rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero;
                 rb.isKinematic = true;
                 h.Kin = true;
@@ -1828,10 +1765,16 @@ namespace SfMorph
             }
             h.VRoot.SetPositionAndRotation(vp, vq);
 
-            // grip -> curl
-            float g = ReadGrip(h, now);
+            // grip -> curl (the target the finger joints are driven to); the visual fingers follow the simulated bones
+            float g = h.Left ? Grip.Left : Grip.Right;
             h.Curl = Mathf.Lerp(h.Curl, g, 1f - Mathf.Exp(-25f * dt));
-            if (Mathf.Abs(h.Curl - h.AppliedCurl) > 0.002f) { h.AppliedCurl = h.Curl; PoseFingers(h); }
+            if (h.RigOn) PoseFromRig(h);
+            else
+            {
+                for (int f = 0; f < 5; f++) h.FCurl[f] = h.Curl;
+                if (Mathf.Abs(h.Curl - h.AppliedCurl) > 0.002f) { h.AppliedCurl = h.Curl; PoseFingers(h); }
+            }
+            PublishFingers(h);
 
             SetVisible(h, !s.HideVisual);
 
@@ -1887,6 +1830,8 @@ namespace SfMorph
             catch (Exception e) { Plugin.Log.LogWarning("PhysicsHands: release: " + e.Message); }
             LeftWrist = RightWrist = null;
             SetDisp(true, Vector3.zero, Quaternion.identity); SetDisp(false, Vector3.zero, Quaternion.identity);
+            LeftFingersValid = RightFingersValid = false;
+            _handTouchT[0] = _handTouchT[1] = -100f;
             Active = false;
             _taken = false; _retryAt = 0f; _nextBuildL = _nextBuildR = 0f; _herNext = 0f; _herNote = "";
             _herSoftness = -1f; _statusDirty = false; RebuildCapsNow = false;

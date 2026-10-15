@@ -65,3 +65,15 @@ found"), `Soft zones on 'Reika'` (zones, points, helpers), `Physics hands:` line
   hand stops at her body after the skin gives (no passing through), no jitter while resting on her.
 - Embody on (Follow): the view sits at his eyes and stays there through his animation; his head is not in the way; his hands
   follow your controllers (try Left, Right, Both); turning it off puts the view and his head back.
+
+## 0.7.2
+
+Log: `PhysicsHands: <side> finger rig: 11 rigidbodies ...` per hand (no "finger rig failed", no "limit sign swapped"),
+`Grip:` lines, `palm: force cap avg ... resist max ...` every 10 s, `Soft zones on 'Reika' (..., quality Balanced)` with
+~131 points / ~250 helpers, at Fidelity `Subdiv` lines per body mesh, `Overlap: driving 16 bones`, `Embody: ... fingers 5/5`.
+Headset: (1) free air: hands 1:1, no lag/jitter; (2) palm into a glute slowly: the hand slows and stops, hand-shaped dent,
+fingers fold and spring back; (3) grip in the air, then on her thigh: fingers settle on the skin; (4) Embody, physics hands off:
+his fingers curl with grip, his arm trails a fast swing; both on: his hand stops where the physics hand stops; (5) Quality
+Performance → Balanced → Fidelity: smoother silhouette and dents in Fidelity, note frame time; toggle a character in Fidelity
+(no stuck mesh); (6) Overlap 0 → 50 %: elbows/knees trail and settle, no pops; 0 = the game's animation; (7) the VrHands log line
+no longer lists SfPhys_*_visual as a partner.

@@ -1,0 +1,20 @@
+ManifestFileVersion: 0
+CRC: 2631092521
+Hashes:
+  AssetFileHash:
+    serializedVersion: 2
+    Hash: 7e87f073e696345f923e560008f562ca
+  TypeTreeHash:
+    serializedVersion: 2
+    Hash: 17a3557cae3d0f9916dbe762213cf068
+  IncrementalBuildHash:
+    serializedVersion: 2
+    Hash: 7e87f073e696345f923e560008f562ca
+HashAppended: 0
+ClassTypes:
+- Class: 72
+  Script: {instanceID: 0}
+SerializeReferenceClassIdentifiers: []
+Assets:
+- Assets/SfMorph/Shaders/SoftDeform.compute
+Dependencies: []

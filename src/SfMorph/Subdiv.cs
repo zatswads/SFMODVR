@@ -440,6 +440,7 @@ namespace SfMorph
             }
 
             m.Clear(true);
+            m.ClearBlendShapes();
             m.indexFormat = d.fmt;
             m.vertices = d.verts;
             if (d.nrm != null) m.normals = d.nrm;

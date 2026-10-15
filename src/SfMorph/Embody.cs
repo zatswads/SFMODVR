@@ -34,12 +34,6 @@ namespace SfMorph
             return a.Written && a.PlacedFrame >= Time.frameCount - 1;
         }
 
-        // The physics hand's finger rest locals (Quaternion[15]) for Inverse(rest) * current; null until PhysicsHands publishes them.
-        static Quaternion[] PhysRest(bool left)
-        {
-            return null;   // TODO(integrator): PhysicsHands.LeftFingerRest / RightFingerRest
-        }
-
         const float FollowSeconds = 0.1f;   // exponential catch-up of the rig to his eye in Follow
         const float JumpMeters = 0.5f;      // something else moving the rig this far in one frame is logged once
         const float MovedMeters = 0.02f;    // the rig is not where we left it: someone else wrote it
@@ -941,16 +935,15 @@ namespace SfMorph
             if (a.Curl < 0f) a.Curl = grip;
             else if (dt > 0f) a.Curl += (grip - a.Curl) * (1f - Mathf.Exp(-CurlRate * dt));
 
-            Quaternion[] sim = left ? PhysicsHands.LeftFingerLocal : PhysicsHands.RightFingerLocal;
-            Quaternion[] rest = PhysRest(left);
+            float[] curl = left ? PhysicsHands.LeftFingerCurlDeg : PhysicsHands.RightFingerCurlDeg;
             bool useSim = PhysicsHands.Active && (left ? PhysicsHands.LeftFingersValid : PhysicsHands.RightFingersValid)
-                          && sim != null && sim.Length >= 15 && rest != null && rest.Length >= 15;
+                          && curl != null && curl.Length >= 15;
             string src = useSim ? "simulated" : "grip";
             if (src != a.FingerSrc)
             {
                 a.FingerSrc = src;
                 Plugin.Log.LogInfo("Embody: his " + a.Side + " fingers now follow " + (useSim ? "the physics hand's simulated fingers" : "the controller grip (Grip." + (left ? "Left" : "Right") + ", " + Grip.Source + ")")
-                    + (PhysicsHands.Active && !useSim ? (rest == null ? " [no finger rest from the physics hand yet]" : " [its fingers are not valid]") : ""));
+                    + (PhysicsHands.Active && !useSim ? " [its fingers are not valid]" : ""));
             }
 
             for (int f = 0; f < 5; f++)
@@ -964,15 +957,8 @@ namespace SfMorph
                     float ang = (f == 0 ? ThumbMax[j] : FingerMax[j]) * a.Curl;
                     if (useSim)
                     {
-                        int i = f * 3 + j;
-                        float sa;
-                        Vector3 sx;
-                        (Quaternion.Inverse(rest[i]) * sim[i]).ToAngleAxis(out sa, out sx);
-                        if (!float.IsNaN(sa) && !float.IsInfinity(sa))
-                        {
-                            if (sa > 180f) sa = 360f - sa;
-                            ang = Mathf.Clamp(sa, 0f, 120f);
-                        }
+                        float sa = curl[f * 3 + j];   // signed twist about the curl axis: a sideways swing or a backward bend is not a curl
+                        if (!float.IsNaN(sa) && !float.IsInfinity(sa)) ang = Mathf.Clamp(sa, -15f, 120f);
                     }
                     var cur = b.localRotation;
                     // Our last write still there: the animation did not write this bone, so its pose is the one from before our write.

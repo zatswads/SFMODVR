@@ -118,9 +118,8 @@ namespace SfMorph
 
             bool reset = dt > ResetDt;
             if (reset && !_loggedReset[0]) { _loggedReset[0] = true; Plugin.Log.LogInfo("Overlap: reset, frame time " + dt.ToString("0.000") + " s"); }
-            int n = dt > 0f ? Mathf.Max(1, Mathf.CeilToInt(dt / Step - 1e-3f)) : 0;
+            int n = dt > 0f ? Mathf.Min(12, Mathf.Max(1, Mathf.CeilToInt(dt / Step - 1e-3f))) : 0;
             float h = n > 0 ? dt / n : 0f;
-            n = Mathf.Min(n, 12);
 
             int driven = 0;
             for (int i = 0; i < _bones.Count; i++)

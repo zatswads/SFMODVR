@@ -1,6 +1,6 @@
 # SF Body Morphs — handoff
 
-State at **0.7.0** (branch `main`). 0.7.0 (soft points, VR hands, physics hands, Embody) built, not yet run in the game; 0.6.3 soft zones were tested: nothing touched them (see README). Read this first, then `docs/TESTING.md`.
+State at **0.7.2** (branch `main`). 0.7.2 (hands v2, contact v2, quality presets with subdivision, secondary motion) built, not yet run in the game; 0.7.0 tested: hands and contacts worked but felt rigid.
 
 ## What this is
 
@@ -56,6 +56,10 @@ commit them). Toolchain: `apt-get update && apt-get install -y mono-mcs mono-dev
 | `SoftSim.cs` | Soft zones' per-frame spring sim (0.7.0): helpers' rest place from their bone, damped spring at 1/120 s substeps, contacts against `SoftCapsule`s (push out, velocity transfer), clamp (in ≤ limit, out ≤ 0.3, sideways ≤ 0.5), bulge to neighbours, writes S; debug markers. Runs in `Body.ApplyAll` after `Apply(c)`. |
 | `VrHands.cs` | `SoftCapsule` + who can touch her (0.7.0): the user's hands via `VR_HandController.controller_left/right`, partner rigs (humanoid or AdvancedSkeleton wrists/fingers), her thighs/forearms/hands; mirrors capsules into the game's breast DynamicBones; one-time `VR rig survey`. Refreshed every 2 s. |
 | `PhysicsHands.cs` | Physics hands (0.7.0): hand mesh cut from the player's body (or primitives), palm rigidbody following the controller by velocity in `Runner.FixedUpdate`, visual pose = controller ∘ physics offset (no added latency), grip curl, her body as kinematic capsules (inset so the soft zones give first), two private layers. |
+| `PhysicsHands.Rig.cs` | Hands v2 (0.7.2): jointed finger rigidbodies (proximal + fused middle/distal, ConfigurableJoint slerp drives with capped force = compliance), curl targets, tip-cast settle, kinematic fallback; palm force-capped follow (`Fcap = lerp(60,12,resist)`) + PD torque. |
+| `Grip.cs` | Controller grip 0..1 per hand (VR_HandController.selectValue_*, Animator param, XR), once per frame; used by physics hands and Embody. |
+| `Subdiv.cs` | Fidelity: one level PN-triangle subdivision in place (same Mesh object, so MorphState's swap check holds), seams welded, weights/blendshapes interpolated, exact Undo. |
+| `Overlap.cs` | Secondary motion: second-order spring follow of her limb/head/spine local rotations after the animation, faded on contact, reset on cuts. |
 | `Embody.cs` | Embody (0.7.0): partner rig (Player/BadGuy), view snap/follow by moving the XR rig root (undone exactly), head hidden (scale 0.001, tracker), two-bone arm IK to the controllers with automatic hand frame, override detection in `Application.onBeforeRender`. |
 | `SoftZones.cs` | Physics (0.6.3): per zone (glutes, thighs in/out, belly, breast front/side) a rest point under her skin, helper pairs (anchor = DynamicBone root with an excluded second child so it is never re-aimed, soft = simulated particle hanging along the skin) under each bone that weights the zone, weights split w → w(1-f) + w f, bind poses appended (follow `MorphState.BindVersion`); readable clones of the game's meshes when no character is on, MorphState's clones extended in place otherwise (`SoftZones.Original` keeps MorphState cloning the game's mesh); DynamicBoneCollider capsules on partner hands (humanoid Animator or bone names), her forearms/hands/thighs; never adds children to game DynamicBone chain bones with < 2 children. |
 | `Panel.cs` | F8 window: character buttons, tabs Body (collapsible groups) / Bones / Presets / Characters, filter + 80-row cap, greyed rows with reasons. |

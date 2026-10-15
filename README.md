@@ -41,6 +41,21 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.7.2:
+- Hands felt rigid (0.7.0): the physics hand was velocity-driven (infinitely stiff) and the fingers only posed from grip. Now
+  the palm follows the controller with a capped force and a PD torque (60 N in the air, down to 12 N as her skin compresses,
+  so the hand slows and stops instead of hitting a wall), and the fingers are jointed rigidbodies (two per finger) with soft
+  drives: they curl with grip, settle on her skin instead of passing into it, fold when pressed and spring back.
+- Embody: his fingers curl with your grip (or copy the physics hand's fingers), and his arm trails fast moves a little.
+- Contact: the dent now takes the shape of what presses (hand, fingers), the deeper the more the hand is held back; denser
+  soft points (about 131 instead of 51). Physics → Quality: Performance (0.7.0 points), Balanced (dense, default), Fidelity
+  (dense + her body mesh subdivided once with PN smoothing: rounder silhouette, finer dents; costs GPU skinning).
+- Secondary motion (VR tab): her elbows, wrists, knees, head and spine trail fast animation a little and settle (damped
+  springs per bone); fades out where a hand or her other leg touches her. Overlap 0 = exactly the game's animation.
+- Our own hand meshes are no longer mistaken for a partner rig.
+- Shader project for the next step (tools/shaders, Unity 2022.3.9f1 batch build → dist/sfmorph_shaders): a post-skinning
+  compute deformer for per-vertex dents (not loaded by the plugin yet).
+
 0.7.1:
 - Characters keep her rig: the character's face goes on at its own proportions (eye spacing, nose, chin, ears,
   head width within about 1 mm), her body gets the character's surface on her own joint centres, so limb, finger
