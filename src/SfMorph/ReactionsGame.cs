@@ -55,7 +55,8 @@ namespace SfMorph
         public bool VoiceOn;               // GameSetting_Function.voiceIsOn
         public bool SfxOn;                 // GameSetting_Function.soundEffectIsOn
         public bool BreakSystemOn;         // GameSetting_Function.dirtyTalkBreakSystemIsOn
-        public bool DirtyTalkPlaying;      // LadyVoice_Function.dirtyTalkPlaying || dirtyTalk_audioSource.isPlaying
+        public bool DirtyTalkPlaying;      // dirtyTalk_audioSource.isPlaying (the flag below is sticky and only logged)
+        public bool DirtyTalkFlag;         // LadyVoice_Function.dirtyTalkPlaying (sticky: not a gate)
         public bool DialoguePlaying;       // dialoguePlaying || kissInteractionPlaying || dialogue_audioSource.isPlaying (real scripted speech: a hard block)
         public string DialogueWhy = "";    // which of those three: "dialogue", "kiss" or "dialogue audio" (empty when none)
         public bool SexFacialPlaying;      // LadyVoice_Function.sexFacialPlaying (the feeling loops; on for long stretches in sex mode, not a block for slaps)
@@ -64,6 +65,7 @@ namespace SfMorph
         public bool FacialOff;             // FacialFunction.facialLayer == "off"
         public string FacialLayer = "";    // FacialFunction.facialLayer ("on", "lip", "eye", "eyeBrow", "off")
         public bool MoanPlaying;           // moan_audioSource.isPlaying (the game's, or ours from MoanClip)
+        public bool MoanTail;              // MoanPlaying, but only the silent padding of the clip is left (the game pads its moans to 4 s): audibly free
         public bool OwnVoicePlaying;       // our Breath() one-shot is still sounding (updated on every ReadGates call)
         public float TouchReactionTime;    // LadyBreastPhysics_Function.touchReactionTime (s)
         public float Desire = -1f;         // SexMode_State_System.reikaDesire (0..100); < 0 = unknown (no gauge)
@@ -141,9 +143,10 @@ namespace SfMorph
         Mem _mSrcMoan, _mSrcDirty, _mSrcDialogue, _mSrcSfx, _mSrcVoice;
         Mem _mVoiceOn, _mSfxOn, _mBreakOn, _mLang;
         Mem _mSexMode, _mForeplay, _mTouchTime, _mDesire;
-        MethodInfo _miMoan, _miBlink, _miDesirePlus, _miEyeIn, _miEyeOut;
+        MethodInfo _miMoan, _miBlink, _miDesirePlus, _miEyeIn, _miEyeOut, _miDtStop, _miSubHide;
+        Mem _mSubtitle;
         // audio members (AudioSource / AudioClip, reflected)
-        PropertyInfo _pPlaying, _pClip, _pPitch, _pVolume, _pBlend, _pRolloff, _pMin, _pMax, _pPlayAwake, _pGroup, _pClipLen;
+        PropertyInfo _pPlaying, _pClip, _pPitch, _pVolume, _pBlend, _pRolloff, _pMin, _pMax, _pPlayAwake, _pGroup, _pClipLen, _pTime;
         MethodInfo _miPlay, _miStop, _miOneShot;
         Func<object, bool> _isPlayingFast;
         readonly object[] _argOneShot = new object[2], _argInt = new object[1], _argFlt = new object[1];
@@ -173,12 +176,14 @@ namespace SfMorph
         bool _gHold; float _gBase, _gLast;
         float _now, _gateT = -100f, _nextFind, _nextSlow, _nextSet, _lastFeed = -100f, _ownEnd;
         int _moanFail; float _moanOffUntil;
+        float _moanT0, _ownT0; bool _ownOneShot;   // when our/the game's last moan started; whether the latest thing on the moan source is our breath one-shot
         bool _bridgeLogged;
         readonly HashSet<string> _logged = new HashSet<string>();
         readonly List<string> _missing = new List<string>();
 
         // ---- guard state ----
-        bool _guardSub, _guardDead, _guardBackoff, _dtDead;
+        bool _guardSub, _guardBackoff, _dtDead;
+        string _dtStatus = "off"; int _dtStKey = -1, _dtVer, _gsVer = -1, _gsSfx = -1;   // the guard's status text is built only when its inputs change
         volatile bool _voiceErr, _sfxErr;
         int _sfxRepairs, _sfxSinceLog, _sfxLogMs, _sfxErrTotal; bool _sfxLoggedFirst;
         readonly Dictionary<string, Mem[]> _seMems = new Dictionary<string, Mem[]>();
@@ -248,6 +253,16 @@ namespace SfMorph
                 for (var k = t; k != null && mi == null && k != typeof(object); k = k.BaseType)
                     mi = k.GetMethod(name, AnyM | BindingFlags.DeclaredOnly, null, args, null);
             if (mi == null) Miss(label);
+            return mi;
+        }
+
+        // A method without arguments (public or private), found quietly (no Miss): for optional members.
+        static MethodInfo QMe(Type t, string name)
+        {
+            MethodInfo mi = null;
+            if (t != null)
+                for (var k = t; k != null && mi == null && k != typeof(object); k = k.BaseType)
+                    mi = k.GetMethod(name, AnyM | BindingFlags.DeclaredOnly, null, Type.EmptyTypes, null);
             return mi;
         }
 
@@ -376,7 +391,6 @@ namespace SfMorph
         void Resolve(bool first)
         {
             if (first) { _missing.Clear(); Missing = ""; _bridgeLogged = false; }
-            _guardDead = false;      // members are looked up again: the guard re-evaluates (GuardTick turns itself off again if they are still missing)
             var tf = _facial.GetType();
             _mLv = M(tf, "ladyVoice_Function", "FacialFunction.ladyVoice_Function");
             _mSnd = M(tf, "sound_Function", "FacialFunction.sound_Function");
@@ -393,6 +407,11 @@ namespace SfMorph
             _miEyeOut = Me(tf, "ReactionFacialOut_Eye", "FacialFunction.ReactionFacialOut_Eye(float)", typeof(float));
             _mFacLib = M(tf, "dirtyTalk_Facial_Library", "FacialFunction.dirtyTalk_Facial_Library");
             _hasMoanFn = _miMoan != null; HasMoan = _hasMoanFn; HasBlink = _miBlink != null;
+            // optional (no Miss): how the game stops dirty talk when a moan breaks in
+            _miDtStop = QMe(tf, "DirtyTalkFacialAnimationStop");
+            _mSubtitle = Q(tf, "subtitle_Function");
+            _miSubHide = null;
+            try { var sub = _mSubtitle.Ok ? _mSubtitle.Get(_facial) : null; if (sub != null && !Dead(sub)) _miSubHide = QMe(sub.GetType(), "SubtitleHide"); } catch (Exception) { }
 
             _lv = _mLv.Get(_facial); _snd = _mSnd.Get(_facial); _bp = _mBp.Get(_facial); _gs = _mGs.Get(_facial); _sm = _mSm.Get(_facial);
             _anim = _mAnim.Get(_facial) as Animator;
@@ -460,7 +479,7 @@ namespace SfMorph
 
         void ResolveAudioMembers()
         {
-            _pPlaying = _pClip = _pPitch = _pVolume = _pBlend = _pRolloff = _pMin = _pMax = _pPlayAwake = _pGroup = _pClipLen = null;
+            _pPlaying = _pClip = _pPitch = _pVolume = _pBlend = _pRolloff = _pMin = _pMax = _pPlayAwake = _pGroup = _pClipLen = _pTime = null;
             _miPlay = _miStop = _miOneShot = null; _isPlayingFast = null;
             if (_tSrc == null) { Miss("AudioSource (no source found)"); return; }
             _pPlaying = _tSrc.GetProperty("isPlaying");
@@ -473,6 +492,7 @@ namespace SfMorph
             _pMax = _tSrc.GetProperty("maxDistance");
             _pPlayAwake = _tSrc.GetProperty("playOnAwake");
             _pGroup = _tSrc.GetProperty("outputAudioMixerGroup");
+            _pTime = _tSrc.GetProperty("time");
             _miPlay = _tSrc.GetMethod("Play", Type.EmptyTypes);
             _miStop = _tSrc.GetMethod("Stop", Type.EmptyTypes);
             foreach (var mi in _tSrc.GetMethods(BindingFlags.Instance | BindingFlags.Public))
@@ -755,6 +775,10 @@ namespace SfMorph
         }
 
         // The range of a shader Range property (Shader.GetPropertyRangeLimits through reflection: it only exists in newer Unity versions).
+        struct RangeInfo { public string Prop; public bool Ok; public float Lo, Hi; }
+        static readonly Dictionary<Shader, RangeInfo> _rangeCache = new Dictionary<Shader, RangeInfo>();
+
+        // Cached per Shader instance (the scan runs on every material swap and the property walk is reflection).
         static bool PropRange(Material m, string prop, out float lo, out float hi)
         {
             lo = 0f; hi = 1f;
@@ -762,6 +786,21 @@ namespace SfMorph
             {
                 var sh = m.shader;
                 if (sh == null) return false;
+                RangeInfo ri;
+                if (_rangeCache.TryGetValue(sh, out ri) && ri.Prop == prop) { if (ri.Ok) { lo = ri.Lo; hi = ri.Hi; } return ri.Ok; }
+                ri = new RangeInfo { Prop = prop, Ok = PropRangeScan(sh, prop, out lo, out hi), Lo = lo, Hi = hi };
+                _rangeCache[sh] = ri;
+                return ri.Ok;
+            }
+            catch (Exception) { }
+            return false;
+        }
+
+        static bool PropRangeScan(Shader sh, string prop, out float lo, out float hi)
+        {
+            lo = 0f; hi = 1f;
+            try
+            {
                 var t = typeof(Shader);
                 var mCount = t.GetMethod("GetPropertyCount", Type.EmptyTypes);
                 var mName = t.GetMethod("GetPropertyName", new[] { typeof(int) });
@@ -883,23 +922,27 @@ namespace SfMorph
                 Language = lang;
                 if (lang != _bankLang) { BuildLibrary(lang); HasMoan = _hasMoanFn || HasLibrary; }
                 DirtyTalkPause = Bool(_mDtPause, _lv);
-                DirtyTalkPlaying = Bool(_mDtPlaying, _lv) || Playing(_srcDirty);
+                // the game's dirtyTalkPlaying flag is sticky (only PlayDirtyTalk(bool) writes it, the timer path never clears it): only the source counts
+                DirtyTalkFlag = Bool(_mDtPlaying, _lv);
+                DirtyTalkPlaying = Playing(_srcDirty);
                 bool dlg = Bool(_mDialogue, _lv), kiss = Bool(_mKiss, _lv), dsrc = Playing(_srcDialogue);
                 SexFacialPlaying = Bool(_mSexFacial, _lv);
                 DialoguePlaying = dlg || kiss || dsrc;
                 DialogueWhy = dlg ? "dialogue" : kiss ? "kiss" : dsrc ? "dialogue audio" : "";
-                int mask = (dlg ? 1 : 0) | (kiss ? 2 : 0) | (dsrc ? 4 : 0) | (SexFacialPlaying ? 8 : 0);
-                if (mask != _gateMask && _now - _gateLogT >= 2f)
+                int mask = (dlg ? 1 : 0) | (kiss ? 2 : 0) | (dsrc ? 4 : 0);   // sexFacial flips constantly in sex mode: not a reason to log
+                if (mask != _gateMask && _now - _gateLogT >= 10f)
                 {
                     _gateMask = mask; _gateLogT = _now;
                     Log("voice gates: dialogue " + (dlg ? "on" : "off") + ", kiss " + (kiss ? "on" : "off") + ", dialogue audio " + (dsrc ? "on" : "off")
-                        + " (these block the voice); sexFacial " + (SexFacialPlaying ? "on" : "off") + " (blocks only caresses and grope)");
+                        + " (these block the voice); sexFacial " + (SexFacialPlaying ? "on" : "off") + " (blocks only caresses and grope), dirty-talk audio "
+                        + (DirtyTalkPlaying ? "on" : "off") + " (flag " + (DirtyTalkFlag ? "on" : "off") + ", sticky, ignored)");
                 }
                 FunctionPause = _mFPause.Ok ? Bool(_mFPause, _facial) : Bool(_mLvPause, _lv);
                 var layer = _mLayer.Ok ? _mLayer.Get(_facial) as string : null;
                 FacialLayer = layer ?? "";
                 FacialOff = layer != null && layer == "off";
                 MoanPlaying = Playing(_srcMoan);
+                MoanTail = MoanPlaying && TailSilent();
                 TouchReactionTime = Flt(_mTouchTime, _bp, 0f);
                 Desire = HasGauge && _gauge != null && !Dead(_gauge) ? Flt(_mDesire, _gauge, -1f) : -1f;
                 PitchTick();
@@ -936,13 +979,13 @@ namespace SfMorph
         }
 
         // ---- the game's eye reaction (FacialFunction.ReactionFacialEnter_Eye(k) now, ReactionFacialOut_Eye(k) 0.6-1.0 s later) ----
-        // level 1 soft, 2 hard, 3 too hard; k is a random id from public_DT_Lv<level>. True = the eye reaction is running (this call's or one
-        // already in progress). Both calls only act when the game's facialLayer allows ("on" / "eye").
-        public bool EyeReact(int level, out int k)
+        // level 1 soft, 2 hard, 3 too hard; k is a random id from public_DT_Lv<level>. True = the eye reaction is running (this call's, fresh = true, or one
+        // already in progress, fresh = false). Both calls only act when the game's facialLayer allows ("on" / "eye").
+        public bool EyeReact(int level, out int k, out bool fresh)
         {
-            k = -1;
+            k = -1; fresh = false;
             if (!Found || !HasEyeReact || !_hasEyeTrig || Dead(_facial)) return false;
-            if (_eyeOutAt > 0f) { k = _eyeK; return true; }
+            if (_eyeOutAt > 0f) { k = _eyeK; return true; }   // already in progress: not a new one
             if (FacialLayer != "on" && FacialLayer != "eye") return false;
             int[] ids = null;
             for (int d = 0; d < 3 && ids == null; d++)
@@ -958,6 +1001,7 @@ namespace SfMorph
                 _argInt[0] = k;
                 _miEyeIn.Invoke(_facial, _argInt);
                 _eyeK = k; _eyeOutAt = _now + 0.6f + UnityEngine.Random.value * 0.4f; _eyeResetAt = 0f;
+                fresh = true;
                 return true;
             }
             catch (Exception e) { LogOnce("eyein:" + e.GetType().Name, "ReactionFacialEnter_Eye threw " + (e.InnerException ?? e).Message); HasEyeReact = false; return false; }
@@ -994,6 +1038,7 @@ namespace SfMorph
             try
             {
                 RestorePitch();
+                _moanT0 = _now; _ownOneShot = false;
                 _miMoan.Invoke(_facial, null);
                 _moanFail = 0;
                 MarkTrigger();
@@ -1026,8 +1071,9 @@ namespace SfMorph
                 if (clip == null) return false;
                 if (!_pitchHold) _pitchBase = GetPitch(_srcMoan, 1f);
                 // like the game's DirtyTalkMoan: talking stops for the moan; a moan or breath still sounding is cut
-                if (stopDirty && _srcDirty != null && !Dead(_srcDirty) && _miStop != null && Playing(_srcDirty)) _miStop.Invoke(_srcDirty, null);
+                if (stopDirty) StopDirtyTalk();
                 if (_miStop != null && (Playing(_srcMoan) || _now < _ownEnd)) { _miStop.Invoke(_srcMoan, null); _ownEnd = 0f; OwnVoicePlaying = false; }
+                _moanT0 = _now; _ownOneShot = false;
                 _pClip.SetValue(_srcMoan, clip, null);
                 if (_pPitch != null) _pPitch.SetValue(_srcMoan, pitch, null);
                 _pitchHold = true; _pitchSet = pitch;
@@ -1040,11 +1086,57 @@ namespace SfMorph
             catch (Exception e) { LogOnce("moanclip:" + e.GetType().Name, "own moan clip failed: " + e.Message); return false; }
         }
 
+        // True when the moan source plays only the silent padding of a clip (the game pads its moan clips to about 4 s, so isPlaying stays
+        // true long after the voice is over): the audible part ends after min(clip length, 1.8 s). Our own breath one-shot is tracked by _ownEnd
+        // (the source's clip/time say nothing about a one-shot).
+        bool TailSilent()
+        {
+            if (_srcMoan == null || Dead(_srcMoan) || !Playing(_srcMoan)) return false;
+            try
+            {
+                if (_ownOneShot)
+                {
+                    if (_now - _ownT0 > 6f || _now < _ownT0) { _ownOneShot = false; return false; }   // stale (a clip of the game's started meanwhile)
+                    return _now >= _ownEnd;
+                }
+                float pitch = Mathf.Max(0.5f, GetPitch(_srcMoan, 1f));
+                float len = ClipLen(_pClip != null ? _pClip.GetValue(_srcMoan, null) as UnityEngine.Object : null);
+                if (len <= 0f) return false;
+                float limit = Mathf.Min(len / pitch, 1.8f), el;
+                if (_pTime != null) el = Convert.ToSingle(_pTime.GetValue(_srcMoan, null)) / pitch;
+                else el = _now - _moanT0;
+                return el >= limit;
+            }
+            catch (Exception) { return false; }
+        }
+
+        // Dirty talk stops the way the game does it when a moan breaks in: FacialFunction.DirtyTalkFacialAnimationStop() (stops the source and
+        // the talking face), the subtitle hidden; the raw Stop of the source only when that is not available or left the source playing.
+        void StopDirtyTalk()
+        {
+            if (_srcDirty == null || Dead(_srcDirty) || !Playing(_srcDirty)) return;
+            try
+            {
+                if (_miDtStop != null && _facial != null && !Dead(_facial))
+                {
+                    _miDtStop.Invoke(_facial, null);
+                    if (_miSubHide != null)
+                    {
+                        var sub = _mSubtitle != null && _mSubtitle.Ok ? _mSubtitle.Get(_facial) : null;
+                        if (sub != null && !Dead(sub)) _miSubHide.Invoke(sub, null);
+                    }
+                }
+            }
+            catch (Exception e) { LogOnce("dtstop:" + e.GetType().Name, "DirtyTalkFacialAnimationStop failed: " + (e.InnerException ?? e).Message); }
+            try { if (Playing(_srcDirty) && _miStop != null) _miStop.Invoke(_srcDirty, null); }
+            catch (Exception) { }
+        }
+
         // A strong hit cuts the moan or breath that is still sounding (before the game's MoanFunction starts its own).
         public void StopMoan()
         {
             if (!Found || _srcMoan == null || Dead(_srcMoan) || _miStop == null) return;
-            try { _miStop.Invoke(_srcMoan, null); _ownEnd = 0f; OwnVoicePlaying = false; MoanPlaying = false; }
+            try { _miStop.Invoke(_srcMoan, null); _ownEnd = 0f; OwnVoicePlaying = false; MoanPlaying = false; MoanTail = false; _ownOneShot = false; }
             catch (Exception e) { LogOnce("stopmoan", "stopping the moan source failed: " + e.Message); }
         }
 
@@ -1053,7 +1145,7 @@ namespace SfMorph
             try { return _pPitch != null ? Convert.ToSingle(_pPitch.GetValue(src, null)) : def; } catch (Exception) { return def; }
         }
 
-        void RestorePitch()
+        public void RestorePitch()
         {
             if (!_pitchHold) return;
             _pitchHold = false;
@@ -1075,14 +1167,19 @@ namespace SfMorph
             if (!Found || !HasBreath || _srcMoan == null || Dead(_srcMoan)) return false;
             try
             {
-                if (Playing(_srcMoan)) return false;
+                if (Playing(_srcMoan))
+                {
+                    if (!TailSilent()) return false;
+                    StopMoan();   // only the silent padding of the last clip is left: free
+                }
                 RestorePitch();
                 var clip = _breath.Pick();
                 if (clip == null) return false;
                 _argOneShot[0] = clip; _argOneShot[1] = BreathVolume;
                 _miOneShot.Invoke(_srcMoan, _argOneShot);
                 LastClip = clip; LastClipLength = ClipLen(clip);
-                _ownEnd = _now + LastClipLength;
+                _ownEnd = _now + Mathf.Min(LastClipLength, 1.8f);   // the game's clips are padded: the audible part is over by then
+                _ownT0 = _now; _ownOneShot = true;
                 OwnVoicePlaying = true;
                 return true;
             }
@@ -1207,6 +1304,383 @@ namespace SfMorph
                 Log(sb.ToString());
             }
             catch (Exception e) { LogOnce("slapdiag", "slap diagnostics failed: " + e.Message); }
+        }
+
+        // ======================================================================================================================
+        // Diagnose (the panel's button): one pass over ~3 s that logs what the audio and face chain looks like and plays a test tone, one of the
+        // game's slap clips and the "moan" trigger. A small state machine ticked from Reactions.Update (one step per tick, DiagAt = seconds from
+        // the start); everything is collected into one multi-line log entry "Reactions diagnose:" written at the end. Not used by anything else.
+        // ======================================================================================================================
+        public bool DiagBusy { get { return _dActive; } }
+        public bool DiagRan;
+        bool _dActive, _dSaved, _dTrig;
+        int _dStep; float _dT0;
+        StringBuilder _dSb;
+        Component _dListener;
+        Type _tLis;
+        UnityEngine.Object _dTone;
+        float _dBlend0, _dVol0, _dPitch0; object _dGroup0;
+        int[] _dHash; float[] _dWt;
+        static readonly float[] DiagAt = { 0f, 0.1f, 0.5f, 1.0f, 1.1f, 1.5f, 1.6f, 2.0f, 2.3f, 3.0f };
+
+        public void DiagStart(float now)
+        {
+            if (!Found || _dActive) return;
+            _dActive = true; _dStep = 0; _dT0 = now; _dTrig = false; _dSaved = false; _dListener = null; _dHash = null; _dWt = null;
+            _dSb = new StringBuilder("Reactions diagnose: start (diagnose)");
+        }
+
+        // Every frame; runs the next step when its time has come. The game link lost: the run ends where it is.
+        public void DiagTick(float now)
+        {
+            if (!_dActive) return;
+            if (!Found) { DiagEnd("aborted: the game link was lost"); return; }
+            float t = now - _dT0;
+            if (t < 0f) { _dT0 = now; t = 0f; }
+            if (_dStep < DiagAt.Length && t >= DiagAt[_dStep])
+            {
+                int s = _dStep++;
+                try { DiagStep(s); }
+                catch (Exception e) { D("step " + s + " failed: " + (e.InnerException ?? e).GetType().Name + " " + (e.InnerException ?? e).Message); }
+            }
+            if (_dStep >= DiagAt.Length) DiagEnd(null);
+        }
+
+        void D(string line) { if (_dSb != null) _dSb.Append("\n  (diagnose) ").Append(line); }
+
+        void DiagEnd(string why)
+        {
+            if (!_dActive) return;
+            _dActive = false;
+            try { DiagRestoreSfx(); } catch (Exception) { }
+            try { if (_dTrig && _anim != null && !Dead(_anim) && HasAnim) _anim.ResetTrigger(_hMoan); } catch (Exception) { }
+            _dTrig = false;
+            try { if (!ReferenceEquals(_dTone, null)) UnityEngine.Object.Destroy(_dTone); } catch (Exception) { }
+            _dTone = null; _dListener = null;
+            D(why ?? "done (test tone removed)");
+            DiagRan = true;
+            if (_dSb != null) Plugin.Log.LogInfo(_dSb.ToString());
+            _dSb = null;
+        }
+
+        static object Gp(object o, string name)
+        {
+            if (o == null) return null;
+            try
+            {
+                var t = o.GetType();
+                var p = t.GetProperty(name, BindingFlags.Instance | BindingFlags.Public);
+                if (p != null && p.CanRead && p.GetIndexParameters().Length == 0) return p.GetValue(o, null);
+                var f = t.GetField(name, BindingFlags.Instance | BindingFlags.Public);
+                if (f != null) return f.GetValue(o);
+            }
+            catch (Exception) { }
+            return null;
+        }
+
+        static object Sp(Type t, string name)
+        {
+            if (t == null) return null;
+            try
+            {
+                var p = t.GetProperty(name, BindingFlags.Static | BindingFlags.Public);
+                if (p != null && p.CanRead) return p.GetValue(null, null);
+            }
+            catch (Exception) { }
+            return null;
+        }
+
+        static string Sv(object v)
+        {
+            if (v == null) return "?";
+            if (v is float) return ((float)v).ToString("0.###");
+            if (v is bool) return (bool)v ? "yes" : "no";
+            var u = v as UnityEngine.Object;
+            if (!ReferenceEquals(u, null)) return u != null ? u.name : "(destroyed)";
+            return v.ToString();
+        }
+
+        static string Yn(bool b) { return b ? "yes" : "no"; }
+
+        string GroupOf(Behaviour src)
+        {
+            try { var g = _pGroup != null && src != null ? _pGroup.GetValue(src, null) as UnityEngine.Object : null; return g != null ? g.name : "none"; }
+            catch (Exception) { return "?"; }
+        }
+
+        string MixerOf(Behaviour src)
+        {
+            try { var g = _pGroup != null && src != null ? _pGroup.GetValue(src, null) as UnityEngine.Object : null; return g != null ? Sv(Gp(g, "audioMixer")) : "none"; }
+            catch (Exception) { return "?"; }
+        }
+
+        string LoadState(UnityEngine.Object clip) { return clip != null ? Sv(Gp(clip, "loadState")) : "no clip"; }
+
+        string ClipText(UnityEngine.Object clip)
+        {
+            if (clip == null) return "none";
+            return clip.name + " (" + ClipLen(clip).ToString("0.00") + " s, " + Sv(Gp(clip, "frequency")) + " Hz, " + Sv(Gp(clip, "channels")) + " ch, loadState " + LoadState(clip)
+                + ", preloadAudioData " + Sv(Gp(clip, "preloadAudioData")) + ", loadInBackground " + Sv(Gp(clip, "loadInBackground")) + ")";
+        }
+
+        Vector3 DiagFront(float d)
+        {
+            if (_dListener != null && !Dead(_dListener)) return _dListener.transform.position + _dListener.transform.forward * d;
+            return _herRoot != null ? _herRoot.position + Vector3.up : Vector3.zero;
+        }
+
+        void DiagStep(int s)
+        {
+            switch (s)
+            {
+                case 0:
+                    D("Time.timeScale " + Time.timeScale.ToString("0.###") + ", voice language " + Language);
+                    DiagListeners();
+                    DiagOurSource();
+                    DiagGameSources();
+                    DiagTone(1);
+                    break;
+                case 1:
+                    D("tone 1 (our source, 2D, no mixer group, volume 1) 0.1 s after Play: isPlaying " + Yn(Playing(_sfxSrc)) + ", source time " + Sv(Gp(_sfxSrc, "time"))
+                      + ", clip loadState " + LoadState(_dTone));
+                    break;
+                case 2:
+                    DiagRestoreSfx();
+                    break;
+                case 3:
+                    DiagTone(2);
+                    break;
+                case 4:
+                    D("tone 2 (game's sfx mixer group, 3D) 0.1 s after Play: isPlaying " + Yn(Playing(_sfxSrc)) + ", source time " + Sv(Gp(_sfxSrc, "time"))
+                      + ", clip loadState " + LoadState(_dTone));
+                    break;
+                case 5:
+                    DiagRestoreSfx();
+                    DiagSlap();
+                    break;
+                case 6:
+                    D("slap clip 0.1 s after PlayOneShot: our source isPlaying " + Yn(Playing(_sfxSrc)) + ", clip loadState " + LoadState(_dSlap));
+                    break;
+                case 7:
+                    DiagFace(true);
+                    break;
+                case 8:
+                    DiagFace(false);
+                    break;
+            }
+        }
+
+        // (a) listeners and global audio settings
+        void DiagListeners()
+        {
+            if (_tLis == null && _tSrc != null) _tLis = _tSrc.Assembly.GetType("UnityEngine.AudioListener");
+            if (_tLis == null) { D("AudioListener type not found"); return; }
+            var all = UnityEngine.Object.FindObjectsOfType(_tLis);
+            int enabled = 0;
+            var names = new StringBuilder();
+            for (int i = 0; i < all.Length; i++)
+            {
+                var b = all[i] as Behaviour;
+                if (b == null) continue;
+                bool en = b.enabled && b.gameObject.activeInHierarchy;
+                if (en) { enabled++; if (_dListener == null) _dListener = b; }
+                if (names.Length > 0) names.Append("; ");
+                var p = b.transform.position;
+                names.Append(b.gameObject.name).Append(en ? "" : " (disabled)").Append(" at ").Append(p.x.ToString("0.00")).Append(',').Append(p.y.ToString("0.00")).Append(',').Append(p.z.ToString("0.00"));
+            }
+            D("AudioListener: " + all.Length + " found, " + enabled + " enabled" + (names.Length > 0 ? " [" + names + "]" : "") + (enabled == 0 ? " (NO enabled listener: Unity plays nothing)" : enabled > 1 ? " (more than one enabled listener)" : ""));
+            D("AudioListener.pause " + Sv(Sp(_tLis, "pause")) + ", AudioListener.volume " + Sv(Sp(_tLis, "volume")));
+            var tAs = _tSrc.Assembly.GetType("UnityEngine.AudioSettings");
+            if (tAs == null) { D("AudioSettings type not found"); return; }
+            var sb = new StringBuilder("AudioSettings: outputSampleRate " + Sv(Sp(tAs, "outputSampleRate")) + ", speakerMode " + Sv(Sp(tAs, "speakerMode")));
+            try
+            {
+                var mc = tAs.GetMethod("GetConfiguration", BindingFlags.Static | BindingFlags.Public, null, Type.EmptyTypes, null);
+                var cfg = mc != null ? mc.Invoke(null, null) : null;
+                if (cfg != null)
+                {
+                    sb.Append(", configuration {");
+                    var fs = cfg.GetType().GetFields(BindingFlags.Instance | BindingFlags.Public);
+                    for (int i = 0; i < fs.Length; i++) sb.Append(i > 0 ? ", " : "").Append(fs[i].Name).Append(' ').Append(Sv(fs[i].GetValue(cfg)));
+                    sb.Append('}');
+                }
+            }
+            catch (Exception) { }
+            D(sb.ToString());
+        }
+
+        // (b) our slap source
+        void DiagOurSource()
+        {
+            if (!EnsureSfx()) { D("our sfx source: could NOT be created (" + (_tSrc == null ? "no AudioSource type" : _herRoot == null ? "no root" : _srcSfx == null ? "the game's sfx source is missing" : "AddComponent failed") + ")"); return; }
+            DiagSaveSfx();
+            string dist = "no listener";
+            if (_dListener != null && !Dead(_dListener)) dist = (_sfxSrc.transform.position - _dListener.transform.position).magnitude.ToString("0.00") + " m";
+            D("our sfx source: exists yes, activeInHierarchy " + Yn(_sfxSrc.gameObject.activeInHierarchy) + ", enabled " + Yn(_sfxSrc.enabled) + ", mute " + Sv(Gp(_sfxSrc, "mute"))
+              + ", volume " + Sv(Gp(_sfxSrc, "volume")) + ", spatialBlend " + Sv(Gp(_sfxSrc, "spatialBlend")) + ", minDistance " + Sv(Gp(_sfxSrc, "minDistance")) + ", maxDistance " + Sv(Gp(_sfxSrc, "maxDistance"))
+              + ", mixer group " + GroupOf(_sfxSrc) + ", mixer " + MixerOf(_sfxSrc) + ", distance to the listener (where the last slap was) " + dist + ", under " + _sfxGo.transform.parent.name);
+        }
+
+        // (c) the game's sources and the mixer
+        void DiagGameSources()
+        {
+            string[] nm = { "moan", "dirtyTalk", "sfx", "voice", "dialogue" };
+            Behaviour[] sr = { _srcMoan, _srcDirty, _srcSfx, _srcVoice, _srcDialogue };
+            for (int i = 0; i < sr.Length; i++)
+            {
+                var b = sr[i];
+                if (b == null || Dead(b)) { D("game source " + nm[i] + ": not found"); continue; }
+                UnityEngine.Object clip = null;
+                try { clip = _pClip != null ? _pClip.GetValue(b, null) as UnityEngine.Object : null; } catch (Exception) { }
+                D("game source " + nm[i] + ": enabled " + Yn(b.enabled) + ", activeInHierarchy " + Yn(b.gameObject.activeInHierarchy) + ", mute " + Sv(Gp(b, "mute")) + ", volume " + Sv(Gp(b, "volume"))
+                  + ", spatialBlend " + Sv(Gp(b, "spatialBlend")) + ", isPlaying " + Yn(Playing(b)) + ", clip " + (clip != null ? clip.name : "none") + ", mixer group " + GroupOf(b) + ", mixer " + MixerOf(b));
+            }
+            object mixer = null;
+            try
+            {
+                var g = _pGroup != null && _srcSfx != null ? _pGroup.GetValue(_srcSfx, null) : null;
+                mixer = g != null ? Gp(g, "audioMixer") : null;
+                if (mixer == null && _mMixer != null && _mMixer.Ok && _snd != null) mixer = _mMixer.Get(_snd);
+            }
+            catch (Exception) { }
+            if (mixer == null) { D("AudioMixer of the game's sfx source: not reachable"); return; }
+            var mi = mixer.GetType().GetMethod("GetFloat", new[] { typeof(string), typeof(float).MakeByRefType() });
+            if (mi == null) { D("AudioMixer " + Sv(mixer) + ": GetFloat not found"); return; }
+            var sb = new StringBuilder("AudioMixer " + Sv(mixer) + " exposed levels (dB): ");
+            string[] names = { "soundEffect", "voice", "moan", "Master", "master", "BGM", "bgm", "dirtyTalk", "system", "environment" };
+            for (int i = 0; i < names.Length; i++)
+            {
+                var a = new object[] { names[i], 0f };
+                var r = mi.Invoke(mixer, a);
+                sb.Append(i > 0 ? ", " : "").Append(names[i]).Append(' ').Append(r is bool && (bool)r ? ((float)a[1]).ToString("0.0") : "not exposed");
+            }
+            D(sb.ToString());
+        }
+
+        void DiagSaveSfx()
+        {
+            if (_dSaved || _sfxSrc == null || Dead(_sfxSrc)) return;
+            _dBlend0 = Convert.ToSingle(Gp(_sfxSrc, "spatialBlend") ?? 0.6f); _dVol0 = Convert.ToSingle(Gp(_sfxSrc, "volume") ?? 1f); _dPitch0 = Convert.ToSingle(Gp(_sfxSrc, "pitch") ?? 1f);
+            _dGroup0 = _pGroup != null ? _pGroup.GetValue(_sfxSrc, null) : null;
+            _dSaved = true;
+        }
+
+        // Our source stops and gets back what it had before the probe played on it.
+        void DiagRestoreSfx()
+        {
+            if (!_dSaved) return;
+            _dSaved = false;
+            if (_sfxSrc == null || Dead(_sfxSrc)) return;
+            if (_miStop != null) _miStop.Invoke(_sfxSrc, null);
+            if (_pClip != null) _pClip.SetValue(_sfxSrc, null, null);
+            if (_pBlend != null) _pBlend.SetValue(_sfxSrc, _dBlend0, null);
+            if (_pVolume != null) _pVolume.SetValue(_sfxSrc, _dVol0, null);
+            if (_pPitch != null) _pPitch.SetValue(_sfxSrc, _dPitch0, null);
+            if (_pGroup != null) _pGroup.SetValue(_sfxSrc, _dGroup0, null);
+        }
+
+        // (d) the test tone: 0.4 s, 660 Hz, mono, built here. which 1: on our source as 2D without a mixer group at volume 1; 2: through the game's
+        // sfx mixer group, 3D, 0.5 m in front of the listener.
+        void DiagTone(int which)
+        {
+            if (!EnsureSfx() || _pClip == null || _miPlay == null) { D("test tone " + which + ": no sound source to play on"); return; }
+            DiagSaveSfx();
+            if (_dTone == null)
+            {
+                const int rate = 44100, n = 17640, fade = 441;
+                var data = new float[n];
+                for (int i = 0; i < n; i++)
+                {
+                    float env = i < fade ? i / (float)fade : i >= n - fade ? (n - 1 - i) / (float)fade : 1f;
+                    data[i] = 0.5f * Mathf.Sin(2f * Mathf.PI * 660f * i / rate) * env;
+                }
+                var tClip = _pClip.PropertyType;
+                var create = tClip.GetMethod("Create", new[] { typeof(string), typeof(int), typeof(int), typeof(int), typeof(bool) });
+                var setData = tClip.GetMethod("SetData", new[] { typeof(float[]), typeof(int) });
+                if (create == null || setData == null) { D("test tone: AudioClip.Create / SetData not found"); return; }
+                _dTone = create.Invoke(null, new object[] { "SfDiagTone", n, 1, rate, false }) as UnityEngine.Object;
+                if (_dTone == null) { D("test tone: AudioClip.Create returned nothing"); return; }
+                object ok = setData.Invoke(_dTone, new object[] { data, 0 });
+                D("test tone created: SfDiagTone, " + n + " samples at " + rate + " Hz (0.4 s, 660 Hz, mono, not streaming), SetData " + Sv(ok) + ", loadState " + LoadState(_dTone));
+            }
+            if (which == 1)
+            {
+                if (_pBlend != null) _pBlend.SetValue(_sfxSrc, 0f, null);
+                if (_pGroup != null) _pGroup.SetValue(_sfxSrc, null, null);
+                _sfxGo.transform.localPosition = Vector3.zero;
+            }
+            else
+            {
+                var grp = _pGroup != null && _srcSfx != null ? _pGroup.GetValue(_srcSfx, null) : null;
+                if (_pBlend != null) _pBlend.SetValue(_sfxSrc, 1f, null);
+                if (_pGroup != null) _pGroup.SetValue(_sfxSrc, grp, null);
+                _sfxGo.transform.position = DiagFront(0.5f);
+            }
+            if (_pVolume != null) _pVolume.SetValue(_sfxSrc, 1f, null);
+            if (_pPitch != null) _pPitch.SetValue(_sfxSrc, 1f, null);
+            _pClip.SetValue(_sfxSrc, _dTone, null);
+            _miPlay.Invoke(_sfxSrc, null);
+            D("tone " + which + " played: " + (which == 1 ? "on our source, 2D (spatialBlend 0), no mixer group, volume 1, at her root" : "on our source through the game's sfx mixer group '" + GroupOf(_srcSfx) + "', 3D, volume 1, 0.5 m in front of the listener"));
+        }
+
+        UnityEngine.Object _dSlap;
+
+        // (e) one game slap clip on our source the way the slap path plays it
+        void DiagSlap()
+        {
+            if (!EnsureSfx() || _miOneShot == null) { D("slap clip: no sound source to play on"); return; }
+            DiagSaveSfx();
+            var clip = (_slapHard.Count > 0 ? _slapHard : _slapSoft).Pick();
+            _dSlap = clip;
+            if (clip == null) { D("slap clip: none in the library (HasSfx " + Yn(HasSfx) + ")"); return; }
+            string before = ClipText(clip);
+            _sfxGo.transform.position = DiagFront(0.5f);
+            if (_pPitch != null) _pPitch.SetValue(_sfxSrc, 1f, null);
+            _argOneShot[0] = clip; _argOneShot[1] = 1f;
+            _miOneShot.Invoke(_sfxSrc, _argOneShot);
+            D("slap clip played with PlayOneShot(clip, 1) on our source (0.5 m in front of the listener, spatialBlend " + Sv(Gp(_sfxSrc, "spatialBlend")) + ", group " + GroupOf(_sfxSrc) + "): before " + before + "; right after loadState " + LoadState(clip));
+        }
+
+        // (f) the face: layers, flags and what "moan" changes. before: first snapshot and the trigger; else the changes 0.3 s later and the reset.
+        void DiagFace(bool before)
+        {
+            if (before)
+            {
+                D("face flags: facialLayer '" + FacialLayer + "', functionPause " + Yn(FunctionPause) + ", sexMode " + (_mSexMode != null && _mSexMode.Ok ? Sv(Peek(_mSexMode, _sm)) : "?") + ", foreplayMode " + (_mForeplay != null && _mForeplay.Ok ? Sv(Peek(_mForeplay, _sm)) : "?")
+                  + ", dialoguePlaying " + Yn(DialoguePlaying) + ", dirtyTalkPause " + Yn(DirtyTalkPause) + ", voiceIsOn " + Yn(VoiceOn) + ", HasAnim(moan) " + Yn(HasAnim));
+            }
+            if (_anim == null || Dead(_anim)) { D("Animator: not available"); return; }
+            if (before)
+            {
+                D("Animator " + _anim.gameObject.name + ": controller " + Sv(_anim.runtimeAnimatorController) + ", enabled " + Yn(_anim.enabled) + ", speed " + _anim.speed.ToString("0.##") + ", layers " + _anim.layerCount);
+            }
+            int ln = _anim.layerCount, changed = 0;
+            if (before) { _dHash = new int[ln]; _dWt = new float[ln]; }
+            for (int i = 0; i < ln; i++)
+            {
+                var st = _anim.GetCurrentAnimatorStateInfo(i);
+                float w = _anim.GetLayerWeight(i);
+                if (before)
+                {
+                    _dHash[i] = st.fullPathHash; _dWt[i] = w;
+                    D("layer " + i + " '" + _anim.GetLayerName(i) + "': weight " + w.ToString("0.##") + ", state " + st.fullPathHash + ", normalizedTime " + st.normalizedTime.ToString("0.00") + (_anim.IsInTransition(i) ? ", in transition" : ""));
+                }
+                else if (_dHash != null && i < _dHash.Length && (_dHash[i] != st.fullPathHash || Mathf.Abs(_dWt[i] - w) > 0.01f))
+                {
+                    changed++;
+                    D("layer " + i + " '" + _anim.GetLayerName(i) + "' CHANGED by the trigger: state " + _dHash[i] + " -> " + st.fullPathHash + ", weight " + _dWt[i].ToString("0.##") + " -> " + w.ToString("0.##"));
+                }
+            }
+            if (before)
+            {
+                if (HasAnim) { _anim.SetTrigger(_hMoan); _dTrig = true; D("Animator trigger 'moan' set"); }
+                else D("Animator has no 'moan' trigger: not set");
+            }
+            else
+            {
+                if (changed == 0) D("0.3 s after SetTrigger('moan'): no layer changed its state or weight");
+                if (_dTrig) { _anim.ResetTrigger(_hMoan); _dTrig = false; D("Animator trigger 'moan' reset"); }
+            }
         }
 
         // ======================================================================================================================
@@ -1336,12 +1810,11 @@ namespace SfMorph
             if (!on)
             {
                 if (_guardSub) { try { Application.logMessageReceived -= _logCb; } catch (Exception) { } _guardSub = false; }
-                GuardStatus = "off";
+                SetGuardStatus("off");
                 return;
             }
             if (!_guardSub) { try { Application.logMessageReceived += _logCb; _guardSub = true; } catch (Exception e) { LogOnce("guardsub", "voice guard: log hook failed: " + e.Message); } }
-            if (!Found) { GuardStatus = "waiting for the game"; return; }
-            if (_guardDead) return;
+            if (!Found) { SetGuardStatus("waiting for the game"); return; }
             try
             {
                 int ms = Ms();
@@ -1349,12 +1822,12 @@ namespace SfMorph
                 {
                     if (unchecked(ms - _backoffUntilMs) < 0) return;
                     _guardBackoff = false; _repaired = false; Interlocked0();
-                    GuardStatus = "watching";
+                    _gsVer = -1;
                 }
                 if (_repaired && System.Threading.Volatile.Read(ref _errAfter) > 20 && unchecked(ms - _lastRepairMs) < 2000)
                 {
                     _guardBackoff = true; _backoffUntilMs = unchecked(ms + 60000);
-                    GuardStatus = "repairs don't stop the error, left alone for 60 s";
+                    SetGuardStatus("repairs don't stop the error, left alone for 60 s");
                     Log("voice guard: repairs don't stop the error (" + _errAfter + " exceptions within 2 s of a repair), leaving it for 60 s. " + GuardDump("state"));
                     return;
                 }
@@ -1374,12 +1847,29 @@ namespace SfMorph
             if (lv == null || Dead(lv))
             {
                 // not there (yet): not a verdict. The 2 s tick re-resolves when the object appears.
-                GuardStatus = "waiting for the game's voice object";
+                SetGuardStatus("waiting for the game's voice object");
                 return;
             }
             if (!_dtDead) GuardDirty(err, ms, lv);
             GuardSfx(serr, ms, lv);
-            if (_sfxRepairs > 0 && !GuardStatus.StartsWith("off")) GuardStatus += "; sound-effect shuffle repaired " + _sfxRepairs + " times";
+            // the shown text is rebuilt only when the dirty-talk part or the sound-effect repair count changed
+            if (_gsVer != _dtVer || _gsSfx != _sfxRepairs)
+            {
+                _gsVer = _dtVer; _gsSfx = _sfxRepairs;
+                GuardStatus = _sfxRepairs > 0 && !_dtStatus.StartsWith("off") ? _dtStatus + "; sound-effect shuffle repaired " + _sfxRepairs + " times" : _dtStatus;
+            }
+        }
+
+        // A status that does not come from the dirty-talk part (waiting, off, backoff): shown as it is until the next change of the real one.
+        void SetGuardStatus(string s) { GuardStatus = s; _gsVer = -1; }
+
+        // The dirty-talk part's text, built by the caller only when this says its inputs (case, count) changed.
+        bool DtChanged(int code, int n)
+        {
+            int key = code * 100003 + n;
+            if (key == _dtStKey) return false;
+            _dtStKey = key; _dtVer++;
+            return true;
         }
 
         // ---- the dirty-talk shuffle ----
@@ -1387,18 +1877,18 @@ namespace SfMorph
         {
             if (!_mDtActive.Ok || !_mDtList.Ok || !_mDtVoice.Ok || !_mDtNum.Ok || !_mRandSeq.Ok)
             {
-                _dtDead = true; GuardStatus = "off: the game's dirty-talk members were not found";
+                _dtDead = true; _dtStatus = "off: the game's dirty-talk members were not found"; _dtVer++;
                 LogOnce("guarddead", "voice guard: off (dirty-talk members missing: " + Missing + ")");
                 return;
             }
             int R = Int(_mRandSeq, lv, 0);
             if (R < 1 || R > 64)
             {
-                _dtDead = true; GuardStatus = "off: randomSequence is " + R;
+                _dtDead = true; _dtStatus = "off: randomSequence is " + R; _dtVer++;
                 LogOnce("guardR", "voice guard: off (randomSequence " + R + " is outside 1..64)");
                 return;
             }
-            if (!Bool(_mDtActive, lv)) { GuardStatus = _repairs == 0 ? "watching (dirty talk idle)" : "watching, repaired " + _repairs + " times"; return; }
+            if (!Bool(_mDtActive, lv)) { if (DtChanged(1, _repairs)) _dtStatus = _repairs == 0 ? "watching (dirty talk idle)" : "watching, repaired " + _repairs + " times"; return; }
             var list = _mDtList.Get(lv) as Array;
             int len = list != null ? list.Length : 0;
             int n = Int(_mDtNum, lv, -1);
@@ -1408,7 +1898,7 @@ namespace SfMorph
                 // an empty list throws in the shuffle every time the timer fires: never let it fire
                 if (_mDtSpeed.Ok && Flt(_mDtSpeed, lv, 3f) < 1f) _mDtSpeed.Set(lv, 3f);
                 LogOnce("guardempty", "voice guard: the dirty-talk list is empty while active, holding its timer (type " + (_mDtType.Get(lv) as string) + ")");
-                GuardStatus = "dirty-talk list empty, timer held";
+                if (DtChanged(2, _repairs)) _dtStatus = "dirty-talk list empty, timer held";
                 return;
             }
             string why = null;
@@ -1416,7 +1906,7 @@ namespace SfMorph
             else if (n < 0 && len < R) why = "list of " + len + " is shorter than the shuffle window " + R;
             if (why == null)
             {
-                GuardStatus = _repairs == 0 ? "watching" : "watching, repaired " + _repairs + " times";
+                if (DtChanged(3, _repairs)) _dtStatus = _repairs == 0 ? "watching" : "watching, repaired " + _repairs + " times";
                 if (err) LogOnce("guardvalid", "voice guard: PlayRandomVoice threw but the state looks valid. " + GuardDump("state"));
                 return;
             }
@@ -1435,7 +1925,7 @@ namespace SfMorph
             _mDtNum.Set(lv, R - 1);
             _repairs++; _repairsSinceLog++; _repaired = true; _lastRepairMs = ms;
             System.Threading.Interlocked.Exchange(ref _errAfter, 0);
-            GuardStatus = "repaired " + _repairs + " times (last: " + why + ")";
+            DtChanged(4, _repairs); _dtVer++; _dtStatus = "repaired " + _repairs + " times (last: " + why + ")";
             if (dump != null) { _guardLoggedFirst = true; _repairLogMs = ms; _repairsSinceLog = 0; Log("voice guard: " + why + ", rebuilt the dirty-talk shuffle. " + dump); }
             else if (unchecked(ms - _repairLogMs) >= 10000) { _repairLogMs = ms; Log("voice guard: " + _repairsSinceLog + " more repair(s) in the last 10 s (last: " + why + "), " + _errTotal + " exceptions seen in all"); _repairsSinceLog = 0; }
         }
@@ -1594,6 +2084,7 @@ namespace SfMorph
         // unsubscribes the log handler and forgets the session (Refresh finds everything again).
         public void Release()
         {
+            if (_dActive) DiagEnd("aborted: the bridge was released");
             ReleaseHeld();
             if (_guardSub) { try { Application.logMessageReceived -= _logCb; } catch (Exception) { } _guardSub = false; }
             try { if (_sfxGo != null) UnityEngine.Object.Destroy(_sfxGo); } catch (Exception) { }
@@ -1603,23 +2094,25 @@ namespace SfMorph
             _anim = null; _herRoot = null;
             _srcMoan = _srcDirty = _srcDialogue = _srcSfx = _srcVoice = null; _tSrc = null;
             _isPlayingFast = null; _gazeGet = null; _gazeSet = null; _mGazeW = null;
-            _miMoan = _miBlink = _miDesirePlus = null;
+            _miMoan = _miBlink = _miDesirePlus = _miDtStop = _miSubHide = null; _mSubtitle = null;
             for (int i = 0; i < _moanBanks.Length; i++) _moanBanks[i].Clips = null;
             _breath.Clips = null; _slapHard.Clips = null; _slapSoft.Clips = null; _bankLang = -1;
             _eyeOutAt = 0f; _eyeResetAt = 0f; _eyeIds[0] = _eyeIds[1] = _eyeIds[2] = null; HasEyeReact = false; _hasEyeTrig = false; _eyeText = "";
             _miEyeIn = _miEyeOut = null; _mMixer = null; _slapDiag = false; _blushSig = ""; _gateMask = 0; _gateLogT = -100f;
             DialogueWhy = ""; SexFacialPlaying = false; SlapBanks = "";
-            _bm.Clear(); _bmSrc.Clear(); _bmFirst.Clear(); BlushFaceCount = BlushBodyCount = 0;
+            _bm.Clear(); _bmSrc.Clear(); _bmFirst.Clear(); BlushFaceCount = BlushBodyCount = 0; _rangeCache.Clear();
             _hasMoanFn = false;
             HasMoan = HasLibrary = HasBreath = HasSfx = HasBlush = HasGaze = HasGauge = HasAnim = HasBlink = false;
-            InSexMode = VoiceOn = SfxOn = BreakSystemOn = DirtyTalkPlaying = DialoguePlaying = DirtyTalkPause = FunctionPause = FacialOff = MoanPlaying = OwnVoicePlaying = false;
+            InSexMode = VoiceOn = SfxOn = BreakSystemOn = DirtyTalkPlaying = DirtyTalkFlag = DialoguePlaying = DirtyTalkPause = FunctionPause = FacialOff = MoanPlaying = MoanTail = OwnVoicePlaying = false;
+            _ownOneShot = false;
             FacialLayer = ""; TouchReactionTime = 0f; Desire = -1f;
             LastClip = null; LastSlapClip = null; LastClipLength = 0f;
             _gateT = -100f; _nextFind = 0f; _nextSlow = 0f; _nextSet = 0f; _ownEnd = 0f; _moanFail = 0; _moanOffUntil = 0f;
             _bridgeLogged = false; BridgeLine = "";
             _pitchHold = false; _gHold = false; _trigSet = false;
-            _guardDead = false; _dtDead = false; _guardBackoff = false; _repaired = false; _voiceErr = false; _sfxErr = false; _seMems.Clear();
-            GuardStatus = "off";
+            _dtDead = false; _guardBackoff = false; _repaired = false; _voiceErr = false; _sfxErr = false; _seMems.Clear();
+            _dtStatus = "off"; _dtStKey = -1; _gsVer = -1;
+            SetGuardStatus("off");
         }
     }
 }

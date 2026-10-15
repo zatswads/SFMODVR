@@ -145,6 +145,7 @@ namespace SfMorph
             if (_g.Found && !_bridgeLogged) { _bridgeLogged = true; if (_g.BridgeLine != null && _g.BridgeLine.Length > 0) L(_g.BridgeLine); }
             else if (!_g.Found) _bridgeLogged = false;       // a re-found bridge is logged again
             _g.Pump(_now);
+            _g.DiagTick(_now);                                       // the Diagnose button's state machine (idle unless it was pressed)
             _g.Guard(s.VoiceGuard, _now);
             GuardStatus = _g.GuardStatus != null ? _g.GuardStatus : "";
             if (_resetAt > 0f && _now >= _resetAt) { _resetAt = 0f; _g.ResetMoan(); }
@@ -182,6 +183,17 @@ namespace SfMorph
             }
         }
 
+        // ---- the Diagnose button (see ReactionsGame.DiagStart) ----
+        public bool BridgeFound { get { return _g.Found; } }
+        public bool DiagBusy { get { return _g.DiagBusy; } }
+        public bool DiagRan { get { return _g.DiagRan; } }
+        public void Diagnose()
+        {
+            if (!_g.Found) { L("diagnose: her game link is not found yet"); return; }
+            if (_g.DiagBusy) return;
+            _g.DiagStart(_now);
+        }
+
         // Gives back everything we changed (blush, look-at weight, the guard's hooks) and forgets the session.
         public void Release()
         {
@@ -202,6 +214,7 @@ namespace SfMorph
             if (_resetAt > 0f) { _resetAt = 0f; try { _g.ResetMoan(); } catch { } }
             if (_blushSent) { _blushSent = false; _g.SetBlush(0f, 0f); }
             if (_gazeSent) { _gazeSent = false; _g.SetGaze(0f); }
+            try { _g.RestorePitch(); } catch { }                       // the moan source gets its own pitch back
             _blushCur = 0f; _away = 0f;
         }
 
@@ -302,7 +315,7 @@ namespace SfMorph
                 _r[gi].LowT = low ? _r[gi].LowT + dt : 0f;
                 if (_r[gi].LowT >= 0.5f) _r[gi].Pressed = false;
                 bool fired = false;
-                if (pressing && _r[gi].PressT >= 0.25f && !_r[gi].Pressed && _now - _zGrope[zone] >= 2f && _now - _zArr[zone] >= 0.5f)
+                if (pressing && _r[gi].PressT >= 0.25f && !_r[gi].Pressed && _now - _zGrope[zone] >= 2f && _now - _zArr[zone] >= 0.5f && !Pending(zone))
                 {
                     _r[gi].Pressed = true; _zGrope[zone] = _now; fired = true;
                     if (ZoneGain[zone][1] > 0f)
@@ -327,11 +340,21 @@ namespace SfMorph
         }
 
         // A slap arrival of this frame: held until the whole frame was seen (the swing touches several segments at once).
+        // One hit per zone: two segments of one zone in the same frame are compared and the faster one stays (the zone's arrival cooldown is
+        // written in FireHits, for the hit that fires).
         void Collect(int zone, HerBody.Seg g, int tier, float I, Vector3 pt, Vector3 dir, string by, float v, float force)
         {
-            _zArr[zone] = _now;
+            var h = new Hit { Zone = zone, G = g, Tier = tier, I = I, V = v, Force = force, Pt = pt, Dir = dir, By = by };
+            for (int i = 0; i < _nHits; i++)
+                if (_hits[i].Zone == zone) { if (v > _hits[i].V) _hits[i] = h; return; }
             if (_nHits >= _hits.Length) return;
-            _hits[_nHits++] = new Hit { Zone = zone, G = g, Tier = tier, I = I, V = v, Force = force, Pt = pt, Dir = dir, By = by };
+            _hits[_nHits++] = h;
+        }
+
+        bool Pending(int zone)
+        {
+            for (int i = 0; i < _nHits; i++) if (_hits[i].Zone == zone) return true;
+            return false;
         }
 
         // The strongest hit of the frame is voiced, heard and winced; the others of the same swing only move her (excitement, pain, flinch, blush).
@@ -340,6 +363,7 @@ namespace SfMorph
             if (_nHits == 0) return;
             int best = 0;
             for (int i = 1; i < _nHits; i++) if (_hits[i].V > _hits[best].V) best = i;
+            for (int i = 0; i < _nHits; i++) _zArr[_hits[i].Zone] = _now;
             for (int pass = 0; pass < 2; pass++)
                 for (int i = 0; i < _nHits; i++)
                 {
@@ -453,23 +477,26 @@ namespace SfMorph
             // flinch, slap sound, blush, gaze, the game's desire
             if (tier >= 3)
             {
-                if (s.Flinch) DoFlinch(zone, g, tier, I, pt, dir, wasGuarded, false);
+                float Ie = Mathf.Max(I, 0.1f);   // a weak tap is not voiced (rule above on the raw I) but still moves her and reddens a little
+                if (s.Flinch) DoFlinch(zone, g, tier, Ie, pt, dir, wasGuarded, false);
                 if (s.Sound && !_quiet) DoSlap(tier, I, pt, false);
                 if (s.Blush)
                 {
-                    float add = FlushAdd[tier] * I * (zone == ZFace ? 2f : 1f);
+                    float add = FlushAdd[tier] * Ie * (zone == ZFace ? 2f : 1f);
                     _flush = Mathf.Min(0.65f, _flush + add);
                     Note("blush +" + (add * s.BlushGain).ToString("0.00"));
                 }
                 if (s.Gaze && (tier >= 4 || wasGuarded)) _gazeHold = Mathf.Max(_gazeHold, _now + (tier >= 5 ? 1.5f : 0.4f));
             }
-            if (s.FeedDesire && (tier >= 2 || (tier == 1 && Tier >= 2)) && _g.InSexMode && _now - _lastDesireT >= 3f) { _lastDesireT = _now; _g.FeedDesire(); Note("desire"); }
+            // the game's desire: groping and slaps (every 3 s); a caress only once she is well aroused (excitement tier 3) and every 6 s
+            if (s.FeedDesire && (tier >= 2 || (tier == 1 && Tier >= 3)) && _g.InSexMode && _now - _lastDesireT >= (tier == 1 ? 6f : 3f)) { _lastDesireT = _now; _g.FeedDesire(); Note("desire"); }
 
             if (s.AutoState && s.AllowClimax && E >= 1f && State != RState.Climax && State != RState.Afterglow) EnterClimax();
 
             // log
-            _evN++;
-            bool logIt = s.Log >= 2 || (s.Log == 1 && (test || _evN <= 20 || _evN % 10 == 0));
+            // (only the voiced best hit of a swing is the event: the quiet ones of the same swing show up in the log at Log 2 only)
+            if (!_quiet) _evN++;
+            bool logIt = _quiet ? s.Log >= 2 : s.Log >= 2 || (s.Log == 1 && (test || _evN <= 20 || _evN % 10 == 0));
             if (logIt)
             {
                 _sb.Length = 0;
@@ -484,7 +511,8 @@ namespace SfMorph
                 L(_sb.ToString());
             }
 
-            // the panel's "last:" line (built per event only)
+            // the panel's "last:" line (built per event only, for the best hit of a swing)
+            if (_quiet) return;
             _last.Length = 0;
             _last.Append("last: ").Append(TierNames[tier]).Append(" on ").Append(ZoneNames[zone]).Append(" by ").Append(by != null ? by : "a hand");
             if (test) _last.Append(" (test)");
@@ -515,7 +543,8 @@ namespace SfMorph
             bool cut = tier >= 4 && I >= 0.5f;
             if (!slap && _g.SexFacialPlaying) return "sex facial";
             if (!slap && _g.DirtyTalkPause) return "dirty talk pause";
-            if ((_g.MoanPlaying || _g.OwnVoicePlaying) && !cut) return "moan playing";   // our breath one-shot is invisible to the source's isPlaying
+            // the game pads its moan clips to 4 s: a source with only the silent tail left (MoanTail) is free; our breath one-shot is invisible to the source's isPlaying
+            if (((_g.MoanPlaying && !_g.MoanTail) || _g.OwnVoicePlaying) && !cut) return "moan playing";
             if (_g.DirtyTalkPlaying && (breath || tier <= 2)) return "dirty talk";
             if (gap)
             {
@@ -538,10 +567,11 @@ namespace SfMorph
             int bank = Tier <= 1 ? 0 : Tier <= 3 ? 1 : 2;
             float pitch = 1f + (Rand() * 2f - 1f) * _s.VoicePitchVar;
             bool pause = _g.DirtyTalkPause, sex = _g.InSexMode;
-            // outside sex / foreplay mode our own clip plays and the Animator "moan" trigger is not set (it could stay queued there)
+            // outside sex / foreplay mode our own clip plays and the Animator "moan" trigger is set too (the lips move; the 1 s reset in
+            // ReactionsGame stops it from staying queued)
             bool viaGame = sex && !pause && (_s.VoiceMode == 0 || _g.DirtyTalkPlaying);   // MoanFunction does nothing while the pause is up
-            if (cut && (_g.MoanPlaying || _g.OwnVoicePlaying)) _g.StopMoan();
-            bool ok = viaGame ? _g.Moan() : _g.MoanClip(bank, pitch, _g.DirtyTalkPlaying, sex);
+            if ((cut || _g.MoanTail) && (_g.MoanPlaying || _g.OwnVoicePlaying)) _g.StopMoan();   // a cut, or only the silent padding of the last clip is left
+            bool ok = viaGame ? _g.Moan() : _g.MoanClip(bank, pitch, _g.DirtyTalkPlaying, true);
             if (!ok) ok = viaGame ? _g.MoanClip(bank, pitch, _g.DirtyTalkPlaying, true) : (sex && !pause && _g.Moan());
             if (ok)
             {
@@ -553,14 +583,15 @@ namespace SfMorph
         }
 
         // The face (design 3.2): the game's own eye reaction (ReactionFacialEnter_Eye / _Out_Eye with an id from its dirty-talk face library:
-        // soft / hard / too hard), also under a moan; without it (not found, or the face layer does not allow it) a wince on hard hits or a blink on
-        // soft ones, when no moan carries the face. The feeling loops (sexFacialPlaying) do not stop it.
+        // soft / hard / too hard), also under a moan, and alongside it a wince on hard hits or a blink on soft ones when no moan carries the
+        // face. The feeling loops (sexFacialPlaying) do not stop it.
         void DoFace(int tier, float I, bool voiced)
         {
             if (!_g.Found || _g.FunctionPause || _g.DialoguePlaying || _g.FacialLayer == "off" || _now - _lastFaceT < 0.5f) return;
-            int k;
-            if (_g.EyeReact(tier >= 5 ? 3 : tier >= 4 ? 2 : 1, out k)) { _lastFaceT = _now; Note("eye reaction " + k); return; }
-            if (voiced) return;
+            int k; bool fresh;
+            // the eye reaction runs alongside the wince / blink, not instead of it (the game never calls its own exit, ours does at 0.6-1.0 s)
+            if (_g.EyeReact(tier >= 5 ? 3 : tier >= 4 ? 2 : 1, out k, out fresh)) { _lastFaceT = _now; if (fresh) Note("eye reaction " + k); }
+            if (voiced) return;                                      // a moan carries the face (the Animator "moan" trigger comes with it)
             if (tier >= 4 && I >= 0.3f && _g.InSexMode) { if (_g.WinceTrigger()) { _lastFaceT = _now; _resetAt = _now + 1f; Note("wince"); } }
             else if (_g.Blink()) { _lastFaceT = _now; Note("blink"); }
         }
@@ -569,8 +600,8 @@ namespace SfMorph
         bool FaceSoft(int level)
         {
             if (!_g.Found || _g.FunctionPause || _g.DialoguePlaying || _g.FacialLayer == "off" || _now - _lastFaceT < 0.5f) { Note("face skipped (paused or busy)"); return false; }
-            int k;
-            if (_g.EyeReact(level, out k)) { _lastFaceT = _now; Note("eye reaction " + k); return true; }
+            int k; bool fresh;
+            if (_g.EyeReact(level, out k, out fresh)) { _lastFaceT = _now; if (fresh) Note("eye reaction " + k); return true; }
             if (_g.Blink()) { _lastFaceT = _now; Note("blink"); return true; }
             Note("face skipped (no eye reaction or blink)");
             return false;

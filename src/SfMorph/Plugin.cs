@@ -108,7 +108,7 @@ namespace SfMorph
             ReactVoice = Config.Bind("Reactions", "Voice", true, "She moans in reaction (the game's moan in sex or foreplay mode, her own clips and breaths elsewhere; never over dialogue or dirty talk).");
             ReactVoiceMode = Config.Bind("Reactions", "VoiceMode", 0, new ConfigDescription("0 the game picks the moan, 1 a moan chosen by intensity from her voice library.", new AcceptableValueRange<int>(0, 1)));
             ReactVoicePitchVar = Config.Bind("Reactions", "VoicePitchVar", 0.04f, new ConfigDescription("Random pitch change of the moans chosen by intensity (plus/minus).", new AcceptableValueRange<float>(0f, 0.15f)));
-            ReactFace = Config.Bind("Reactions", "Face", true, "Her face reacts (wince, blink) when there is no voice.");
+            ReactFace = Config.Bind("Reactions", "Face", true, "Her face reacts to touch: the game's own eye reaction on slaps (and soft ones on caresses and gropes), with a wince or blink alongside when no moan carries the face.");
             ReactFlinch = Config.Bind("Reactions", "Flinch", true, "Her body swings and her soft zones jiggle after a slap (needs the limb push slider above 0).");
             ReactSound = Config.Bind("Reactions", "Sound", true, "A slap sound at the spot of a slap.");
             ReactVolume = Config.Bind("Reactions", "Volume", 0.6f, new ConfigDescription("Slap sound volume.", new AcceptableValueRange<float>(0f, 1f)));
@@ -120,13 +120,14 @@ namespace SfMorph
             ReactConfigRev = Config.Bind("Reactions", "ConfigRev", 0, new ConfigDescription("Internal: one-time config migrations already applied. Do not change.", new AcceptableValueRange<int>(0, 100), "Advanced"));
             ReactAuto = Config.Bind("Reactions", "AutoState", true, "States (aroused, startled, guarded, afterglow) change by themselves.");
             ReactClimax = Config.Bind("Reactions", "AllowClimax", false, "At full excitement she climaxes (cosmetic: three moans, then afterglow).");
-            VoiceGuard = Config.Bind("Reactions", "VoiceGuard", true, "Repair the game's dirty-talk voice error (IndexOutOfRange in PlayRandomVoice every frame). Works without Reactions.");
+            VoiceGuard = Config.Bind("Reactions", "VoiceGuard", true, "Repair the game's voice shuffle errors (IndexOutOfRange / NullReference in PlayRandomVoice, for dirty talk and the sex sound effects) by rebuilding the stale shuffle. Works without Reactions.");
             ReactLog = Config.Bind("Reactions", "Log", 1, new ConfigDescription("0 quiet, 1 the first 20 events then every 10th, 2 every event.", new AcceptableValueRange<int>(0, 2)));
             // one-time migration: FeedDesire used to default to false; the game's own escalating face follows its desire gauge, so it is switched on once
             if (ReactConfigRev.Value < 1)
             {
+                bool wasOff = !ReactFeedDesire.Value;
                 ReactFeedDesire.Value = true; ReactConfigRev.Value = 1;
-                Logger.LogInfo("Config migration: [Reactions] FeedDesire turned on (revision 1)");
+                if (wasOff) Logger.LogInfo("Config migration: [Reactions] FeedDesire turned on (revision 1)");
             }
             Logger.LogInfo("SF Body Morphs " + Version + ": panel on " + PanelKey.Value + ", looks in " + Store.Dir);
             // The game destroys plugin components; a hidden object of our own keeps running.
