@@ -251,7 +251,7 @@ namespace SfMorph
             GUILayout.FlexibleSpace();
             GUILayout.EndHorizontal();
             if (pickNone && c.Look.Morph != null) { c.Look.Morph = null; _body.Touch(c); }
-            if (pick != null && c.Look.Morph != pick) { c.Look.Morph = pick; c.Look.MorphFace = 1f; c.Look.MorphBody = 1f; _body.Touch(c); }
+            if (pick != null && c.Look.Morph != pick) { c.Look.Morph = pick; c.Look.MorphFace = 1f; c.Look.MorphBody = 1f; c.Look.ResetMorphExtras(); _body.Touch(c); }
             if (all.Count == 0)
                 GUILayout.Label("off: no converted characters yet. Export her (Presets tab) and a VaM character (SfExport plugin), then run tools/pipeline/run.ps1.", _off);
             if (GUILayout.Button("Rescan the folder", GUILayout.Width(160))) MorphSet.Rescan();
@@ -354,10 +354,52 @@ namespace SfMorph
             if (faceOnly) { c.Look.MorphFace = 1f; c.Look.MorphBody = 0f; c.Look.MorphSkin = true; c.Look.MorphSkinBody = false; _body.Touch(c); }
             else if (full) { c.Look.MorphFace = 1f; c.Look.MorphBody = 1f; c.Look.MorphSkin = true; c.Look.MorphSkinBody = true; _body.Touch(c); }
             GUILayout.Label("Facial likeness only: Body 0 %, Face 100 %, face skin on, body skin off.", _hint);
+            BodySliders(c, set, two);
             if (!_p.Apply.Value) GUILayout.Label("off: 'Apply changes' is off", _off);
             else if (c.Morph.Status.Length > 0) GUILayout.Label(c.Morph.Status, c.Morph.Status.StartsWith("off") ? _off : _hint);
             GUILayout.Label("Clothes follow the skin by its nearest vertex and are pushed out where the new shape would poke through. " +
                             "Her height stays the game's (the VaM character is scaled to her eye height), so scenes still line up.", _hint);
+        }
+
+        // Body sliders (VaM morphs exported with the character), joint correctives, skin tone and gloss. The sliders scale with Body.
+        void BodySliders(Character c, MorphSet set, bool two)
+        {
+            GUILayout.Space(6);
+            GUILayout.Label("Body sliders", _bold);
+            // decided once, before any control: the same controls in the Layout pass and the click pass
+            const string reexport = "re-export the character from VaM with Export morphs, then run the pipeline";
+            bool haveSliders = set != null && set.Sliders.Count > 0, haveJcm = set != null && set.Jcms.Count > 0;
+            string slidersOff = !haveSliders ? "off: this character has no body slider data (" + reexport + ")"
+                              : c.Look.MorphBody <= 0f ? "off: Body is 0 % (the sliders scale with it)" : null;
+            if (haveSliders)
+                foreach (var sd in set.Sliders)
+                {
+                    float s;
+                    if (!c.Look.Sliders.TryGetValue(sd.Name, out s)) s = sd.S0;
+                    float nv = Slider(sd.Name, s, 0f, 1f, "0.00", sd.S0, slidersOff);
+                    if (slidersOff == null && Mathf.Abs(nv - s) > 0.0001f)
+                    {
+                        if (Mathf.Abs(nv - sd.S0) < 0.005f) c.Look.Sliders.Remove(sd.Name); else c.Look.Sliders[sd.Name] = nv;
+                        _body.Touch(c);
+                    }
+                }
+            else GUILayout.Label("    " + slidersOff, _off);
+            float tone = Slider("Skin tone", c.Look.SkinTone, -0.1f, 0.1f, "+0.00;-0.00;0", 0f);
+            if (Mathf.Abs(tone - c.Look.SkinTone) > 0.0001f) { c.Look.SkinTone = Mathf.Abs(tone) < 0.0025f ? 0f : tone; _body.Touch(c); }
+            float gloss = Slider("Gloss", c.Look.Gloss, 0f, 2f, "0.00", 1f);
+            if (Mathf.Abs(gloss - c.Look.Gloss) > 0.0001f) { c.Look.Gloss = Mathf.Abs(gloss - 1f) < 0.01f ? 1f : gloss; _body.Touch(c); }
+            GUI.enabled = haveJcm;
+            bool jcm = GUILayout.Toggle(c.Look.MorphJcm, " Joint correctives (shapes that grow as her joints bend)");
+            bool angles = GUILayout.Toggle(c.Morph.ShowAngles, " Show corrective angles (log, once a second)");
+            GUI.enabled = true;
+            if (haveJcm)
+            {
+                if (jcm != c.Look.MorphJcm) { c.Look.MorphJcm = jcm; _body.Touch(c); }
+                if (angles != c.Morph.ShowAngles) c.Morph.ShowAngles = angles;
+            }
+            else GUILayout.Label("    off: this character has no corrective data (" + reexport + ")", _off);
+            GUILayout.Label("Sliders move a body area away from the character's own default (Reset goes back to it). " +
+                            "Skin tone lightens or darkens the skin tint; gloss scales its shininess.", _hint);
         }
 
         void HandsSection(Character c)

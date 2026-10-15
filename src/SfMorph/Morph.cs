@@ -21,7 +21,18 @@ namespace SfMorph
         public readonly HashSet<string> Skin = new HashSet<string>();
         public readonly HashSet<string> Hide = new HashSet<string>();     // original mesh names to switch off while she is active
         public readonly List<string[]> Textures = new List<string[]>();   // material, kind (albedo/normal), file
+        // 'slider <name> <s0> <file>' and 'jcm <file> <her bone> <child bone> <n> <rest> <theta0> <angle>': body sliders and joint
+        // correctives exported from VaM morphs (shape.<name>.txt files, loaded when the clones are built).
+        public readonly List<SliderDef> Sliders = new List<SliderDef>();
+        public readonly List<JcmDef> Jcms = new List<JcmDef>();
+        public readonly List<string> JcmShapes = new List<string>();     // distinct jcm files in first-use order: one blendshape each
+        public bool HasShapeData { get { return Sliders.Count > 0 || Jcms.Count > 0; } }
+        // Blendshape count of a clone: 0 body, 1 face, then (plus, minus) per slider, then one per corrective file.
+        public int ShapeCount { get { return 2 + 2 * Sliders.Count + JcmShapes.Count; } }
         Texture2D _thumb; bool _thumbTried;
+        readonly Dictionary<string, ShapeFile> _shapes = new Dictionary<string, ShapeFile>();
+        readonly HashSet<string> _badShapes = new HashSet<string>();
+        HashSet<string> _skinMats;
         Dictionary<string, Vector3> _joints;
         readonly Dictionary<string, MeshMorph> _cache = new Dictionary<string, MeshMorph>();
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
@@ -33,6 +44,9 @@ namespace SfMorph
             var s = new MorphSet { Dir = dir, Name = Path.GetFileName(dir) };
             foreach (var raw in File.ReadAllLines(path))
             {
+                // slider/jcm lines are read whole: tab or space separated, the slider name may hold spaces ('Body Type')
+                if (raw.StartsWith("slider ") || raw.StartsWith("slider\t")) { try { s.ParseSlider(raw.Substring(7)); } catch (Exception e) { Plugin.Log.LogWarning(path + ": '" + raw + "': " + e.Message); } continue; }
+                if (raw.StartsWith("jcm ") || raw.StartsWith("jcm\t")) { try { s.ParseJcm(raw.Substring(4)); } catch (Exception e) { Plugin.Log.LogWarning(path + ": '" + raw + "': " + e.Message); } continue; }
                 var f = raw.Split('\t');
                 if (f.Length < 2 || f[0].StartsWith("#")) continue;
                 int n;
@@ -48,6 +62,83 @@ namespace SfMorph
                 }
             }
             return s;
+        }
+
+        static readonly char[] Ws = { ' ', '\t' };
+
+        // '<name> <s0> <file>' (tab separated, or spaces with the file and s0 last)
+        void ParseSlider(string body)
+        {
+            string name, file; float s0;
+            body = body.Trim();
+            if (body.IndexOf('\t') >= 0)
+            {
+                var p = body.Split(new[] { '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                if (p.Length < 3) throw new Exception("slider needs name, s0 and file");
+                name = p[0].Trim(); file = p[2].Trim();
+                if (!float.TryParse(p[1].Trim(), NumberStyles.Float, Inv, out s0)) throw new Exception("bad s0");
+            }
+            else
+            {
+                var p = body.Split(Ws, StringSplitOptions.RemoveEmptyEntries);
+                if (p.Length < 3) throw new Exception("slider needs name, s0 and file");
+                file = p[p.Length - 1];
+                if (!float.TryParse(p[p.Length - 2], NumberStyles.Float, Inv, out s0)) throw new Exception("bad s0");
+                name = string.Join(" ", p, 0, p.Length - 2);
+            }
+            Sliders.Add(new SliderDef { Name = name, S0 = s0, File = file });
+        }
+
+        // '<file> <her bone> <child bone> nx ny nz rx ry rz theta0 angle' (any mix of tabs and spaces)
+        void ParseJcm(string body)
+        {
+            var p = body.Split(Ws, StringSplitOptions.RemoveEmptyEntries);
+            if (p.Length < 11) throw new Exception("jcm needs file, two bones and 8 numbers");
+            var v = new float[8];
+            for (int i = 0; i < 8; i++) if (!float.TryParse(p[3 + i], NumberStyles.Float, Inv, out v[i])) throw new Exception("bad number '" + p[3 + i] + "'");
+            var normal = new Vector3(v[0], v[1], v[2]);
+            if (normal.sqrMagnitude < 1e-12f) throw new Exception("zero plane normal");
+            normal.Normalize();
+            var rest = Vector3.ProjectOnPlane(new Vector3(v[3], v[4], v[5]), normal);
+            if (rest.sqrMagnitude < 1e-12f) throw new Exception("rest direction lies along the normal");
+            if (Mathf.Abs(v[7]) < 1e-4f) throw new Exception("angle is 0");
+            int shape = JcmShapes.IndexOf(p[0]);
+            if (shape < 0) { shape = JcmShapes.Count; JcmShapes.Add(p[0]); }
+            Jcms.Add(new JcmDef { File = p[0], Her = p[1], Child = p[2], Normal = normal, Rest = rest.normalized, Theta0 = v[6], AngleDeg = v[7], Shape = shape });
+        }
+
+        // A shape.<name>.txt, read once (null when missing or unreadable; warned once).
+        public ShapeFile Shape(string file)
+        {
+            ShapeFile sf;
+            if (_shapes.TryGetValue(file, out sf)) return sf;
+            if (_badShapes.Contains(file)) return null;
+            var p = Path.Combine(Dir, file);
+            try
+            {
+                if (!File.Exists(p)) { _badShapes.Add(file); Plugin.Log.LogWarning("Character " + Name + ": missing " + p + "; its shape stays flat"); return null; }
+                sf = ShapeFile.Read(p);
+                _shapes[file] = sf;
+                return sf;
+            }
+            catch (Exception e)
+            {
+                _badShapes.Add(file);
+                Plugin.Log.LogWarning("Character " + Name + ": couldn't read " + p + " (" + e.Message + "); its shape stays flat");
+                return null;
+            }
+        }
+
+        // Names of her skin materials this character has textures for: where Skin Tone and Gloss apply.
+        public HashSet<string> SkinMaterials
+        {
+            get
+            {
+                if (_skinMats != null) return _skinMats;
+                _skinMats = new HashSet<string>();
+                foreach (var t in Textures) _skinMats.Add(t[0]);
+                return _skinMats;
+            }
         }
 
         public Texture2D Thumb
@@ -150,6 +241,72 @@ namespace SfMorph
         }
     }
 
+    internal class SliderDef { public string Name, File; public float S0; }
+
+    // A joint corrective: its blendshape (File) grows as the child bone swings in the plane (Normal) away from Rest, from Theta0 to Theta0 + AngleDeg.
+    // Normal, Rest in the parent bone's local space (Rest is already projected on the plane and normalised). Shape = index among MorphSet.JcmShapes.
+    internal class JcmDef
+    {
+        public string File, Her, Child; public Vector3 Normal, Rest; public float Theta0, AngleDeg; public int Shape;
+    }
+
+    // Sparse per-vertex deltas ('i dx dy dz nx ny nz'); Total = the vertex count its header gave.
+    internal class Sparse { public int Total; public int[] I; public Vector3[] D, N; }
+
+    // shape.<name>.txt: blocks 'mesh <name> <vertexCount>' and 'skin <count>' each followed by sparse delta lines.
+    internal class ShapeFile
+    {
+        public readonly Dictionary<string, Sparse> Meshes = new Dictionary<string, Sparse>();
+        public Sparse Skin;   // deltas of the welded skin reference (indices in skin.txt order): what clothes follow
+
+        class Builder
+        {
+            public string Mesh; public int Total; public bool IsSkin;
+            public readonly List<int> I = new List<int>(); public readonly List<Vector3> D = new List<Vector3>(), N = new List<Vector3>();
+        }
+
+        static readonly char[] Ws = { ' ', '\t' };
+
+        public static ShapeFile Read(string path)
+        {
+            var inv = CultureInfo.InvariantCulture;
+            var sf = new ShapeFile();
+            Builder cur = null;
+            foreach (var raw in File.ReadAllLines(path))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line[0] == '#') continue;
+                var t = line.Split(Ws, StringSplitOptions.RemoveEmptyEntries);
+                if (t[0] == "mesh" && t.Length >= 3) { sf.Finish(cur); cur = new Builder { Mesh = t[1] }; int.TryParse(t[2], NumberStyles.Integer, inv, out cur.Total); continue; }
+                if (t[0] == "skin" && t.Length >= 2) { sf.Finish(cur); cur = new Builder { IsSkin = true }; int.TryParse(t[1], NumberStyles.Integer, inv, out cur.Total); continue; }
+                if (cur == null || t.Length < 4) continue;
+                int i;
+                if (!int.TryParse(t[0], NumberStyles.Integer, inv, out i) || i < 0) continue;
+                cur.I.Add(i);
+                cur.D.Add(new Vector3(float.Parse(t[1], inv), float.Parse(t[2], inv), float.Parse(t[3], inv)));
+                cur.N.Add(t.Length >= 7 ? new Vector3(float.Parse(t[4], inv), float.Parse(t[5], inv), float.Parse(t[6], inv)) : Vector3.zero);
+            }
+            sf.Finish(cur);
+            return sf;
+        }
+
+        void Finish(Builder b)
+        {
+            if (b == null) return;
+            var sp = new Sparse { Total = b.Total, I = b.I.ToArray(), D = b.D.ToArray(), N = b.N.ToArray() };
+            if (b.IsSkin) Skin = sp; else Meshes[b.Mesh] = sp;
+        }
+    }
+
+    internal enum ShapeKind { Body, Face, SliderPlus, SliderMinus, Jcm }
+
+    // One blendshape of a clone: its index, what it is, and the slider / corrective name (the file for a corrective; empty for body and face).
+    internal struct ShapeInfo
+    {
+        public int Index; public ShapeKind Kind; public string Name;
+        public ShapeInfo(int index, ShapeKind kind, string name) { Index = index; Kind = kind; Name = name; }
+    }
+
     internal class MeshMorph
     {
         public Vector3[] D, N;
@@ -180,10 +337,17 @@ namespace SfMorph
         }
 
         // The shape as Unity blendshapes on a clone. With head weights: shape 0 'body' = D*(1-H), shape 1 'face' = D*H
-        // (shape 0 stays the body, which SoftZones reads); without: one shape. Returns whether it has two.
+        // (shape 0 stays the body, which SoftZones reads); without head weights shape 0 ("SfMorph single") is the whole delta, driven by
+        // Face, and shape 1 is an empty placeholder so the layout (body, face, sliders, correctives) is the same for every character.
+        // Returns whether the two shapes are really split.
         public static bool AddFrames(Mesh clone, string name, Vector3[] d, Vector3[] n, float[] h)
         {
-            if (h == null || h.Length != d.Length) { clone.AddBlendShapeFrame("SfMorph " + name, 100f, d, n, null); return false; }
+            if (h == null || h.Length != d.Length)
+            {
+                clone.AddBlendShapeFrame(MorphState.SingleShape, 100f, d, n, null);
+                clone.AddBlendShapeFrame(MorphState.FaceShape, 100f, new Vector3[d.Length], new Vector3[d.Length], null);
+                return false;
+            }
             var bd = new Vector3[d.Length]; var bn = new Vector3[d.Length]; var fd = new Vector3[d.Length]; var fn = new Vector3[d.Length];
             for (int k = 0; k < d.Length; k++)
             {
@@ -191,8 +355,8 @@ namespace SfMorph
                 bd[k] = d[k] * (1f - hv); fd[k] = d[k] * hv;
                 if (n != null && k < n.Length) { bn[k] = n[k] * (1f - hv); fn[k] = n[k] * hv; }
             }
-            clone.AddBlendShapeFrame("SfMorph body", 100f, bd, bn, null);
-            clone.AddBlendShapeFrame("SfMorph face", 100f, fd, fn, null);
+            clone.AddBlendShapeFrame(MorphState.BodyShape, 100f, bd, bn, null);
+            clone.AddBlendShapeFrame(MorphState.FaceShape, 100f, fd, fn, null);
             return true;
         }
     }
@@ -210,10 +374,64 @@ namespace SfMorph
             public Matrix4x4[] Bind;       // the original bind poses
             public Matrix4x4 ToMesh;       // common bind space -> this mesh's space (identity for her own meshes)
             public string Kind;            // "morph" or "follow"
-            public bool Two;               // the clone has two blendshapes: 0 = body, 1 = face (else one, driven by Face)
-            public float Weight = -1f, Weight1 = -1f, BindWeight = -1f;   // last weights set on shapes 0 and 1
+            public bool Two;               // shapes 0/1 are split body/face (else shape 0 is the whole delta, driven by Face, and shape 1 is empty)
+            public float BindWeight = -1f;
+            public float[] W;              // last weight (0..100) set on each shape, -1 = unknown: only changes are written
         }
         class Saved { public Texture Tex; public bool Keyword; }
+        class JcmRt { public JcmDef D; public Transform Bone, Child, Parent; public float T, Angle; }
+
+        // ---- the shape layout of a clone (fixed): 0 body, 1 face, then per slider "+" and "-", then one per corrective file ----
+        // The layout is carried by the shape names, so it survives SoftZones/Subdiv extending the same Mesh object.
+        public const string BodyShape = "SfMorph body", FaceShape = "SfMorph face", SingleShape = "SfMorph single";
+        const string PlusPrefix = "SfMorph slider+ ", MinusPrefix = "SfMorph slider- ", JcmPrefix = "SfMorph jcm ";
+        class LayoutInfo { public int Count; public bool Split; public List<ShapeInfo> Shapes; }
+        static readonly Dictionary<Mesh, LayoutInfo> _layouts = new Dictionary<Mesh, LayoutInfo>();
+        static readonly List<ShapeInfo> NoShapes = new List<ShapeInfo>();
+
+        static LayoutInfo Layout(Mesh m)
+        {
+            if (m == null) return null;
+            int n = m.blendShapeCount;
+            LayoutInfo li;
+            if (_layouts.TryGetValue(m, out li) && li.Count == n) return li;
+            li = new LayoutInfo { Count = n, Shapes = new List<ShapeInfo>() };
+            for (int i = 0; i < n; i++)
+            {
+                var name = m.GetBlendShapeName(i);
+                if (name == null || !name.StartsWith("SfMorph ")) { li.Shapes = NoShapes; break; }   // not one of ours (the game's own shapes)
+                if (name == BodyShape) { li.Split = true; li.Shapes.Add(new ShapeInfo(i, ShapeKind.Body, "")); }
+                else if (name == SingleShape) li.Shapes.Add(new ShapeInfo(i, ShapeKind.Body, ""));
+                else if (name == FaceShape) li.Shapes.Add(new ShapeInfo(i, ShapeKind.Face, ""));
+                else if (name.StartsWith(PlusPrefix)) li.Shapes.Add(new ShapeInfo(i, ShapeKind.SliderPlus, name.Substring(PlusPrefix.Length)));
+                else if (name.StartsWith(MinusPrefix)) li.Shapes.Add(new ShapeInfo(i, ShapeKind.SliderMinus, name.Substring(MinusPrefix.Length)));
+                else if (name.StartsWith(JcmPrefix)) li.Shapes.Add(new ShapeInfo(i, ShapeKind.Jcm, name.Substring(JcmPrefix.Length)));
+            }
+            _layouts[m] = li;
+            return li;
+        }
+
+        // What each blendshape of one of our clones is (index, kind, name); empty for any other mesh. Read-only: don't modify the list.
+        public static List<ShapeInfo> ShapeLayout(Mesh clone)
+        {
+            var li = Layout(clone);
+            return li != null ? li.Shapes : NoShapes;
+        }
+
+        // The renderer's current weight of one shape, in 0..1 (the weights are 0..100).
+        public static float ShapeWeight(SkinnedMeshRenderer r, ShapeInfo s) { return r.GetBlendShapeWeight(s.Index) / 100f; }
+
+        // The summed current weights (0..1 each) of the shapes that change the rest shape: body, face and the slider +/- shapes,
+        // never the joint correctives (those follow the pose). 0 for a mesh that isn't one of our clones.
+        public static float NonJcmSum(SkinnedMeshRenderer r)
+        {
+            if (r == null) return 0f;
+            var shapes = ShapeLayout(r.sharedMesh);
+            float sum = 0f;
+            for (int i = 0; i < shapes.Count; i++)
+                if (shapes[i].Kind != ShapeKind.Jcm) sum += r.GetBlendShapeWeight(shapes[i].Index) / 100f;
+            return sum;
+        }
 
         readonly Dictionary<SkinnedMeshRenderer, Slot> _slots = new Dictionary<SkinnedMeshRenderer, Slot>();
         readonly Dictionary<Mesh, Mesh> _clones = new Dictionary<Mesh, Mesh>();       // original -> clone, per set
@@ -233,6 +451,17 @@ namespace SfMorph
         bool _texOn;
         int _texKey;   // which skins are on: 1 = face, 2 = body
         float _nextCheck;
+        // body sliders / correctives / skin look
+        float[] _want;                                       // per shape: the weight (0..100) every clone wants, except shapes 0/1 (per slot)
+        readonly List<JcmRt> _jcm = new List<JcmRt>();
+        float[] _jcmSum = new float[0];
+        float _nextAngleLog;
+        public bool ShowAngles;                              // 'Show corrective angles': log the drivers once a second
+        float _tone, _gloss = 1f, _toneApplied = float.NaN, _glossApplied = float.NaN;
+        bool _skinDirty;
+        readonly HashSet<Material> _white = new HashSet<Material>();                       // skin materials whose tint WhiteTint made white
+        readonly Dictionary<Material, Dictionary<string, float>> _savedFloat = new Dictionary<Material, Dictionary<string, float>>();
+        static readonly HashSet<string> _loggedJcm = new HashSet<string>(), _loggedNoGloss = new HashSet<string>();
         string _status = "";
         public string Status
         {
@@ -252,6 +481,7 @@ namespace SfMorph
             float face = set != null ? Mathf.Clamp01(look.MorphFace) : 0f;
             float body = set != null ? Mathf.Clamp01(look.MorphBody) : 0f;
             if (set == null || (face <= 0f && body <= 0f)) { Release(); JointWeight = 0f; return; }
+            _tone = Mathf.Clamp(look.SkinTone, -0.1f, 0.1f); _gloss = Mathf.Clamp(look.Gloss, 0f, 2f);
 
             string why = set != _set ? "character picked" : _builtFor == null ? "shape back on" : !SameList(_builtFor, c.Renderers) ? RendererChange(c) : null;
             if (why == null)
@@ -264,11 +494,13 @@ namespace SfMorph
             {
                 _nextCheck = Time.unscaledTime + 2f;
                 if (_texOn) ApplyTextures(c, set, _texKey);  // re-apply if DefaultSetting() put its own back
+                _skinDirty = true;                           // and the tone and gloss the same way
             }
             if (rebuild) Build(c, set);
 
             bool joints = look.MorphJoints;
             JointWeight = joints ? face : 0f;   // joint offsets are face joints only (eyes, jaw)
+            ComputeWeights(set, look, body);    // sliders (cached) and correctives (every frame) -> _want, scaled by Body
             foreach (var kv in _slots)
             {
                 var r = kv.Key; var s = kv.Value;
@@ -278,14 +510,17 @@ namespace SfMorph
                 {
                     SetBind(r, s, set, bw); s.BindWeight = bw;
                     r.sharedMesh = s.Clone;  // make sure the renderer picks up the new bind poses
-                    s.Weight = -1f; s.Weight1 = -1f;
+                    for (int i = 0; i < s.W.Length; i++) s.W[i] = -1f;
                 }
-                float w0 = s.Two ? body : face, w1 = s.Two ? face : 0f;   // two shapes: 0 body, 1 face; one shape: Face
-                if (s.Weight != w0 || s.Weight1 != w1)
+                int count = Mathf.Min(s.W.Length, _want.Length);
+                for (int i = 0; i < count; i++)
                 {
-                    r.SetBlendShapeWeight(0, w0 * 100f);
-                    if (s.Two) r.SetBlendShapeWeight(1, w1 * 100f);
-                    s.Weight = w0; s.Weight1 = w1;
+                    // 0 body, 1 face; a single-shape character drives shape 0 by Face and leaves 1 empty
+                    float w = i == 0 ? (s.Two ? body : face) * 100f : i == 1 ? (s.Two ? face : 0f) * 100f : _want[i];
+                    float last = s.W[i];
+                    if (last == w || (w != 0f && Mathf.Abs(last - w) < 0.01f)) continue;   // correctives move a little every frame: skip the noise
+                    r.SetBlendShapeWeight(i, w);
+                    s.W[i] = w;
                 }
             }
             HideMeshes(c, set);
@@ -296,10 +531,81 @@ namespace SfMorph
                 if (_texOn) RestoreTextures();
                 _texOn = key != 0; _texKey = key;
                 if (_texOn) ApplyTextures(c, set, key);
+                _skinDirty = true;
             }
+            if (_skinDirty || _tone != _toneApplied || _gloss != _glossApplied) ApplySkinLook(c, set);
         }
 
         string _why = "";
+
+        // ---- body sliders and joint correctives ----
+
+        // Fills _want (per shape, 0..100) for the shapes past body/face: sliders from the look, correctives from her bones this frame.
+        // Both scale with Body. Layout: 2 + 2i / 3 + 2i = slider i plus / minus, then the corrective shapes.
+        void ComputeWeights(MorphSet set, Look look, float body)
+        {
+            int n = set.ShapeCount;
+            if (_want == null || _want.Length != n) _want = new float[n];
+            for (int i = 0; i < set.Sliders.Count; i++)
+            {
+                var sd = set.Sliders[i];
+                float s;
+                if (!look.Sliders.TryGetValue(sd.Name, out s)) s = sd.S0;
+                _want[2 + 2 * i] = Mathf.Max(0f, s - sd.S0) * 100f * body;
+                _want[3 + 2 * i] = Mathf.Max(0f, sd.S0 - s) * 100f * body;
+            }
+            int j0 = 2 + 2 * set.Sliders.Count;
+            if (_jcmSum.Length != set.JcmShapes.Count) _jcmSum = new float[set.JcmShapes.Count];
+            if (_jcm.Count > 0) UpdateJcm(look.MorphJcm);
+            for (int j = 0; j < _jcmSum.Length; j++) _want[j0 + j] = _jcmSum[j] * 100f * body;
+        }
+
+        // Each corrective's driver: the child bone's direction (relative to her bone, in the parent bone's local space) projected on the
+        // joint's plane, its signed angle from the rest direction minus theta0, over the range, smoothed. Sums per shape into _jcmSum.
+        void UpdateJcm(bool on)
+        {
+            Array.Clear(_jcmSum, 0, _jcmSum.Length);
+            float dt = Mathf.Min(Time.unscaledDeltaTime, 0.1f);
+            float k = 1f - Mathf.Exp(-dt * 12f);
+            bool log = ShowAngles && Time.unscaledTime >= _nextAngleLog;
+            StringBuilder sb = null;
+            if (log) { _nextAngleLog = Time.unscaledTime + 1f; sb = new StringBuilder("Corrective angles:"); }
+            foreach (var rt in _jcm)
+            {
+                float t = 0f;
+                if (rt.Bone != null && rt.Child != null)
+                {
+                    var dir = rt.Child.position - rt.Bone.position;
+                    if (rt.Parent != null) dir = rt.Parent.InverseTransformDirection(dir);
+                    dir = Vector3.ProjectOnPlane(dir, rt.D.Normal);
+                    if (dir.sqrMagnitude > 1e-12f)
+                    {
+                        rt.Angle = Vector3.SignedAngle(rt.D.Rest, dir, rt.D.Normal) - rt.D.Theta0;
+                        if (on) t = Mathf.Clamp01(rt.Angle / rt.D.AngleDeg);
+                    }
+                }
+                rt.T = Mathf.Lerp(rt.T, t, k);
+                if (rt.D.Shape < _jcmSum.Length) _jcmSum[rt.D.Shape] += rt.T;
+                if (sb != null) sb.Append(' ').Append(rt.D.File).Append('=').Append(rt.Angle.ToString("0.#", CultureInfo.InvariantCulture)).Append("deg(t=").Append(rt.T.ToString("0.00", CultureInfo.InvariantCulture)).Append(')');
+            }
+            if (sb != null) Plugin.Log.LogInfo(sb.ToString());
+        }
+
+        // Her bone transforms for the correctives (by name; the ones she doesn't have are skipped, logged once).
+        void ResolveJcm(Character c, MorphSet set)
+        {
+            _jcm.Clear();
+            foreach (var d in set.Jcms)
+            {
+                Transform bone, child;
+                if (!c.Bones.TryGetValue(d.Her, out bone) || !c.Bones.TryGetValue(d.Child, out child))
+                {
+                    if (_loggedJcm.Add(set.Name + "|" + d.File + "|" + d.Her)) Plugin.Log.LogInfo("Corrective '" + d.File + "' needs bones '" + d.Her + "' and '" + d.Child + "'; not both on her, skipped");
+                    continue;
+                }
+                _jcm.Add(new JcmRt { D = d, Bone = bone, Child = child, Parent = bone.parent });
+            }
+        }
 
         // 'hide' lines: meshes of the game's woman the character replaces (by original mesh name) are switched off while
         // she is active. Only renderers we switched off are touched again; the game's own enabled state is left alone.
@@ -400,6 +706,7 @@ namespace SfMorph
                 {
                     clone = Clone(orig, d);
                     MeshMorph.AddFrames(clone, set.Name, mm.D, mm.N, mm.H);
+                    AddExtraShapes(clone, set, orig.name, d, false, null, Matrix4x4.identity);
                     _clones[orig] = clone;
                 }
                 Use(r, orig, clone, d, Matrix4x4.identity, "morph");
@@ -424,18 +731,26 @@ namespace SfMorph
                     skin.Follow(d.Pos, d.Nrm, toSkin, out fd, out fn, out fh, out fhn);
                     if (fh != null)   // body part (with the push-out) and face part
                     {
-                        clone.AddBlendShapeFrame("SfMorph body", 100f, fd, fn, null);
-                        clone.AddBlendShapeFrame("SfMorph face", 100f, fh, fhn, null);
+                        clone.AddBlendShapeFrame(BodyShape, 100f, fd, fn, null);
+                        clone.AddBlendShapeFrame(FaceShape, 100f, fh, fhn, null);
                     }
-                    else clone.AddBlendShapeFrame("SfMorph " + set.Name, 100f, fd, fn, null);
+                    else   // one shape driven by Face, plus the empty second one that keeps the layout fixed
+                    {
+                        clone.AddBlendShapeFrame(SingleShape, 100f, fd, fn, null);
+                        clone.AddBlendShapeFrame(FaceShape, 100f, new Vector3[fd.Length], new Vector3[fd.Length], null);
+                    }
+                    AddExtraShapes(clone, set, orig.name, d, true, stored, toSkin);   // slider and corrective shapes, through the same skin neighbours
                     _clones[orig] = clone;
                 }
                 Use(r, orig, clone, d, toSkin.inverse, "follow");
                 follow++;
             }
             JointLocals(c, set);
+            ResolveJcm(c, set);
+            _skinDirty = true;
             Status = set.Name + ": " + morphed + " meshes morphed, " + follow + " follow (clothes and the rest)" + (skipped > 0 ? ", " + skipped + " skipped (see the log)" : "")
-                     + "; " + _jointLocal.Count + " joints moved, " + simulatedCount + " physics/driven bones keep their parent's";
+                     + "; " + _jointLocal.Count + " joints moved, " + simulatedCount + " physics/driven bones keep their parent's"
+                     + (set.HasShapeData ? "; " + set.Sliders.Count + " sliders, " + _jcm.Count + "/" + set.Jcms.Count + " correctives driven" : "");
             Plugin.Log.LogInfo("Character '" + set.Name + "' on '" + c.Key + "': " + morphed + " meshes morphed, " + follow + " follow the skin, "
                                + _jointLocal.Count + " joints, built in " + ((Time.realtimeSinceStartup - t0) * 1000f).ToString("0") + " ms (" + _why + ")"
                                + (problems.Count > 0 ? "; skipped: " + string.Join("; ", problems.ToArray()) : ""));
@@ -464,8 +779,62 @@ namespace SfMorph
 
         void Use(SkinnedMeshRenderer r, Mesh orig, Mesh clone, MeshData d, Matrix4x4 toMesh, string kind)
         {
-            _slots[r] = new Slot { Orig = orig, Clone = clone, Bind = d.Bind, ToMesh = toMesh, Kind = kind, Two = clone.blendShapeCount >= 2 };
+            var li = Layout(clone);
+            var w = new float[clone.blendShapeCount];
+            for (int i = 0; i < w.Length; i++) w[i] = -1f;
+            _slots[r] = new Slot { Orig = orig, Clone = clone, Bind = d.Bind, ToMesh = toMesh, Kind = kind, Two = li != null && li.Split, W = w };
             r.sharedMesh = clone;
+        }
+
+        static bool _loggedNoRef;
+
+        // The slider (plus, minus) and corrective shapes after body and face. Own meshes: the shape file's block for this mesh. Clothes
+        // (follow, stored = the skin reference): the 'skin' block's deltas through the same nearest-skin-vertex weights as the base follow
+        // (found once for the mesh, reused by every shape), no push-out. A shape without data stays flat so the layout never changes.
+        void AddExtraShapes(Mesh clone, MorphSet set, string meshName, MeshData d, bool follow, SkinRef stored, Matrix4x4 toSkin)
+        {
+            if (!set.HasShapeData) return;
+            int n = clone.vertexCount;
+            var zeroD = new Vector3[n]; var zeroN = new Vector3[n];
+            SkinRef.FollowCache fc = null;
+            if (follow)
+            {
+                if (stored != null) fc = stored.BuildCache(d.Pos, toSkin);
+                else if (!_loggedNoRef) { _loggedNoRef = true; Plugin.Log.LogInfo("Character '" + set.Name + "' has no stored skin reference (skin.txt): body sliders and correctives don't reach its clothes"); }
+            }
+            foreach (var sl in set.Sliders)
+            {
+                Vector3[] pd = zeroD, pn = zeroN;
+                Shape(set, sl.File, meshName, n, follow, stored, fc, d, toSkin, ref pd, ref pn);
+                clone.AddBlendShapeFrame(PlusPrefix + sl.Name, 100f, pd, pn, null);
+                clone.AddBlendShapeFrame(MinusPrefix + sl.Name, 100f, ReferenceEquals(pd, zeroD) ? zeroD : Negated(pd), ReferenceEquals(pn, zeroN) ? zeroN : Negated(pn), null);
+            }
+            foreach (var file in set.JcmShapes)
+            {
+                Vector3[] pd = zeroD, pn = zeroN;
+                Shape(set, file, meshName, n, follow, stored, fc, d, toSkin, ref pd, ref pn);
+                clone.AddBlendShapeFrame(JcmPrefix + file, 100f, pd, pn, null);
+            }
+        }
+
+        static Vector3[] Negated(Vector3[] a) { var r = new Vector3[a.Length]; for (int i = 0; i < a.Length; i++) r[i] = -a[i]; return r; }
+
+        // One shape file's deltas for a mesh as dense arrays (pd/pn are left as they came, the shared zero arrays, when there is nothing).
+        void Shape(MorphSet set, string file, string meshName, int n, bool follow, SkinRef stored, SkinRef.FollowCache fc, MeshData d, Matrix4x4 toSkin,
+                   ref Vector3[] pd, ref Vector3[] pn)
+        {
+            var sf = set.Shape(file);
+            if (sf == null) return;
+            if (!follow)
+            {
+                Sparse sp;
+                if (!sf.Meshes.TryGetValue(meshName, out sp) || sp.I.Length == 0) return;
+                if (sp.Total != 0 && sp.Total != n) { Plugin.Log.LogWarning(file + ": mesh '" + meshName + "' has " + sp.Total + " vertices, the game's " + n + "; shape stays flat"); return; }
+                pd = new Vector3[n]; pn = new Vector3[n];
+                for (int k = 0; k < sp.I.Length; k++) if (sp.I[k] < n) { pd[sp.I[k]] = sp.D[k]; pn[sp.I[k]] = sp.N[k]; }
+            }
+            else if (fc != null && sf.Skin != null && sf.Skin.I.Length > 0)
+                stored.FollowShape(fc, d.Nrm, toSkin, sf.Skin, out pd, out pn);
         }
 
         internal static Mesh Clone(Mesh orig, MeshData d)
@@ -632,7 +1001,7 @@ namespace SfMorph
                         var tex = Load(set, t[2], kind, out info);
                         if (_loggedProps.Add(mname)) LogProps(mname, mat);
                         // the face-only albedo is pre-compensated for the game's tint: keep the tint then (the neck seam matches her tinted body)
-                        if (tex != null && kind == "albedo" && !fo) WhiteTint(mat);
+                        if (tex != null && kind == "albedo") { if (!fo) { WhiteTint(mat); _white.Add(mat); } else _white.Remove(mat); }
                         if (tex != null && normal) _normalApplied[mat] = tex;
                         if (tex == null) continue;
                         var curTex = mat.GetTexture(prop);
@@ -685,7 +1054,63 @@ namespace SfMorph
                 if (!_savedCol.TryGetValue(mat, out sc)) { sc = new Dictionary<string, Color>(); _savedCol[mat] = sc; }
                 var cur = mat.GetColor(pn);
                 if (!sc.ContainsKey(pn)) sc[pn] = cur;
-                if (cur != Color.white) mat.SetColor(pn, Color.white);
+                var want = new Color(1f + _tone, 1f + _tone, 1f + _tone, 1f);   // white, times the Skin Tone
+                if (cur != want) mat.SetColor(pn, want);
+            }
+        }
+
+        // Skin Tone (a multiplier on the skin tint: the white WhiteTint sets, or the game's own tint where it is kept) and Gloss (a
+        // multiplier on _SmoothnessPower), on every material of the character's skin. Originals are saved on first touch and come back
+        // with the textures. Re-run whenever the values change and in the 2 s check.
+        static readonly string[] GlossProps = { "_SmoothnessPower" };
+
+        void ApplySkinLook(Character c, MorphSet set)
+        {
+            _skinDirty = false; _toneApplied = _tone; _glossApplied = _gloss;
+            var names = set.SkinMaterials;
+            if (names.Count == 0) return;
+            float tone = _tone, gloss = _gloss;
+            foreach (var r in c.Renderers)
+            {
+                if (r == null) continue;
+                foreach (var mat in r.sharedMaterials)
+                {
+                    if (mat == null || !names.Contains(mat.name.Replace(" (Instance)", "").Trim())) continue;
+                    bool white = _white.Contains(mat);
+                    foreach (var pn in TintProps)
+                    {
+                        if (!mat.HasProperty(pn)) continue;
+                        Dictionary<string, Color> sc;
+                        if (!_savedCol.TryGetValue(mat, out sc)) { sc = new Dictionary<string, Color>(); _savedCol[mat] = sc; }
+                        var cur = mat.GetColor(pn);
+                        Color orig;
+                        if (white) orig = Color.white;
+                        else if (!sc.TryGetValue(pn, out orig))
+                        {
+                            if (tone == 0f) continue;   // nothing of ours on it
+                            sc[pn] = orig = cur;
+                        }
+                        var want = new Color(orig.r * (1f + tone), orig.g * (1f + tone), orig.b * (1f + tone), orig.a);
+                        if (cur != want) mat.SetColor(pn, want);
+                    }
+                    string gp = null;
+                    foreach (var pn in GlossProps) if (mat.HasProperty(pn)) { gp = pn; break; }
+                    if (gp == null)
+                    {
+                        if (gloss != 1f && _loggedNoGloss.Add(mat.name)) Plugin.Log.LogInfo("Material '" + mat.name + "' has no _SmoothnessPower; Gloss does nothing there");
+                        continue;
+                    }
+                    Dictionary<string, float> sf;
+                    if (!_savedFloat.TryGetValue(mat, out sf)) { sf = new Dictionary<string, float>(); _savedFloat[mat] = sf; }
+                    float o;
+                    if (!sf.TryGetValue(gp, out o))
+                    {
+                        if (gloss == 1f) continue;
+                        sf[gp] = o = mat.GetFloat(gp);
+                    }
+                    float wantF = o * gloss;
+                    if (Mathf.Abs(mat.GetFloat(gp) - wantF) > 1e-5f) mat.SetFloat(gp, wantF);
+                }
             }
         }
 
@@ -800,6 +1225,14 @@ namespace SfMorph
         void RestoreTextures()
         {
             _normalApplied.Clear();
+            _white.Clear();
+            _skinDirty = true; _toneApplied = float.NaN; _glossApplied = float.NaN;   // tone and gloss are put back with the skin look
+            foreach (var kv in _savedFloat)
+            {
+                if (kv.Key == null) continue;
+                foreach (var p in kv.Value) kv.Key.SetFloat(p.Key, p.Value);
+            }
+            _savedFloat.Clear();
             foreach (var kv in _saved)
             {
                 if (kv.Key == null) continue;
@@ -825,7 +1258,7 @@ namespace SfMorph
         public void Release()
         {
             ShowHidden();
-            if (_slots.Count == 0 && _saved.Count == 0 && _savedCol.Count == 0) return;
+            if (_slots.Count == 0 && _saved.Count == 0 && _savedCol.Count == 0 && _savedFloat.Count == 0) return;
             ReleaseMeshes(false);
             RestoreTextures();
             _texOn = false;
@@ -840,7 +1273,7 @@ namespace SfMorph
             _slots.Clear();
             _jointLocal.Clear();
             if (!destroy) return;
-            foreach (var m in _clones.Values) if (m != null) UnityEngine.Object.Destroy(m);
+            foreach (var m in _clones.Values) if (m != null) { _layouts.Remove(m); UnityEngine.Object.Destroy(m); }
             _clones.Clear();
             _data.Clear();
         }
@@ -983,6 +1416,62 @@ namespace SfMorph
                 if (split) { faceD[v] = back.MultiplyVector(dd * hv); outD[v] = back.MultiplyVector(dd * (1f - hv) + push); }   // the push-out goes with the body
                 else outD[v] = back.MultiplyVector(dd + push);
             }
+        }
+
+        // The nearest skin vertices of every vertex of a clothing mesh with the weights Follow uses (1/(d+2mm)^2, normalised), found once
+        // and reused by every slider/corrective shape of that mesh.
+        public class FollowCache { public int[] Idx; public float[] W; }   // 4 entries per vertex; Idx -1 = none
+
+        public FollowCache BuildCache(Vector3[] pos, Matrix4x4 toSkin)
+        {
+            var fc = new FollowCache { Idx = new int[pos.Length * 4], W = new float[pos.Length * 4] };
+            var idx = new int[4]; var dist = new float[4];
+            for (int v = 0; v < pos.Length; v++)
+            {
+                int found = Nearest(toSkin.MultiplyPoint3x4(pos[v]), idx, dist);
+                float wsum = 0f;
+                for (int k = 0; k < 4; k++)
+                {
+                    if (k < found) { float w = 1f / (dist[k] + 0.002f); w *= w; fc.Idx[v * 4 + k] = idx[k]; fc.W[v * 4 + k] = w; wsum += w; }
+                    else fc.Idx[v * 4 + k] = -1;
+                }
+                if (wsum > 0f) for (int k = 0; k < found; k++) fc.W[v * 4 + k] /= wsum;
+            }
+            return fc;
+        }
+
+        Vector3[] _sd, _sn;   // scratch: a sparse skin shape scattered by skin index
+
+        // One slider/corrective shape's deltas for a clothing mesh from the shape's 'skin' block (sparse, skin.txt order), through the cached
+        // neighbours: the weighted delta carried back to the mesh's space, the normal change as in Follow. No push-out.
+        public void FollowShape(FollowCache fc, Vector3[] nrm, Matrix4x4 toSkin, Sparse skin, out Vector3[] outD, out Vector3[] outN)
+        {
+            int count = _p.Count, n = fc.Idx.Length / 4;
+            if (_sd == null || _sd.Length != count) { _sd = new Vector3[count]; _sn = new Vector3[count]; }
+            for (int k = 0; k < skin.I.Length; k++) if (skin.I[k] < count) { _sd[skin.I[k]] = skin.D[k]; _sn[skin.I[k]] = skin.N[k]; }
+            var back = toSkin.inverse;
+            outD = new Vector3[n]; outN = new Vector3[n];
+            for (int v = 0; v < n; v++)
+            {
+                Vector3 dsum = Vector3.zero, nsum = Vector3.zero;
+                bool any = false;
+                for (int k = 0; k < 4; k++)
+                {
+                    int i = fc.Idx[v * 4 + k];
+                    if (i < 0) break;
+                    float w = fc.W[v * 4 + k];
+                    dsum += _sd[i] * w; nsum += _sn[i] * w; any = true;
+                }
+                if (!any) continue;
+                outD[v] = back.MultiplyVector(dsum);
+                if (nrm != null && v < nrm.Length && nsum != Vector3.zero)
+                {
+                    var fn0 = toSkin.MultiplyVector(nrm[v]).normalized;
+                    var fn1 = (fn0 + nsum).normalized;
+                    outN[v] = back.MultiplyVector(fn1).normalized * nrm[v].magnitude - nrm[v];
+                }
+            }
+            for (int k = 0; k < skin.I.Length; k++) if (skin.I[k] < count) { _sd[skin.I[k]] = Vector3.zero; _sn[skin.I[k]] = Vector3.zero; }
         }
 
         int Nearest(Vector3 p, int[] idx, float[] dist)
