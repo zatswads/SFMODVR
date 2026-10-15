@@ -299,12 +299,11 @@ namespace SfMorph
         // target after followers and the give (5.4), eased into FCurl. FingerStep only turns FCurl into joint targets.
         static void UpdateFingers(Hand h, HandsSettings s, float dt)
         {
-            float grip = Mathf.Clamp01(h.Left ? Grip.Left : Grip.Right), trig = Mathf.Clamp01(h.Left ? Grip.TriggerLeft : Grip.TriggerRight);
+            // 0.8.0 (user): one grab button closes the whole hand from its rest curl (Grip.GrabButton, the trigger by default: the grip is
+            // the game's menu button); no index-only pointing pose
+            float grab = Mathf.Clamp01(h.Left ? Grip.GrabLeft : Grip.GrabRight);
             float rs = Mathf.Clamp01(s.RestCurl) / 0.25f;
-            // index = trigger; middle, ring, pinky = grip; the thumb closes with the grip or, a bit less, with the trigger
-            _cmd[1] = Mathf.Lerp(Mathf.Clamp01(RestCurlF[1] * rs), 1f, trig);
-            for (int f = 2; f < 5; f++) _cmd[f] = Mathf.Lerp(Mathf.Clamp01(RestCurlF[f] * rs), 1f, grip);
-            _cmd[0] = Mathf.Lerp(Mathf.Clamp01(RestCurlF[0] * rs), 1f, Mathf.Max(grip, 0.6f * trig));
+            for (int f = 0; f < 5; f++) _cmd[f] = Mathf.Lerp(Mathf.Clamp01(RestCurlF[f] * rs), 1f, grab);
 
             // contact: the fan on the rigidbody's pose, once per frame per finger (<= 16 CheckSphere + one cast each)
             bool cast = s.FingerConform && _herBuilt && _layerHer >= 0 && h.CollideOn && !h.Kin && h.Rb != null;

@@ -22,6 +22,10 @@ namespace SfMorph
         // whether the soft zones run (the Physics tab): hands may sink 1-3 cm into soft parts then, else 0.5 cm like firm ones (design 13.3a).
         // Body.cs: `_emb.SoftZonesOn = physics;` (true until then).
         public bool SoftZonesOn = true;
+        // 0.8.0 (user): what a snap turns the view to (0 his head's yaw, 1 his chest's) and manual corrections applied on every snap
+        // (degrees: yaw about the rig's up, + turns the view right; pitch about the headset's right, + nose up; roll about its forward)
+        public int ViewAlign = 1;
+        public float ViewYaw, ViewPitch, ViewRoll;
         // Controller -> his wrist (m, degrees), in the controller's axes. The position is where the wrist sits relative to the
         // tracked pose (Quest Touch, from Embody for VaM); the right hand is the left mirrored. The rotation is added to an
         // automatic hand alignment (fingers along the controller's forward, thumb along its up, palm toward the body's midline;
@@ -890,8 +894,14 @@ namespace SfMorph
             return p;
         }
 
+        Vector3 _snapCorr; int _snapAlign = -1;
+        static float Clean(float v) { return float.IsNaN(v) || float.IsInfinity(v) ? 0f : Mathf.Clamp(v, -90f, 90f); }
+
         void ViewStep(EmbodySettings s, float dt)
         {
+            // a changed alignment or correction re-snaps (the sliders act at once)
+            if (_viewRig != null && (s.ViewAlign != _snapAlign || Mathf.Abs(Clean(s.ViewYaw) - _snapCorr.x) > 0.5f || Mathf.Abs(Clean(s.ViewPitch) - _snapCorr.y) > 0.5f
+                                     || Mathf.Abs(Clean(s.ViewRoll) - _snapCorr.z) > 0.5f)) _snapPending = true;
             var cam = GameRig.VrCamera();
             if (cam == null) { _viewRig = null; return; }
             Transform rigRoot;
@@ -940,9 +950,26 @@ namespace SfMorph
             if (_snapPending)
             {
                 _snapPending = false;
+                // a pitch/roll correction from an earlier snap is taken out first (the rig back upright), so corrections never add up;
+                // only when we tilted it (a game's own tilt is left alone)
+                if ((_snapCorr.y != 0f || _snapCorr.z != 0f) && Vector3.Angle(rigRoot.up, Vector3.up) < 50f)
+                    Turn(Quaternion.FromToRotation(rigRoot.up, Vector3.up), cam.transform.position);
                 var rup = rigRoot.up;
                 var hf = Facing(cam.transform.forward, cam.transform.up, rup);
                 var tf = Facing(_hFwd, _hUp, rup);
+                // 0.8.0: his chest's facing (shoulder line x up, signed by his head) when asked: his head is often turned in the
+                // animation, and turning the view to it put his arms off to one side of yours
+                string to = "his head's yaw";
+                if (s.ViewAlign == 1 && _rig.L != null && _rig.R != null && _rig.L.Shoulder != null && _rig.R.Shoulder != null)
+                {
+                    var left = Vector3.ProjectOnPlane(_rig.L.Shoulder.position - _rig.R.Shoulder.position, rup);
+                    var cf = Vector3.Cross(rup, left);
+                    if (cf.sqrMagnitude > 1e-6f && left.sqrMagnitude > 1e-4f)
+                    {
+                        if (tf.sqrMagnitude > 1e-6f && Vector3.Dot(cf, tf) < 0f) cf = -cf;
+                        tf = cf; to = "his chest's yaw";
+                    }
+                }
                 float yaw = 0f;
                 if (hf.sqrMagnitude > 1e-6f && tf.sqrMagnitude > 1e-6f)
                 {
@@ -950,12 +977,27 @@ namespace SfMorph
                     // About the headset, so it stays where it is while the world turns around it.
                     Turn(Quaternion.AngleAxis(yaw, rup), cam.transform.position);
                 }
+                // the user's corrections, about the headset too
+                float cy = Clean(s.ViewYaw), cp = Clean(s.ViewPitch), cr = Clean(s.ViewRoll);
+                if (cy != 0f) Turn(Quaternion.AngleAxis(cy, rup), cam.transform.position);
+                if (cp != 0f || cr != 0f)
+                {
+                    var cfw = Vector3.ProjectOnPlane(cam.transform.forward, rup);
+                    if (cfw.sqrMagnitude < 1e-6f) cfw = Vector3.ProjectOnPlane(_hFwd, rup);
+                    if (cfw.sqrMagnitude > 1e-6f)
+                    {
+                        cfw.Normalize();
+                        var right = Vector3.Cross(rup, cfw);
+                        Turn(Quaternion.AngleAxis(-cp, right) * Quaternion.AngleAxis(cr, cfw), cam.transform.position);
+                    }
+                }
+                _snapCorr = new Vector3(cy, cp, cr); _snapAlign = s.ViewAlign;
                 _eyeSmooth = EyeWorld(); _eyeInit = true;   // a new start: no smoothing from the old position
                 Translate();
                 if (!_snapLogged)
                 {
                     _snapLogged = true;
-                    Plugin.Log.LogInfo("Embody: snapped the view: turned " + yaw.ToString("0") + " deg to his head's yaw and put the headset on his eye point (" + _eyeFrom + "), head axes from " + _rig.AxesFrom);
+                    Plugin.Log.LogInfo("Embody: snapped the view: turned " + yaw.ToString("0") + " deg to " + to + (cy != 0f || cp != 0f || cr != 0f ? " (+ correction yaw " + cy.ToString("0") + ", pitch " + cp.ToString("0") + ", roll " + cr.ToString("0") + " deg)" : "") + " and put the headset on his eye point (" + _eyeFrom + "), head axes from " + _rig.AxesFrom);
                 }
             }
             else if (s.View == 2)
@@ -1249,17 +1291,16 @@ namespace SfMorph
 
         static float Grip01(float v) { return float.IsNaN(v) ? 0f : Mathf.Clamp01(v); }
 
-        // The finger commands (design 5.1/6.2, the physics hands' numbers): the trigger curls the index, the grip the middle, ring and
-        // pinky, the thumb opposes with max(grip, 0.6 trigger); each rests at RestCurlF scaled by RestCurl / 0.25.
+        // The finger commands (the physics hands' numbers): every finger rests at RestCurlF scaled by RestCurl / 0.25 and closes with the
+        // grab button (Grip.GrabLeft/Right).
         void Commands(bool left, float[] cmd)
         {
             float rs = _cur != null ? Mathf.Clamp01(_cur.RestCurl) / 0.25f : 1f;
-            float grip = Grip01(left ? Grip.Left : Grip.Right), trig = Grip01(left ? Grip.TriggerLeft : Grip.TriggerRight);
+            float grab = Grip01(left ? Grip.GrabLeft : Grip.GrabRight);   // 0.8.0 (user): one grab button closes the whole hand, no pointing pose
             for (int f = 0; f < 5; f++)
             {
                 float rest = Mathf.Clamp01(RestCurlF[f] * rs);
-                float drive = f == 1 ? trig : f == 0 ? Mathf.Max(grip, 0.6f * trig) : grip;
-                cmd[f] = Mathf.Lerp(rest, 1f, drive);
+                cmd[f] = Mathf.Lerp(rest, 1f, grab);
             }
         }
 
@@ -1342,7 +1383,7 @@ namespace SfMorph
             else
             {
                 a.FInit = false; a.WasStopped = false;
-                float grip = Grip01(left ? Grip.Left : Grip.Right);
+                float grip = Grip01(left ? Grip.GrabLeft : Grip.GrabRight);
                 if (a.Curl < 0f) a.Curl = grip;
                 else if (dt > 0f) a.Curl += (grip - a.Curl) * (1f - Mathf.Exp(-CurlRate * dt));
             }
@@ -1456,15 +1497,8 @@ namespace SfMorph
         static readonly WorldCap[] _dcap = new WorldCap[48];
         const float StopHz = 12f, StopMaxShift = 0.25f, StopMinPen = 0.001f;
 
-        // How far a hand may sink into her skin before it stops, where the soft zones / GPU contact dent it. TODO: replace with
-        // HerBody.SkinAllowance(seg) (P2, same numbers) once it exists; soft segments lerp(1.0, 3.0 cm, Softness) while the soft zones run,
-        // else 0.5 cm like the firm ones.
-        float SkinAllowance(int seg)
-        {
-            bool soft = seg >= 0 && seg < HerBody.Defs.Length && HerBody.Defs[seg].Soft;
-            if (!soft || _cur == null || !_cur.SoftZonesOn) return 0.005f;
-            return Mathf.Lerp(0.010f, 0.030f, Mathf.Clamp01(_cur.Softness));
-        }
+        // How far a hand may sink into her skin before it stops, where the soft zones / GPU contact dent it.
+        float SkinAllowance(int seg) { return HerBody.SkinAllowance(seg); }   // the part's tissue depth by softness (HerBody)
 
         // The shift (metres, world) that takes his hand out of her skin at the candidate pose: three passes along the deepest penetration.
         Vector3 StopShift(Arm a, Vector3 T, Quaternion tq, out int deepSeg)

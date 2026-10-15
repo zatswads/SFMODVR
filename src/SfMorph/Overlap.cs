@@ -10,6 +10,8 @@ namespace SfMorph
     internal class OverlapSettings
     {
         public float Amount, Arms = 1f, Legs = 1f, Head = 1f, Spine = 1f; public Embody Embody;   // Embody: unused here
+        // 0.8.0: multiplier of the lag on the OUTPUT only (1..4): the spring states are unchanged, so it can't destabilise them
+        public float Strength = 1f;
         // 0.7.7 (v2): ripple 0..1; bounce per region (0 arms, 1 legs, 2 head, 3 spine) 0..1; planted lock; limb yield from the hands
         // 0..1 (LimbPush: 0 off, 0.5 natural, 1 twice as far); Caps = Body.Contacts() this frame (partner/hers capsules for the planted
         // test; null when no hands are tracked)
@@ -202,6 +204,7 @@ namespace SfMorph
         readonly bool[] _loggedFade = new bool[6];
         readonly bool[] _loggedReset = new bool[3];
         readonly bool[] _loggedHinge = new bool[2];       // elbow, knee
+        float _str = 1f;                                  // 0.8.0 Strength (1..4)
         float _ripple, _lp;
         uint _yieldBits;                                  // bit per HerBody segment that yields this frame (HerBody.YieldOn)
         readonly int[] _yieldCm = new int[HerBody.SegNames.Length];   // that segment's penetration in whole cm (status text only)
@@ -323,6 +326,7 @@ namespace SfMorph
                 _zeta[r] = Mathf.Lerp(1.0f, 0.35f, bo);      // v1 used 0.7 everywhere
                 _fs[r] = Mathf.Lerp(1.4f, 0.7f, bo);         // bouncier also means slower
             }
+            _str = float.IsNaN(s.Strength) ? 1f : Mathf.Clamp(s.Strength, 1f, 4f);
             _ripple = Mathf.Clamp01(s.Ripple);
             _lp = Mathf.Clamp01(s.LimbPush);
             _yieldBits = 0u;
@@ -530,8 +534,19 @@ namespace SfMorph
                 if (float.IsNaN(b.PW.x) || float.IsNaN(b.POmega.x)) { b.PW = Quaternion.identity; b.POmega = Vector3.zero; b.PState = 0; }
 
                 // Contact fades only the lag term; the yield (if any) stays on top of it.
-                float w = wReq * (1f - _contact[b.Group]);
-                Quaternion o = w >= 0.9999f ? b.Qs : (w <= 0f ? b.Target : Quaternion.Slerp(b.Target, b.Qs, w));
+                // Strength (1..4) scales the shown lag beyond the state (SlerpUnclamped), never the state itself, so the springs stay as stable
+                // as at 1x; the shown lag is capped at Strength x the region's lag clamp and never more than 50 deg.
+                float w = wReq * (1f - _contact[b.Group]) * _str;
+                Quaternion o;
+                if (w <= 0f) o = b.Target;
+                else if (w <= 1f) o = w >= 0.9999f ? b.Qs : Quaternion.Slerp(b.Target, b.Qs, w);
+                else
+                {
+                    o = Quaternion.SlerpUnclamped(b.Target, b.Qs, w);
+                    float cap = Mathf.Min(50f, ClampDegR[rg] * _str);
+                    if (Quaternion.Angle(b.Target, o) > cap) o = Quaternion.RotateTowards(b.Target, o, cap);
+                    if (float.IsNaN(o.x) || float.IsNaN(o.w)) o = b.Qs;
+                }
                 if (b.YieldLive)
                 {
                     float ya = b.Yv.magnitude;

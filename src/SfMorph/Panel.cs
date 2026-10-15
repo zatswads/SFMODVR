@@ -332,9 +332,25 @@ namespace SfMorph
             if (elbowOff == null && ea != _p.EmbodyElbowAvoid.Value) _p.EmbodyElbowAvoid.Value = ea;
             GUI.enabled = true;
             if (_p.EmbodyOn.Value && elbowOff != null) GUILayout.Label("    off: " + elbowOff, _off);
+            // view alignment (acts at once: a change re-snaps the view)
+            string viewOff = !_p.EmbodyOn.Value ? "off: Embody is off" : _p.EmbodyView.Value == 0 ? "off: the view is the game's camera" : null;
+            GUI.enabled = viewOff == null;
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Face the view to", GUILayout.Width(170));
+            int al = GUILayout.Toolbar(_p.EmbodyViewAlign.Value, ViewAligns);
+            if (viewOff == null && al != _p.EmbodyViewAlign.Value) _p.EmbodyViewAlign.Value = al;
+            GUILayout.EndHorizontal();
+            GUI.enabled = true;
+            float vy = Slider("View turn", _p.EmbodyViewYaw.Value, -90f, 90f, "0", 0f, viewOff, " deg");
+            if (viewOff == null && Mathf.Abs(vy - _p.EmbodyViewYaw.Value) > 0.01f) _p.EmbodyViewYaw.Value = vy;
+            float vp = Slider("View tilt", _p.EmbodyViewPitch.Value, -45f, 45f, "0", 0f, viewOff, " deg");
+            if (viewOff == null && Mathf.Abs(vp - _p.EmbodyViewPitch.Value) > 0.01f) _p.EmbodyViewPitch.Value = vp;
+            float vr = Slider("View roll", _p.EmbodyViewRoll.Value, -45f, 45f, "0", 0f, viewOff, " deg");
+            if (viewOff == null && Mathf.Abs(vr - _p.EmbodyViewRoll.Value) > 0.01f) _p.EmbodyViewRoll.Value = vr;
             if (_p.EmbodyOn.Value && _body.Embody.Status.Length > 0) GUILayout.Label(_body.Embody.Status, _body.Embody.Status.StartsWith("off") ? _off : _hint);
             GUILayout.Label("The game's own POV camera can end up elsewhere; 'Follow his eyes' keeps your view at his eyes (position only, " +
-                            "you turn your own head). Hand offsets per controller: [Embody] in sfmodvr.sfmorph.cfg.", _hint);
+                            "you turn your own head). A snap faces you the way his chest (or head) faces; turn/tilt/roll correct what is left " +
+                            "(+ turn = right, + tilt = nose up; tilting the world can feel odd, keep it small). Hand offsets per controller: [Embody] in sfmodvr.sfmorph.cfg.", _hint);
         }
 
         void MorphControls(Character c)
@@ -441,6 +457,12 @@ namespace SfMorph
             GUI.enabled = handsOn;
             bool jf = GUILayout.Toggle(_p.HandsJointed.Value, " Jointed fingers (simulated finger bodies that bend on her skin; off: posed by the grip only)");
             if (handsOn && jf != _p.HandsJointed.Value) _p.HandsJointed.Value = jf;
+            GUI.enabled = true;   // the grab button also closes Embody's hands, physics hands on or off
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Grab with", GUILayout.Width(170));
+            int gb = GUILayout.Toolbar(_p.HandsGrabButton.Value, GrabButtons);
+            if (gb != _p.HandsGrabButton.Value) _p.HandsGrabButton.Value = gb;
+            GUILayout.EndHorizontal();
             GUI.enabled = hitOff == null;
             bool fc = GUILayout.Toggle(_p.HandsFingerConform.Value, " Fingers close on her skin and sink in by softness");
             if (hitOff == null && fc != _p.HandsFingerConform.Value) _p.HandsFingerConform.Value = fc;
@@ -457,7 +479,7 @@ namespace SfMorph
             if (hitOff == null && Mathf.Abs(fr - _p.HandsFriction.Value) > 0.0001f) _p.HandsFriction.Value = fr;
             GUI.enabled = true;
             if (handsOn && PhysicsHands.Status.Length > 0) GUILayout.Label(PhysicsHands.Status, PhysicsHands.Status.StartsWith("off") ? _off : _hint);
-            GUILayout.Label("Trigger curls the index finger, grip the others (they stop on her skin). Rest curl: the hand with nothing pressed. Friction: a resting hand is carried along when she moves. " +
+            GUILayout.Label("The grab button closes the whole hand (it stops on her skin; the grip is the game's menu button, so the trigger is the default; Embody's hands too). Rest curl: the hand with nothing pressed. Friction: a resting hand is carried along when she moves. " +
                             "Hand position/rotation offsets per controller: [Embody] Left/RightHandOffset in sfmodvr.sfmorph.cfg.", _hint);
         }
 
@@ -508,6 +530,8 @@ namespace SfMorph
                             "at the shoulder/elbow, 20/25 at the hip/knee, 15 head, 8 spine). Measured from where the hand is, not from the blocked physics hand.", _hint);
         }
 
+        static readonly string[] GrabButtons = { "Trigger", "Grip", "Either" };
+        static readonly string[] ViewAligns = { "His head", "His chest" };
         static readonly string[] Qualities = { "Performance", "Balanced", "Fidelity" };
         static readonly string[] BreastModes = { "Off", "Main chains", "All" };
 
@@ -520,6 +544,8 @@ namespace SfMorph
             if (Mathf.Abs(a - _p.OverlapAmount.Value) > 0.0001f) _p.OverlapAmount.Value = a;
             string sub = off ?? (_p.OverlapAmount.Value > 0f ? null : "overlap is 0");
             string subOff = sub == null ? null : "off: " + sub;
+            float str = Slider("Strength", _p.OverlapStrength.Value, 1f, 4f, "0.0", 1f, subOff, " x");
+            if (subOff == null && Mathf.Abs(str - _p.OverlapStrength.Value) > 0.0001f) _p.OverlapStrength.Value = str;
             float v;
             v = Slider("Ripple", _p.OverlapRipple.Value * 100f, 0f, 100f, "0", 50f, subOff, " %") / 100f;
             if (Mathf.Abs(v - _p.OverlapRipple.Value) > 0.0001f) _p.OverlapRipple.Value = v;

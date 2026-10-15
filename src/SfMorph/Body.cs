@@ -514,6 +514,7 @@ namespace SfMorph
                 try { VrHands.UpdateLive(); } catch (Exception e) { Plugin.Log.LogWarning("Hands visibility: " + e.Message); }   // once per frame, before anything reads Live
             }
             else if (_handsOn) { _handsOn = false; try { VrHands.Release(); } catch { } }
+            Grip.GrabButton = _p.HandsGrabButton.Value;
             if (physHands || embody) try { Grip.Update(); } catch (Exception e) { Plugin.Log.LogWarning("Grip: " + e.Message); }
             int quality = _p.Quality.Value;
             foreach (var c in Found)
@@ -548,7 +549,7 @@ namespace SfMorph
                 {
                     _ovs.Amount = _p.OverlapAmount.Value; _ovs.Arms = _p.OverlapArms.Value; _ovs.Legs = _p.OverlapLegs.Value;
                     _ovs.Head = _p.OverlapHead.Value; _ovs.Spine = _p.OverlapSpine.Value; _ovs.Embody = Embody;
-                    _ovs.Ripple = _p.OverlapRipple.Value; _ovs.PlantedLock = _p.OverlapPlanted.Value; _ovs.LimbPush = _p.HandsLimbPush.Value;
+                    _ovs.Ripple = _p.OverlapRipple.Value; _ovs.Strength = _p.OverlapStrength.Value; _ovs.PlantedLock = _p.OverlapPlanted.Value; _ovs.LimbPush = _p.HandsLimbPush.Value;
                     _ovs.Bounce[0] = _p.ArmsBounce.Value; _ovs.Bounce[1] = _p.LegsBounce.Value; _ovs.Bounce[2] = _p.HeadBounce.Value; _ovs.Bounce[3] = _p.SpineBounce.Value;
                     _ovs.Caps = physics || physHands ? Contacts() : null;
                     try { Overlap.Update(c, _ovs, Time.deltaTime); _overlapOn = true; }
@@ -630,6 +631,7 @@ namespace SfMorph
                 _emb.On = true; _emb.Hands = _p.EmbodyHands.Value; _emb.HideHead = _p.EmbodyHideHead.Value; _emb.View = _p.EmbodyView.Value;
                 _emb.Partner = _p.EmbodyPartner.Value;
                 _emb.NeutralFingers = _p.EmbodyNeutralFingers.Value; _emb.ElbowAvoid = _p.EmbodyElbowAvoid.Value; _emb.RestCurl = _p.HandsRestCurl.Value; _emb.Softness = _p.Softness.Value; _emb.SoftZonesOn = physics;
+                _emb.ViewAlign = _p.EmbodyViewAlign.Value; _emb.ViewYaw = _p.EmbodyViewYaw.Value; _emb.ViewPitch = _p.EmbodyViewPitch.Value; _emb.ViewRoll = _p.EmbodyViewRoll.Value;
                 _emb.LeftPos = _p.LeftHandPos.Value; _emb.LeftRot = _p.LeftHandRot.Value; _emb.RightPos = _p.RightHandPos.Value; _emb.RightRot = _p.RightHandRot.Value;
                 try { Embody.Update(her, Found, _emb); _embodyOn = true; }
                 catch (Exception e)

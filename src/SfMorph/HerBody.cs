@@ -337,17 +337,37 @@ namespace SfMorph
 
         // How far the collision shape of a segment is pulled in from her skin: soft zones give by the softness setting (so the soft
         // contact acts first), firm parts barely.
-        // 0.8.0: only while the soft zones run (they dent first); with them off nothing dents, so a soft segment is inset like a firm one.
-        public static float Inset(Seg g, float softness, bool softZonesOn) { return g.Soft && softZonesOn ? Mathf.Lerp(0.02f, 0.045f, Mathf.Clamp01(softness)) : 0.008f; }
+        // 0.8.0 (user: the hands sank into her): the collider inset is how deep her TISSUE gives at that part, not a flat 2-4.5 cm for every
+        // soft zone (a thigh has ~1.4 cm of flesh before the muscle; a hand stopped 3 cm inside it, deeper than any dent could show).
+        // Metres at Softness 0.5, scaled lerp(0.7, 1.3, Softness); the same table bounds how far Embody's hand sinks before it stops.
+        // Values after the contact-visuals Tissue table (butt ~23 mm, breast ~24, belly ~18, thigh 10-16, calf 9, upper arm 7-10, forearm 4).
+        static float TissueDepth(string name)
+        {
+            if (name == null) return 0.004f;
+            if (name.StartsWith("butt", StringComparison.Ordinal)) return 0.023f;
+            if (name.StartsWith("breast", StringComparison.Ordinal)) return 0.024f;
+            if (name == "spine") return 0.018f;        // the waist/belly segment
+            if (name == "pelvis") return 0.012f;
+            if (name.StartsWith("thigh", StringComparison.Ordinal)) return 0.014f;
+            if (name.StartsWith("calf", StringComparison.Ordinal)) return 0.009f;
+            if (name.StartsWith("upperarm", StringComparison.Ordinal)) return 0.009f;
+            if (name.StartsWith("forearm", StringComparison.Ordinal)) return 0.004f;
+            if (name == "chest") return 0.007f;
+            if (name == "neck") return 0.004f;
+            return 0.003f;                             // head, anything bony
+        }
+        static float Tissue(string name, float softness) { return TissueDepth(name) * Mathf.Lerp(0.7f, 1.3f, Mathf.Clamp01(softness)); }
+
+        // With the soft zones off nothing dents, so only the skin's few millimetres give.
+        public static float Inset(Seg g, float softness, bool softZonesOn) { return softZonesOn ? Mathf.Max(0.004f, Tissue(g.Name, softness)) : 0.004f; }
         public static float Inset(Seg g, float softness) { return Inset(g, softness, true); }
 
         // How far a hand may sink into the skin of segment `seg` (Defs index) before it stops, where the soft zones / GPU contact dent it:
-        // soft segments lerp(1, 3 cm, Softness) while the soft zones run, else (and for firm ones) 0.5 cm. Reads this frame's settings.
+        // the part's tissue depth (TissueDepth, by Softness) while the soft zones run, else 4 mm of skin. Reads this frame's settings.
         public static float SkinAllowance(int seg)
         {
-            bool soft = seg >= 0 && seg < Defs.Length && Defs[seg].Soft;
-            if (!soft || !SoftZonesOn) return 0.005f;
-            return Mathf.Lerp(0.010f, 0.030f, Mathf.Clamp01(Softness));
+            if (seg < 0 || seg >= Defs.Length || !SoftZonesOn) return 0.004f;
+            return Mathf.Max(0.004f, Tissue(Defs[seg].Name, Softness));
         }
 
         static void Build(Character her, HerBodySettings s)

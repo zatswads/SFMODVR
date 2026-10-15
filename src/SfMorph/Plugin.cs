@@ -27,7 +27,8 @@ namespace SfMorph
         internal ConfigEntry<bool> KeysUnfocused, Apply, Physics, ShowSoftPoints, EmbodyOn, EmbodyHideHead, HandsOn, HandsCollide, GpuContactOn;
         // 0.7.8 hands: convex-hull body colliders, pushes from hands that aren't physics hands, friction, jointed fingers
         internal ConfigEntry<bool> HandsHull, HandsPushByTouch, HandsPushByPartner, HandsJointed, HandsDrawnFade, HandsFingerConform, EmbodyNeutralFingers, EmbodyElbowAvoid;
-        internal ConfigEntry<float> HandsRestCurl;
+        internal ConfigEntry<float> HandsRestCurl, EmbodyViewYaw, EmbodyViewPitch, EmbodyViewRoll, OverlapStrength;
+        internal ConfigEntry<int> HandsGrabButton, EmbodyViewAlign;
         internal ConfigEntry<float> HandsFriction;
         internal ConfigEntry<float> UiScale, Softness, Springiness, Gravity, OverlapAmount, OverlapArms, OverlapLegs, OverlapHead, OverlapSpine;
         internal ConfigEntry<int> EmbodyHands, EmbodyView, EmbodyPartner, HandsMesh, Quality;
@@ -57,6 +58,7 @@ namespace SfMorph
             Springiness = Config.Bind("Physics", "Springiness", 0.3f, new ConfigDescription("Secondary motion of the soft zones from her own movement (0 none, 1 a lot).", new AcceptableValueRange<float>(0f, 1f)));
             Quality = Config.Bind("Physics", "Quality", 1, new ConfigDescription("Soft zones: 0 Performance (few points), 1 Balanced (dense points), 2 Fidelity (dense points + smoothed, subdivided body mesh).", new AcceptableValueRange<int>(0, 2)));
             OverlapAmount = Config.Bind("Motion", "Overlap", 0.3f, new ConfigDescription("Secondary motion: her limbs, head and spine trail the animation a little (0 off).", new AcceptableValueRange<float>(0f, 1f)));
+            OverlapStrength = Config.Bind("Motion", "Strength", 1f, new ConfigDescription("Multiplies the secondary motion on top of Overlap (1 = as designed, up to 4x: bigger trailing and swings; the springs themselves don't change, so it stays stable).", new AcceptableValueRange<float>(1f, 4f)));
             OverlapArms = Config.Bind("Motion", "Arms", 1f, new ConfigDescription("Overlap amount on the arms.", new AcceptableValueRange<float>(0f, 1f)));
             OverlapLegs = Config.Bind("Motion", "Legs", 1f, new ConfigDescription("Overlap amount on the legs.", new AcceptableValueRange<float>(0f, 1f)));
             OverlapHead = Config.Bind("Motion", "Head", 1f, new ConfigDescription("Overlap amount on the neck and head.", new AcceptableValueRange<float>(0f, 1f)));
@@ -79,6 +81,7 @@ namespace SfMorph
             HandsJointed = Config.Bind("Hands", "JointedFingers", true, "Fingers are simulated bodies on joints (off: posed by the grip only, like 0.7.0).");
             HandsDrawnFade = Config.Bind("Hands", "DrawnOffsetFade", true, "The drawn physics hand is exactly the controller in free air; the blocked displacement fades in on contact (off: always the physics pose, for comparing).");
             HandsFingerConform = Config.Bind("Hands", "FingerConform", true, "Fingers close until they touch her and sink in by the part's softness (off: the grip alone poses them).");
+            HandsGrabButton = Config.Bind("Hands", "GrabButton", 0, new ConfigDescription("The controller button that closes the hand (all fingers together): 0 trigger (the grip is the game's menu button), 1 grip, 2 whichever is pressed further.", new AcceptableValueRange<int>(0, 2)));
             HandsRestCurl = Config.Bind("Hands", "RestCurl", 0.25f, new ConfigDescription("How much the fingers curl with nothing pressed (0 flat, 1 a fist). Physics hands and his hands.", new AcceptableValueRange<float>(0f, 1f)));
             ShowSoftPoints = Config.Bind("Physics", "ShowSoftPoints", false, "Small markers on the soft points (green at rest, red touched) and the contact capsules, to see what touches what.");
             WrinkOn = Config.Bind("Wrinkles", "On", false, "Procedural skin wrinkles: folds appear in her skin's normal map where the skin compresses (expressions, bending), computed on the GPU (shader bundle sfmorph_shaders next to the DLL).");
@@ -97,6 +100,10 @@ namespace SfMorph
             EmbodyOn = Config.Bind("Embody", "On", false, "See through the partner's eyes (VR), his head hidden, his hands on your controllers.");
             EmbodyHands = Config.Bind("Embody", "Hands", 3, new ConfigDescription("His hands follow the controllers: 0 none, 1 left, 2 right, 3 both.", new AcceptableValueRange<int>(0, 3)));
             EmbodyHideHead = Config.Bind("Embody", "HideHead", true, "Hide his head so it doesn't block the view.");
+            EmbodyViewAlign = Config.Bind("Embody", "ViewAlign", 1, new ConfigDescription("What the view is turned to on a snap: 0 his head's yaw, 1 his chest's (his arms then sit where yours are even when his head is turned).", new AcceptableValueRange<int>(0, 1)));
+            EmbodyViewYaw = Config.Bind("Embody", "ViewYaw", 0f, new ConfigDescription("Turn correction of the view on a snap (degrees, + = to the left).", new AcceptableValueRange<float>(-90f, 90f)));
+            EmbodyViewPitch = Config.Bind("Embody", "ViewPitch", 0f, new ConfigDescription("Tilt correction of the world on a snap (degrees, + = nose up). Tilting the world can be uncomfortable: small values.", new AcceptableValueRange<float>(-45f, 45f)));
+            EmbodyViewRoll = Config.Bind("Embody", "ViewRoll", 0f, new ConfigDescription("Roll correction of the world on a snap (degrees).", new AcceptableValueRange<float>(-45f, 45f)));
             EmbodyNeutralFingers = Config.Bind("Embody", "NeutralFingers", true, "His fingers rest in a neutral pose instead of the animation's; the trigger curls the index finger, the grip clasps the others and stops on her skin.");
             EmbodyElbowAvoid = Config.Bind("Embody", "ElbowAvoid", true, "His elbow swings around her instead of his arm passing through her.");
             EmbodyView = Config.Bind("Embody", "View", 2, new ConfigDescription("0 the game's camera, 1 snap to his eyes once, 2 follow his eyes.", new AcceptableValueRange<int>(0, 2)));

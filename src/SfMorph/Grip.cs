@@ -19,6 +19,10 @@ namespace SfMorph
         public static float Left, Right;
         // 0.8.0: the trigger (VR_HandController.activateValue_*), 0..1, read in the same Update as Left/Right. Index finger.
         public static float TriggerLeft, TriggerRight;
+        // 0.8.0: what closes the hand (all five fingers together, no pointing pose): the button picked by [Hands] GrabButton
+        // (0 trigger, the default: the grip is the game's menu button on some controllers; 1 grip; 2 whichever is pressed further)
+        public static int GrabButton;
+        public static float GrabLeft, GrabRight;
         public static string Source = "";
 
         const BindingFlags Any = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -59,12 +63,20 @@ namespace SfMorph
                 Right = Read(_r, _r.G, false, now);
                 TriggerLeft = Read(_l, _l.T, true, now);
                 TriggerRight = Read(_r, _r.T, true, now);
+                GrabLeft = Grab(Left, TriggerLeft);
+                GrabRight = Grab(Right, TriggerRight);
             }
             catch (Exception e)
             {
-                Left = Right = TriggerLeft = TriggerRight = 0f;
+                Left = Right = TriggerLeft = TriggerRight = GrabLeft = GrabRight = 0f;
                 LogOnce("err" + e.GetType().Name, "update error: " + e.Message);
             }
+        }
+
+        static float Grab(float grip, float trigger)
+        {
+            float g = float.IsNaN(grip) ? 0f : Mathf.Clamp01(grip), t = float.IsNaN(trigger) ? 0f : Mathf.Clamp01(trigger);
+            return GrabButton == 1 ? g : GrabButton == 2 ? Mathf.Max(g, t) : t;
         }
 
         static void SetSource()
