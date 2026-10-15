@@ -91,7 +91,12 @@ namespace SfMorph
             // contact impulses (PhysicsHands.NoteContact adds during the physics step, PublishPhys turns them into PhysF at the next fixed step)
             public Vector3 ImpSum, ImpPt; public float ImpW, ImpWL, ImpWR;
             public Vector3 PhysF, PhysPt, GeoF, GeoPt; public float GeoW; public bool PushRight; public CapSource GeoBy; public float GeoDepth;
+            public string GeoName;                  // who pushed geometrically when the capsule has no CapSource (its Owner), never built per frame
             public bool PushLogged;
+            // Space 1 (the head): where the shape's centre is in the segment-local frame (metres at scale 1); a fallback sphere collider
+            // sits there (SegPose puts the frame at A, not at the sphere's centre). Zero for every other segment.
+            public Vector3 FrameCenter;
+            public float HullRMin, HullRMax;        // radial extent of the hull (about the axis, or about the centre): for logs and markers
             public float TouchT = -100f;            // Time.fixedTime of the last contact with a hand collider (see PhysicsHands.TouchingHer)
             public Track Trk;                       // her bones' pose sampled per frame (0.7.8 package A)
         }
@@ -113,6 +118,13 @@ namespace SfMorph
         static bool _dirty, _geoActive;
         static float _next, _nextCheck, _builtMorph;
         static int _bindVersion;
+
+        // hull grids (design 1.2): axis segments NAlong x NAround + 2 poles = 194 points, bone-space ones NLat x NLon + 2 = 130 (PhysX convex
+        // hulls take at most 255 vertices)
+        const int NAlong = 12, NAround = 16, NLat = 8, NLon = 16;
+        // geometric push (3.2)
+        const float PushStiffness = 150f, PushDamp = 4f, PushCapPerHand = 20f, PushCapPerSeg = 40f, PushMinN = 0.2f;
+        const float MaxCapSpeed = 3f, TeleportSpeed = 8f;   // m/s, the same rules as SoftSim
 
         static void LogOnce(string key, string msg) { if (_once.Add(key)) Plugin.Log.LogInfo("Her body: " + msg); }
         static bool Finite(Vector3 v) { return !(float.IsNaN(v.x) || float.IsNaN(v.y) || float.IsNaN(v.z) || float.IsInfinity(v.x) || float.IsInfinity(v.y) || float.IsInfinity(v.z)); }
@@ -143,7 +155,12 @@ namespace SfMorph
                 if (why != null) { Plugin.Log.LogInfo("Her body: rebuilding (" + why + ")"); Rebuild(her, s, now); }
             }
             else if (now >= _next) Rebuild(her, s, now);
-            if (Built) GeoPush(s);
+            if (Built)
+            {
+                GeoPush(s);
+                if (!PushActive) ClearPush();
+                Tally(now);
+            }
         }
 
         static void Rebuild(Character her, HerBodySettings s, float now)
@@ -193,6 +210,8 @@ namespace SfMorph
             Array.Clear(_byIndex, 0, _byIndex.Length);
             _builtRends.Clear();
             Built = false; Root = null; Status = ""; _dirty = false; _geoActive = false;
+            _pN = -1; _catN = -1; _pushBits = 0; _tallyAt = 0f; _statBase = "";
+            Array.Clear(_sumF, 0, _sumF.Length); Array.Clear(_nF, 0, _nF.Length);
         }
 
         public static Seg Find(string name)
@@ -260,6 +279,30 @@ namespace SfMorph
                 return;
             }
 
+            // hull segments: the frame their points live in (the same one SegPose reports at run time, taken from her bones NOW, so the
+            // hull is in the segment-local frame at scale 1 in world metres by construction). The scale and length must be known first.
+            var fInv = new Matrix4x4[segs.Count];
+            var locs = new List<Vector3>[segs.Count];          // hull segments: the skin vertices of the segment in that frame
+            var samples = new List<VSample>[segs.Count];       // a few of them kept with their skin weights for the frame check
+            for (int i = 0; i < segs.Count; i++)
+            {
+                var g = segs[i];
+                if (!g.Hull) continue;
+                g.BuildScale = Mathf.Max(1e-4f, Mathf.Abs(g.A.lossyScale.x));
+                Vector3 fp; Quaternion fq;
+                if (g.Space == 1) { fp = g.A.position; fq = g.A.rotation; if (!Finite(fp)) fp = Vector3.zero; }
+                else
+                {
+                    g.Len0 = Mathf.Max(1e-4f, (g.B.position - g.A.position).magnitude);
+                    ChooseRoll(g);
+                    float ln;
+                    if (!AxisPose(g, out fp, out fq, out ln)) { g.Hull = false; LogOnce("herframe" + g.Name, "hull " + g.Name + ": its axis is degenerate, capsule only"); continue; }
+                }
+                g.HullLen = g.Len0;
+                fInv[i] = Matrix4x4.TRS(fp, fq, Vector3.one).inverse;
+                locs[i] = new List<Vector3>(); samples[i] = new List<VSample>();
+            }
+
             // skin radii from her body meshes: weights >= .5 on the part's bones, distance to the segment axis (bind space)
             var posOf = new Dictionary<Transform, Vector3>();
             var bindOfBone = new Dictionary<Transform, Matrix4x4>();
@@ -293,13 +336,15 @@ namespace SfMorph
             }
             var pts = new List<Vector3>[segs.Count];
             for (int i = 0; i < pts.Length; i++) pts[i] = new List<Vector3>();
-            int bodies = 0;
+            int bodies = 0, morphed = 0;
+            Vector3[] dv = null;
             foreach (var r in her.Renderers)
             {
                 if (r == null || r.sharedMesh == null || !r.sharedMesh.name.ToLowerInvariant().Contains("body")) continue;
                 string err;
                 var d = MeshData.Read(r.sharedMesh, out err);
                 if (d == null || d.Weights == null || d.Pos == null) { Plugin.Log.LogWarning("Her body: skin '" + r.sharedMesh.name + "' unreadable (" + (err ?? "no weights") + ")"); continue; }
+                morphed += ApplyMorphs(r, d.Pos, ref dv);   // radii and hull points follow the character's shape
                 bodies++;
                 var bs = r.bones;
                 var segOfIdx = new int[bs.Length];
@@ -310,6 +355,15 @@ namespace SfMorph
                     int si;
                     segOfIdx[i] = t != null && segOf.TryGetValue(t, out si) ? si : -1;
                 }
+                // this mesh's bind space -> each hull segment's frame, rigidly through the segment's own bone A (bind pose of A in THIS mesh,
+                // A's matrix now, the frame's inverse): pose independent, includes the units and her scale, no sign or handedness guesses
+                var rig = new Matrix4x4[segs.Count]; var rigOk = new bool[segs.Count];
+                for (int i = 0; i < segs.Count; i++)
+                {
+                    if (locs[i] == null) continue;
+                    int ia = Array.IndexOf(bs, segs[i].A);
+                    if (ia >= 0 && ia < d.Bind.Length) { rig[i] = fInv[i] * segs[i].A.localToWorldMatrix * d.Bind[ia]; rigOk[i] = true; }
+                }
                 var acc = new float[segs.Count];
                 for (int v = 0; v < d.Pos.Length && v < d.Weights.Length; v++)
                 {
@@ -319,10 +373,26 @@ namespace SfMorph
                     if (w.boneIndex1 < segOfIdx.Length && segOfIdx[w.boneIndex1] >= 0) acc[segOfIdx[w.boneIndex1]] += w.weight1;
                     if (w.boneIndex2 < segOfIdx.Length && segOfIdx[w.boneIndex2] >= 0) acc[segOfIdx[w.boneIndex2]] += w.weight2;
                     if (w.boneIndex3 < segOfIdx.Length && segOfIdx[w.boneIndex3] >= 0) acc[segOfIdx[w.boneIndex3]] += w.weight3;
-                    for (int i = 0; i < acc.Length; i++) if (acc[i] >= 0.5f) { pts[i].Add(d.Pos[v]); break; }
+                    for (int i = 0; i < acc.Length; i++)
+                        if (acc[i] >= 0.5f)
+                        {
+                            Vector3 vp = d.Pos[v];
+                            pts[i].Add(vp);
+                            if (locs[i] != null)
+                            {
+                                Matrix4x4 m = rig[i];
+                                bool ok = rigOk[i] || FallbackMatrix(w, segOfIdx, i, bs, d.Bind, fInv[i], out m);   // this mesh has no bone A: the segment's heaviest bone
+                                if (ok)
+                                {
+                                    locs[i].Add(m.MultiplyPoint3x4(vp));
+                                    if ((locs[i].Count & 7) == 1 && samples[i].Count < 160) samples[i].Add(new VSample { Pos = vp, W = w, Bones = bs, Bind = d.Bind });
+                                }
+                            }
+                            break;
+                        }
                 }
             }
-            var sbLog = new StringBuilder("Her body: segments from " + bodies + " body meshes:");
+            var sbLog = new StringBuilder("Her body: segments from " + bodies + " body meshes" + (morphed > 0 ? " (character '" + her.Key + "' " + (MorphWeight(her) * 100f).ToString("0") + " %)" : "") + ":");
             for (int i = 0; i < segs.Count; i++)
             {
                 var g = segs[i];
@@ -367,11 +437,15 @@ namespace SfMorph
                     g.RSkin = dists[(int)(g.Def.Pct * (dists.Count - 1))] * Unit;
                 }
                 else if (g.Sphere && g.Name.StartsWith("breast_", StringComparison.Ordinal)) g.Drop = true;   // no vertices: a sphere at the bone's origin would be a guess
+                if (g.Hull && !g.Drop) BuildHull(g, locs[i]);
                 float inset = Inset(g, s.Softness);
                 if (g.Drop) { sbLog.Append("\n  ").Append(g.Name).Append(" (").Append(g.A.name).Append(" sphere): only ").Append(g.Verts).Append(" verts under ").Append(g.Owner).Append(", not made"); continue; }
                 sbLog.Append("\n  ").Append(g.Name).Append(" (").Append(g.A.name).Append(g.B != null ? "->" + g.B.name : " sphere" + (g.Owner != g.A.name ? ", owner " + g.Owner : "")).Append("): ")
-                     .Append(g.Verts).Append(" verts, skin r ").Append(g.RSkin.ToString("0.000")).Append(dists.Count >= 12 ? "" : " (default)")
-                     .Append(", inset ").Append(inset.ToString("0.000")).Append(" -> r ").Append(Mathf.Max(0.012f, g.RSkin - inset).ToString("0.000")).Append(g.Soft ? " [soft zone]" : "");
+                     .Append(g.Verts).Append(" verts, skin r ").Append(g.RSkin.ToString("0.000")).Append(dists.Count >= 12 ? "" : " (default)");
+                if (g.HullPts != null) sbLog.Append(", hull ").Append(g.HullPts.Length).Append(" pts (r ").Append(g.HullRMin.ToString("0.000")).Append("..").Append(g.HullRMax.ToString("0.000")).Append(")");
+                sbLog.Append(", inset ").Append(inset.ToString("0.000"));
+                if (g.HullPts == null) sbLog.Append(" -> capsule r ").Append(Mathf.Max(0.012f, g.RSkin - inset).ToString("0.000"));
+                if (g.Soft) sbLog.Append(" [soft zone]");
             }
             Plugin.Log.LogInfo(sbLog.ToString());
 
@@ -379,43 +453,334 @@ namespace SfMorph
             {
                 if (g.Drop) continue;
                 g.BuildScale = Mathf.Max(1e-4f, Mathf.Abs(g.A.lossyScale.x));
-                if (!g.Sphere) g.Len0 = Mathf.Max(1e-4f, (g.B.position - g.A.position).magnitude);
+                if (!g.Sphere) { g.Len0 = Mathf.Max(1e-4f, (g.B.position - g.A.position).magnitude); g.HullLen = g.Len0; }
                 Segs.Add(g);
                 _byIndex[g.Index] = g;
             }
+            // How the hull frame was verified (once per build, cheap): each hull is mapped to the world exactly as the colliders will place it
+            // (SegPose), then 64 vertices are skinned with the LIVE bone matrices (all four weights, not the rigid bone-A image the hull was
+            // built from). The hull sits on the outer skin, so the nearest hull point is a grid spacing or a concavity away (a few cm); a
+            // wrong roll, handedness or units shows as the hull far from the skin (avg > 5 cm) and logs a warning.
+            var sbChk = new StringBuilder("Her body: hull frame check (64 live-skinned vertices vs the hull's world points):");
+            bool chkBad = false;
+            for (int i = 0; i < segs.Count; i++)
+                if (!segs[i].Drop && segs[i].HullPts != null) chkBad |= FrameCheck(segs[i], samples[i], sbChk);
+            if (chkBad) Plugin.Log.LogWarning(sbChk.ToString()); else Plugin.Log.LogInfo(sbChk.ToString());
             _builtRends.AddRange(her.Renderers);
             _bindVersion = MorphState.BindVersion;
             _builtMorph = MorphWeight(her);
             Built = true;
             Note = "";
-            Status = "Her body: " + Segs.Count + " segments";
+            int nh = 0;
+            foreach (var g in Segs) if (g.HullPts != null) nh++;
+            _statBase = "Her body: " + Segs.Count + " segments (" + nh + " hulls, " + (Segs.Count - nh) + " capsules/spheres)";
+            _pushBits = 0;
+            Status = _statBase;
             BuildVersion++;
+        }
+
+        // ================= hull points (design 1.2) =================
+
+        // One skinned vertex kept from the build to check the hull against the live skin.
+        struct VSample { public Vector3 Pos; public BoneWeight W; public Transform[] Bones; public Matrix4x4[] Bind; }
+
+        // Adds the blendshape frames her readable meshes carry to bind-space positions (a character's clone has "SfMorph body/face"
+        // shapes whose weights the sliders drive), so the radii and the hull follow her current shape. The last frame of each shape is
+        // taken (the clones have one, at weight 100). Returns how many shapes contributed. dv: one scratch array per build.
+        static int ApplyMorphs(SkinnedMeshRenderer r, Vector3[] pos, ref Vector3[] dv)
+        {
+            var m = r.sharedMesh;
+            if (m == null || pos == null || !m.isReadable) return 0;   // the game's own GPU-only meshes have no blendshapes
+            int bc = m.blendShapeCount, n = m.vertexCount, used = 0;
+            if (bc == 0 || pos.Length != n) return 0;
+            for (int k = 0; k < bc; k++)
+            {
+                float wgt = r.GetBlendShapeWeight(k);
+                if (Mathf.Abs(wgt) < 0.1f) continue;      // 0.001 of the full weight
+                int last = m.GetBlendShapeFrameCount(k) - 1;
+                if (last < 0) continue;
+                float fw = m.GetBlendShapeFrameWeight(k, last);
+                if (!(fw > 0f)) fw = 100f;
+                float f = wgt / fw;
+                if (dv == null || dv.Length != n) dv = new Vector3[n];
+                try { m.GetBlendShapeFrameVertices(k, last, dv, null, null); }
+                catch (Exception e) { LogOnce("hermorph" + m.name, "blendshape '" + m.GetBlendShapeName(k) + "' of '" + m.name + "' not read (" + e.Message + "), hull and radii ignore it"); continue; }
+                for (int v = 0; v < n; v++) pos[v] += dv[v] * f;
+                used++;
+            }
+            return used;
+        }
+
+        // A vertex whose mesh doesn't carry the segment's bone A: take the heaviest of its bones that belongs to the segment.
+        static bool FallbackMatrix(BoneWeight w, int[] segOfIdx, int seg, Transform[] bs, Matrix4x4[] bind, Matrix4x4 frameInv, out Matrix4x4 m)
+        {
+            m = Matrix4x4.identity;
+            int best = -1; float bw = 0f;
+            Heaviest(w.boneIndex0, w.weight0, segOfIdx, seg, ref best, ref bw);
+            Heaviest(w.boneIndex1, w.weight1, segOfIdx, seg, ref best, ref bw);
+            Heaviest(w.boneIndex2, w.weight2, segOfIdx, seg, ref best, ref bw);
+            Heaviest(w.boneIndex3, w.weight3, segOfIdx, seg, ref best, ref bw);
+            if (best < 0 || best >= bs.Length || best >= bind.Length || bs[best] == null) return false;
+            m = frameInv * bs[best].localToWorldMatrix * bind[best];
+            return true;
+        }
+
+        static void Heaviest(int bi, float wt, int[] segOfIdx, int seg, ref int best, ref float bw)
+        {
+            if (bi < 0 || bi >= segOfIdx.Length || segOfIdx[bi] != seg || !(wt > bw)) return;
+            best = bi; bw = wt;
+        }
+
+        // The hull of one segment from its skin vertices in the segment-local frame (metres, scale 1). Fills HullPts / HullTris /
+        // HullRMin / HullRMax / FrameCenter; leaves HullPts null (capsule only) when there are too few vertices.
+        static void BuildHull(Seg g, List<Vector3> loc)
+        {
+            if (g.Space == 1 && loc != null && loc.Count > 0)
+            {
+                Vector3 c = Vector3.zero;
+                for (int k = 0; k < loc.Count; k++) c += loc[k];
+                g.FrameCenter = c / loc.Count;
+            }
+            g.HullPts = null; g.HullTris = null;
+            if (loc == null || loc.Count < 24) { g.Hull = false; LogOnce("hershort" + g.Name, "hull " + g.Name + ": only " + (loc == null ? 0 : loc.Count) + " skin vertices, capsule only"); return; }
+            if (g.Space == 1) BuildBoneHull(g, loc); else BuildAxisHull(g, loc);
+            if (g.HullPts != null)
+                for (int k = 0; k < g.HullPts.Length; k++)
+                    if (!Finite(g.HullPts[k])) { g.HullPts = null; g.HullTris = null; g.Hull = false; LogOnce("herhullnan" + g.Name, "hull " + g.Name + ": non-finite points, capsule only"); return; }
+        }
+
+        // Axis segments: NAlong bins along A->B x NAround angular bins about it; per cell the vertex farthest from the axis (the outer skin; the
+        // inset at cooking time is what lets the skin give first), an empty cell takes RSkin so the hull is never thinner than the capsule it
+        // replaces. Range along the axis: the joints +-5 %, widened to the vertices (the pelvis axis runs hip to hip, the torso reaches far
+        // beyond it) but never beyond 0.8 x the length past either end; vertices outside that are dropped. Two poles close the ends.
+        static void BuildAxisHull(Seg g, List<Vector3> loc)
+        {
+            float L = g.Len0, lo = -0.8f * L, hi = 1.8f * L;
+            float yMin = float.MaxValue, yMax = float.MinValue;
+            for (int k = 0; k < loc.Count; k++)
+            {
+                float y = loc[k].y;
+                if (y < lo || y > hi) continue;
+                if (y < yMin) yMin = y;
+                if (y > yMax) yMax = y;
+            }
+            float yLo = Mathf.Min(-0.05f * L, yMin), yHi = Mathf.Max(1.05f * L, yMax);
+            float dy = (yHi - yLo) / NAlong;
+            var cell = new float[NAlong * NAround];
+            for (int k = 0; k < cell.Length; k++) cell[k] = -1f;
+            float angToBin = NAround / (2f * Mathf.PI);
+            for (int k = 0; k < loc.Count; k++)
+            {
+                Vector3 v = loc[k];
+                if (v.y < lo || v.y > hi) continue;
+                int i = Mathf.Clamp((int)((v.y - yLo) / dy), 0, NAlong - 1);
+                int j = (int)((Mathf.Atan2(v.z, v.x) + Mathf.PI) * angToBin) % NAround;
+                float rad = Mathf.Sqrt(v.x * v.x + v.z * v.z);
+                int c = i * NAround + j;
+                if (rad > cell[c]) cell[c] = rad;
+            }
+            var pts = new Vector3[NAlong * NAround + 2];
+            float rMin = float.MaxValue, rMax = 0f;
+            for (int i = 0; i < NAlong; i++)
+                for (int j = 0; j < NAround; j++)
+                {
+                    float rad = cell[i * NAround + j];
+                    rad = Mathf.Max(0.006f, rad > 0f ? rad : g.RSkin);
+                    float phi = -Mathf.PI + (j + 0.5f) * (2f * Mathf.PI / NAround);
+                    pts[i * NAround + j] = new Vector3(rad * Mathf.Cos(phi), yLo + (i + 0.5f) * dy, rad * Mathf.Sin(phi));
+                    if (rad < rMin) rMin = rad;
+                    if (rad > rMax) rMax = rad;
+                }
+            float cap = 0.5f * Mathf.Max(0.01f, g.RSkin);
+            pts[NAlong * NAround] = new Vector3(0f, yLo - cap, 0f);
+            pts[NAlong * NAround + 1] = new Vector3(0f, yHi + cap, 0f);
+            g.HullPts = pts; g.HullTris = MakeTris(NAlong, NAround); g.HullRMin = rMin; g.HullRMax = rMax;
+        }
+
+        // Bone-space segments (the head): NLat x NLon directions around the centroid, farthest vertex per cell, empty = RSkin, poles on +-Y.
+        // Row 0 is the south (-Y) side so the triangle winding is the same as the axis hull's (outward).
+        static void BuildBoneHull(Seg g, List<Vector3> loc)
+        {
+            Vector3 c = g.FrameCenter;
+            var cell = new float[NLat * NLon];
+            for (int k = 0; k < cell.Length; k++) cell[k] = -1f;
+            float angToBin = NLon / (2f * Mathf.PI);
+            for (int k = 0; k < loc.Count; k++)
+            {
+                Vector3 d = loc[k] - c;
+                float rad = d.magnitude;
+                if (!(rad > 1e-4f)) continue;
+                int i = Mathf.Clamp((int)((Mathf.PI - Mathf.Acos(Mathf.Clamp(d.y / rad, -1f, 1f))) * (NLat / Mathf.PI)), 0, NLat - 1);
+                int j = (int)((Mathf.Atan2(d.z, d.x) + Mathf.PI) * angToBin) % NLon;
+                if (rad > cell[i * NLon + j]) cell[i * NLon + j] = rad;
+            }
+            var pts = new Vector3[NLat * NLon + 2];
+            float rMin = float.MaxValue, rMax = 0f, south = 0f, north = 0f;
+            for (int i = 0; i < NLat; i++)
+            {
+                float theta = Mathf.PI - (i + 0.5f) * (Mathf.PI / NLat);
+                float st = Mathf.Sin(theta), ct = Mathf.Cos(theta);
+                for (int j = 0; j < NLon; j++)
+                {
+                    float rad = cell[i * NLon + j];
+                    rad = Mathf.Max(0.006f, rad > 0f ? rad : g.RSkin);
+                    float phi = -Mathf.PI + (j + 0.5f) * (2f * Mathf.PI / NLon);
+                    pts[i * NLon + j] = c + new Vector3(rad * st * Mathf.Cos(phi), rad * ct, rad * st * Mathf.Sin(phi));
+                    if (rad < rMin) rMin = rad;
+                    if (rad > rMax) rMax = rad;
+                    if (i == 0) south += rad / NLon;
+                    if (i == NLat - 1) north += rad / NLon;
+                }
+            }
+            pts[NLat * NLon] = c - new Vector3(0f, south, 0f);
+            pts[NLat * NLon + 1] = c + new Vector3(0f, north, 0f);
+            g.HullPts = pts; g.HullTris = MakeTris(NLat, NLon); g.HullRMin = rMin; g.HullRMax = rMax;
+        }
+
+        // The cylinder/sphere grid (rows x cols points, row-major, rows run in +Y) with a fan at each end: pole0 = index rows*cols (below row 0),
+        // pole1 = the next one. Unity's winding (cross(b - a, c - a) points out): outward for the canonical frame (checked numerically). 384 / 256 triangles.
+        static int[] MakeTris(int rows, int cols)
+        {
+            var t = new int[(rows - 1) * cols * 6 + 2 * cols * 3];
+            int n = 0, pole0 = rows * cols, pole1 = pole0 + 1;
+            for (int i = 0; i < rows - 1; i++)
+                for (int j = 0; j < cols; j++)
+                {
+                    int j1 = (j + 1) % cols;
+                    int a = i * cols + j, b = (i + 1) * cols + j, c = i * cols + j1, d = (i + 1) * cols + j1;
+                    t[n++] = a; t[n++] = b; t[n++] = c;
+                    t[n++] = b; t[n++] = d; t[n++] = c;
+                }
+            for (int j = 0; j < cols; j++) { int j1 = (j + 1) % cols; t[n++] = pole0; t[n++] = j; t[n++] = j1; }
+            for (int j = 0; j < cols; j++) { int j1 = (j + 1) % cols; t[n++] = pole1; t[n++] = (rows - 1) * cols + j1; t[n++] = (rows - 1) * cols + j; }
+            return t;
+        }
+
+        // The vertex skinned with the live bone matrices (what the renderer draws, all four weights).
+        static bool SkinNow(VSample s, out Vector3 world)
+        {
+            world = Vector3.zero;
+            float ws = 0f;
+            Skin1(s, s.W.boneIndex0, s.W.weight0, ref world, ref ws);
+            Skin1(s, s.W.boneIndex1, s.W.weight1, ref world, ref ws);
+            Skin1(s, s.W.boneIndex2, s.W.weight2, ref world, ref ws);
+            Skin1(s, s.W.boneIndex3, s.W.weight3, ref world, ref ws);
+            if (!(ws > 0.01f)) return false;
+            world /= ws;
+            return Finite(world);
+        }
+
+        static void Skin1(VSample s, int bi, float wt, ref Vector3 sum, ref float ws)
+        {
+            if (!(wt > 0f) || bi < 0 || bi >= s.Bones.Length || bi >= s.Bind.Length || s.Bones[bi] == null) return;
+            sum += wt * (s.Bones[bi].localToWorldMatrix * s.Bind[bi]).MultiplyPoint3x4(s.Pos);
+            ws += wt;
+        }
+
+        // Once per build: the hull as the colliders place it (SegPose) against live-skinned vertices. Appends one line to sb; true = looks wrong.
+        static bool FrameCheck(Seg g, List<VSample> samples, StringBuilder sb)
+        {
+            Vector3 p, sc; Quaternion q;
+            sb.Append("\n  ").Append(g.Name).Append(": ");
+            if (!SegPose(g, out p, out q, out sc) || samples == null || samples.Count == 0) { sb.Append("no pose or no samples"); return false; }
+            int n = g.HullPts.Length, grid = n - 2;
+            var w = new Vector3[n];
+            for (int k = 0; k < n; k++) w[k] = p + q * Vector3.Scale(g.HullPts[k], sc);
+            // the hull's radial extent in the world about the live axis (or the head's centre): equals the canonical radii if SegPose's frame is right
+            Vector3 centre = g.Space == 1 ? p + q * Vector3.Scale(g.FrameCenter, sc) : p;
+            Vector3 ay = g.Space == 1 ? Vector3.zero : q * Vector3.up;
+            float rMin = float.MaxValue, rMax = 0f;
+            for (int k = 0; k < grid; k++)
+            {
+                Vector3 v = w[k] - centre;
+                v -= ay * Vector3.Dot(v, ay);
+                float r = v.magnitude;
+                if (r < rMin) rMin = r;
+                if (r > rMax) rMax = r;
+            }
+            int cnt = Mathf.Min(64, samples.Count), used = 0;
+            float sum = 0f, max = 0f;
+            for (int t = 0; t < cnt; t++)
+            {
+                Vector3 sp;
+                if (!SkinNow(samples[cnt > 1 ? t * (samples.Count - 1) / (cnt - 1) : 0], out sp)) continue;
+                float best = float.MaxValue;
+                for (int k = 0; k < n; k++) { float d2 = (w[k] - sp).sqrMagnitude; if (d2 < best) best = d2; }
+                best = Mathf.Sqrt(best);
+                sum += best; if (best > max) max = best; used++;
+            }
+            if (used == 0) { sb.Append("no skinned samples"); return false; }
+            float avg = sum / used;
+            bool bad = avg > 0.05f || max > 0.15f || (rMax > 0f && Mathf.Abs(rMax - g.HullRMax) > 0.005f);
+            sb.Append("hull r ").Append(rMin.ToString("0.000")).Append("..").Append(rMax.ToString("0.000")).Append(" in the world (skin r ").Append(g.RSkin.ToString("0.000"))
+              .Append("), ").Append(used).Append(" skinned verts: nearest hull point avg ").Append((avg * 100f).ToString("0.0")).Append(" cm, max ").Append((max * 100f).ToString("0.0")).Append(" cm");
+            if (bad) sb.Append("  <-- frame looks wrong");
+            return bad;
         }
 
         // ================= live pose =================
 
-        // Where a segment's collision shape stands now (the same placement the capsules always had): axis segments at the middle of
-        // A -> B, rotated so +Y runs from A to B; spheres at LocalCenter in A's space. scale = (rr, rl, rr): rr how much her bone was
-        // scaled since the build (the skin got fatter or thinner), rl the live length of A -> B against Len0 (1 for spheres).
-        // false when a bone is gone or the pose isn't usable. (0.7.8 hull package: the origin moves to A, see design 1.3.)
+        // The roll about the axis follows A's local X (its Z when X lies along the axis): remembered at build so it never switches at run time.
+        static void ChooseRoll(Seg g)
+        {
+            g.RollAxis = 0;
+            Vector3 d = g.B.position - g.A.position;
+            if (!(d.sqrMagnitude > 1e-8f)) return;
+            Vector3 y = d.normalized, x = g.A.right;
+            if ((x - y * Vector3.Dot(x, y)).magnitude < 0.1f) g.RollAxis = 2;
+        }
+
+        static Vector3 Perp(Vector3 v, Vector3 y)
+        {
+            Vector3 x = v - y * Vector3.Dot(v, y);
+            float m = x.magnitude;
+            return m > 1e-4f ? x / m : Vector3.zero;
+        }
+
+        // The axis segments' frame (origin at joint A, Y along A -> B, X from A's local X or Z): the one place both the build and SegPose use.
+        static bool AxisPose(Seg g, out Vector3 a, out Quaternion q, out float len)
+        {
+            q = Quaternion.identity;
+            a = g.A.position;
+            Vector3 d = g.B.position - a;
+            len = d.magnitude;
+            if (!(len > 1e-4f) || !Finite(d) || !Finite(a)) return false;
+            Vector3 y = d / len;
+            bool z = g.RollAxis == 2;
+            Vector3 x = Perp(z ? g.A.forward : g.A.right, y);
+            if (!(x.sqrMagnitude > 0.5f)) x = Perp(z ? g.A.right : g.A.forward, y);   // the roll axis lies along the segment right now: the other one
+            if (!(x.sqrMagnitude > 0.5f)) return false;
+            q = Quaternion.LookRotation(Vector3.Cross(x, y), y);   // right = x, up = y, forward = x cross y
+            return true;
+        }
+
+        // Where a segment's collision shape stands now, in the frame its HullPts are in (design section 11), false when a bone is gone or the
+        // pose isn't usable. scale = (rr, rl, rr): rr how much her bone was scaled since the build (the skin got fatter or thinner), rl the live
+        // length of A -> B against Len0 (Length sliders stretch along Y only).
+        //   axis (Space 0): p = A.position, Y = A -> B, X from A's local X (RollAxis 2: Z), scale (rr, rl, rr)
+        //   sphere: p = A.TransformPoint(LocalCenter), q = A.rotation, scale (rr, rr, rr) / one
+        //   bone space (Space 1, the head): p = A.position, q = A.rotation, scale (rr, rr, rr); the shape's centre is FrameCenter in that frame
         public static bool SegPose(Seg g, out Vector3 p, out Quaternion q, out Vector3 scale)
         {
             p = Vector3.zero; q = Quaternion.identity; scale = Vector3.one;
             if (g.A == null || (!g.Sphere && g.B == null)) return false;
             float rr = Mathf.Abs(g.A.lossyScale.x) / g.BuildScale;
-            if (g.Sphere) p = g.A.TransformPoint(g.LocalCenter);
-            else
+            if (g.Space == 1)
             {
-                Vector3 a = g.A.position, d = g.B.position - a;
-                float len = d.magnitude;
-                if (!(len > 1e-4f) || !Finite(d)) return false;
-                p = a + d * 0.5f;
-                q = Quaternion.FromToRotation(Vector3.up, d / len);
-                scale = new Vector3(rr, len / g.Len0, rr);
+                p = g.A.position; q = g.A.rotation;
+                scale = new Vector3(rr, rr, rr);
                 return Finite(p);
             }
-            scale = new Vector3(rr, 1f, rr);
-            return Finite(p);
+            if (g.Sphere)
+            {
+                p = g.A.TransformPoint(g.LocalCenter); q = g.A.rotation;
+                scale = new Vector3(rr, rr, rr);
+                return Finite(p);
+            }
+            float len;
+            if (!AxisPose(g, out p, out q, out len)) return false;
+            scale = new Vector3(rr, len / g.Len0, rr);
+            return true;
         }
 
         // ================= pushes =================
@@ -472,10 +837,218 @@ namespace SfMorph
             }
         }
 
-        // Pushes from hands that aren't physics hands (your hand models, the partner's hands), by how deep they are in her. 0.7.8 geometric
-        // push package: fills GeoF / GeoPt / GeoBy per segment here and sets _geoActive. Nothing yet.
+        // ---- geometric push state (allocation-free once the arrays have grown) ----
+
+        static Vector3[] _pA = new Vector3[0], _pB = new Vector3[0];   // each capsule's world endpoints last frame (indexed like SoftSim: by position in Caps)
+        static bool[] _pOk = new bool[0];
+        static byte[] _cat = new byte[0];                               // 1 = a source of geometric pushes (decided when the capsule set changes)
+        static int _pN = -1, _pVer = -1, _catN = -1, _catVer = -1;
+        static object _catList;
+        static Transform _catRoot;
+        static readonly Vector3[] _sa = new Vector3[Defs.Length], _sb = new Vector3[Defs.Length];   // her segments' world axes / centres this frame
+        static readonly float[] _sr = new float[Defs.Length];
+        static readonly bool[] _sOk = new bool[Defs.Length];
+        // pushes seen (merged physics + geometric) for the 10 s log and the status
+        static readonly float[] _sumF = new float[Defs.Length];
+        static readonly int[] _nF = new int[Defs.Length];
+        static readonly string[] _byLast = new string[Defs.Length];
+        static float _tallyAt;
+        static uint _pushBits;
+        static string _statBase = "";
+
+        // Which capsules can push her geometrically: your hand models and the partner's hands (the physics hands push through contact
+        // impulses; her own capsules never push her). Decided when the capsule set changes, not per frame.
+        static void Categorise(List<SoftCapsule> caps)
+        {
+            int n = caps.Count;
+            if (_cat.Length < n) _cat = new byte[Mathf.Max(n, _cat.Length * 2)];
+            for (int i = 0; i < n; i++)
+            {
+                var c = caps[i];
+                bool ok = c.T != null && ((c.Kind == "vr" && c.Owner != "PhysicsHands") || c.Kind == "partner");
+                if (ok && Root != null && c.T.IsChildOf(Root)) ok = false;
+                _cat[i] = (byte)(ok ? 1 : 0);
+            }
+            _catN = n; _catVer = VrHands.Version; _catList = caps; _catRoot = Root;
+        }
+
+        static void ClosestSegSeg(Vector3 p1, Vector3 q1, Vector3 p2, Vector3 q2, out float s, out Vector3 c1, out Vector3 c2)
+        {
+            Vector3 d1 = q1 - p1, d2 = q2 - p2, r = p1 - p2;
+            float a = Vector3.Dot(d1, d1), e = Vector3.Dot(d2, d2), f = Vector3.Dot(d2, r), t;
+            const float eps = 1e-8f;
+            if (a <= eps && e <= eps) { s = 0f; t = 0f; }
+            else if (a <= eps) { s = 0f; t = Mathf.Clamp01(f / e); }
+            else
+            {
+                float c = Vector3.Dot(d1, r);
+                if (e <= eps) { t = 0f; s = Mathf.Clamp01(-c / a); }
+                else
+                {
+                    float b = Vector3.Dot(d1, d2), den = a * e - b * b;
+                    s = den > eps ? Mathf.Clamp01((b * f - c * e) / den) : 0f;
+                    t = (b * s + f) / e;
+                    if (t < 0f) { t = 0f; s = Mathf.Clamp01(-c / a); }
+                    else if (t > 1f) { t = 1f; s = Mathf.Clamp01((b - c) / a); }
+                }
+            }
+            c1 = p1 + d1 * s; c2 = p2 + d2 * t;
+        }
+
+        // Pushes from hands that aren't physics hands (your hand models, the partner's hands), by how deep they are in her SKIN shape (the
+        // radius the capsule colliders had before the inset: RSkin x her bone scale): per capsule and segment a force along the line from the
+        // capsule to her axis, Stiffness x depth + Damp x the capsule's approach speed, capped per hand and per segment. Fills GeoF / GeoPt / GeoBy
+        // per segment every frame and sets _geoActive. (Physics.ComputePenetration would need a collider per capsule; the push only needs depth.)
         static void GeoPush(HerBodySettings s)
         {
+            for (int i = 0; i < Segs.Count; i++)
+            {
+                var g = Segs[i];
+                g.GeoF = Vector3.zero; g.GeoPt = Vector3.zero; g.GeoW = 0f; g.GeoDepth = 0f; g.GeoBy = null; g.GeoName = null;
+            }
+            _geoActive = false;
+            var caps = s.Caps;
+            if (!s.PushByTouch || caps == null || caps.Count == 0) { _pN = -1; return; }
+            int n = caps.Count;
+            if (n != _catN || VrHands.Version != _catVer || !ReferenceEquals(caps, _catList) || !ReferenceEquals(Root, _catRoot)) Categorise(caps);
+            bool reset = n != _pN || VrHands.Version != _pVer;
+            if (_pA.Length < n) { int m = Mathf.Max(n, _pA.Length * 2); _pA = new Vector3[m]; _pB = new Vector3[m]; _pOk = new bool[m]; reset = true; }
+            if (reset) { Array.Clear(_pOk, 0, _pOk.Length); _pN = n; _pVer = VrHands.Version; }   // a different capsule set: no velocities from the old one
+            float dt = Time.deltaTime, invDt = dt > 1e-4f && dt < 0.5f ? 1f / dt : 0f;
+
+            // her segments' skin shapes in the world, once
+            for (int i = 0; i < Segs.Count; i++)
+            {
+                var g = Segs[i];
+                int k = g.Index;
+                _sOk[k] = false;
+                if (g.A == null || (!g.Sphere && g.B == null)) continue;
+                float rr = Mathf.Abs(g.A.lossyScale.x) / g.BuildScale;
+                if (g.Sphere) { _sa[k] = _sb[k] = g.A.TransformPoint(g.LocalCenter); }
+                else { _sa[k] = g.A.position; _sb[k] = g.B.position; }
+                _sr[k] = g.RSkin * rr;
+                _sOk[k] = Finite(_sa[k]) && Finite(_sb[k]) && _sr[k] > 0.001f;
+            }
+
+            for (int ci = 0; ci < n; ci++)
+            {
+                var c = caps[ci];
+                if (c.T == null || !(c.Radius > 0f)) { _pOk[ci] = false; continue; }
+                Matrix4x4 m = c.T.localToWorldMatrix;
+                Vector3 a = m.MultiplyPoint3x4(c.LocalA), b = m.MultiplyPoint3x4(c.LocalB);
+                Vector3 va = Vector3.zero, vb = Vector3.zero;
+                if (_pOk[ci] && invDt > 0f)
+                {
+                    va = (a - _pA[ci]) * invDt; vb = (b - _pB[ci]) * invDt;
+                    float sa = va.sqrMagnitude, sbb = vb.sqrMagnitude;
+                    if (sa > TeleportSpeed * TeleportSpeed || sbb > TeleportSpeed * TeleportSpeed) { va = Vector3.zero; vb = Vector3.zero; }   // jumped, not moved
+                    else
+                    {
+                        if (sa > MaxCapSpeed * MaxCapSpeed) va *= MaxCapSpeed / Mathf.Sqrt(sa);
+                        if (sbb > MaxCapSpeed * MaxCapSpeed) vb *= MaxCapSpeed / Mathf.Sqrt(sbb);
+                    }
+                }
+                _pA[ci] = a; _pB[ci] = b; _pOk[ci] = true;   // tracked even while hidden so its speed is right when it comes back
+                if (_cat[ci] == 0) continue;
+                var src = c.Src;
+                if (src != null && !src.Live) continue;      // a hidden partner (or replaced controller model) touches nothing
+                if (!Finite(a) || !Finite(b)) continue;
+                _geoActive = true;
+                for (int i = 0; i < Segs.Count; i++)
+                {
+                    var g = Segs[i];
+                    int k = g.Index;
+                    if (!_sOk[k]) continue;
+                    float t; Vector3 cc, cs;
+                    ClosestSegSeg(a, b, _sa[k], _sb[k], out t, out cc, out cs);
+                    Vector3 diff = cs - cc;
+                    float dist = diff.magnitude;
+                    float pen = c.Radius + _sr[k] - dist;
+                    if (pen <= 0f || dist < 1e-4f) continue;
+                    Vector3 nrm = diff / dist;                             // into her
+                    float vn = Mathf.Max(0f, Vector3.Dot(Vector3.Lerp(va, vb, t), nrm));
+                    float mag = Mathf.Min(PushCapPerHand, PushStiffness * pen + PushDamp * vn);
+                    Vector3 f = nrm * mag;
+                    g.GeoF += f;
+                    g.GeoPt += (cc + nrm * c.Radius) * mag;
+                    g.GeoW += mag;
+                    if (pen > g.GeoDepth) { g.GeoDepth = pen; g.GeoBy = src; g.GeoName = c.Owner; }
+                }
+            }
+
+            for (int i = 0; i < Segs.Count; i++)
+            {
+                var g = Segs[i];
+                if (g.GeoW > 1e-6f)
+                {
+                    g.GeoPt /= g.GeoW;
+                    float fm = g.GeoF.magnitude;
+                    if (fm > PushCapPerSeg) g.GeoF *= PushCapPerSeg / fm;
+                    if (!Finite(g.GeoF) || !Finite(g.GeoPt)) { g.GeoF = Vector3.zero; g.GeoW = 0f; }
+                }
+                else g.GeoW = 0f;
+                if (!g.PushLogged && g.GeoF.sqrMagnitude >= PushMinN * PushMinN)
+                {
+                    g.PushLogged = true;
+                    Plugin.Log.LogInfo("Her body: first push on " + g.Name + " by " + ByName(g, 0f, 1f) + " (" + g.GeoF.magnitude.ToString("0.0") + " N, " + (g.GeoDepth * 100f).ToString("0.0") + " cm deep)");
+                }
+            }
+        }
+
+        // Nothing can push her: the last pushes must not linger.
+        static void ClearPush()
+        {
+            for (int i = 0; i < Segs.Count; i++)
+            {
+                var g = Segs[i];
+                g.GeoF = Vector3.zero; g.GeoW = 0f; g.PhysF = Vector3.zero;
+            }
+        }
+
+        static string ByName(Seg g, float wp, float wg)
+        {
+            if (wp >= wg) return g.PushRight ? "your right physics hand" : "your left physics hand";
+            return g.GeoBy != null ? g.GeoBy.Name : (g.GeoName != null ? g.GeoName : "a hand");
+        }
+
+        // Every frame: which segments are pushed (status line), and every 10 s one log line with their average force while pushes happened.
+        static void Tally(float now)
+        {
+            uint bits = 0;
+            for (int i = 0; i < Segs.Count; i++)
+            {
+                var g = Segs[i];
+                Vector3 f = g.PhysF + g.GeoF;
+                if (!PushActive || f.sqrMagnitude < PushMinN * PushMinN) continue;
+                bits |= 1u << g.Index;
+                float wp = g.PhysF.magnitude, wg = g.GeoF.magnitude;
+                _sumF[g.Index] += f.magnitude; _nF[g.Index]++;
+                _byLast[g.Index] = ByName(g, wp, wg);
+            }
+            if (bits != _pushBits)
+            {
+                _pushBits = bits;
+                var sb = new StringBuilder(_statBase);
+                bool first = true;
+                for (int i = 0; i < Segs.Count; i++)
+                    if ((bits & (1u << Segs[i].Index)) != 0) { sb.Append(first ? "; pushed: " : ", ").Append(Segs[i].Name); first = false; }
+                Status = sb.ToString();
+            }
+            if (_tallyAt <= 0f) _tallyAt = now + 10f;
+            else if (now >= _tallyAt)
+            {
+                _tallyAt = now + 10f;
+                StringBuilder sb = null;
+                for (int i = 0; i < Segs.Count; i++)
+                {
+                    int k = Segs[i].Index;
+                    if (_nF[k] == 0) continue;
+                    if (sb == null) sb = new StringBuilder("Her body: last 10 s pushes: "); else sb.Append(", ");
+                    sb.Append(Segs[i].Name).Append(' ').Append((_sumF[k] / _nF[k]).ToString("0.0")).Append(" N avg by ").Append(_byLast[k]);
+                    _sumF[k] = 0f; _nF[k] = 0;
+                }
+                if (sb != null) Plugin.Log.LogInfo(sb.ToString());
+            }
         }
 
         // The push on one of her segments over the last step: the force ON HER (N, world), where it acted, and who pushed ("your right
@@ -499,7 +1072,7 @@ namespace SfMorph
             float wp = g.PhysF.magnitude, wg = g.GeoF.magnitude;
             point = (g.PhysPt * wp + g.GeoPt * wg) / (wp + wg);
             forceOnHer = f;
-            by = wp >= wg ? (g.PushRight ? "your right physics hand" : "your left physics hand") : (g.GeoBy != null ? g.GeoBy.Name : "a hand");
+            by = ByName(g, wp, wg);
             return true;
         }
     }
