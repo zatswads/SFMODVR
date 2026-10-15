@@ -210,6 +210,10 @@ namespace SfMorph
         public string Status = "";
 
         // The game's mesh behind one of our clones (MorphState must clone the game's mesh, not ours).
+        // 0.7.2: how deep each physics hand is into her skin (0..1 of the limit), for the hands' force cap; per zone contact.
+        public static float LeftResist, RightResist;
+        public bool Touching(string zoneIdPrefix) { return false; }   // stub
+
         public static Mesh Original(Mesh m)
         {
             Mesh o;
@@ -220,7 +224,7 @@ namespace SfMorph
 
         // Every frame, after MorphState.Update and before Body applies: on = Apply + Physics on + the game's woman.
         // Builds, rebuilds and maintains the zones; the springs are SoftSim.cs's Simulate.
-        public void Update(Character c, bool on, float softness, float spring, List<Character> everyone)
+        public void Update(Character c, bool on, float softness, float spring, List<Character> everyone, int quality = 1)
         {
             if (!on || c.Root == null) { Release(); return; }
             Types();

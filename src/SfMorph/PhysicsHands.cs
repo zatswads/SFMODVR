@@ -37,7 +37,11 @@ namespace SfMorph
         public static bool Active;                                  // hands are built: the integrator uses Capsules instead of VrHands' "vr" ones
         public static int Version;                                  // bumped whenever Capsules changes
         public static string Status = "";
-        public static Transform LeftWrist, RightWrist;              // the visual wrists (Embody's IK targets when it follows the hands)
+        public static Transform LeftWrist, RightWrist;
+        // 0.7.2: the simulated fingers' local rotations (5 fingers x 3 bones, thumb first, in each bone's parent frame) for Embody.
+        public static readonly Quaternion[] LeftFingerLocal = new Quaternion[15], RightFingerLocal = new Quaternion[15];
+        public static bool LeftFingersValid, RightFingersValid;
+        public static bool TouchingHer(string herBone) { return false; }   // 0.7.2 stub: a physics hand touches this capsule of hers              // the visual wrists (Embody's IK targets when it follows the hands)
         // Per hand, this frame: how far the physics body stands from the controller target (the displacement the visual pose gets).
         // Zero / identity when the hand is missing, kinematic (Collide off) or not built. Embody composes it into its wrist targets.
         public static Vector3 LeftDp, RightDp;

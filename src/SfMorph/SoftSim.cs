@@ -77,7 +77,7 @@ namespace SfMorph
 
         // Every frame after Body applies (bones carry our scales), inside the apply step: the soft points' springs and contacts.
         // softness 0..1 (stiff..soft), spring 0..1 (0 = settles at once and doesn't lag her motion).
-        public void Simulate(float dt, List<SoftCapsule> caps, float softness, float spring, bool debug)
+        public void Simulate(float dt, List<SoftCapsule> caps, float softness, float spring, bool debug, int quality = 1)
         {
             int nh = _helpers.Count;
             if (nh == 0 || _bL2W == null) { if (_dbgOn) DebugOff(); if (Contacts.Length > 0) Contacts = ""; return; }

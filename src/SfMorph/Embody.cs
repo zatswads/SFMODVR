@@ -24,6 +24,7 @@ namespace SfMorph
     internal class Embody
     {
         public string Status = "";
+        public bool DrivesArm(bool left) { return false; }   // 0.7.2 stub: Embody's IK owns his arm this frame
 
         const float FollowSeconds = 0.1f;   // exponential catch-up of the rig to his eye in Follow
         const float JumpMeters = 0.5f;      // something else moving the rig this far in one frame is logged once
