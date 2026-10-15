@@ -253,6 +253,16 @@ namespace SfMorph
                 GUILayout.Label("off: no converted characters yet. Export her (Presets tab) and a VaM character (SfExport plugin), then run tools/pipeline/run.ps1.", _off);
             if (GUILayout.Button("Rescan the folder", GUILayout.Width(160))) MorphSet.Rescan();
 
+            // Pose check: records the game's own animation of her for the pipeline (PoseRecorder).
+            string recStatus = PoseRecorder.Status;   // read once: the same controls in the Layout pass and the click pass
+            bool recBusy = PoseRecorder.Busy;
+            GUILayout.Space(6);
+            GUI.enabled = !recBusy;
+            if (GUILayout.Button("Record 6 s of her animation (pose check)")) PoseRecorder.Start(c, 6f, 10f, _p);
+            GUI.enabled = true;
+            GUILayout.Label("For the pipeline's pose check: turn Apply changes, soft zones, Embody and physics hands off first to record the game's own pose.", _hint);
+            if (recStatus.Length > 0) GUILayout.Label(recStatus, recStatus.StartsWith("off") ? _off : _hint);
+
             if (had && c.Look.Morph != null) MorphControls(c);  // a pick shows its controls from the next frame on
         }
 
