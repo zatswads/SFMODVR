@@ -4,6 +4,8 @@
 //                          corners (barycentric weights = a partition of unity), the corner's fold profile gradient, written as
 //                          a tangent-space slope (x along +u, y along +v, metres/metre). RT: RG slope, B coverage, A activation.
 //   Pass 1  blend        : fullscreen; base normal + slope (bilinear, dilated by coverage) -> whiteout blend -> the sheet's normal RT.
+//                          0.8.0: with _MarksOn > 0.5 the lingering dent of SkinMarks' marks RT (_Marks.b, metres) is whited out into
+//                          the normal too (same maths as SkinMarks.shader pass 2); off by default, the wrinkles then look as before.
 //   Pass 2  debug tint   : activation (or fold orientation) as a colour over the base albedo.
 //   Pass 3  self-test    : _TestMode 0 writes a UV gradient through the same uv -> clip mapping as pass 0/1, _TestMode 1 samples it
 //                          back at a fixed uv into a 1x1 target; the CPU reads that texel to learn whether _FlipY is right.
@@ -23,6 +25,10 @@ Shader "SfMorph/WrinkleRaster"
         _Test ("Test", 2D) = "black" {}
         _SlopeTexel ("Slope texel size", Vector) = (0.000488, 0.000488, 0, 0)
         _DebugMode ("Debug mode", Float) = 1
+        _Marks ("Skin marks (0.8.0)", 2D) = "black" {}
+        _MarksOn ("Skin marks on", Float) = 0
+        _MarksTexel ("Marks texel size", Vector) = (0.000488, 0.000488, 0, 0)
+        _MarksScale ("1 / metres per UV", Float) = 1
     }
     SubShader
     {
@@ -38,6 +44,9 @@ Shader "SfMorph/WrinkleRaster"
 
         float _FlipY, _Strength, _Amp, _TestMode, _DebugMode;
         float4 _SlopeTexel;
+        float _MarksOn, _MarksScale;
+        float4 _MarksTexel;
+        Texture2D _Marks; SamplerState sampler_Marks;
         Texture2D _BaseNormal; SamplerState sampler_BaseNormal;
         Texture2D _BaseAlbedo; SamplerState sampler_BaseAlbedo;
         Texture2D _Slope; SamplerState sampler_Slope;
@@ -85,6 +94,36 @@ Shader "SfMorph/WrinkleRaster"
             }
             if (c.z < 1e-3) return float4(0, 0, 0, 0);
             return float4(c.xy / c.z, saturate(c.z), c.w / c.z);
+        }
+
+        // SkinMarks' marks RT (x redness, y pressure, z lingering dent in metres, w coverage), normalised by coverage and dilated like SampleSlope
+        float MarksDent(float2 uv)
+        {
+            float4 c = _Marks.SampleLevel(sampler_Marks, uv, 0);
+            if (c.w < 0.999)
+            {
+                [unroll] for (int j = -1; j <= 1; j++)
+                {
+                    [unroll] for (int i = -1; i <= 1; i++)
+                    {
+                        if (i == 0 && j == 0) continue;
+                        c += _Marks.SampleLevel(sampler_Marks, uv + float2(i, j) * _MarksTexel.xy, 0);
+                    }
+                }
+            }
+            return c.w < 1e-3 ? 0.0 : c.z / c.w;
+        }
+
+        // slope (x along +u, y along +v, metres/metre) of the height -dent; the same scale as SkinMarks.shader pass 2 (DentGain 0.6)
+        float2 MarksSlope(float2 uv)
+        {
+            float2 tx = float2(_MarksTexel.x, 0.0), ty = float2(0.0, _MarksTexel.y);
+            float2 g = float2(MarksDent(uv + tx) - MarksDent(uv - tx), MarksDent(uv + ty) - MarksDent(uv - ty)) * 0.5 * _MarksScale
+                / max(_MarksTexel.xy, 1e-6);
+            float2 s = -g * 0.6;
+            float sl = length(s);
+            if (sl > 1.0) s /= sl;
+            return s;
         }
         ENDHLSL
 
@@ -215,6 +254,12 @@ Shader "SfMorph/WrinkleRaster"
                 float4 s = SampleSlope(i.uv);
                 float3 nd = normalize(float3(-s.x, -s.y, 1.0));
                 float3 n = normalize(float3(nb.xy + nd.xy, nb.z * nd.z));            // whiteout
+                if (_MarksOn > 0.5)                                                  // 0.8.0: SkinMarks' lingering dent, second whiteout
+                {
+                    float2 ms = MarksSlope(i.uv);
+                    float3 nm = normalize(float3(-ms.x, -ms.y, 1.0));
+                    n = normalize(float3(n.xy + nm.xy, n.z * nm.z));
+                }
                 return float4(n * 0.5 + 0.5, 1.0);
             }
             ENDHLSL

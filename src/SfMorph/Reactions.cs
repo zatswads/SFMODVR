@@ -417,6 +417,9 @@ namespace SfMorph
                     _flush = Mathf.Min(0.65f, _flush + add);
                     Note("blush +" + (add * s.BlushGain).ToString("0.00"));
                 }
+                // 0.8.0: slap mark (redness) and ripple at the hit; both are no-ops while their feature is off
+                SkinMarks.Slap(pt, 0.07f, I);
+                Ripple.Impact(pt, dir, Mathf.Max(v, 1f), g != null ? g.A : null, by);
                 if (s.Gaze && (tier >= 4 || wasGuarded)) _gazeHold = Mathf.Max(_gazeHold, _now + (tier >= 5 ? 1.5f : 0.4f));
             }
             if (s.FeedDesire && tier >= 2 && _g.InSexMode && _now - _lastDesireT >= 3f) { _lastDesireT = _now; _g.FeedDesire(); Note("desire"); }

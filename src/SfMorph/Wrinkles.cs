@@ -41,6 +41,57 @@ namespace SfMorph
         static readonly HashSet<int> _owned = new HashSet<int>();
         public static bool Owns(Texture t) { return t != null && _owned.Contains(t.GetInstanceID()); }
 
+        // ---- 0.8.0 hooks for SkinMarks (it shares the owned set, the skin slots and the normal blend) ----
+
+        // Other systems' render textures in a skin slot (SkinMarks): Morph and Wrinkles treat them as ours. Disown before destroying.
+        internal static void Own(Texture t) { if (t != null) _owned.Add(t.GetInstanceID()); }
+        internal static void Disown(Texture t) { if (t != null) _owned.Remove(t.GetInstanceID()); }
+
+        // What another system (SkinMarks) has under its own render texture in a material's slot: the base to start from when the slot
+        // holds a texture we don't know. Set by SkinMarks; null result = unknown.
+        internal static Func<Material, string, Texture> ExternalBase;
+
+        static Texture ExternalBaseOf(Material m, string prop)
+        {
+            var f = ExternalBase;
+            if (f == null || m == null || string.IsNullOrEmpty(prop)) return null;
+            try { return Usable(f(m, prop)); }
+            catch { return null; }
+        }
+
+        // SkinMarks' marks changed: the sheet of this material blends the normal again (its pass 1 adds the marks' dent).
+        internal static void Touch(Material m)
+        {
+            var w = _live;
+            if (w == null || w._dead || m == null) return;
+            var sheets = w._sheets;
+            for (int i = 0; i < sheets.Count; i++)
+            {
+                var sh = sheets[i];
+                if (sh == null || sh.Mat != m || !sh.Built) continue;
+                sh.Dirty = true;
+                sh.LastChange = Time.unscaledTime;
+            }
+        }
+
+        // True while a built Wrinkles sheet has its normal RT in this material's normal slot (SkinMarks then leaves that slot to it).
+        internal static bool OwnsNormalSlot(Material m)
+        {
+            var w = _live;
+            if (w == null || w._dead || !w._active || m == null) return false;
+            var sheets = w._sheets;
+            for (int i = 0; i < sheets.Count; i++)
+            {
+                var sh = sheets[i];
+                if (sh != null && sh.Mat == m && sh.Built && !sh.Skip && sh.Normal != null) return true;
+            }
+            return false;
+        }
+
+        // The self-tested clip-Y sign of the live instance (-1 = D3D until it has settled, or when none runs).
+        internal static float FlipY { get { var w = _live; return w != null ? w._flip : -1f; } }
+        internal static bool FlipSettled { get { var w = _live; return w != null && w._flipState == 2; } }
+
         // ---- constants ----
 
         const float Amp = 0.15f;                 // fold depth as a fraction of the spacing (slope peak ~0.4)
@@ -48,7 +99,7 @@ namespace SfMorph
         const int MaxInflight = 6;
         const string BsWhy = "blendshape weights changed";
         static readonly string[] NormalProps = { "_NormalMap", "_BumpMap" };
-        static readonly string[] AlbedoProps = { "_ColorMap", "_BaseColorMap", "_BaseMap", "_MainTex", "_AlbedoMap" };
+        internal static readonly string[] AlbedoProps = { "_ColorMap", "_BaseColorMap", "_BaseMap", "_MainTex", "_AlbedoMap" };
 
         static readonly int PVerts = Shader.PropertyToID("_Verts"), PStride = Shader.PropertyToID("_Stride"), PPosOff = Shader.PropertyToID("_PosOff"),
             PTriCount = Shader.PropertyToID("_TriCount"), PVertCount = Shader.PropertyToID("_VertCount"), PDt = Shader.PropertyToID("_Dt"),
@@ -59,7 +110,9 @@ namespace SfMorph
             PCounter = Shader.PropertyToID("_Counter"), PFlip = Shader.PropertyToID("_FlipY"), PStrength = Shader.PropertyToID("_Strength"),
             PAmp = Shader.PropertyToID("_Amp"), PTestMode = Shader.PropertyToID("_TestMode"), PBaseNormal = Shader.PropertyToID("_BaseNormal"),
             PBaseAlbedo = Shader.PropertyToID("_BaseAlbedo"), PSlope = Shader.PropertyToID("_Slope"), PTest = Shader.PropertyToID("_Test"),
-            PSlopeTexel = Shader.PropertyToID("_SlopeTexel"), PDebugMode = Shader.PropertyToID("_DebugMode"), PInvScale2 = Shader.PropertyToID("_InvScale2");
+            PSlopeTexel = Shader.PropertyToID("_SlopeTexel"), PDebugMode = Shader.PropertyToID("_DebugMode"), PInvScale2 = Shader.PropertyToID("_InvScale2"),
+            PMarks = Shader.PropertyToID("_Marks"), PMarksOn = Shader.PropertyToID("_MarksOn"), PMarksTexel = Shader.PropertyToID("_MarksTexel"),
+            PMarksScale = Shader.PropertyToID("_MarksScale");
 
         // ---- state ----
 
@@ -203,17 +256,21 @@ namespace SfMorph
         {
             try
             {
+                if (m == null || string.IsNullOrEmpty(prop)) return null;
                 var w = _live;
-                if (w == null || w._dead || m == null || string.IsNullOrEmpty(prop)) return null;
-                var sheets = w._sheets;
-                for (int i = 0; i < sheets.Count; i++)
+                if (w != null && !w._dead)
                 {
-                    var sh = sheets[i];
-                    if (sh == null || sh.Mat != m) continue;
-                    if (sh.Built && sh.Prop == prop) return Usable(sh.Orig) ?? Usable(sh.Base);
-                    if (sh.Debug != null && sh.AlbedoProp == prop) return Usable(sh.AlbedoBase);
-                    return null;
+                    var sheets = w._sheets;
+                    for (int i = 0; i < sheets.Count; i++)
+                    {
+                        var sh = sheets[i];
+                        if (sh == null || sh.Mat != m) continue;
+                        if (sh.Built && sh.Prop == prop) return Usable(sh.Orig) ?? Usable(sh.Base);
+                        if (sh.Debug != null && sh.AlbedoProp == prop) return Usable(sh.AlbedoBase);
+                        break;
+                    }
                 }
+                return ExternalBaseOf(m, prop);   // 0.8.0: the slot may hold SkinMarks' albedo / normal copy instead
             }
             catch { }
             return null;
@@ -488,6 +545,16 @@ namespace SfMorph
             sh.Mpb.SetTexture(PBaseNormal, sh.Base != null ? sh.Base : (Texture)_flat);
             sh.Mpb.SetTexture(PSlope, _slope);
             sh.Mpb.SetVector(PSlopeTexel, new Vector4(1f / _slope.width, 1f / _slope.height, 0f, 0f));
+            // 0.8.0: SkinMarks' lingering dent of this material (marks RT + metres per UV), a second whiteout in pass 1; off when it has none
+            RenderTexture mrt = null;
+            float msc = 0f;
+            try { mrt = SkinMarks.MarksOf(sh.Mat); msc = mrt != null ? SkinMarks.SlopeScaleOf(sh.Mat) : 0f; }
+            catch (Exception e) { if (_logged.Add("marksof")) Plugin.Log.LogWarning("Wrinkles: skin marks lookup failed (" + e.Message + "); wrinkles without marks"); mrt = null; msc = 0f; }
+            bool mon = mrt != null && msc > 0f;
+            sh.Mpb.SetTexture(PMarks, mon ? (Texture)mrt : Texture2D.blackTexture);
+            sh.Mpb.SetFloat(PMarksOn, mon ? 1f : 0f);
+            sh.Mpb.SetFloat(PMarksScale, mon ? msc : 1f);
+            sh.Mpb.SetVector(PMarksTexel, mon ? new Vector4(1f / mrt.width, 1f / mrt.height, 0f, 0f) : new Vector4(0.000488f, 0.000488f, 0f, 0f));
             cmd.SetRenderTarget(sh.Normal);
             cmd.DrawProcedural(Matrix4x4.identity, _mat, 1, MeshTopology.Triangles, 3, 1, sh.Mpb);
             cmd.GenerateMips(sh.Normal);
@@ -622,7 +689,7 @@ namespace SfMorph
         static readonly System.Text.RegularExpressions.Regex BodyRx = new System.Text.RegularExpressions.Regex("body(?![a-z])", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         static readonly System.Text.RegularExpressions.Regex ClothRx = new System.Text.RegularExpressions.Regex("suit|stocking|cloth|dress|shirt|skirt|panties|bra", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
-        static int Classify(Material mat, SkinnedMeshRenderer r)
+        internal static int Classify(Material mat, SkinnedMeshRenderer r)
         {
             string ml = (mat.name ?? "").ToLowerInvariant();
             string rl = (r.name ?? "").ToLowerInvariant();
@@ -1005,8 +1072,10 @@ namespace SfMorph
         {
             Texture slot = sh.Mat.GetTexture(sh.Prop);
             Texture nf = NormalFor(her, sh.Mat);
-            sh.Base = nf != null && !Owns(nf) ? nf : (slot != null && !Owns(slot) ? slot : null);
-            sh.Orig = (slot != null && !Owns(slot) && slot != nf) ? slot : OriginalVia(her != null ? her.Morph : null, sh.Mat, sh.Prop);
+            // 0.8.0: SkinMarks may hold the slot with its own normal copy: what it has under it is the base then
+            Texture ext = slot != null && Owns(slot) ? ExternalBaseOf(sh.Mat, sh.Prop) : null;
+            sh.Base = nf != null && !Owns(nf) ? nf : (slot != null && !Owns(slot) ? slot : ext);
+            sh.Orig = (slot != null && !Owns(slot) && slot != nf) ? slot : (OriginalVia(her != null ? her.Morph : null, sh.Mat, sh.Prop) ?? ext);
             MakeNormalRT(sh, s);
             sh.Built = true;
             sh.LastChange = now;
@@ -1094,7 +1163,7 @@ namespace SfMorph
             Texture slot = sh.Mat.GetTexture(sh.AlbedoProp);
             if (sh.Debug == null)
             {
-                sh.AlbedoBase = slot != null && !Owns(slot) ? slot : null;
+                sh.AlbedoBase = slot != null && !Owns(slot) ? slot : (slot != null ? ExternalBaseOf(sh.Mat, sh.AlbedoProp) : null);   // SkinMarks' albedo copy: what it has under it
                 int bw = sh.AlbedoBase != null ? sh.AlbedoBase.width : 1024, bh = sh.AlbedoBase != null ? sh.AlbedoBase.height : 1024;
                 int cap = Math.Min(2048, s.Resolution <= 0 ? 2048 : s.Resolution);
                 int mx = Math.Max(bw, bh);
