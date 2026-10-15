@@ -97,6 +97,20 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.7.8 (hand follow, hulls, pushes, tabs)
+
+Install `dist/SfMorph.dll` (+ `dist/sfmorph_shaders` unchanged). Log: `Her body: segments from N body meshes` with hull points per
+segment and a `hull frame check` line (warns if the hull and the skinned vertices disagree), `PhysicsHands: her hulls cooked: N ok`,
+`PhysicsHands: friction ...`, no `space ambiguous` for the nipple meshes. Headset: (1) physics hands idle in free air 20 s: the 10 s
+line shows "at the cap" free air near 0 %, steps/frame plausible, drawn-hand jitter small (mm, deg); hands no longer stutter;
+(2) a game camera/POV cut: "rig shifts" counts, no `first contact ... 6 m/s`; (3) Show soft points: orange hulls follow her torso,
+thighs, arms, also with a leg bent (pelvis hull doesn't roll); the palm stops at the skin on her sides; VR → Body colliders Capsules
+shows the old sinking; (4) press her thigh/forearm/chest/head: it gives and springs back (`Overlap: thigh_L pushed by ...`); a hand
+held in her settles short of the limit; (5) physics hands off, hand model or Embody partner hand into her forearm: `Her body: first
+push on forearm_L by ...`; her own limbs and hidden partners never push; (6) a resting hand is carried along when she moves; no
+judder when stroking (else lower Grip friction); (7) Physics tab / VR tab hold the right rows; Overlap 0 + Push 0 = the game's
+animation; Physics off removes the breast colliders at once.
+
 ## 0.7.7 (contacts, Overlap v2, bundle)
 
 Install `dist/SfMorph.dll` + `dist/sfmorph_shaders` into `BepInEx\plugins`. Log: no "not compatible with this newer version" error;

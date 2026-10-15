@@ -41,6 +41,31 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.7.8:
+- Physics hands stuttered and floated: the palm chased a controller pose that only changes once per rendered frame with a
+  one-step "close the whole gap now" pull at the 50 Hz physics rate, so on every second step it braked to a stop and
+  re-accelerated (the 0.7.6/0.7.7 logs show the 60 N pull limit hit in 88-100 % of steps with nothing touching). The
+  game's own camera moves also left the hand racing at 6 m/s through her. Now the controller pose is sampled per frame
+  with its velocity and extrapolated to each physics step (position and rotation), the hand keeps its offset when the game
+  moves the VR rig, the drawn hand is interpolated between physics steps and refreshed right before rendering (after the
+  headset's late tracking update and after Embody's view correction), and her colliders move smoothly between frames. The
+  10 s log line now says how often the pull hits its limit in free air vs touching, physics steps per frame and the drawn
+  hand's frame-to-frame jitter.
+- Her colliders for the physics hands follow her shape: convex hulls from her skin (torso, pelvis, thighs, calves, arms,
+  head) instead of 40th-percentile capsules, so the hand stops at the skin on the sides too; they follow her bone sliders
+  and the character shape (VR → Body colliders: Convex hulls / Capsules).
+- Hands grip her skin a little (VR → Grip friction): a resting hand is carried along when she moves.
+- Pushes everywhere: hands push her arms, legs, head and spine aside and the pose springs back (Physics → Pushes); the
+  push eases toward a limit instead of slamming into it. Not only the physics hands: your hand models and the partner's
+  hands push too, by how deep they are in her ("Other hands push too"); her own limbs and hidden hands never push her.
+- Panel: the old VR tab is now two tabs. Physics: soft zones, secondary motion, pushes, wrinkles. VR: Embody, VR hands,
+  contacts.
+- Fixes from the 0.7.7 headset log: the nipple meshes got no per-vertex contact (their skinning-space check was rejected
+  as ambiguous on a small mesh); the 8 mm skin floor under a hand now applies to the body meshes only (no push-through at
+  the nipple cap edge or clothes); breast colliders come off the moment Physics is switched off; an empty partner rig is
+  no longer rebuilt and logged every 10 s; "Overlap: driving N bones" counts what it lists; a compensated wrinkle scale
+  check is no longer a warning.
+
 0.7.7:
 - GPU contact and skin wrinkles actually load now: the shader bundle was built with Unity's AssetBundle module disabled in its
   project, so it had no AssetBundle object and the game refused it ("not compatible with this newer version of the Unity

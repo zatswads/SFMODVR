@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.7.7";
+        public const string Version = "0.7.8";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;

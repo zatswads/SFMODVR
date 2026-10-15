@@ -1,8 +1,9 @@
 # SF Body Morphs — handoff
 
-State at **0.7.7** (branch `main`). 0.7.7 (contact accuracy, Overlap v2, physics-hand breast colliders/arm push, shader bundle fix) built, not yet run
-in the game. GPU contact (0.7.3) and wrinkles (0.7.5) never ran before 0.7.7: the bundle lacked its AssetBundle object (the bundle
-project's Packages/manifest.json must list com.unity.modules.assetbundle; build.ps1 checks it).
+State at **0.7.8** (branch `main`). 0.7.8 (physics-hand follow fix, hull colliders, pushes from any hand on limbs/spine/head, friction,
+Physics/VR tabs) built, not yet run in the game. 0.7.7 ran once (log 2026-10-15 14:51): GPU contact and wrinkles load and run; the
+physics hands stuttered (fixed in 0.7.8). GPU contact (0.7.3) and wrinkles (0.7.5) never ran before 0.7.7: the bundle lacked its
+AssetBundle object (the bundle project's Packages/manifest.json must list com.unity.modules.assetbundle; build.ps1 checks it).
 
 ## What this is
 
@@ -57,16 +58,17 @@ commit them). Toolchain: `apt-get update && apt-get install -y mono-mcs mono-dev
 | `Morph.cs` | Characters (0.6.0): `MorphSet` (a converted character folder), `MorphState` per character (readable clones from MeshData + `AddBlendShapeFrame`, follow blendshapes for clothes via `SkinRef` nearest skin vertex + push-out, joint offsets as local moves for Body's trackers with matching bind poses, DynamicBone-simulated bones excluded, baked textures with restore). |
 | `SoftSim.cs` | Soft zones' per-frame spring sim (0.7.0): helpers' rest place from their bone, damped spring at 1/120 s substeps, contacts against `SoftCapsule`s (push out, velocity transfer), clamp (in ≤ limit, out ≤ 0.3, sideways ≤ 0.5), bulge to neighbours, writes S; debug markers. Runs in `Body.ApplyAll` after `Apply(c)`. |
 | `VrHands.cs` | `SoftCapsule` + who can touch her (0.7.0): the user's hands via `VR_HandController.controller_left/right`, partner rigs (humanoid or AdvancedSkeleton wrists/fingers, nested rigs counted once at wrist level), her thighs/forearms/hands; palms = three 1.5 cm capsules; one-time `VR rig survey`. Refreshed every 2 s. 0.7.7: every capsule has a `CapSource` (your hand, physics hand, partner rig, her); `UpdateLive` (once per frame) marks gated sources dead while none of their renderers is drawn by the XR camera (hidden partner, controller models replaced by physics hands); the soft points, GPU imprint and breast mirror skip dead sources. Mirrors `Body.Contacts()` into the game's breast DynamicBones (`BreastColliders`: off / main `upperbreast` chains / all), detaching hidden sources (`MirrorLive`). `ContactsFeed` = what each source feeds. |
-| `PhysicsHands.cs` | Physics hands (0.7.0): hand mesh cut from the player's body (or primitives), palm rigidbody following the controller by velocity in `Runner.FixedUpdate`, visual pose = controller ∘ physics offset (no added latency), grip curl, her body as kinematic capsules (inset so the soft zones give first), two private layers. |
+| `PhysicsHands.cs` | Physics hands (0.7.0): hand mesh cut from the player's body (or primitives), palm rigidbody following the controller in `Runner.FixedUpdate`, grip curl, two private layers. 0.7.8: the controller pose is sampled once per frame with its linear/angular velocity (`Track`, in HerBody.cs) and extrapolated to `Time.fixedTime` of each step (feed-forward + gap gain 25/s, force cap); a rig jump (the game moving the VR rig) shifts the hand with its offset; the drawn hand = controller ∘ the offset of the last two steps interpolated by (time - fixedTime)/fdt, refreshed in onBeforeRender and again after Embody's view fix (`PreRenderRefresh`). Her colliders: one kinematic body per `HerBody.Seg` (`SegBody`), a convex hull cooked from `Seg.HullPts` (<= 2 per frame, inset toward the axis, 16-gon reduced fallback) or the capsule/sphere; friction materials (`Friction`). |
+| `HerBody.cs` | Her body segments (0.7.8), shared by the physics hands and the pushes: segment defs, fit from her body meshes (bind pose + character morph deltas), hull points (12x16 grid in the segment frame: origin at joint A, Y along A->B, roll from `RollRef` = A or the owner bone for sibling joints such as the pelvis), `SegPose`, contact impulses from the physics hands (`PhysF`, 50 ms filter) and the geometric push from other hands (`GeoPush`: hand model/partner capsules vs her skin capsules, 300 N/m after 1.5 cm of skin give, measured after Overlap so the push fades as the limb yields), `PushOn` merge. |
 | `PhysicsHands.Rig.cs` | Hands v2 (0.7.2): jointed finger rigidbodies (proximal + fused middle/distal, ConfigurableJoint slerp drives with capped force = compliance), curl targets, tip-cast settle, kinematic fallback; palm force-capped follow (`Fcap = lerp(60,12,resist)`) + PD torque. |
 | `Grip.cs` | Controller grip 0..1 per hand (VR_HandController.selectValue_*, Animator param, XR), once per frame; used by physics hands and Embody. |
 | `Subdiv.cs` | Fidelity: one level PN-triangle subdivision in place (same Mesh object, so MorphState's swap check holds), seams welded, weights/blendshapes interpolated, exact Undo. |
-| `Overlap.cs` / `Ik.cs` | Secondary motion v2 (0.7.7): second-order springs on 16 of her bones' local rotations (parents first), per-part bounce (zeta, frequency), ripple kick from the parent's world angular acceleration, planted hands/feet (animated end effector still, or still relative to a nearby partner/her capsule) held by an analytic two-bone IK (`Ik.TwoBone`, Embody's solve) while the chain lags, arm push springs from `PhysicsHands.PushOn` (works at Overlap 0), faded on contact, reset on cuts. |
+| `Overlap.cs` / `Ik.cs` | Secondary motion v2 (0.7.7): second-order springs on 16 of her bones' local rotations (parents first), per-part bounce (zeta, frequency), ripple kick from the parent's world angular acceleration, planted hands/feet (animated end effector still, or still relative to a nearby partner/her capsule) held by an analytic two-bone IK (`Ik.TwoBone`, Embody's solve) while the chain lags, push springs (0.7.8: arms, legs, spine, neck/head via segment -> bone shares; per-region inertia/clamp/torque cap; tanh knee to 0.8 x clamp) from `HerBody.PushOn` (works at Overlap 0), faded on contact, reset on cuts. |
 | `GpuContact.cs` | GPU contact (0.7.3): loads `sfmorph_shaders` (tools/shaders, built with Unity 2022.3.9f1 by build.ps1), sets `vertexBufferTarget |= Raw` on her soft renderers, dispatches `SoftDeform.compute` Imprint (exact ray-capsule exit along the inward normal, <= limit x mask) on the CURRENT skinned buffer once per frame after skinning (PlayerLoop step after UpdateAllSkinnedMeshes, SRP beginContextRendering fallback); skinning space calibrated by AsyncGPUReadback vs CPU skinning; never writes the previous buffer (motion vectors stay right). |
 | `Wrinkles.cs` / `WrinkleBake.cs` | Skin wrinkles (0.7.5): CPU bake per renderer (neutral = bind pose + blendshapes + bone scale, weld groups, CSR adjacency, rest frames, UV Jacobians, patches) → `Wrinkles.compute` (TriStrain from live skinned edges, VertexGather with attack/release + axis hysteresis) before GpuContact's Imprint (BeforeImprint / own PlayerLoop step) → `WrinkleRaster.shader` (UV-space slope raster, blend into a copy of her `_NormalMap`, debug tint, _FlipY self-test). `ShaderBundle.cs`/`RawTarget.cs` are shared ref counts. |
 | `Embody.cs` | Embody (0.7.0): partner rig (Player/BadGuy), view snap/follow by moving the XR rig root (undone exactly), head hidden (scale 0.001, tracker), two-bone arm IK to the controllers with automatic hand frame, override detection in `Application.onBeforeRender`. |
 | `SoftZones.cs` | Physics (0.6.3): per zone (glutes, thighs in/out, belly, breast front/side) a rest point under her skin, helper pairs (anchor = DynamicBone root with an excluded second child so it is never re-aimed, soft = simulated particle hanging along the skin) under each bone that weights the zone, weights split w → w(1-f) + w f, bind poses appended (follow `MorphState.BindVersion`); readable clones of the game's meshes when no character is on, MorphState's clones extended in place otherwise (`SoftZones.Original` keeps MorphState cloning the game's mesh); DynamicBoneCollider capsules on partner hands (humanoid Animator or bone names), her forearms/hands/thighs; never adds children to game DynamicBone chain bones with < 2 children. |
-| `Panel.cs` | F8 window: character buttons, tabs Body (collapsible groups) / Bones / Presets / Characters, filter + 80-row cap, greyed rows with reasons. |
+| `Panel.cs` | F8 window: character buttons, tabs Body (collapsible groups) / Bones / Presets / Characters / Physics (soft zones, motion, pushes, wrinkles) / VR (Embody, VR hands, contacts), filter + 80-row cap, greyed rows with reasons. |
 
 ### How changes are applied (keep this model)
 
@@ -112,11 +114,14 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
 
 ## Open items
 
-- 0.7.7 GPU mask floor (SoftZones.HardFloor 0.25): every vertex of a zone mesh yields up to 0.25 x limit (~8 mm) under a hand; thin parts
-  and back faces in those meshes (nipple cap edge, cloth edges) can be pushed through by that much. If the headset shows it, add a
-  normal-facing guard in SoftDeform.compute Imprint or lower the floor.
-- 0.7.7 contact-review leftovers (low): a partner root with only nested hands rebuilds every 10 s; breast mirrors stay up to 2 s after
-  Physics off; AddImpulse's sign test uses the hand collider's transform position.
+- 0.7.8 to check in the headset: free-air "at the cap" near 0 % and low drawn-hand jitter (if not: Jointed fingers off to isolate the
+  finger joints); hull frames line up with the markers in a flexed-leg pose (pelvis roll from Root_M); "cooked a reduced set" lines
+  (16-gon fallback when PhysX's 255-polygon limit bites); stick-slip when stroking (Friction 0.5); partner hands left inside her by an
+  animation now push her limbs by up to the knee angle (PushByTouch); the extrapolation lead (first-contact speeds plausible).
+- GPU floor: 0.7.8 keeps it on body meshes only (C#). The shader-side normal guard (SoftDeform.compute Imprint: skip floor-only vertices
+  when the capsule axis lies behind the skin) waits for the next bundle rebuild.
+- 0.7.9 planned: reactions and states (design in the session notes: design-0.7.9-reactions.md; research-vammoan.md; game API in
+  survey-game-reactions.md), incl. a guard for the game's own LadyVoice_Function.PlayRandomVoice IndexOutOfRange spam.
 
 - 0.3.0 untested in game: jitter gone? which helper sliders visibly do something (helper bones may carry few
   skin weights); check the `sliders:` line for each slider's bones, parents and child counts.
