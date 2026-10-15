@@ -41,6 +41,17 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.6.3:
+- Physics (Characters tab): soft zones, so hands and limbs press into her instead of clipping through. Her glutes,
+  outer and inner thighs, belly and breasts (front and side) get helper bones under the skin, simulated by the game's own
+  DynamicBone and colliding with capsules on the partner's hands and fingers, her forearms and hands, and her other thigh;
+  the partner's hands also reach the game's own breast physics. Skin weights are split, not moved (weight w on a bone becomes
+  w(1-f) on it and w f on a helper under it), so without contact she deforms exactly as before. **Softness** sets how far the
+  skin gives, **Springiness** how much the zones lag and settle as she moves (secondary motion, natural by default).
+  Works with or without a character shape; redone when the game or the shape swaps a mesh; turning it off gives every
+  mesh, bone, weight and the game's DynamicBone lists back. The log has a one-time physics survey (the game's DynamicBones
+  and colliders) and a `Soft zones on ...` line listing zones, helper bones, meshes and colliders.
+
 0.6.2:
 - Picking a character in the uniform scene looked badly wrong: dressed, the game swaps her upper body for
   `uniform_upperBody_normal` (and a uniform nipple mesh), which the loader treated as clothes following "the skin" — but

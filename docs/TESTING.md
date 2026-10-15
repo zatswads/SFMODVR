@@ -45,3 +45,11 @@ Nothing here can run in a cloud session: the plugin only runs inside the game on
 - [ ] Clothes on (game's menu): they follow the new shape without skin poking through (log: they count as "follow").
 - [ ] Skin textures on/off: VaM skin vs hers; the log's `Material 'reika_body' (...) textures:` line lists the slots.
 - [ ] SfNr alongside still fine (AO, passthrough cut-out, NR follow the resized body).
+
+## Soft zones (0.6.3)
+
+Log: one `Physics survey:` block (the game's DynamicBones and colliders), then `Soft zones on 'Reika' (...)` with zones,
+helper bones (`zone@bone(weight)`), meshes and collider counts, and `Soft zones: partner '...'` per partner rig (humanoid or
+by bone names, hands and finger segments). In the headset: a hand pressed on her thigh and glute dents the skin and it springs
+back; thighs pressed together flatten a little; she jiggles slightly when she moves (Springiness 0 = none); Physics off,
+Apply off and picking/removing a character give her exact look back (no stray bones, no broken skinning).

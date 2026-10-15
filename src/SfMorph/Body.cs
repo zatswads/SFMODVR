@@ -152,6 +152,7 @@ namespace SfMorph
         public readonly Look Look = new Look();
         public readonly Dictionary<Transform, Matrix4x4> Bind = new Dictionary<Transform, Matrix4x4>(); // bone -> bind pose (mesh -> bone)
         public MorphState Morph = new MorphState();   // a converted character's shape (Characters tab)
+        public SoftZones Soft = new SoftZones();      // physics helper bones (Characters tab, Physics)
         public bool Dirty;
         public float DirtyAt;
     }
@@ -230,7 +231,11 @@ namespace SfMorph
             foreach (var l in byRoot.Values) l.Sort((a, b) => a.GetInstanceID().CompareTo(b.GetInstanceID())); // stable order for Same()
             var old = new Dictionary<Transform, Character>();
             foreach (var c in Found) if (c.Root != null) old[c.Root] = c;
-                else if (c.Dirty) Store.SaveCharacter(c.Key, c.Look); // character gone: keep unsaved edits
+                else
+                {
+                    if (c.Dirty) Store.SaveCharacter(c.Key, c.Look); // character gone: keep unsaved edits
+                    try { c.Soft.Release(); } catch { }               // our clones and the colliders on others
+                }
             Found.Clear();
             // Keys (file names) must be unique: two copies of one character are "Name" and "Name 2".
             var used = new HashSet<string>();
@@ -273,7 +278,7 @@ namespace SfMorph
             used.Add(key);
             var c = new Character { Root = root, Key = key };
             c.Renderers.AddRange(list);
-            if (prev != null) { c.Look.CopyFrom(prev.Look); c.Dirty = prev.Dirty; c.DirtyAt = prev.DirtyAt; c.Morph = prev.Morph; } // clothes changed: same person
+            if (prev != null) { c.Look.CopyFrom(prev.Look); c.Dirty = prev.Dirty; c.DirtyAt = prev.DirtyAt; c.Morph = prev.Morph; c.Soft = prev.Soft; } // clothes changed: same person
             else Store.LoadCharacter(c.Key, c.Look);
 
             // Skin bones and their bind poses (mesh space -> bone), from the first mesh that has each bone.
@@ -283,7 +288,7 @@ namespace SfMorph
                 var bones = r.bones;
                 var bp = r.sharedMesh.bindposes;
                 for (int i = 0; i < bones.Length; i++)
-                    if (bones[i] != null && !bind.ContainsKey(bones[i]) && i < bp.Length) bind[bones[i]] = bp[i];
+                    if (bones[i] != null && !bind.ContainsKey(bones[i]) && i < bp.Length && !bones[i].name.StartsWith(SoftZones.Prefix)) bind[bones[i]] = bp[i];
             }
             foreach (var t in root.GetComponentsInChildren<Transform>(true)) // hierarchy order: parents first
                 if (bind.ContainsKey(t))
@@ -443,6 +448,13 @@ namespace SfMorph
                     c.Look.Morph = null; Touch(c);
                     try { c.Morph.Release(); } catch { }
                 }
+                try { c.Soft.Update(c, _p.Apply.Value && _p.Physics.Value && c.Root != null && c.Female && !c.IsPlayer, _p.Softness.Value, _p.Springiness.Value, Found); }
+                catch (Exception e)
+                {
+                    Plugin.Log.LogError("Soft zones on '" + c.Key + "' failed, physics turned off: " + e);
+                    _p.Physics.Value = false;
+                    try { c.Soft.Release(); } catch { }
+                }
                 if (_p.Apply.Value && !c.Look.Empty && c.Root != null) Apply(c);
             }
             Release();
@@ -600,7 +612,7 @@ namespace SfMorph
         {
             _frame++;
             Release();
-            foreach (var c in Found) try { c.Morph.Release(); } catch { }
+            foreach (var c in Found) { try { c.Soft.Release(); } catch { } try { c.Morph.Release(); } catch { } }
         }
     }
 }

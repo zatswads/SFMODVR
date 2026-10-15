@@ -46,6 +46,18 @@ namespace SfMorph
             return go != null ? go.transform : null;
         }
 
+        // The other people in the scene (MovePlayerAndGirl.player, .badGuy), whose hands press into her (soft zones).
+        public static List<GameObject> Partners()
+        {
+            Types();
+            var l = new List<GameObject>();
+            if (_move == null) return l;
+            var m = UnityEngine.Object.FindObjectOfType(_move);
+            if (m == null) return l;
+            foreach (var f in new[] { "player", "badGuy" }) { var go = Get(m, f) as GameObject; if (go != null) l.Add(go); }
+            return l;
+        }
+
         // Body part (Region id) -> the game's own bones for it, only those under the lady.
         public static Dictionary<string, List<Transform>> Parts(Transform lady)
         {

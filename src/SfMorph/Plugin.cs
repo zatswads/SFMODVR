@@ -17,12 +17,12 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.6.2";
+        public const string Version = "0.6.3";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
-        internal ConfigEntry<bool> KeysUnfocused, Apply;
-        internal ConfigEntry<float> UiScale;
+        internal ConfigEntry<bool> KeysUnfocused, Apply, Physics;
+        internal ConfigEntry<float> UiScale, Softness, Springiness;
         internal ConfigEntry<string> PanelRect;
         internal ConfigEntry<int> Tab;
 
@@ -35,6 +35,9 @@ namespace SfMorph
             PanelRect = Config.Bind("Interface", "PanelRect", "", "Panel position and size (x,y,width,height), saved when you move or resize it.");
             Tab = Config.Bind("Interface", "Tab", 0, "Last panel tab.");
             Apply = Config.Bind("General", "Apply", true, "Apply the body changes (off = the game's own look, for comparing).");
+            Physics = Config.Bind("Physics", "SoftZones", true, "Hands and limbs press into her glutes, thighs, belly and breasts (helper bones driven by the game's DynamicBone).");
+            Softness = Config.Bind("Physics", "Softness", 0.5f, new ConfigDescription("How much the soft zones give (0 firm, 1 soft).", new AcceptableValueRange<float>(0f, 1f)));
+            Springiness = Config.Bind("Physics", "Springiness", 0.3f, new ConfigDescription("Secondary motion of the soft zones from her own movement (0 none, 1 a lot).", new AcceptableValueRange<float>(0f, 1f)));
             Logger.LogInfo("SF Body Morphs " + Version + ": panel on " + PanelKey.Value + ", looks in " + Store.Dir);
             // The game destroys plugin components; a hidden object of our own keeps running.
             var go = new GameObject("SfMorphRunner") { hideFlags = HideFlags.HideAndDontSave };

@@ -252,7 +252,12 @@ namespace SfMorph
                 GUILayout.Label("off: no converted characters yet. Export her (Presets tab) and a VaM character (SfExport plugin), then run tools/pipeline/run.ps1.", _off);
             if (GUILayout.Button("Rescan the folder", GUILayout.Width(160))) MorphSet.Rescan();
 
-            if (!had || c.Look.Morph == null) return;  // a pick shows its controls from the next frame on
+            if (had && c.Look.Morph != null) MorphControls(c);  // a pick shows its controls from the next frame on
+            PhysicsSection(c);
+        }
+
+        void MorphControls(Character c)
+        {
             GUILayout.Space(6);
             GUILayout.Label(c.Look.Morph, _bold);
             float w = Slider("Shape", c.Look.MorphWeight * 100f, 0f, 100f, "0", 100f, null, " %") / 100f;
@@ -265,6 +270,29 @@ namespace SfMorph
             else if (c.Morph.Status.Length > 0) GUILayout.Label(c.Morph.Status, c.Morph.Status.StartsWith("off") ? _off : _hint);
             GUILayout.Label("Clothes follow the skin by its nearest vertex and are pushed out where the new shape would poke through. " +
                             "Her height stays the game's (the VaM character is scaled to her eye height), so scenes still line up.", _hint);
+        }
+
+        void PhysicsSection(Character c)
+        {
+            GUILayout.Space(10);
+            GUILayout.Label("Physics", _bold);
+            string off = !_p.Apply.Value ? "'Apply changes' is off"
+                       : !SoftZones.Available ? "the game has no DynamicBone class"
+                       : !c.Female || c.IsPlayer ? "only for the game's woman" : null;
+            GUI.enabled = off == null;
+            bool on = GUILayout.Toggle(_p.Physics.Value, " Soft zones: hands and limbs press into her glutes, thighs, belly and breasts");
+            GUI.enabled = true;
+            if (off == null && on != _p.Physics.Value) _p.Physics.Value = on;
+            string sliderOff = off ?? (_p.Physics.Value ? null : "soft zones are off");
+            float s = Slider("Softness", _p.Softness.Value * 100f, 0f, 100f, "0", 50f, sliderOff == null ? null : "off: " + sliderOff, " %") / 100f;
+            if (Mathf.Abs(s - _p.Softness.Value) > 0.0001f) _p.Softness.Value = s;
+            float sp = Slider("Springiness", _p.Springiness.Value * 100f, 0f, 100f, "0", 30f, sliderOff == null ? null : "off: " + sliderOff, " %") / 100f;
+            if (Mathf.Abs(sp - _p.Springiness.Value) > 0.0001f) _p.Springiness.Value = sp;
+            if (off != null) GUILayout.Label("off: " + off, _off);
+            else if (c.Soft.Status.Length > 0) GUILayout.Label(c.Soft.Status, c.Soft.Status.StartsWith("off") ? _off : _hint);
+            GUILayout.Label("Helper bones under her skin, simulated by the game's own DynamicBone, collide with the partner's hands and fingers, " +
+                            "her forearms and hands, and her other thigh. Softness: how far the skin gives. Springiness: how much the zones lag " +
+                            "and settle as she moves. Works with or without a character shape.", _hint);
         }
 
         bool Card(Texture2D thumb, string name, bool on, float size)

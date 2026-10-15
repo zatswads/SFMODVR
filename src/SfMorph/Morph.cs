@@ -288,7 +288,7 @@ namespace SfMorph
             {
                 if (r == null) continue;
                 Slot old;
-                var orig = _slots.TryGetValue(r, out old) && (r.sharedMesh == old.Clone || r.sharedMesh == null) ? old.Orig : r.sharedMesh;
+                var orig = _slots.TryGetValue(r, out old) && (r.sharedMesh == old.Clone || r.sharedMesh == null) ? old.Orig : SoftZones.Original(r.sharedMesh);
                 _slots.Remove(r);  // re-added below if it still gets a clone (a stale slot would rebuild every frame)
                 if (orig == null) continue;
                 if (r.sharedMesh != orig && old != null && r.sharedMesh == old.Clone) r.sharedMesh = orig;
@@ -370,7 +370,7 @@ namespace SfMorph
             r.sharedMesh = clone;
         }
 
-        static Mesh Clone(Mesh orig, MeshData d)
+        internal static Mesh Clone(Mesh orig, MeshData d)
         {
             var m = new Mesh { name = orig.name + " (SfMorph)" };
             if (d.Pos.Length > 65535) m.indexFormat = IndexFormat.UInt32;
@@ -467,16 +467,21 @@ namespace SfMorph
         {
             var j = _eff;
             var bones = r.bones;
-            var bp = (Matrix4x4[])s.Bind.Clone();
+            var cur = s.Clone.bindposes;   // soft zones may have appended helper bones: keep theirs (they follow BindVersion)
+            var bp = new Matrix4x4[Mathf.Max(cur.Length, s.Bind.Length)];
+            Array.Copy(cur, bp, cur.Length);
+            Array.Copy(s.Bind, bp, s.Bind.Length);
             if (w > 0f)
-                for (int i = 0; i < bp.Length && i < bones.Length; i++)
+                for (int i = 0; i < s.Bind.Length && i < bones.Length; i++)
                 {
                     Vector3 o;
                     if (bones[i] == null || !j.TryGetValue(bones[i].name, out o)) continue;
                     bp[i] = bp[i] * Matrix4x4.Translate(-(s.ToMesh.MultiplyVector(o) * w));
                 }
             s.Clone.bindposes = bp;
+            BindVersion++;
         }
+        public static int BindVersion;   // bumped whenever a clone's bind poses move (SoftZones re-derives its helpers' then)
 
         // ---- textures ----
 
