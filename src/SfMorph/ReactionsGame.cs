@@ -81,6 +81,8 @@ namespace SfMorph
         public string LineHow = "";        // which path the last SpeakLine() took ("game", "own clip (...)")
         public int LineCat, LineLevel;     // the category (0 nipple, 1 pussy, 2 anal, 3 public) and level (1..3) it actually used
         public static readonly string[] LineCats = { "nipple", "pussy", "anal", "public" };
+        // 0.8.7: her face Animator (FacialFunction.anim) for the face clips; null while the bridge is not found
+        public Animator Anim { get { return Found && _anim != null && !Dead(_anim) ? _anim : null; } }
 
         const BindingFlags Own = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
         const BindingFlags AnyM = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;

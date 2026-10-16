@@ -97,6 +97,18 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.8.7 (face clips)
+
+Install `dist/SfMorph.dll` (bundle unchanged). Log: `SF Body Morphs 0.8.7`; with Reactions on, a few seconds in: `Reactions face: bound to
+'...' (N transforms ...), M face bones`, `K clips in the controller`, `X of K clips move her face`, the ranked lines (5 per line), `ranked
+list saved to ...face-clips.txt`, `moods: Pleasure 1 = '...' (by name / by strength only) ...`. Headset: (1) while the survey runs (status
+"surveying ..."), no flicker, no pose jump, no stutter worth noting; (2) Reactions tab, Face clips: each mood Test shows a distinct
+expression for about 2 s and eases back; < > changes the clip, Test again; the eye reaction Lv1/2/3 and Blink buttons work; (3) caress
+her breasts at Aroused 1 / 3 / 4: pleasure faces getting stronger; stroke her arm: ticklish; hard slap: pain face; (4) while she moans or
+speaks a line, the face clip changes her eyes and brows but her mouth keeps the game's lip sync; (5) Allow climax: the climax face; (6)
+bone sliders on the face (eyelids, lips, brows) still apply during a face clip, nothing stays bent after it; (7) Face clips off: no
+survey, faces as in 0.8.6. Send the log and `face-clips.txt` (the auto picks are a guess until the clip names are known).
+
 ## 0.8.6 (her lines for the touched area)
 
 Install `dist/SfMorph.dll` (bundle unchanged). Log: `SF Body Morphs 0.8.6`, then `Reactions: lines for voice language N: nipple a/b/c,

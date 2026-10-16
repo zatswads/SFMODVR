@@ -41,6 +41,21 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.8.7:
+- Her face barely reacted to touch: only the game's eye reaction, a blink or a wince, never the expressions her face Animator holds. Now
+  a one-time survey (a few seconds after Reactions finds her) samples every clip of her face Animator's controller, measures how much each
+  moves her face bones (eyelids, brows, mouth, cheeks) against her neutral face, logs the ranked list and saves it to
+  `BepInEx\config\SfMorphs\face-clips.txt`. Each sample is undone in the same frame (every transform, active flag, renderer flag and
+  property block under her Animator is put back), so nothing of it is ever drawn.
+- Moods: Pleasure 1/2/3, Ticklish, Surprise, Pain, Climax get a clip each (by name, then by strength; speech and blink clips are left
+  out). A caress or grope on her breasts, chest, hips, butt, thighs or neck shows pleasure by her excitement tier; on her arms, calves,
+  belly or face a ticklish (caress) or surprised (grope) face; a soft slap surprise, a hard one pain; the climax its own face. The clip
+  plays over the game's face on a face-only layer (her face bones only, eased in and out, Face strength slider), before the bone sliders,
+  so they still apply; the eyeballs stay with the game's look-at, and the mouth stays the game's while she speaks or moans (its lip sync
+  is in its clips). A clip the game's own eye reaction already plays is left to that hook (watched and logged when it fires).
+- Reactions tab, Face clips: on/off, strength, the survey status, per mood the picked clip with < > to walk the ranked list (saved in
+  `[Reactions] FaceMap`), Test, "Back to the automatic picks", and test buttons for the game's eye reactions Lv1/2/3 and its blink.
+
 0.8.6:
 - Her touch reactions only ever moaned, breathed or played the touch loops: the game's own recorded lines for the touched area were never
   used, although the game has them per voice language (the dirty-talk library's nipple, pussy and anal lines at three levels, its

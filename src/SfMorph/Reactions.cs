@@ -6,8 +6,9 @@ namespace SfMorph
     // Her reactions to touch (0.7.9): what the Body hands the director each frame. Filled from the config once per frame (no allocation).
     internal class ReactionSettings
     {
-        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines;
-        public float Sensitivity, Cooldown, Volume, BlushGain, VoicePitchVar, LimbPush, LineChance;
+        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips;
+        public float Sensitivity, Cooldown, Volume, BlushGain, VoicePitchVar, LimbPush, LineChance, FaceStrength;
+        public string FaceMap = "";
         public int VoiceMode, Log;
 
         public void Fill(Plugin p)
@@ -19,6 +20,7 @@ namespace SfMorph
             BlushGain = p.ReactBlushGain.Value; VoicePitchVar = p.ReactVoicePitchVar.Value;
             VoiceMode = p.ReactVoiceMode.Value; Log = p.ReactLog.Value;
             Lines = p.ReactLines.Value; LineChance = p.ReactLineChance.Value;
+            FaceClips = p.ReactFaceClips.Value; FaceStrength = p.ReactFaceStrength.Value; FaceMap = p.ReactFaceMap.Value ?? "";
             PushByTouch = p.HandsPushByTouch.Value;   // the geometric push of other hands: without it and without physics hands nothing is classified
             LimbPush = p.HandsLimbPush.Value;   // the flinch's swing is a push on her limbs: it needs the slider above 0
         }
@@ -98,6 +100,11 @@ namespace SfMorph
         int _bv = -1;
 
         readonly ReactionsGame _g = new ReactionsGame();
+        readonly ReactionsFace _face = new ReactionsFace();
+        public ReactionsFace Face { get { return _face; } }
+        float _lastFaceClipT = -100f;
+        // zones whose caress / grope shows pleasure (the rest: ticklish or surprised): breast, chest, hips, butt, thigh, neck
+        static readonly bool[] Erogenous = { true, true, false, true, true, true, false, false, false, true };
         readonly System.Random _rng = new System.Random();
         readonly StringBuilder _sb = new StringBuilder(160), _resp = new StringBuilder(160), _last = new StringBuilder(200);
 
@@ -165,6 +172,8 @@ namespace SfMorph
             try
             {
                 if (_now >= _nextGate) { _nextGate = _now + 0.1f; _g.ReadGates(_now); }
+                // 0.8.7: the face clip survey and track building (a few samples per frame, restored in the same frame)
+                _face.Tick(her, _g.Anim, s.Face && s.FaceClips && _g.Found, s.FaceMap, _now, dt);
 
                 if (HerBody.Built)
                 {
@@ -204,6 +213,7 @@ namespace SfMorph
         {
             try { if (_resetAt > 0f) _g.ResetMoan(); } catch { }     // the delayed "moan" trigger safety must not be lost
             try { _g.Release(); } catch { }
+            try { _face.Release(); } catch { }
             ResetSession();
             _wasOn = false; _bridgeLogged = false; _nextRefresh = 0f; _resetAt = 0f;
             _her = null; _root = null; _s = null; _ov = null;
@@ -219,6 +229,7 @@ namespace SfMorph
             if (_resetAt > 0f) { _resetAt = 0f; try { _g.ResetMoan(); } catch { } }
             if (_blushSent) { _blushSent = false; _g.SetBlush(0f, 0f); }
             if (_gazeSent) { _gazeSent = false; _g.SetGaze(0f); }
+            try { _face.Stop(); } catch { }
             try { _g.RestorePitch(); } catch { }                       // the moan source gets its own pitch back
             _blushCur = 0f; _away = 0f;
         }
@@ -230,7 +241,7 @@ namespace SfMorph
             _flush = 0f; _gazeHold = 0f; _guardHold = 0f; _until = 0f; _climaxIdx = 3; _blink2At = 0f;
             _lastEvT = -100f; _lastStimT = -100f; _lastVoiceT = -100f; _lastBreathT = -100f; _lastFlinchT = -100f; _lastSlapT = -100f; _lastFaceT = -100f; _lastDesireT = -100f; _lastCaressFaceT = -100f;
             _startledAt = -100f; _nHits = 0; _quiet = false;
-            _lastLineT = -100f; _lastEnterT = -100f; _enterTier = 0;
+            _lastLineT = -100f; _lastEnterT = -100f; _enterTier = 0; _lastFaceClipT = -100f;
             System.Array.Clear(_zArr, 0, NZ); System.Array.Clear(_zCaress, 0, NZ); System.Array.Clear(_zGrope, 0, NZ); System.Array.Clear(_zAny, 0, NZ);
             ClearR();
         }
@@ -488,6 +499,7 @@ namespace SfMorph
                 if (tier == 1 && Tier >= 1 && _now - _lastCaressFaceT >= 4f && Rand() < 0.25f + 0.1f * Tier) { if (FaceSoft(1)) _lastCaressFaceT = _now; }
                 else if (tier == 2 && Rand() < 0.5f) FaceSoft(2);
             }
+            if (s.Face && s.FaceClips && !_quiet) FaceClip(zone, tier, I);
 
             // flinch, slap sound, blush, gaze, the game's desire
             if (tier >= 3)
@@ -576,6 +588,74 @@ namespace SfMorph
                 }
             }
             return null;
+        }
+
+        // ---- 0.8.7: her face clips ----
+
+        // Body.ApplyAll calls this for her before the bone sliders: the face clip of this frame over the Animator's face.
+        public void FaceStep(float dt)
+        {
+            if (_s == null || !_s.On || !_s.Face || !_s.FaceClips || !_g.Found) return;
+            // the mouth stays the game's while she speaks or moans (the lip sync is in the game's clips)
+            bool mouthFree = !((_g.MoanPlaying && !_g.MoanTail) || _g.OwnVoicePlaying || _g.DirtyTalkPlaying || _g.DialoguePlaying);
+            _face.Step(dt, mouthFree, _g.SexFacialPlaying ? 0.6f : 1f);
+        }
+
+        // The face clip for a touch: pain on hard slaps, surprise on soft ones; caress / grope: pleasure by her excitement on erogenous zones,
+        // ticklish (caress) or surprised (grope) elsewhere. Own gaps and chances; a stronger face (climax, pain) is not cut by a weaker one.
+        void FaceClip(int zone, int tier, float I)
+        {
+            int m; float w, hold, gap, chance;
+            if (tier >= 4) { m = ReactionsFace.Pain; w = Mathf.Lerp(0.6f, 1f, I); hold = tier >= 5 ? 1.6f : 1.0f; gap = 0.4f; chance = 1f; }
+            else if (tier == 3) { m = ReactionsFace.Surprise; w = 0.7f; hold = 0.6f; gap = 1f; chance = 1f; }
+            else if (Erogenous[zone])
+            {
+                if (_g.DirtyTalkPlaying || State == RState.Guarded) return;   // her line's own talking face carries it; guarded: no pleasure
+                m = Tier >= 4 ? ReactionsFace.Pleasure3 : Tier >= 2 ? ReactionsFace.Pleasure2 : ReactionsFace.Pleasure1;
+                w = tier == 2 ? 0.85f : 0.6f; hold = tier == 2 ? 1.6f : 1.2f; gap = 2.5f; chance = tier == 2 ? 0.7f : 0.35f + 0.1f * Tier;
+            }
+            else { m = tier == 2 ? ReactionsFace.Surprise : ReactionsFace.Ticklish; w = 0.6f; hold = 1f; gap = 3f; chance = 0.4f; }
+            if (_now - _lastFaceClipT < gap) return;
+            if (!(chance >= 1f || Rand() < chance)) return;
+            PlayFace(m, w, hold);
+        }
+
+        bool PlayFace(int m, float w, float hold)
+        {
+            string why;
+            string nm = ReactionsFace.MoodNames[m];
+            if (_face.Play(m, w * Mathf.Clamp01(_s.FaceStrength), hold, out why)) { _lastFaceClipT = _now; Note("face " + nm + " '" + _face.CurrentName + "'"); return true; }
+            if (why == "building") { _lastFaceClipT = _now; Note("face " + nm + " (its clip is being sampled)"); }
+            else if (why == "hook") Note("face " + nm + " left to the game's own hook");
+            else if (why != "busy" && why != "surveying") Note("face " + nm + " skipped (" + why + ")");
+            return false;
+        }
+
+        // The panel's face tests: a mood's clip at full strength, the game's eye reaction at a level, the game's blink.
+        public void TestFace(int m)
+        {
+            if (_s == null || !_s.On) { L("test face: reactions are off"); return; }
+            if (!_s.Face || !_s.FaceClips) { L("test face: Face or Face clips is off"); return; }
+            _resp.Length = 0; _face.Stop();
+            bool ok = PlayFace(Mathf.Clamp(m, 0, ReactionsFace.NM - 1), 1f, 1.5f);
+            L("test face " + ReactionsFace.MoodNames[Mathf.Clamp(m, 0, ReactionsFace.NM - 1)] + " (test): " + (ok ? "playing" : "not played") + (_resp.Length > 0 ? ": " + _resp : ""));
+        }
+
+        public void TestEye(int level)
+        {
+            if (_s == null || !_s.On) { L("test eye: reactions are off"); return; }
+            _resp.Length = 0;
+            int k = -1; bool fresh = false;
+            bool ok = _g.Found && _g.EyeReact(Mathf.Clamp(level, 1, 3), out k, out fresh);
+            if (ok && fresh) _face.Watch("eye reaction " + k, _now);
+            L("test eye reaction Lv" + level + " (test): " + (ok ? (fresh ? "id " + k : "one is still running") : "not available (the face layer must be 'on' or 'eye')"));
+        }
+
+        public void TestBlink()
+        {
+            if (_s == null || !_s.On) { L("test blink: reactions are off"); return; }
+            bool ok = _g.Found && _g.Blink();
+            L("test blink (test): " + (ok ? "sent" : "failed"));
         }
 
         // ---- 0.8.6: her lines ----
@@ -710,7 +790,7 @@ namespace SfMorph
             if (!_g.Found || _g.FunctionPause || _g.DialoguePlaying || _g.FacialLayer == "off" || _now - _lastFaceT < 0.5f) return;
             int k; bool fresh;
             // the eye reaction runs alongside the wince / blink, not instead of it (the game never calls its own exit, ours does at 0.6-1.0 s)
-            if (_g.EyeReact(tier >= 5 ? 3 : tier >= 4 ? 2 : 1, out k, out fresh)) { _lastFaceT = _now; if (fresh) Note("eye reaction " + k); }
+            if (_g.EyeReact(tier >= 5 ? 3 : tier >= 4 ? 2 : 1, out k, out fresh)) { _lastFaceT = _now; if (fresh) { Note("eye reaction " + k); _face.Watch("eye reaction " + k, _now); } }
             if (voiced) return;                                      // a moan carries the face (the Animator "moan" trigger comes with it)
             if (tier >= 4 && I >= 0.3f && _g.InSexMode) { if (_g.WinceTrigger()) { _lastFaceT = _now; _resetAt = _now + 1f; Note("wince"); } }
             else if (_g.Blink()) { _lastFaceT = _now; Note("blink"); }
@@ -721,7 +801,7 @@ namespace SfMorph
         {
             if (!_g.Found || _g.FunctionPause || _g.DialoguePlaying || _g.FacialLayer == "off" || _now - _lastFaceT < 0.5f) { Note("face skipped (paused or busy)"); return false; }
             int k; bool fresh;
-            if (_g.EyeReact(level, out k, out fresh)) { _lastFaceT = _now; if (fresh) Note("eye reaction " + k); return true; }
+            if (_g.EyeReact(level, out k, out fresh)) { _lastFaceT = _now; if (fresh) { Note("eye reaction " + k); _face.Watch("eye reaction " + k, _now); } return true; }
             if (_g.Blink()) { _lastFaceT = _now; Note("blink"); return true; }
             Note("face skipped (no eye reaction or blink)");
             return false;
@@ -784,7 +864,11 @@ namespace SfMorph
             }
         }
 
-        void EnterClimax() { _climaxT0 = _now; _climaxIdx = 0; EnterState(RState.Climax, 4f); }
+        void EnterClimax()
+        {
+            _climaxT0 = _now; _climaxIdx = 0; EnterState(RState.Climax, 4f);
+            if (_s != null && _s.Face && _s.FaceClips) { _resp.Length = 0; PlayFace(ReactionsFace.Climax, 1f, 3.4f); }
+        }
 
         // back from a timed state: guarded again if she was and the pain is still up, else by excitement
         void Derive()

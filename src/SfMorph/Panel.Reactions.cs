@@ -31,6 +31,7 @@ namespace SfMorph
             bool auto = _p.ReactAuto.Value, allowClimax = _p.ReactClimax.Value, guard = _p.VoiceGuard.Value;
             int voiceMode = Mathf.Clamp(_p.ReactVoiceMode.Value, 0, 1);
             bool lines = _p.ReactLines.Value; float lineChanceCfg = _p.ReactLineChance.Value;
+            bool faceClips = _p.ReactFaceClips.Value; float faceStrCfg = _p.ReactFaceStrength.Value;
             float sensCfg = _p.ReactSensitivity.Value, gapCfg = _p.ReactCooldown.Value, volCfg = _p.ReactVolume.Value;
             string sub = who ?? (reactOn ? null : "reactions are off");
             string guardOff = !c.Female || c.IsPlayer ? "only for the game's woman" : null;   // the guard needs neither the toggle nor touch tracking
@@ -90,6 +91,8 @@ namespace SfMorph
             else GUILayout.Label("    off: " + sub, _off);
             GUILayout.Label("Face: the game's own eye reaction on slaps, with a wince or blink alongside when no moan carries the face. Gaze away: she looks away for a moment after a hard hit. " +
                             "Feed: touch also raises the game's own desire gauge.", _hint);
+
+            FaceClipsBlock(react, sub, face, faceClips, faceStrCfg);
 
             GUI.enabled = sub == null && voice;
             GUILayout.Label("Voice", _hint);
@@ -201,6 +204,52 @@ namespace SfMorph
                             "Slaps: by how fast the hand arrives (soft 1.2, hard 2.3, too hard 4.5 m/s at 50 % sensitivity). " +
                             "Excitement (tier 0 to 4) rises with touch and fades after ten quiet seconds; pain rises with hard slaps. " +
                             "Flinches need the 'Push her limbs' slider above 0 and soft zones or physics hands.", _hint);
+        }
+
+        // 0.8.7: her face clips (survey, mood picks, tests) and the game's own eye reactions / blink tests.
+        void FaceClipsBlock(Reactions react, string sub, bool face, bool faceClips, float strCfg)
+        {
+            var fc = react.Face;
+            GUILayout.Label("Face clips", _hint);
+            GUI.enabled = sub == null && face;
+            bool t = GUILayout.Toggle(faceClips, " Her face clips over the game's face (pleasure, ticklish, surprise, pain, climax)");
+            GUI.enabled = true;
+            if (sub == null && face && t != faceClips) _p.ReactFaceClips.Value = t;
+            string off = sub ?? (!face ? "Face is off" : !faceClips ? "face clips are off" : null);
+            float st = Slider("Face strength", strCfg * 100f, 0f, 100f, "0", 80f, off, " %") / 100f;
+            if (off == null && Mathf.Abs(st - strCfg) > 0.0001f) _p.ReactFaceStrength.Value = st;
+            if (off != null) GUILayout.Label("    off: " + off, _off);
+            else if (fc.Status.Length > 0) GUILayout.Label(fc.Status, fc.Status.StartsWith("off") ? _off : _hint);
+            GUI.enabled = sub == null && face;
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Eye Lv1")) react.TestEye(1);
+            if (GUILayout.Button("Eye Lv2")) react.TestEye(2);
+            if (GUILayout.Button("Eye Lv3")) react.TestEye(3);
+            if (GUILayout.Button("Blink")) react.TestBlink();
+            GUILayout.EndHorizontal();
+            GUI.enabled = true;
+            if (off == null && fc.Surveyed)
+            {
+                for (int m = 0; m < ReactionsFace.NM; m++)
+                {
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label(ReactionsFace.MoodNames[m], GUILayout.Width(90));
+                    GUI.enabled = fc.RankedCount > 0;
+                    if (GUILayout.Button("<", GUILayout.Width(28))) _p.ReactFaceMap.Value = fc.Cycle(m, -1);
+                    if (GUILayout.Button(">", GUILayout.Width(28))) _p.ReactFaceMap.Value = fc.Cycle(m, 1);
+                    GUI.enabled = true;
+                    string nm = fc.PickName(m);
+                    GUILayout.Label(nm.Length > 0 ? nm + "  (" + fc.PickWhy(m) + ")" : "none", _hint, GUILayout.Width(330));
+                    if (GUILayout.Button("Test", GUILayout.Width(50))) react.TestFace(m);
+                    GUILayout.EndHorizontal();
+                }
+                GUI.enabled = !string.IsNullOrEmpty(_p.ReactFaceMap.Value);
+                if (GUILayout.Button("Back to the automatic picks")) _p.ReactFaceMap.Value = "";
+                GUI.enabled = true;
+            }
+            GUILayout.Label("A one-time survey samples every clip of her face Animator and ranks how much each moves her face (log and BepInEx\\config\\SfMorphs\\face-clips.txt). " +
+                            "< > walk the ranked list for a mood (saved), Test plays it. Pleasure by excitement on breasts, hips, butt, thighs and neck; ticklish or surprised elsewhere; " +
+                            "surprise on soft slaps, pain on hard ones. Her mouth stays the game's while she speaks or moans.", _hint);
         }
 
         // The game's dirty-talk voice error repair: independent of the reactions toggle, only needs her.

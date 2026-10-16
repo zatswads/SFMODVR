@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.8.6";
+        public const string Version = "0.8.7";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -37,8 +37,9 @@ namespace SfMorph
         internal ConfigEntry<float> WrinkStrength, WrinkThreshold, WrinkAttack, WrinkRelease, WrinkSpacingFace, WrinkSpacingBody, WrinkCullDistance, WrinkCavity;
         internal ConfigEntry<int> WrinkDebug, WrinkResolution;
         // 0.7.9 reactions
-        internal ConfigEntry<bool> ReactOn, ReactVoice, ReactFace, ReactFlinch, ReactSound, ReactBlush, ReactBlushBody, ReactGaze, ReactFeedDesire, ReactAuto, ReactClimax, VoiceGuard, ReactLines;
-        internal ConfigEntry<float> ReactSensitivity, ReactCooldown, ReactVolume, ReactBlushGain, ReactVoicePitchVar, ReactLineChance;
+        internal ConfigEntry<bool> ReactOn, ReactVoice, ReactFace, ReactFlinch, ReactSound, ReactBlush, ReactBlushBody, ReactGaze, ReactFeedDesire, ReactAuto, ReactClimax, VoiceGuard, ReactLines, ReactFaceClips;
+        internal ConfigEntry<float> ReactSensitivity, ReactCooldown, ReactVolume, ReactBlushGain, ReactVoicePitchVar, ReactLineChance, ReactFaceStrength;
+        internal ConfigEntry<string> ReactFaceMap;
         internal ConfigEntry<int> ReactVoiceMode, ReactLog, ReactConfigRev;
         // 0.8.0 contact visuals v2 (GPU contact: dent edge, rim bulge, bent normals, self-contact, partner body, bend bulges, ripple, skin marks)
         internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn;
@@ -148,6 +149,9 @@ namespace SfMorph
             ReactVoicePitchVar = Config.Bind("Reactions", "VoicePitchVar", 0.04f, new ConfigDescription("Random pitch change of the moans chosen by intensity (plus/minus).", new AcceptableValueRange<float>(0f, 0.15f)));
             ReactLines = Config.Bind("Reactions", "Lines", true, "She speaks the game's own recorded lines for the touched area (breasts: nipple lines, between her legs: pussy or anal lines, butt, hips and thighs: her general lines), at the level of her excitement, and a feeling sound when her excitement rises a tier. Sex or foreplay mode only, never over dialogue, a kiss, the game's dirty talk or a moan.");
             ReactLineChance = Config.Bind("Reactions", "LineChance", 0.5f, new ConfigDescription("Chance that a voiced touch of an area with lines speaks a line instead of a moan (at most one line per 8 s at the default voice gap).", new AcceptableValueRange<float>(0f, 1f)));
+            ReactFaceClips = Config.Bind("Reactions", "FaceClips", true, "Her face Animator's own clips play over her face as reactions (pleasure by excitement on breasts, hips, butt, thighs and neck; ticklish or surprised elsewhere; surprise on soft slaps, pain on hard ones; climax). Found by a one-time survey of her face clips (log and BepInEx\\config\\SfMorphs\\face-clips.txt). Her mouth is left to the game while she speaks or moans.");
+            ReactFaceStrength = Config.Bind("Reactions", "FaceStrength", 0.8f, new ConfigDescription("How strongly the face clips show over the game's face.", new AcceptableValueRange<float>(0f, 1f)));
+            ReactFaceMap = Config.Bind("Reactions", "FaceMap", "", "The face clip per mood chosen in the panel, 'Mood=clip;...'. Empty: picked by name, then by strength.");
             ReactFace = Config.Bind("Reactions", "Face", true, "Her face reacts to touch: the game's own eye reaction on slaps (and soft ones on caresses and gropes), with a wince or blink alongside when no moan carries the face.");
             ReactFlinch = Config.Bind("Reactions", "Flinch", true, "Her body swings and her soft zones jiggle after a slap (needs the limb push slider above 0).");
             ReactSound = Config.Bind("Reactions", "Sound", true, "A slap sound at the spot of a slap.");

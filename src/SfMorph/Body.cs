@@ -525,6 +525,10 @@ namespace SfMorph
             int quality = _p.Quality.Value;
             foreach (var c in Found)
             {
+                // 0.8.7: her reaction face clip over the Animator's face, before the bone sliders (they add on top of it)
+                if (c == her && _reactOn && _p.ReactOn.Value)
+                    try { React.FaceStep(Time.deltaTime); }
+                    catch (Exception e) { Plugin.Log.LogError("Reactions face clips failed, turned off: " + e); _p.ReactFaceClips.Value = false; try { React.Face.Stop(); } catch { } }
                 try { c.Morph.Update(c, _p.Apply.Value && c.Root != null); }  // before Apply: its joint moves go through the trackers
                 catch (Exception e)
                 {
