@@ -41,6 +41,15 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+Pipeline, after 0.11.6 (skin bake fixes found on the Genesis 9 character's face; the plugin is unchanged):
+- The adapter writes VaM's triangle winding. A file that came in the other way round (Krista's FBX) made the bake rebuild
+  inverted source normals, so most of the normal detail was thrown away as "tilted" (face 96 %, body 64 %; now 1 %, 3 %).
+- Faces get a second, tight bake pass (4 mm cage over the 12 mm one; the tight hit wins, its misses keep the wide one): the
+  wide rays from her nose wings, eyelid rims, lip corners and ears landed on the character's nostril, lid and mouth insides
+  (dark nostrils, dark eye rims, lip colour past the mouth corners). A VaM character's fuller lips still come from the wide pass.
+- Her neck mesh (a cap inside the neck whose UVs lie on the throat) is baked before the upper body, so its rays' misses no
+  longer paint a flat disc on her throat.
+
 0.11.6 (fit fixes found on the Genesis 9 character; the plugin is unchanged):
 - Jaw and chin: the rigid VaM head was blended into the body warp up to her Head_M (mouth height), so a large body warp sheared
   the lower face (Krista: jutting jaw, parted lips; chin 21 mm off). The blend now ends under her chin and the warp carries

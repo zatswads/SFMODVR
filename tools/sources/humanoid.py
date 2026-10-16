@@ -529,6 +529,13 @@ def main():
                 filled += 1
         log('DAZ material channels (%s): %d texture slots filled' % (os.path.basename(side), filled))
 
+    # VaM's convention (Unity's clockwise front faces): cross(b - a, c - a) points against the outward normals. The bake
+    # rebuilds the source's normals from the winding, so a file that comes in the other way round is written reversed
+    fo = [0, 2, 1]
+    fx = np.cross(V[F[:, fo[1]]] - V[F[:, fo[0]]], V[F[:, fo[2]]] - V[F[:, fo[0]]])
+    if np.median(np.einsum('ij,ij->i', fx, N[F].mean(1))) > 0:
+        fo = [0, 1, 2]
+        log('winding reversed to the VaM convention')
     # body.obj
     with open(os.path.join(out, 'body.obj'), 'w', encoding='utf-8', newline='\n') as f:
         f.write('# %s via tools/sources/humanoid.py (%s rig); Unity axes (left-handed, Y up), metres\n' % (os.path.basename(src), rid))
@@ -541,8 +548,7 @@ def main():
         for gi, g in enumerate(groups):
             f.write('g %s\n' % g)
             for t in F[gidx == gi]:
-                # Unity's front faces are clockwise: the frame change mirrored the winding, so reverse it back
-                a, b, c = t[0] + 1, t[2] + 1, t[1] + 1
+                a, b, c = t[fo[0]] + 1, t[fo[1]] + 1, t[fo[2]] + 1
                 f.write('f %d/%d/%d %d/%d/%d %d/%d/%d\n' % (a, a, a, b, b, b, c, c, c))
     # joints.txt (rest = posed: the file's own pose)
     with open(os.path.join(out, 'joints.txt'), 'w', encoding='utf-8', newline='\n') as f:

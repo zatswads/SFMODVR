@@ -89,5 +89,8 @@ class Roles:
         return [n for n in [self.upper, self.lower, self.foot, self.neck, self.face] if n]
 
     def body_sheet(self):
-        """Meshes drawn with her body material (the body texture atlas): the bake target of 'reika_body'."""
-        return [n for n in [self.upper, self.lower, self.foot, self.neck] if n] + self.nipples + self.nails + self.pussies
+        """Meshes drawn with her body material (the body texture atlas): the bake target of 'reika_body'. The order is the
+        bake's priority (Cycles rasterises the target's triangles in order, a later one takes a shared texel): the neck
+        mesh is a cap inside her neck whose UVs lie on the throat of the upper body's, so it goes first and the visible
+        throat wins; nipples, nails and genitals sit on top of the body and go after it."""
+        return [n for n in [self.neck, self.upper, self.lower, self.foot] if n] + self.nipples + self.nails + self.pussies

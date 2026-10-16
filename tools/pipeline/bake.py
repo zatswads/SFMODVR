@@ -187,6 +187,32 @@ def skin_fill(vmats, vamdir, log, fill=(0.8, 0.62, 0.52, 1.0)):
     return fill
 
 
+
+# Selected-to-active rays start this far out along her normal and reach this far (metres). The wide cage suits the body's
+# looser fit. On the face, fitted to a few mm, a ray started 12 mm out from a nose wing, an eyelid rim, a lip corner or an
+# ear can land on the character's nostril, lid or mouth interior (dark patches on RKS Krista 9), so faces get a second,
+# tight pass on top: where its ray hits, it wins; where it misses (a VaM character's fuller lips: her lips lie inside them),
+# the wide pass's texel stays (a bake leaves the pixels it has no hit for untouched when the image is not cleared).
+WIDE_CAGE = (0.012, 0.05)
+TIGHT_CAGE = (0.004, 0.025)
+
+
+def bake_pass(kind, tight, sc):
+    """bpy.ops.object.bake with the wide cage, then (tight) the tight pass over it, no clearing and no margin."""
+    b = sc.render.bake
+    b.cage_extrusion, b.max_ray_distance = WIDE_CAGE
+    bpy.ops.object.bake(type=kind)
+    if not tight:
+        return
+    clear, margin = b.use_clear, b.margin
+    b.cage_extrusion, b.max_ray_distance = TIGHT_CAGE
+    b.use_clear, b.margin = False, 0
+    try:
+        bpy.ops.object.bake(type=kind)
+    finally:
+        b.use_clear, b.margin = clear, margin
+        b.cage_extrusion, b.max_ray_distance = WIDE_CAGE
+
 def flat_emission(name, color):
     """A material without a texture (slot missing or unreadable): the flat skin colour."""
     m = bpy.data.materials.new(name)
@@ -987,26 +1013,26 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
                 bpy.context.view_layer.objects.active = tgt
                 sc = bpy.context.scene
                 sc.render.bake.use_selected_to_active = True
-                sc.render.bake.cage_extrusion = 0.012
-                sc.render.bake.max_ray_distance = 0.05
+                sc.render.bake.cage_extrusion = WIDE_CAGE[0]
+                sc.render.bake.max_ray_distance = WIDE_CAGE[1]
                 sc.render.bake.margin = max(8, 24 * res // 4096) * MARGIN_MUL.get(mat, 1)   # the same width in UV space at every size
                 sc.render.bake.margin_type = 'EXTEND'
                 sc.render.bake.target = 'IMAGE_TEXTURES'
                 sc.render.bake.use_clear = kind != 'smooth'
                 if kind == 'albedo':
-                    bpy.ops.object.bake(type='EMIT')
+                    bake_pass('EMIT', mat in R.faces, sc)
                     path = os.path.join(out, 'tex_%s_albedo.jpg' % mat)
                     sc.render.image_settings.file_format = 'JPEG'
                     sc.render.image_settings.quality = JPEG_QUALITY
                 elif kind == 'normal':
                     sc.render.bake.normal_space = 'TANGENT'
-                    bpy.ops.object.bake(type='NORMAL')
+                    bake_pass('NORMAL', mat in R.faces, sc)
                     path = os.path.join(out, 'tex_%s_normal.png' % mat)
                     pa = os.path.join(scratch, '_bake_%s_nA.bmp' % mat); pb = os.path.join(scratch, '_bake_%s_nB.bmp' % mat)
                     save_bmp(img, pa)
                     for i, fm_ in enumerate(flat_mats):   # B: VaM's bare geometry, the same rays
                         src.data.materials[i] = fm_
-                    bpy.ops.object.bake(type='NORMAL')
+                    bake_pass('NORMAL', mat in R.faces, sc)
                     save_bmp(img, pb)
                     miss, tilt = combine_normals(pa, pb, res)
                     log('  %s normal: detail only (%.1f%% of texels had the shape tilted > 30 deg against hers: removed); '
@@ -1025,7 +1051,7 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
                     log('baked %s %s (%dx%d) -> %s in %.1f s' % (mat, kind, res, res, path, time.time() - t0))
                     continue
                 else:
-                    bpy.ops.object.bake(type='EMIT')
+                    bake_pass('EMIT', mat in R.faces, sc)
                     path = os.path.join(out, 'tex_%s_smooth.png' % mat)
                     sc.render.image_settings.file_format = 'PNG'
                     sc.render.image_settings.color_depth = '8'
