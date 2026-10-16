@@ -41,6 +41,17 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.15 (Gloss works):
+- The Characters tab's Gloss slider made no visible change (seen on a face-only character). It multiplied
+  `_SmoothnessPower`, but her skin shader (read from its compiled GBuffer pass) computes smoothness as
+  `_SmoothnessMap.r x _SmoothnessPower + _AddMap.r x _AddPower`, and her face's map is nearly black (mean 0.08), so x2 only
+  took the face from 0.06 to 0.12 smoothness; a face-only character's body has no converted texture, so Gloss never reached it.
+- Gloss now covers all her skin (face, body, feet, every material on her skin shader, converted or not): 0..1 scales both
+  terms (0 fully matte, 1 the game's own), 1..2 keeps the game's map and adds an even lift (a white `_AddMap` x
+  `_AddPower`) sized from each map's measured mean, so face and body both reach the same wet shine (mean smoothness 0.85)
+  at 2. Everything comes back when the character is turned off; a value the game's customise menu writes is kept as the
+  new original. The log gets one `Gloss <value>:` line per setting with the values written per material.
+
 0.11.14 (face-only characters: the bad body combination can no longer be picked):
 - A DAZ character converted for her showed a wrong body at Body 100 % and Krista's whole-body skin with the game's blush
   layers glaring on it when the body skin was on: the body conversion folds a body of quite another shape (Genesis 9) and

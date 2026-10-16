@@ -539,6 +539,7 @@ namespace SfMorph
                 _skinDirty = true;
             }
             if (_skinDirty || _tone != _toneApplied || _gloss != _glossApplied) ApplySkinLook(c, set);
+            LogGloss();
         }
 
         string _why = "";
@@ -1070,17 +1071,16 @@ namespace SfMorph
             }
         }
 
-        // Skin Tone (a multiplier on the skin tint: the white WhiteTint sets, or the game's own tint where it is kept) and Gloss (a
-        // multiplier on _SmoothnessPower), on every material of the character's skin. Originals are saved on first touch and come back
-        // with the textures. Re-run whenever the values change and in the 2 s check.
-        static readonly string[] GlossProps = { "_SmoothnessPower" };
-
+        // Skin Tone (a multiplier on the skin tint: the white WhiteTint sets, or the game's own tint where it is kept) on every material
+        // of the character's skin, and Gloss on all her skin (see ApplyGloss). Originals are saved on first touch and come back with the
+        // textures. Re-run whenever the values change and in the 2 s check.
         void ApplySkinLook(Character c, MorphSet set)
         {
             _skinDirty = false; _toneApplied = _tone; _glossApplied = _gloss;
+            ApplyGloss(c);
             var names = set.SkinMaterials;
             if (names.Count == 0) return;
-            float tone = _tone, gloss = _gloss;
+            float tone = _tone;
             foreach (var r in c.Renderers)
             {
                 if (r == null) continue;
@@ -1104,25 +1104,133 @@ namespace SfMorph
                         var want = new Color(orig.r * (1f + tone), orig.g * (1f + tone), orig.b * (1f + tone), orig.a);
                         if (cur != want) mat.SetColor(pn, want);
                     }
-                    string gp = null;
-                    foreach (var pn in GlossProps) if (mat.HasProperty(pn)) { gp = pn; break; }
-                    if (gp == null)
-                    {
-                        if (gloss != 1f && _loggedNoGloss.Add(mat.name)) Plugin.Log.LogInfo("Material '" + mat.name + "' has no _SmoothnessPower; Gloss does nothing there");
-                        continue;
-                    }
-                    Dictionary<string, float> sf;
-                    if (!_savedFloat.TryGetValue(mat, out sf)) { sf = new Dictionary<string, float>(); _savedFloat[mat] = sf; }
-                    float o;
-                    if (!sf.TryGetValue(gp, out o))
-                    {
-                        if (gloss == 1f) continue;
-                        sf[gp] = o = mat.GetFloat(gp);
-                    }
-                    float wantF = o * gloss;
-                    if (Mathf.Abs(mat.GetFloat(gp) - wantF) > 1e-5f) mat.SetFloat(gp, wantF);
+                    if (_gloss != 1f && !IsSkinShader(mat) && _loggedNoGloss.Add(mat.name))
+                        Plugin.Log.LogInfo("Material '" + mat.name + "' (" + mat.shader.name + ") is not her skin shader; Gloss does nothing there");
                 }
             }
+        }
+
+        // Gloss. Her skin shader ('Shader Graphs/Skin', read from its compiled GBuffer pass) writes
+        //   smoothness = _SmoothnessMap.r x _SmoothnessPower + _AddMap.r x _AddPower   (roughness = 1 - that, clamped by the 8-bit GBuffer)
+        // A plain multiplier on _SmoothnessPower did nothing visible on her face: its map is nearly black (mean 0.08 linear, so 0.06 at
+        // the game's 0.8 and 0.12 at x2), and a face-only character's body had no textured material, so Gloss never reached it.
+        // Now, on every skin-shader material of hers (face, body, feet, whichever skin is on):
+        //   Gloss 0..1: both terms scaled by Gloss (0 = fully matte, 1 = the game's own);
+        //   Gloss 1..2: the game's map and power kept, plus an even lift (a white _AddMap x _AddPower) that brings the material's mean
+        //               smoothness to GlossTop at 2, sized from the maps' measured means, so face and body reach the same shine.
+        // Originals (both floats and the _AddMap) are saved on first touch and come back with RestoreTextures; a value the game writes
+        // itself (its customise menu writes _SmoothnessPower) is taken as the new original.
+        public static float GlossTop = 0.85f;
+        const string SmoothPow = "_SmoothnessPower", SmoothMap = "_SmoothnessMap", AddPow = "_AddPower", AddMap = "_AddMap";
+        static readonly Dictionary<Texture, float> _meanR = new Dictionary<Texture, float>();
+        readonly Dictionary<Material, Vector2> _glossWritten = new Dictionary<Material, Vector2>();   // (power, add power) we last wrote
+        string _glossLog; float _glossLogAt = -1f, _glossLogged = 1f;
+
+        static bool IsSkinShader(Material m)
+        {
+            return m != null && m.HasProperty(SmoothPow) && m.HasProperty(SmoothMap) && m.HasProperty(AddPow) && m.HasProperty(AddMap);
+        }
+
+        void ApplyGloss(Character c)
+        {
+            float g = _gloss;
+            var seen = new HashSet<Material>();
+            StringBuilder log = null;
+            foreach (var r in c.Renderers)
+            {
+                if (r == null) continue;
+                foreach (var mat in r.sharedMaterials)
+                {
+                    if (mat == null || !seen.Add(mat) || !IsSkinShader(mat)) continue;
+                    Dictionary<string, float> sf;
+                    _savedFloat.TryGetValue(mat, out sf);
+                    if (sf == null || !sf.ContainsKey(SmoothPow))
+                    {
+                        if (g == 1f) continue;   // nothing of ours on it
+                        if (sf == null) { sf = new Dictionary<string, float>(); _savedFloat[mat] = sf; }
+                        sf[SmoothPow] = mat.GetFloat(SmoothPow); sf[AddPow] = mat.GetFloat(AddPow);
+                    }
+                    Vector2 last;
+                    float curP = mat.GetFloat(SmoothPow), curA = mat.GetFloat(AddPow);
+                    if (_glossWritten.TryGetValue(mat, out last))
+                    {
+                        if (Mathf.Abs(curP - last.x) > 1e-4f) sf[SmoothPow] = curP;   // the game wrote its own
+                        if (Mathf.Abs(curA - last.y) > 1e-4f) sf[AddPow] = curA;
+                    }
+                    float p0 = sf[SmoothPow], a0 = sf[AddPow];
+                    Dictionary<string, Saved> sv;
+                    if (!_saved.TryGetValue(mat, out sv)) { sv = new Dictionary<string, Saved>(); _saved[mat] = sv; }
+                    Saved addOrig;
+                    bool lifted = sv.TryGetValue(AddMap, out addOrig);
+                    Texture add0 = lifted ? addOrig.Tex : mat.GetTexture(AddMap);
+                    float p, a, mapMean = -1f, addMean = -1f, s1 = -1f;
+                    if (g <= 1f)
+                    {
+                        p = p0 * g; a = a0 * g;
+                        if (lifted) { mat.SetTexture(AddMap, addOrig.Tex); sv.Remove(AddMap); }
+                    }
+                    else
+                    {
+                        mapMean = MeanR(mat.GetTexture(SmoothMap)); addMean = MeanR(add0);
+                        s1 = p0 * mapMean + a0 * addMean;
+                        p = p0;
+                        a = (g - 1f) * Mathf.Max(0f, GlossTop - s1);
+                        if (!lifted) sv[AddMap] = new Saved { Tex = add0 };
+                        if (mat.GetTexture(AddMap) != Texture2D.whiteTexture) mat.SetTexture(AddMap, Texture2D.whiteTexture);
+                    }
+                    if (Mathf.Abs(curP - p) > 1e-5f) mat.SetFloat(SmoothPow, p);
+                    if (Mathf.Abs(curA - a) > 1e-5f) mat.SetFloat(AddPow, a);
+                    _glossWritten[mat] = new Vector2(p, a);
+                    if (log == null) log = new StringBuilder("Gloss " + F(g) + ":");
+                    log.Append(' ').Append(mat.name.Replace(" (Instance)", "").Trim()).Append(' ').Append(SmoothPow).Append(' ').Append(F(p0)).Append("->").Append(F(p))
+                       .Append(", ").Append(AddPow).Append(' ').Append(F(a0)).Append("->").Append(F(a));
+                    if (g > 1f)
+                        log.Append(" on a white _AddMap (map mean ").Append(F(mapMean)).Append(", smoothness mean ").Append(F(s1)).Append("->").Append(F(s1 + a)).Append(')');
+                    log.Append(';');
+                }
+            }
+            if (log != null && g != _glossLogged) { _glossLog = log.ToString(); _glossLogAt = Time.unscaledTime + 0.5f; }   // logged once the slider rests
+        }
+
+        // Called every frame: the gloss line, once the value has stayed put for half a second (not once per frame of a drag).
+        void LogGloss()
+        {
+            if (_glossLog == null || Time.unscaledTime < _glossLogAt) return;
+            Plugin.Log.LogInfo(_glossLog);
+            _glossLog = null; _glossLogged = _gloss;
+        }
+
+        // The mean of a texture's red channel as the shader samples it (linear), read back once through a small blit (her maps are not
+        // CPU-readable). No texture = the shader's default white.
+        static float MeanR(Texture t)
+        {
+            if (t == null) return 1f;
+            float m;
+            if (_meanR.TryGetValue(t, out m)) return m;
+            const int n = 64;
+            var rt = RenderTexture.GetTemporary(n, n, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+            var prev = RenderTexture.active;
+            Texture2D tmp = null;
+            m = 0.5f;
+            try
+            {
+                Graphics.Blit(t, rt);
+                RenderTexture.active = rt;
+                tmp = new Texture2D(n, n, TextureFormat.RGBA32, false, true);
+                tmp.ReadPixels(new Rect(0, 0, n, n), 0, 0, false);
+                double sum = 0;
+                foreach (var px in tmp.GetPixels32()) sum += px.r;
+                m = (float)(sum / (n * n * 255.0));
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Gloss: couldn't read " + t.name + " (" + e.Message + "); taking its mean as 0.5"); }
+            finally
+            {
+                RenderTexture.active = prev;
+                RenderTexture.ReleaseTemporary(rt);
+                if (tmp != null) UnityEngine.Object.Destroy(tmp);
+            }
+            _meanR[t] = m;
+            return m;
         }
 
         static string F(float v) { return v.ToString("0.###", CultureInfo.InvariantCulture); }
@@ -1255,6 +1363,7 @@ namespace SfMorph
                 foreach (var p in kv.Value) kv.Key.SetFloat(p.Key, p.Value);
             }
             _savedFloat.Clear();
+            _glossWritten.Clear();
             foreach (var kv in _saved)
             {
                 if (kv.Key == null) continue;

@@ -523,7 +523,7 @@ namespace SfMorph
             }
             else GUILayout.Label("    off: this character has no corrective data (" + reexport + ")", _off);
             GUILayout.Label("Sliders move a body area away from the character's own default (Reset goes back to it). " +
-                            "Skin tone lightens or darkens the skin tint; gloss scales its shininess.", _hint);
+                            "Skin tone lightens or darkens the skin tint; Gloss sets her whole skin's shine (0 matte, 1 the game's, 2 wet).", _hint);
         }
 
         void HandsSection(Character c)

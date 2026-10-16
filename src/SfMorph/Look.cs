@@ -23,7 +23,7 @@ namespace SfMorph
         public bool MorphJoints = true, MorphSkin = true, MorphSkinBody = true;   // MorphSkin = the face's skin texture
 
         // The character's body sliders (name -> s in 0..1; absent = the slider's own s0, meaning no change), the joint-corrective
-        // switch, and the skin's tone (-0.1..+0.1 multiplier on the tint, 0 = none) and gloss (0..2 multiplier on _SmoothnessPower, 1 = none).
+        // switch, and the skin's tone (-0.1..+0.1 multiplier on the tint, 0 = none) and gloss (0..2: 0 matte, 1 = the game's own, 2 wet; Morph.ApplyGloss).
         public readonly Dictionary<string, float> Sliders = new Dictionary<string, float>();
         public bool MorphJcm = true;
         public float SkinTone, Gloss = 1f;
