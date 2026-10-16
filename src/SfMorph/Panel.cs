@@ -317,7 +317,13 @@ namespace SfMorph
             GUILayout.FlexibleSpace();
             GUILayout.EndHorizontal();
             if (pickNone && c.Look.Morph != null) { c.Look.Morph = null; _body.Touch(c); }
-            if (pick != null && c.Look.Morph != pick) { c.Look.Morph = pick; c.Look.MorphFace = 1f; c.Look.MorphBody = 1f; c.Look.ResetMorphExtras(); _body.Touch(c); }
+            if (pick != null && c.Look.Morph != pick)
+            {
+                var ps = MorphSet.Find(pick);
+                bool fo = ps != null && ps.FaceOnly;   // a face-only character starts as Face only (body and its skin stay hers)
+                c.Look.Morph = pick; c.Look.MorphFace = 1f; c.Look.MorphBody = fo ? 0f : 1f; c.Look.MorphSkin = true; c.Look.MorphSkinBody = !fo;
+                c.Look.ResetMorphExtras(); _body.Touch(c);
+            }
             if (all.Count == 0)
                 GUILayout.Label("off: no converted characters yet. Export her (Presets tab) and a VaM character (SfExport plugin), then run tools/pipeline/run.ps1.", _off);
             if (GUILayout.Button("Rescan the folder", GUILayout.Width(160))) MorphSet.Rescan();
@@ -443,27 +449,35 @@ namespace SfMorph
             GUILayout.Label(c.Look.Morph, _bold);
             var set = MorphSet.Find(c.Look.Morph);
             bool two = set != null && set.TwoFrames;   // decided once, before any control: the same controls in the Layout pass and the click pass
+            bool fonly = set != null && set.FaceOnly;
+            const string fonlyOff = "off: face-only character (its body conversion is not usable: body and body skin stay hers)";
             float fw = Slider("Face", c.Look.MorphFace * 100f, 0f, 100f, "0", 100f, null, " %") / 100f;
             if (Mathf.Abs(fw - c.Look.MorphFace) > 0.0001f) { c.Look.MorphFace = fw; _body.Touch(c); }
-            float bw = Slider("Body", c.Look.MorphBody * 100f, 0f, 100f, "0", 100f, two ? null : "off: this character has a single shape (Face drives all of it)", " %") / 100f;
-            if (two && Mathf.Abs(bw - c.Look.MorphBody) > 0.0001f) { c.Look.MorphBody = bw; _body.Touch(c); }
+            float bw = Slider("Body", (fonly ? 0f : c.Look.MorphBody) * 100f, 0f, 100f, "0", 100f,
+                              fonly ? fonlyOff : two ? null : "off: this character has a single shape (Face drives all of it)", " %") / 100f;
+            if (two && !fonly && Mathf.Abs(bw - c.Look.MorphBody) > 0.0001f) { c.Look.MorphBody = bw; _body.Touch(c); }
             GUILayout.Label("Face: the character's face and head. Body: her figure (lower it if the body looks too heavy in her animations).", _hint);
             bool j = GUILayout.Toggle(c.Look.MorphJoints, " Move her joints to the new shape (limbs bend in the right place)");
             if (j != c.Look.MorphJoints) { c.Look.MorphJoints = j; _body.Touch(c); }
             GUILayout.BeginHorizontal();
             bool sk = GUILayout.Toggle(c.Look.MorphSkin, " Face skin texture", GUILayout.Width(200));
             if (sk != c.Look.MorphSkin) { c.Look.MorphSkin = sk; _body.Touch(c); }
-            bool skb = GUILayout.Toggle(c.Look.MorphSkinBody, " Body skin texture");
-            if (skb != c.Look.MorphSkinBody) { c.Look.MorphSkinBody = skb; _body.Touch(c); }
+            GUI.enabled = !fonly;
+            bool skb = GUILayout.Toggle(c.Look.MorphSkinBody && !fonly, " Body skin texture");
+            GUI.enabled = true;
+            if (!fonly && skb != c.Look.MorphSkinBody) { c.Look.MorphSkinBody = skb; _body.Touch(c); }
             GUILayout.EndHorizontal();
             // presets, applied after the row so the Layout and click passes draw the same controls
             GUILayout.BeginHorizontal();
             bool faceOnly = GUILayout.Button("Face only (body stays hers)");
-            bool full = GUILayout.Button("Full character");
+            GUI.enabled = !fonly;
+            bool full = GUILayout.Button("Full character") && !fonly;
+            GUI.enabled = true;
             GUILayout.EndHorizontal();
             if (faceOnly) { c.Look.MorphFace = 1f; c.Look.MorphBody = 0f; c.Look.MorphSkin = true; c.Look.MorphSkinBody = false; _body.Touch(c); }
             else if (full) { c.Look.MorphFace = 1f; c.Look.MorphBody = 1f; c.Look.MorphSkin = true; c.Look.MorphSkinBody = true; _body.Touch(c); }
             GUILayout.Label("Facial likeness only: Body 0 %, Face 100 %, face skin on, body skin off.", _hint);
+            if (fonly) GUILayout.Label(fonlyOff, _off);
             BodySliders(c, set, two);
             if (!_p.Apply.Value) GUILayout.Label("off: 'Apply changes' is off", _off);
             else if (c.Morph.Status.Length > 0) GUILayout.Label(c.Morph.Status, c.Morph.Status.StartsWith("off") ? _off : _hint);
@@ -480,7 +494,7 @@ namespace SfMorph
             const string reexport = "re-export the character from VaM with Export morphs, then run the pipeline";
             bool haveSliders = set != null && set.Sliders.Count > 0, haveJcm = set != null && set.Jcms.Count > 0;
             string slidersOff = !haveSliders ? "off: this character has no body slider data (" + reexport + ")"
-                              : c.Look.MorphBody <= 0f ? "off: Body is 0 % (the sliders scale with it)" : null;
+                              : c.Look.MorphBody <= 0f || set.FaceOnly ? "off: Body is 0 % (the sliders scale with it)" : null;
             if (haveSliders)
                 foreach (var sd in set.Sliders)
                 {

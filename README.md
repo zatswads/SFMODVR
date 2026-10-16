@@ -41,6 +41,14 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.13 (face-only characters: the bad body combination can no longer be picked):
+- A DAZ character converted for her showed a wrong body at Body 100 % and Krista's whole-body skin with the game's blush
+  layers glaring on it when the body skin was on: the body conversion folds a body of quite another shape (Genesis 9) and
+  is parked. Characters from other sources than VaM (DAZ, any -Source file) are now converted face-only: character.txt
+  says `faceonly`, picking one sets Face only, the Body slider, the Body skin toggle and Full character are greyed out
+  and held at 0 % / off whatever a preset says, and the bake skips the body and foot skin. `run.ps1 -Daz` makes this
+  conversion by default (-Sliders: the slider-fit preset instead; -FullBody: the body too).
+
 Pipeline, after 0.11.10 (skin bake fixes found on the Genesis 9 character's face; the plugin is unchanged):
 - The adapter writes VaM's triangle winding. A file that came in the other way round (Krista's FBX) made the bake rebuild
   inverted source normals, so most of the normal detail was thrown away as "tilted" (face 96 %, body 64 %; now 1 %, 3 %).

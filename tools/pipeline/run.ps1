@@ -28,11 +28,14 @@ ignores it and the next -All tries it again.
                                converted to an SfExport folder in %LOCALAPPDATA%\SfMorph\sources\<file name>, then
                                as above (with -Sliders: the slider fit). -Rig <id> forces the bone table, -SourceMesh
                                <object> picks the body mesh; the adapter's report is source.txt in that folder.
+                               Such characters (any -VamExport folder with a source.txt) are converted face-only: the
+                               character's face and face skin on her own body and skin (character.txt 'faceonly': the
+                               game holds Body at 0 % and the body skin off). -FullBody converts the body too (folds
+                               a body of quite another shape: Genesis 9 tests).
   run.ps1 -Daz <file.duf>      a DAZ character (a Genesis 8 / 9 character preset, or a scene) through DAZ Studio:
                                tools/sources/daz_export.dsa loads it at base resolution and writes an FBX with its
-                               textures to %LOCALAPPDATA%\SfMorph\daz\<name>, which then goes through -Source as a
-                               slider fit (preset "<Name> (fit)"); -Convert runs the full conversion instead (parked:
-                               not usable yet on a body of quite another shape).
+                               textures to %LOCALAPPDATA%\SfMorph\daz\<name>, which then goes through -Source: a
+                               face-only conversion (-Sliders: the slider-fit preset "<Name> (fit)" instead).
                                Needs DAZ Studio and the figure's base (e.g. Genesis 9 Starter Essentials) installed.
   -Brightness hers|vam         albedo brightness (default hers: VaM's skin brought to her body's luminance, VaM's colours
                                kept; vam: VaM's values as they are, usually about twice too bright in the game).
@@ -56,6 +59,7 @@ param(
     [string]$Source,
     [string]$Daz,
     [switch]$Convert,
+    [switch]$FullBody,
     [string]$Rig = 'auto',
     [string]$SourceMesh,
     [ValidateSet('hers', 'vam')][string]$Brightness = 'hers'
@@ -202,7 +206,10 @@ function Convert-Export($exportDir, $charName, $quiet) {
         foreach ($stale in 'summary.txt', 'stage.npz') { Remove-Item (Join-Path $out "_check\$stale") -ErrorAction SilentlyContinue }
         Write-Host "VaM export : $exportDir`nGame export: $GameExport (textures: $TextureExport)`nOutput     : $out"
         $ErrorActionPreference = 'Continue'   # (Windows PowerShell 5.1 turns native stderr into errors otherwise)
-        & $py.FullName (Join-Path $here 'sfpipe.py') --game $GameExport --vam $exportDir --out $out --name $charName 2>&1 | ForEach-Object {
+        # characters from other sources than VaM (an adapter folder: source.txt) are face-only: their body conversion folds a
+        # body of quite another shape (Genesis 9 tests); -FullBody converts the body too
+        $foArgs = @(); if ((Test-Path (Join-Path $exportDir 'source.txt')) -and -not $FullBody) { $foArgs = @('--face-only'); Write-Host 'face-only character (not from VaM): Body held at 0 %, her body skin kept (-FullBody converts the body too)' }
+        & $py.FullName (Join-Path $here 'sfpipe.py') --game $GameExport --vam $exportDir --out $out --name $charName @foArgs 2>&1 | ForEach-Object {
             $t = "$_"; Add-Content $runLog $t -Encoding UTF8
             if (-not $quiet -or $t -match '^(ERROR|WARN|fit stage|character )') { Write-Host $t }
         }
@@ -339,9 +346,10 @@ if ($Daz) {
     Write-Host "DAZ export : $st"
     if (-not $st.StartsWith('OK') -or -not (Test-Path $fbx)) { exit 1 }
     $Source = $fbx
-    # DAZ characters get the slider-fit preset (her own mesh and skin): the full conversion folds her breast skin on a breast
-    # of quite another shape (Genesis 9 tests) and is parked; -Convert still runs it
-    if (-not $Convert -and -not $Sliders) { $Sliders = $true; Write-Host 'DAZ character: slider-fit preset (the full conversion is parked; -Convert runs it anyway)' }
+    # DAZ characters are converted face-only (the character's face and face skin on her own body and skin): the body
+    # conversion folds her breast skin on a breast of quite another shape (Genesis 9 tests); -FullBody converts it anyway,
+    # -Sliders makes the slider-fit preset instead
+    if (-not $Sliders) { Write-Host 'DAZ character: face-only conversion (-Sliders: slider-fit preset instead, -FullBody: the body too)' }
 }
 if ($Source) {
     # any rigged humanoid -> an SfExport folder (tools/sources/humanoid.py), then the usual steps on it

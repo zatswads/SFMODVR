@@ -17,6 +17,9 @@ namespace SfMorph
     {
         public string Name, Dir, Source = "?";
         public bool TwoFrames;   // character.txt 'frames<TAB>body face': separate Body and Face strength (the pipeline wrote head weights)
+        // character.txt 'faceonly<TAB>1': only the face is usable (characters from other sources than VaM, e.g. DAZ: the body
+        // conversion folds a body of quite another shape). Body is held at 0 % and the body skin off, whatever a look says.
+        public bool FaceOnly;
         public readonly Dictionary<string, int> Meshes = new Dictionary<string, int>();
         public readonly HashSet<string> Skin = new HashSet<string>();
         public readonly HashSet<string> Hide = new HashSet<string>();     // original mesh names to switch off while she is active
@@ -59,6 +62,7 @@ namespace SfMorph
                     case "hide": s.Hide.Add(f[1]); break;
                     case "frames": s.TwoFrames = f[1].IndexOf("body", StringComparison.OrdinalIgnoreCase) >= 0 && f[1].IndexOf("face", StringComparison.OrdinalIgnoreCase) >= 0; break;
                     case "texture": if (f.Length > 3) s.Textures.Add(new[] { f[1], f[2], f[3] }); break;
+                    case "faceonly": s.FaceOnly = f[1].Trim() != "0"; break;
                 }
             }
             return s;
@@ -480,7 +484,7 @@ namespace SfMorph
             if (apply && look.Morph != null && set == null && (object)_missing != look.Morph) { _missing = look.Morph; Status = "off: no folder '" + look.Morph + "' in " + MorphSet.Root; }   // 0.9.9: built once, not every frame
             if (set != null) _missing = null;
             float face = set != null ? Mathf.Clamp01(look.MorphFace) : 0f;
-            float body = set != null ? Mathf.Clamp01(look.MorphBody) : 0f;
+            float body = set != null && !set.FaceOnly ? Mathf.Clamp01(look.MorphBody) : 0f;
             if (set == null || (face <= 0f && body <= 0f)) { Release(); JointWeight = 0f; return; }
             _tone = Mathf.Clamp(look.SkinTone, -0.1f, 0.1f); _gloss = Mathf.Clamp(look.Gloss, 0f, 2f);
 
@@ -526,7 +530,7 @@ namespace SfMorph
             }
             HideMeshes(c, set);
             // face and body skins switch separately (the face's texture alone gives the likeness on her body's skin)
-            int key = (look.MorphSkin ? 1 : 0) | (look.MorphSkinBody ? 2 : 0);
+            int key = (look.MorphSkin ? 1 : 0) | (look.MorphSkinBody && !set.FaceOnly ? 2 : 0);
             if (key != (_texOn ? _texKey : 0))
             {
                 if (_texOn) RestoreTextures();

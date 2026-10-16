@@ -1,5 +1,9 @@
 # Character sources beyond VaM
 
+**Update (2026-10-16 evening, user, 0.11.13):** DAZ characters (any non-VaM source) are converted **face-only**: the face
+conversion looked right in the game (RKS Krista 9), the body did not. character.txt `faceonly`; the plugin holds Body at 0 %
+and the body skin off; `run.ps1 -FullBody` still converts the body, `-Sliders` makes the slider-fit preset.
+
 **Decision (2026-10-16, user):** DAZ characters go in as **slider-fit presets** (`run.ps1 -Daz <preset.duf>` writes
 `presets\<Name> (fit).txt`; her own mesh and skin). The full conversion is **parked** for them (`-Convert` still runs it): on
 RKS Krista 9 (Genesis 9) it fixed the face and neck but folded her breast skin under the breasts, unusable. The direction

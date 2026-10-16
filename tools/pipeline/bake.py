@@ -890,14 +890,17 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
     # her bake targets from the exported meshes (roles.py): the body sheet (every body / nipple / nail / genital variant), one
     # target per face material (every face the game can swap in), the foot
     R = roles.Roles(names, set(str(n) for n in Z['active']) if 'active' in Z.files else set(names))
-    TARGETS = {roles.BODY_MAT: R.body_sheet()}
+    face_only_char = 'face_only' in Z.files and bool(Z['face_only'])   # sfpipe --face-only: her body and its skin stay hers
+    TARGETS = {} if face_only_char else {roles.BODY_MAT: R.body_sheet()}
+    if face_only_char:
+        log('face-only character: the body and foot skin are not baked (hers stays)')
     face_mat = {}   # face mesh -> its material (the mesh's own name, else its one material: reika_face_e -> reika_faceE_mat)
     for fc in R.faces:
         g = [str(x) for x in Z[fc + '|groups']] if fc + '|groups' in Z.files else [fc]
         face_mat[fc] = fc if fc in g else g[0]
         TARGETS[face_mat[fc]] = [fc]
     FACE_SET = set(face_mat.values())
-    if R.foot:
+    if R.foot and not face_only_char:
         TARGETS[roles.FOOT_MAT] = [R.foot]
     RES_DIV = {k: (1 if k == roles.BODY_MAT else 2) for k in TARGETS}
     NO_NORMAL = set(R.nails + R.pussies)

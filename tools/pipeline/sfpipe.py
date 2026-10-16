@@ -784,6 +784,10 @@ def main():
     ap.add_argument('--vam', required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--name', default=None)
+    ap.add_argument('--face-only', action='store_true',
+                    help='only the face is usable (characters from other sources than VaM: the body conversion folds a body of '
+                         'quite another shape): character.txt says faceonly, the game holds Body at 0 %% and keeps her body skin, '
+                         'the bake skips the body and foot skin')
     ap.add_argument('--joints', choices=('face', 'all', 'none'), default='face',
                     help="joints.txt offsets: face = only the eyes and the jaw (each capped to 15 mm, the rest stays hers so "
                          "her rig and animations are untouched); all = every bone (shell average of the fitted offsets); none")
@@ -1710,6 +1714,8 @@ def run(a, chk):
         f.write('scale\t%.5f\n' % s)
         f.write('proportions\t%s\n' % a.proportions)
         f.write('frames\tbody face\n')
+        if a.face_only:
+            f.write('faceonly\t1\n')
         for m in results:
             f.write('mesh\t%s\t%d\n' % (m.name, len(m.v)))
         for n in FIT:  # her skin: clothes follow the nearest of these vertices in the game
@@ -1748,7 +1754,7 @@ def run(a, chk):
             shapes['rows'].append((True, "%s at 1: before/after render input written to %s (render: blender -b --factory-startup -P blend.py -- --out %s --no-bake)" % (
                 title, os.path.relpath(os.path.join(rdir, 'stage.npz'), a.out), os.path.dirname(rdir))))
     np.savez_compressed(os.path.join(chk, 'stage.npz'),
-                        vam_v=vam_out, vam_eyes=vam_eyes, vam_eye_r=np.float64(r_vam if r_vam else np.nan),
+                        face_only=np.bool_(a.face_only), vam_v=vam_out, vam_eyes=vam_eyes, vam_eye_r=np.float64(r_vam if r_vam else np.nan),
                         vam_lids_fitted=np.bool_(eye_open is not None and not eye_open[1]), vam_f=vam.faces, vam_g=vam.face_group, vam_uv=vam.uv, vam_vn=vam.vn * vsign,
                         vam_groups=np.array(vam.groups), names=np.array([m.name for m in results]), active=np.array([m.name for m in results if getattr(m, 'active', True)]),
                         dbg_wp=wp, dbg_x0=x0, dbg_xfit=xfit, dbg_wf=wf, dbg_lab=hlab, dbg_match=wmatch,
