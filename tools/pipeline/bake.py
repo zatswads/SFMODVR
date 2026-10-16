@@ -4,6 +4,16 @@ Her fitted skin (posed into VaM's rest pose, lying on the VaM surface) is the ba
 own materials is the source. Albedo is baked as emission (exact colours, no lighting), normals in tangent space,
 smoothness as emission of VaM's _GlossTex (Non-Color). _SpecTex is skipped: the game shader has no slot for it.
 
+Albedo brightness (BRIGHTNESS 'hers', the default): VaM's diffuse maps are near white (VaM's skin shader and the material's
+diffuse colour scale them), while the game's skin shader takes the albedo as it is. One gain for every material (so VaM's face
+and body keep their relation) brings the linear luminance of VaM's torso diffuse x its _Color to that of her body albedo x her
+_SkinColor (her textures from the game export). 'vam' keeps VaM's values (x _Color).
+
+Normals (detail only): a selected-to-active tangent bake records VaM's shading normal relative to HER normal at each hit, so
+every fit residual, faceting difference, open border or finger mis-hit would become a tilt in the map and shade on top of the
+morphed geometry. So each material is baked twice: A = VaM with its normal map, B = VaM's bare geometric normal. The rotation
+taking B to +Z, applied to A per texel, keeps exactly VaM's normal-map detail. Grazing hits (B far from +Z) fade to flat.
+
 Memory: every target is an 8-bit image (an 8K float image would be 1 GB). The no-hit fill after the bake runs on the
 image saved as a raw BMP, memory-mapped and processed in row chunks, so no full-size float array is ever built.
 
@@ -38,6 +48,11 @@ TONE_STRENGTH = 1.0        # 0 = no tone shift, 1 = full per-channel gain (mean_
 GAIN_RANGE = (0.6, 1.6)
 BAND_LO, BAND_HI = 0.2, 0.8   # pixels with w in this range are compared for the tone shift
 NO_EXPORT_MSG = 'export her again from the Presets tab to get the face-only seam blend'
+BRIGHTNESS = 'hers'        # 'hers' | 'vam' (blend.py --brightness)
+GAIN_LIMITS = (0.3, 1.6)   # albedo gain clamp
+# her body albedo x tint when her export has no textures: linear luminance of the game's reika_body _ColorMap x _SkinColor
+HER_LUM_FALLBACK = 0.26
+NRM_GRAZE = (0.25, 0.6)    # B's z: below the first the hit is unreliable (flat normal), full detail above the second
 JPEG_QUALITY = 95
 CHUNK_ROWS = 256   # rows per step of the no-hit fill
 # shells and canals that sit off the VaM surface: their rays hit at grazing angles, so they keep a flat normal
@@ -59,6 +74,7 @@ def read_materials(vamdir):
 
 
 _CACHE = {}
+INFO = {}    # facts for the material check (matcheck.py): albedo gain, normal tilt removed
 WARNS = []   # appended to _check/summary.txt by blend.py
 BAD = {}     # unusable texture files: file name -> reason
 # skin materials that should carry a normal map: a missing one is worth a WARN (Nostrils and the like never have one)
@@ -172,7 +188,8 @@ def flat_emission(name, color):
     return m
 
 
-def emission_material(name, img):
+def emission_material(name, img, mul=None, strength=1.0):
+    """Emission of an image; mul: a linear RGB colour it is multiplied by (VaM's _Color), strength: the albedo gain."""
     m = bpy.data.materials.new(name)
     m.use_nodes = True
     nt = m.node_tree
@@ -181,7 +198,14 @@ def emission_material(name, img):
     out = nt.nodes.new('ShaderNodeOutputMaterial')
     tex = nt.nodes.new('ShaderNodeTexImage'); tex.image = img
     emi = nt.nodes.new('ShaderNodeEmission')
-    nt.links.new(tex.outputs['Color'], emi.inputs['Color'])
+    emi.inputs['Strength'].default_value = float(strength)
+    if mul is not None:
+        vm = nt.nodes.new('ShaderNodeVectorMath'); vm.operation = 'MULTIPLY'
+        vm.inputs[1].default_value = tuple(float(x) for x in mul[:3])
+        nt.links.new(tex.outputs['Color'], vm.inputs[0])
+        nt.links.new(vm.outputs['Vector'], emi.inputs['Color'])
+    else:
+        nt.links.new(tex.outputs['Color'], emi.inputs['Color'])
     nt.links.new(emi.outputs['Emission'], out.inputs['Surface'])
     return m, nt, out, emi
 
@@ -628,6 +652,162 @@ def add_summary_row(out, row):
         f.write('\n'.join(lines + [row]) + '\n')
 
 
+# ---- albedo brightness ---------------------------------------------------------------------------------------
+def read_matprops(vamdir):
+    """matprops.txt (SfExport 0.11+): {VaM material: {property: [floats]}}; {} for older exports."""
+    path = os.path.join(vamdir, 'matprops.txt')
+    props = {}
+    if not os.path.isfile(path):
+        return props
+    with open(path, encoding='utf-8') as f:
+        for l in f.read().splitlines():
+            if not l or l.startswith('#'):
+                continue
+            t = l.split('\t')
+            if len(t) >= 5:
+                try:
+                    props.setdefault(t[1], {})[t[3]] = [float(x) for x in t[4].split()]
+                except ValueError:
+                    pass
+    return props
+
+
+def vam_color(props, g):
+    """VaM's diffuse colour of a material as linear RGB (None when not exported or white)."""
+    c = props.get(g, {}).get('_Color') or props.get(g, {}).get('_DiffuseColor')
+    if not c or len(c) < 3:
+        return None
+    lin = srgb_to_lin(np.array(c[:3], np.float32))
+    return None if np.allclose(lin, 1.0, atol=2e-3) else lin
+
+
+LUM = np.array([0.2126, 0.7152, 0.0722], np.float32)
+
+
+def skin_mask(a):
+    """Skin-like texels of a linear RGB array: not the dark hair / black borders, not near-white, not very saturated."""
+    lum = a @ LUM
+    return (lum > 0.04) & (lum < 0.95) & (a.max(-1) - a.min(-1) < 0.7 * np.maximum(a.max(-1), 1e-4))
+
+
+def image_samples(im, n=1024):
+    """Stored pixel values (0..1) of a Blender image as an (N, 4) array, through a scaled copy when it is large."""
+    w, h = im.size
+    tmp = None
+    if w * h > n * n:
+        tmp = im.copy(); tmp.scale(n, n); im = tmp; w, h = n, n
+    px = np.empty(w * h * 4, np.float32)
+    im.pixels.foreach_get(px)
+    if tmp is not None:
+        bpy.data.images.remove(tmp)
+    return px.reshape(-1, 4)
+
+
+def her_body_lum(log):
+    """(linear luminance median of her body albedo x her _SkinColor, source text); (None, why) without her textures."""
+    gdir = os.environ.get('SFP_GAME_EXPORT', '')
+    tex, tints = read_textures_txt(gdir)
+    if not tex:
+        return None, 'no textures.txt in her export'
+    for key in ('reika_body', 'reika_foot'):
+        p = tex.get((key, '_ColorMap'))
+        if p and os.path.isfile(p):
+            tc = tints.get((key, '_SkinColor'), (1.0, 1.0, 1.0))
+            a = srgb_to_lin(read_pixels(p, 1024, log)[:, :, :3].reshape(-1, 3)) * srgb_to_lin(np.array(tc, np.float32))
+            m = skin_mask(a)
+            if m.sum() > 1000:
+                return float(np.median(a[m] @ LUM)), '%s x _SkinColor %s' % (os.path.basename(p), '/'.join('%.2f' % x for x in tc))
+    return None, 'her body albedo not in the export'
+
+
+def albedo_gain(vmats, vamdir, props, log):
+    """(gain, text): the scalar that brings VaM's torso skin (diffuse x _Color, linear) to her body's luminance."""
+    if BRIGHTNESS == 'vam':
+        return 1.0, 'kept as in VaM (--brightness vam)'
+    # VaM's body skin: torso and limbs pooled (her body sheet carries both; VaM's limbs map is often darker than its torso)
+    pool, used, seen = [], [], set()
+    for g in ('Torso', 'Hips', 'Legs', 'Shoulders', 'Forearms'):
+        fn = vmats.get(g, {}).get('_MainTex')
+        c = vam_color(props, g)
+        key = (fn, None if c is None else tuple(np.round(c, 4)))
+        if not fn or key in seen:
+            continue
+        seen.add(key)
+        im = slot_image(vamdir, vmats.get(g, {}), '_MainTex', 'color', log)
+        if im is None:
+            continue
+        a = srgb_to_lin(image_samples(im)[:, :3])
+        if c is not None:
+            a = a * c
+        m = skin_mask(a)
+        if m.sum() >= 1000:
+            pool.append(a[m] @ LUM); used.append(g + (' x _Color' if c is not None else ''))
+    if not pool:
+        return 1.0, 'no VaM skin texture to measure: kept as in VaM'
+    lv = float(np.median(np.concatenate(pool)))
+    lh, src = her_body_lum(log)
+    if lh is None:
+        lh, src = HER_LUM_FALLBACK, "the game's default body (" + src + ')'
+    gain = float(np.clip(lh / max(lv, 1e-4), *GAIN_LIMITS))
+    txt = 'VaM %s %.3f -> hers %.3f (%s): gain %.2f' % ('+'.join(used), lv, lh, src, gain)
+    log('albedo brightness: ' + txt)
+    return gain, txt
+
+
+# ---- detail-only normals -------------------------------------------------------------------------------------
+def bmp_map(path, res):
+    """A raw 24-bit BMP written by Blender, memory-mapped as (res, stride) bytes (BGR rows)."""
+    with open(path, 'rb') as f:
+        hdr = f.read(54)
+    off = int.from_bytes(hdr[10:14], 'little')
+    bw = int.from_bytes(hdr[18:22], 'little'); bh = int.from_bytes(hdr[22:26], 'little', signed=True)
+    bpp = int.from_bytes(hdr[28:30], 'little')
+    if hdr[:2] != b'BM' or bpp != 24 or bw != res or abs(bh) != res:
+        raise ValueError('unexpected raw BMP layout (%dx%d, %d bpp)' % (bw, bh, bpp))
+    stride = (res * 3 + 3) & ~3
+    return np.memmap(path, dtype=np.uint8, mode='r+', offset=off, shape=(res, stride))
+
+
+def save_bmp(img, path):
+    img.filepath_raw = path
+    img.file_format = 'BMP'
+    img.save()
+
+
+def combine_normals(pa, pb, res):
+    """A (with VaM's normal map) and B (bare geometry), both baked in her tangent space: writes R(B -> +Z) A into A's file.
+    No-hit texels (black) and grazing hits fade to flat. Returns (no-hit share, share of hit texels B tilted > 30 deg)."""
+    A = bmp_map(pa, res); B = bmp_map(pb, res)
+    n_miss = 0; n_tilt = 0
+    lo, hi = NRM_GRAZE
+    for r0 in range(0, res, CHUNK_ROWS):
+        a8 = A[r0:r0 + CHUNK_ROWS, :res * 3].reshape(-1, res, 3)
+        b8 = B[r0:r0 + CHUNK_ROWS, :res * 3].reshape(-1, res, 3)
+        miss = (a8.max(axis=2) <= 1) | (b8.max(axis=2) <= 1)
+        a = a8[:, :, ::-1].astype(np.float32) / 127.5 - 1.0          # BGR -> XYZ
+        b = b8[:, :, ::-1].astype(np.float32) / 127.5 - 1.0
+        b /= np.maximum(np.linalg.norm(b, axis=2, keepdims=True), 1e-6)
+        c = b[:, :, 2]
+        n_tilt += int(((c < 0.866) & ~miss).sum())
+        # Rodrigues for the rotation taking b to z: v = b x z = (b.y, -b.x, 0); R a = a c + v x a + v (v.a) / (1 + c)
+        vx, vy = b[:, :, 1], -b[:, :, 0]
+        ax, ay, az = a[:, :, 0], a[:, :, 1], a[:, :, 2]
+        k = (vx * ax + vy * ay) / np.maximum(1.0 + c, 1e-3)
+        rx = ax * c + vy * az + vx * k
+        ry = ay * c - vx * az + vy * k
+        rz = az * c + vx * ay - vy * ax
+        w = np.clip((c - lo) / (hi - lo), 0.0, 1.0); w = w * w * (3 - 2 * w)
+        w[miss] = 0.0
+        rx *= w; ry *= w; rz = rz * w + (1.0 - w)
+        ln = np.maximum(np.sqrt(rx * rx + ry * ry + rz * rz), 1e-6)
+        o = np.stack([rz / ln, ry / ln, rx / ln], axis=2)            # back to BGR
+        a8[:] = np.clip(np.rint((o + 1.0) * 127.5), 0, 255).astype(np.uint8)
+        n_miss += int(miss.sum())
+    A.flush()
+    del A, B
+    return n_miss / float(res * res), n_tilt / float(res * res)
+
+
 def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
     """Bake the textures. Returns (textures written, WARN messages). A texture that is missing or fails to load
     never stops the bake: that material falls back to the flat skin colour (_MainTex), a flat normal (_BumpMap) or
@@ -635,6 +815,11 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
     clear()
     setup_cycles(log)
     vmats = read_materials(vamdir)
+    props = read_matprops(vamdir)
+    if not props:
+        log("matprops.txt not in the VaM export (SfExport before 0.11): VaM's diffuse colours unknown, textures taken as they are")
+    gain, gain_txt = albedo_gain(vmats, vamdir, props, log)
+    INFO['albedo brightness'] = gain_txt
     groups = [str(g) for g in Z['vam_groups']]
     # --- source: VaM skin, one material slot per VaM material ---------------------------------------
     keep = [i for i, g in enumerate(groups) if g in VAM_SKIN]
@@ -653,9 +838,12 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
     vf = Z['vam_f'][m][:, ::-1]
     vg = Z['vam_g'][m]
     src = make_obj('vam_src', u2b(Z['vam_v']), vf, Z['vam_uv'])
-    fill = skin_fill(vmats, vamdir, log)
+    fill = skin_fill(vmats, vamdir, log)   # stored (sRGB) values of VaM's skin
+    # the fill as emission (linear, with the gain) and as the stored colour of no-hit pixels in the baked albedo
+    fill_lin = np.minimum(srgb_to_lin(np.array(fill[:3], np.float32)) * gain, 1.0)
+    fill_out = tuple(float(x) for x in lin_to_srgb(fill_lin)) + (1.0,)
     slot_of = {}
-    albedo_mats, normal_mats, gloss_mats = [], [], []
+    albedo_mats, normal_mats, gloss_mats, flat_mats = [], [], [], []
     have_normal = False
     flat, nobump = [], []
     gloss_imgs, no_gloss = {}, []
@@ -670,9 +858,9 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
         gimg = slot_image(vamdir, sl, '_GlossTex', 'gloss', log)
         if cimg is None:
             flat.append(g)
-            am = flat_emission('src_' + g, fill)
+            am = flat_emission('src_' + g, tuple(float(x) for x in fill_lin) + (1.0,))
         else:
-            am = emission_material('src_' + g, cimg)[0]
+            am = emission_material('src_' + g, cimg, vam_color(props, g), gain)[0]
         have_normal |= nimg is not None
         if nimg is None and g in BUMP_EXPECTED:
             nobump.append(g)
@@ -682,6 +870,7 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
         used_groups.append(g)
         slot_of[gi] = len(albedo_mats)
         albedo_mats.append(am); normal_mats.append(normal_material('srcn_' + g, nimg))
+        flat_mats.append(normal_material('srcb_' + g, None))
     # smoothness: emission of _GlossTex; a material without a usable one gets the median gloss of the set (0.5 if none)
     pool = [gloss_samples(im) for im in {id(im): im for im in gloss_imgs.values() if im is not None}.values()]
     have_gloss = bool(pool)
@@ -746,7 +935,7 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
                 img = bpy.data.images.new('%s_%s' % (mat, kind), res, res, alpha=False, float_buffer=False)
                 sentinel = None
                 if kind == 'albedo':
-                    img.generated_color = fill
+                    img.generated_color = fill_out
                 elif kind == 'normal':
                     img.generated_color = (0.5, 0.5, 1.0, 1.0)
                 else:   # a colour no baked (gray) hit can have, so the pixels no ray reaches can be told from black gloss
@@ -782,8 +971,28 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
                     sc.render.bake.normal_space = 'TANGENT'
                     bpy.ops.object.bake(type='NORMAL')
                     path = os.path.join(out, 'tex_%s_normal.png' % mat)
+                    pa = os.path.join(scratch, '_bake_%s_nA.bmp' % mat); pb = os.path.join(scratch, '_bake_%s_nB.bmp' % mat)
+                    save_bmp(img, pa)
+                    for i, fm_ in enumerate(flat_mats):   # B: VaM's bare geometry, the same rays
+                        src.data.materials[i] = fm_
+                    bpy.ops.object.bake(type='NORMAL')
+                    save_bmp(img, pb)
+                    miss, tilt = combine_normals(pa, pb, res)
+                    log('  %s normal: detail only (%.1f%% of texels had the shape tilted > 30 deg against hers: removed); '
+                        '%.2f%% of pixels had no hit (flat)' % (mat, 100.0 * tilt, 100.0 * miss))
+                    INFO['normal shape tilt removed ' + mat] = '%.1f%% of texels > 30 deg' % (100.0 * tilt)
+                    im2 = bpy.data.images.load(pa, check_existing=False)
+                    im2.colorspace_settings.name = 'Non-Color'
                     sc.render.image_settings.file_format = 'PNG'
                     sc.render.image_settings.color_depth = '8'
+                    sc.render.image_settings.color_mode = 'RGB'
+                    im2.save_render(path, scene=sc)
+                    bpy.data.images.remove(im2)
+                    for p_ in (pa, pb):
+                        os.remove(p_)
+                    written.append((mat, kind, os.path.basename(path)))
+                    log('baked %s %s (%dx%d) -> %s in %.1f s' % (mat, kind, res, res, path, time.time() - t0))
+                    continue
                 else:
                     bpy.ops.object.bake(type='EMIT')
                     path = os.path.join(out, 'tex_%s_smooth.png' % mat)
@@ -792,7 +1001,7 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
                 sc.render.image_settings.color_mode = 'RGB'
                 # pixels whose rays found no VaM skin: give them the skin tone / a flat normal / the median gloss
                 if kind == 'albedo':
-                    frgb = fill[:3]
+                    frgb = fill_out[:3]
                 elif kind == 'normal':
                     frgb = (0.5, 0.5, 1.0)
                 else:
@@ -829,4 +1038,7 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
             f.write(l + '\n')
         for mat, kind, fn in written + extra:
             f.write('texture\t%s\t%s\t%s\n' % (mat, kind, fn))
+    with open(os.path.join(scratch, 'bake_info.txt'), 'w', encoding='utf-8', newline='\n') as f:   # for matcheck.py -Check runs
+        for k, v in INFO.items():
+            f.write('%s\t%s\n' % (k, v))
     return written, WARNS

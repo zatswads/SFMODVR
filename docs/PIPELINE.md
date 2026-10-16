@@ -10,6 +10,9 @@ transfer the **shape** and **skin textures** of a VaM character onto her:
 
 1. **Her side** (SfMorph 0.5.1): Presets tab → "Export … for the character pipeline" writes her meshes in the
    game's vertex order with UVs, bone weights and the bind-pose skeleton (`BepInEx\config\SfMorphs\export\…`).
+   Since 0.11.0 always the game's own meshes and textures, even with Physics / Fidelity / Wrinkles / a character on (before,
+   an export taken that way held our subdivided clones and render textures; `run.ps1` skips such exports), plus every
+   texture and property of her skin materials (`textures.txt`, `materials.txt`).
    All 36 of her meshes are GPU-only (0.5.0 exported nothing), so `MeshData` reads their vertex and index buffers
    back from the GPU and decodes them with the mesh's vertex layout; `meshes.txt` says CPU or GPU per mesh.
 2. **VaM side** (written, compile-checked against VaM's Assembly-CSharp, not yet run): `tools/vam/SfExport.cs`, a
@@ -86,6 +89,38 @@ too (longer arms/fingers, raised clavicles: distorts her rig, kept for compariso
 Known limits (`--proportions vam`): the fit runs in VaM's T-pose and is unposed with her linear skinning, so her shoulders in the
 A-pose look a little narrower than VaM's; a few creases remain where her shape differs most (under a bigger
 breast, the navel, between toes). Her eyelid shape stays hers.
+
+## Materials (0.11.0)
+
+The skin textures go through two corrections in `bake.py` and a check (`matcheck.py`) before the game sees them:
+
+- **Normals, detail only.** A selected-to-active tangent bake records VaM's shading normal relative to *her* surface normal
+  at each hit, so fit residuals, faceting, open borders and mis-hits (fingers, nostrils, lips, ears) became large tilts that
+  shaded on top of the morphed geometry (Yin before 0.11: large-scale tilt p99 22 deg body, 139 deg face). Each material is
+  baked twice (A with VaM's normal map, B with VaM's bare geometric normal, same rays); the per-texel rotation B -> +Z applied
+  to A keeps exactly VaM's normal-map detail. Grazing hits (B's z < 0.25) fade to flat.
+- **Albedo brightness.** The game's `Shader Graphs/Skin` takes `_ColorMap` as it is (with `_SkinColor` through
+  `_SkinColorMaskMap`; the plugin sets the tint white with a character skin on). VaM's diffuse maps are near white because
+  VaM's shader and material colours scale them, so a raw bake is ~2x too bright in linear light. One gain for every material
+  brings VaM's torso + limb skin (x `_Color` from `matprops.txt`) to her body albedo x `_SkinColor` (median linear luminance
+  of skin texels; her textures from the game export, else a fixed 0.26). `-Brightness vam` skips it.
+- **Her layers stay.** The skin shader also draws `_AttachMap_0..2` (with `_AttachColor_*`, `_AttachFuzziness_*`),
+  `_BlushMap`, `_AddMap` and `_NormalMap_2` over any albedo; the check lists them from her export's `materials.txt`.
+- **Check** (`_check\materials.txt`, `materials.png`, summary rows): albedo luminance ratio vs hers 0.8..1.25, clipped
+  texels <= 5 %, normal large-scale tilt (gaussian 12 px at 1024) p99 <= 12 deg and <= 2 % over 10 deg.
+
+`run.ps1 -Name <name> -Check` checks an existing character; `-Rebake` bakes it again from its `_check\stage.npz` (no refit).
+
+## Slider fit (0.11.0)
+
+`run.ps1 -Sliders` (`sliderfit.py`): the lower-risk alternative to a conversion. No mesh, joint or texture of hers changes;
+the newest VaM export's relative body proportions become her own Body sliders, written as the preset `<Name> (fit)`
+(Presets tab > Load). Measures are pose independent and use only landmarks both rigs place alike (knees, ankles, elbows,
+wrists, eyes, finger joints) and skin landmarks (nipple tips, widest hip, heel to toe); her hip, spine, neck and shoulder
+joints sit elsewhere than VaM's, so they only carry sliders. VaM is scaled to her eye height. Sizes = girth ratios (median
+radius across the limb), lengths = a landmark distance's change put on the spanning bone (divided by the same bone's Size,
+which also scales its length), waist / under-bust width and depth as stretches, nipple spacing as a move. Not fitted: the face,
+shoulder / hip joint spacing, breast lift (the nipples-to-eyes difference beyond the neck's share is noted in the preset).
 
 ## Add a character
 

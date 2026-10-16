@@ -1214,6 +1214,17 @@ namespace SfMorph
             return _texOn && m != null && _normalApplied.TryGetValue(m, out t) ? t : null;
         }
 
+        // The game's own mesh behind a renderer: soft zones' / Fidelity's clone resolved to what it was made from, our morph clone
+        // to the game's mesh. The export must never write a clone (subdivided or extended meshes break the vertex order).
+        internal Mesh GameMesh(SkinnedMeshRenderer r)
+        {
+            if (r == null) return null;
+            var m = SoftZones.Original(r.sharedMesh);
+            Slot s;
+            if (_slots.TryGetValue(r, out s) && s.Orig != null && (m == null || m == s.Clone)) return s.Orig;
+            return m;
+        }
+
         // Her own texture / colour in a material, whatever the converted character has put there since.
         internal Texture OriginalTexture(Material m, string prop)
         {

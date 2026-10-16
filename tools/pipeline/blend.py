@@ -1,6 +1,7 @@
 """SF Body Morphs character pipeline, Blender stage: before/after renders and texture bake.
 
-    blender -b --factory-startup -P blend.py -- --out <morph dir> --vam <SfExport dir> [--no-bake] [--size 8192]
+    blender -b --factory-startup -P blend.py -- --out <morph dir> --vam <SfExport dir> [--no-bake | --bake-only] [--size 8192]
+                                                [--brightness hers|vam]
     blender -b --factory-startup -P blend.py -- --replay <replay.npz>     (offline pose replay from replay.py: original | converted)
 
 Reads <out>/_check/stage.npz written by sfpipe.py. Renders go to <out>/_check/*.png; baked textures to
@@ -278,7 +279,8 @@ def append_summary(rows):
         with open(path, encoding='utf-8') as f:
             lines = [l for l in f.read().splitlines() if l]
     head = lines[0] if lines and lines[0].startswith('#') else '# ' + os.path.basename(os.path.normpath(OUT))
-    body = [l for l in lines if not l.startswith('#') and 'textures baked:' not in l and not l.startswith('WARN  bake:')] + rows
+    body = [l for l in lines if not l.startswith('#') and 'textures baked:' not in l and not l.startswith('WARN  bake:')
+            and 'material check' not in l] + rows
     npass = sum(l.startswith('PASS') for l in body)
     head = head.split(':')[0] + ': %d PASS, %d WARN' % (npass, len(body) - npass)
     with open(path, 'w', encoding='utf-8', newline=chr(10)) as f:
@@ -296,13 +298,15 @@ if __name__ == '__main__':
     if '--debug' in ARGS:
         debug(); closeups(); sys.exit(0)
     rows = []
-    try:
-        renders()
-    except Exception as e:  # noqa: BLE001
-        log('WARN: renders failed (%s: %s)' % (type(e).__name__, e))
-        rows.append('WARN  renders failed (%s: %s); the morph and textures are not affected' % (type(e).__name__, e))
+    if '--bake-only' not in ARGS:   # run.ps1 -Rebake: textures again on an existing character, renders kept
+        try:
+            renders()
+        except Exception as e:  # noqa: BLE001
+            log('WARN: renders failed (%s: %s)' % (type(e).__name__, e))
+            rows.append('WARN  renders failed (%s: %s); the morph and textures are not affected' % (type(e).__name__, e))
     if '--no-bake' not in ARGS:
         import bake
+        bake.BRIGHTNESS = arg('--brightness', 'hers')
         tb = time.time()
         try:
             written, warns = bake.run(Z, NAMES, OUT, VAMDIR, SIZE, make_obj, u2b, clear, log)
@@ -312,5 +316,11 @@ if __name__ == '__main__':
         log('baked %d textures in %.0f s' % (len(written), time.time() - tb))
         rows.append(('PASS  ' if len(written) >= 9 else 'WARN  ') + 'textures baked: %d of 9 (albedo, normal, smooth x body, face, foot)' % len(written))
         rows += ['WARN  bake: ' + w for w in warns]
+        try:
+            import matcheck
+            rows += matcheck.run(OUT, os.environ.get('SFP_GAME_EXPORT', ''), log, dict(bake.INFO))
+        except Exception as e:  # noqa: BLE001
+            log('WARN: material check failed (%s: %s)' % (type(e).__name__, e))
+            rows.append('WARN  material check failed (%s: %s)' % (type(e).__name__, e))
     append_summary(rows)
     log('done in %.0f s' % (time.time() - t0))

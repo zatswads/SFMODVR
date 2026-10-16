@@ -149,6 +149,21 @@ public class SfExport : MVRScript
         }
         FileManagerSecure.WriteAllText(dir + "/materials.txt", mats.ToString());
 
+        // The colours and scalars VaM's skin shader puts on top of the textures (VaM's diffuse maps are near white: the diffuse
+        // colour and texture offsets make the look). Unity 2018 can't list a shader's properties, so known names are probed.
+        var mp = new StringBuilder("# index\tname\tshader\tproperty\tvalue (r g b a for colours)\n");
+        for (int i = 0; gpu != null && i < gpu.Length; i++)
+        {
+            var m = gpu[i];
+            if (m == null) continue;
+            string mn = matNames != null && i < matNames.Length ? matNames[i] : "-";
+            foreach (var p in MatColors)
+                if (m.HasProperty(p)) { var c = m.GetColor(p); mp.Append(i).Append('\t').Append(mn).Append('\t').Append(m.shader.name).Append('\t').Append(p).Append('\t').Append(F(c.r)).Append(' ').Append(F(c.g)).Append(' ').Append(F(c.b)).Append(' ').Append(F(c.a)).Append('\n'); }
+            foreach (var p in MatFloats)
+                if (m.HasProperty(p)) mp.Append(i).Append('\t').Append(mn).Append('\t').Append(m.shader.name).Append('\t').Append(p).Append('\t').Append(F(m.GetFloat(p))).Append('\n');
+        }
+        FileManagerSecure.WriteAllText(dir + "/matprops.txt", mp.ToString());
+
         // The appearance's own texture files (originals, full quality), for reference.
         var urls = new StringBuilder();
         if (tc != null)
@@ -523,6 +538,11 @@ public class SfExport : MVRScript
     }
 
     static string F(float f) { return f.ToString("0.######", Inv); }
+
+    // VaM skin shader properties worth knowing for the bake (probed with HasProperty; missing ones are skipped).
+    static readonly string[] MatColors = { "_Color", "_DiffuseColor", "_SpecColor", "_SubdermisColor", "_RimColor", "_TranslucencyColor" };
+    static readonly string[] MatFloats = { "_DiffOffset", "_SpecOffset", "_GlossOffset", "_SpecInt", "_SpecFresnel", "_Shininess", "_Fresnel",
+        "_DiffuseBumpiness", "_SpecularBumpiness", "_BumpScale", "_IBLFilter", "_AlphaAdjust", "_DetailScale", "_Glossiness", "_SubsurfaceScale" };
     static string V(Vector3 p) { return F(p.x) + " " + F(p.y) + " " + F(p.z); }
 
     static string Safe(string s)

@@ -41,6 +41,34 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.0 (character import: why the skin came out wrong, a material check, and a slider fit as the low-risk alternative):
+- Imported skins looked wrong for three measured reasons (Yin, checked on the files): (1) the baked normal maps carried body
+  shape, not skin detail: the selected-to-active bake records VaM's normal relative to hers, so every fit residual, faceting
+  difference, open border and finger mis-hit became a tilt (large-scale tilt p99 22 deg on the body, 139 deg on the face:
+  nostrils, lips, eyelids and ears shaded inside out; her own maps: 7 deg); (2) the albedo was about twice too bright in linear
+  light (VaM's diffuse maps are near white, VaM's shader and material colours scale them; the game's skin shader takes the
+  albedo as it is, and the tint is set white with a character skin on); (3) her newest export was taken with Physics / Fidelity
+  on, so it held SfMorph's own subdivided clones (upper body 75 281 vertices instead of 19 469, names "(SfSoft)") and the
+  wrinkle / mark render textures instead of her own.
+- Bake: normals are detail only (each material is baked twice, with and without VaM's normal map; the rotation that takes the
+  bare-geometry normal to +Z is applied to the detailed one, so shape differences cancel and VaM's pores stay; grazing hits fade
+  to flat). Albedo brightness matched to her body (one gain for all materials from VaM's torso + limb skin x its diffuse colour
+  against her body albedo x _SkinColor, VaM's colours kept; `run.ps1 -Brightness vam` keeps VaM's values).
+- Material check before anything reaches the game (`tools/pipeline/matcheck.py`, run after every bake, or alone with
+  `run.ps1 -Name <name> -Check`): albedo luminance against hers (0.8..1.25), clipped texels, the normal maps' large-scale tilt
+  (p99 <= 12 deg), her own shader layers that stay on top of any skin (lipstick / blush / attach maps, from her export);
+  `_check\materials.txt`, `_check\materials.png` (her albedo | baked | her normal | baked | tilt), PASS/WARN rows in
+  `_check\summary.txt`. `run.ps1 -Name <name> -Rebake` bakes an existing character again without refitting (old textures
+  kept in `_check\old_textures`).
+- Export (Presets tab): writes the game's own meshes behind our clones (soft zones, Fidelity, the character morph) and her own
+  textures behind the wrinkle / mark copies, every texture of her skin materials (attach / blush / mask maps too) and
+  `materials.txt` with every property of them. `run.ps1` skips exports that hold clones. The VaM plugin (`tools/vam/SfExport.cs`)
+  also writes `matprops.txt` (each material's diffuse colour and scalars; copy it to VaM again).
+- Slider fit (`run.ps1 -Sliders`, `tools/pipeline/sliderfit.py`): no mesh swap, her own skin. The VaM character's relative
+  proportions (girths, segment lengths between landmarks both rigs agree on, waist / under-bust / hip sections, breast and
+  glute projection, nipple spacing, hands, feet, head; VaM scaled to her eye height) as her Body sliders, written as the preset
+  "<Name> (fit)" with the measurements as comments; the face is not fitted.
+
 0.10.0 (muscle definition that follows her pose):
 - Her body had no muscle definition beyond the shape: a converted VaM character's Fitness slider (Characters tab) moves the shape, but
   the definition a fit VaM look gets from its normal maps (linea alba, the upper abs, serratus lines, the iliac V, back and calf

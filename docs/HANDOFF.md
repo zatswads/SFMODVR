@@ -1,6 +1,11 @@
 # SF Body Morphs — handoff
 
-State at **0.10.0** (branch `main`). 0.10.0 (muscle definition: `tools/muscles/author.py` authors a relief per muscle on the body atlas
+State at **0.11.0** (branch `main`). 0.11.0 (character import materials, built, pipeline run locally on Yin, not yet seen in
+the game): the baked normal maps carried body shape (detail-only bake now), the albedo was ~2x too bright (gain to her body),
+her export held our clones (Export now writes the game's meshes / her textures, `Morph.GameMesh`); `tools/pipeline/matcheck.py`
+material check after every bake and `run.ps1 -Check / -Rebake`; slider fit `run.ps1 -Sliders` (`sliderfit.py`, a preset of her
+Body sliders, no mesh swap). Yin re-baked on the user's PC (old textures in `morphs\Yin\_check\old_textures`); preset
+`Lexi (fit)` written. Triage notes: import-materials-triage.md in the session notes. 0.10.0 (muscle definition: `tools/muscles/author.py` authors a relief per muscle on the body atlas
 (bellies + grooves placed in each limb's cylinder coordinates from her skeleton, 27 muscles in areas core / back / legs / arms;
 `muscle_body_detail` BC7 slope / groove depth / coverage + `muscle_body_region` RGBA32 two ids + share, `muscle_layouts.txt`);
 WrinkleRaster pass 0 adds the muscle slope to the creases' before the whiteout, pass 2 the groove shade and the muscle debug views;
@@ -87,7 +92,7 @@ commit them). Toolchain: `apt-get update && apt-get install -y mono-mcs mono-dev
 | `Body.cs` | `Detail` table (slider: group, Op Size/Stretch/Move/Length, Dir, bones by game part → exact rig names → keywords, range, Keep), `Character` (renderers, skin bones, slider bones, bind-pose axes/move directions, look), scan every 2 s (cached; rebuilt only when the renderer set changes), apply/restore trackers for scale and position, one `Character '...'` log block per session. |
 | `Look.cs` | A look (bone factors, slider values keyed by `Detail.Id` in `Regions`, file token `region`), text format, `Store` (autosave/presets in `BepInEx\config\SfMorphs`). |
 | `MeshData.cs` | A mesh's data in game vertex order: CPU if `isReadable`, else GPU readback (`Mesh.GetVertexBuffer/GetIndexBuffer` + `GetData`, decoded by `GetVertexAttributeFormat/Offset/Stream/Dimension`, submeshes from `GetSubMesh`). All her meshes are GPU-only. Basis for the export and the future morph loader (readable clones). Bind poses are readable (0.5.0 log: slider directions worked). |
-| `Export.cs` | Presets tab export: per mesh `.obj` (bind space, game vertex order, `g` per submesh) + `.skin.txt` (bones, bind poses, 4 weights/vertex), `skeleton.txt`, `meshes.txt`. Skips meshes that aren't `isReadable`. |
+| `Export.cs` | Presets tab export: per mesh `.obj` (bind space, game vertex order, `g` per submesh) + `.skin.txt` (bones, bind poses, 4 weights/vertex), `skeleton.txt`, `meshes.txt`. Skips meshes that aren't `isReadable`. 0.11.0: the game's mesh behind any clone (`MorphState.GameMesh`: soft zones / Fidelity / morph), her texture behind our render textures (`Wrinkles.BaseOf`), every texture of her skin materials and `materials.txt` (every shader property + keywords). |
 | `Morph.cs` | Characters (0.6.0): `MorphSet` (a converted character folder), `MorphState` per character (readable clones from MeshData + `AddBlendShapeFrame`, follow blendshapes for clothes via `SkinRef` nearest skin vertex + push-out, joint offsets as local moves for Body's trackers with matching bind poses, DynamicBone-simulated bones excluded, baked textures with restore). |
 | `SoftSim.cs` | Soft zones' per-frame spring sim (0.7.0): helpers' rest place from their bone, damped spring at 1/120 s substeps, contacts against `SoftCapsule`s (push out, velocity transfer), clamp (in ≤ limit, out ≤ 0.3, sideways ≤ 0.5), bulge to neighbours, writes S; debug markers. Runs at the end of `Body.ApplyAll` (`SoftStep`; 0.8.5: after Embody, so his hand capsules are at your controllers). 0.8.1: per-zone stiffness/depth/damping from `Tissue.Zone`, resistance `Tissue.Resist`, fresh fast contacts (approach >= 0.7 m/s) into `Impacts` for Ripple, "partnerBody" gated by `SoftZones.PartnerBody`. |
 | `VrHands.cs` | `SoftCapsule` + who can touch her (0.7.0): the user's hands via `VR_HandController.controller_left/right`, partner rigs (humanoid or AdvancedSkeleton wrists/fingers, nested rigs counted once at wrist level), her thighs/forearms/hands; palms = three 1.5 cm capsules; one-time `VR rig survey`. Refreshed every 2 s. 0.7.7: every capsule has a `CapSource` (your hand, physics hand, partner rig, her); `UpdateLive` (once per frame) marks gated sources dead while none of their renderers is drawn by the XR camera (hidden partner, controller models replaced by physics hands); the soft points, GPU imprint and breast mirror skip dead sources. Mirrors `Body.Contacts()` into the game's breast DynamicBones (`BreastColliders`: off / main `upperbreast` chains / all), detaching hidden sources (`MirrorLive`). `ContactsFeed` = what each source feeds. 0.8.1: her upper arms ("upperarm") and calves ("calf") too, and the partner's pelvis + thighs ("partnerBody", same gated source as his hands; Overlap, HerBody and the breast mirror ignore these kinds); `BreastDbs` for Ripple. |
@@ -188,6 +193,14 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
   arguments and reads only `dirtyTalk_Facial_Library`; `RandomSequenceReset` is the only other writer of the counter. Feeling one-shots: `SexVoice_Source_Library.Feeling_enter_0..3` (single clips).
 
 ## Open items
+
+- 0.11.0 to check in the headset (TESTING.md 0.11.0): Yin's re-baked skin (no dark / inside-out patches at nostrils, lips,
+  ears, under the breasts; brightness close to hers), the face-only mode, the `Lexi (fit)` preset; a fresh export from the
+  Presets tab with Physics on (the log line "Export: the game's own mesh written instead of our clone", vertex counts 19 469 /
+  4 533 in meshes.txt, no RenderTexture in textures.txt), then `run.ps1 -All -Force` / `-Rebake` on the other characters.
+  Unknown: what `_AttachMap_*` / `_AddMap` / `_NormalMap_2` do in Shader Graphs/Skin (makeup / areola / detail layers drawn over
+  a character's albedo; the new export's materials.txt and maps show them). If a VaM skin still shows her lipstick or blush on
+  top, an option to zero `_AttachColor_*` alpha / `_BlushPower` while a character skin is on is the next step.
 
 - 0.9.1/0.9.5/0.9.8 to check in the headset (TESTING.md 0.9.8, 0.9.5, 0.9.1; 0.9.6 log: face/neck idle compression neck ~0.03, glabella 0.04-0.06 -> 0.9.8 idle baseline; 0.9.1 log: face peaks 0.03-0.05, belly 0.29, knee/elbow 0.2-0.25 = full, hipfold 0.05-0.08, armpit 0.010 = never active: check its placement / direction): the regions sit on the right skin (Debug = Regions), which regions actually activate
   with her expressions and bends (the 10 s peak-compression lines; the per-region ranges in `author.py` are first guesses: face 0.08-0.10,

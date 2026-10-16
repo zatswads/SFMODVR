@@ -27,10 +27,15 @@ namespace SfMorph
             var bind = new Dictionary<Transform, Matrix4x4>();
             var seen = new HashSet<Mesh>();
             var index = new StringBuilder("# mesh\trenderer\tvertices\tsubmeshes\tmaterials\tread from\n");
+            var swapped = new List<string>();
             foreach (var r in c.Renderers)
             {
-                if (r == null || r.sharedMesh == null || !seen.Add(r.sharedMesh)) continue;
-                var m = r.sharedMesh;
+                if (r == null || r.sharedMesh == null) continue;
+                // the game's mesh, never our clones: soft zones / Fidelity (subdivided) and the character morph change the vertex set
+                var m = c.Morph.GameMesh(r) ?? r.sharedMesh;
+                if (!seen.Add(m)) continue;
+                if (m != r.sharedMesh) swapped.Add(r.name);
+                if (m.name.EndsWith(" (SfMorph)") || m.name.EndsWith(" (SfSoft)")) { failed.Add(m.name + " (only our clone is reachable; turn Physics and Fidelity off and export again)"); continue; }
                 string err;
                 var d = MeshData.Read(m, out err);
                 if (d == null) { failed.Add(m.name + " (" + err + ")"); continue; }
@@ -51,6 +56,7 @@ namespace SfMorph
             string texMsg;
             try { texMsg = Textures(c, dir); }
             catch (Exception e) { texMsg = "textures failed: " + e.Message; Plugin.Log.LogWarning("Export textures: " + e); }
+            if (swapped.Count > 0) Plugin.Log.LogInfo("Export: the game's own mesh written instead of our clone for " + string.Join(", ", swapped.ToArray()));
             var msg = "Exported " + written + " meshes of '" + c.Key + "' to " + dir + (failed.Count > 0 ? "; " + failed.Count + " failed: " + string.Join(", ", failed.ToArray()) : "") + "; " + texMsg;
             Plugin.Log.LogInfo(msg);
             return msg;
@@ -82,13 +88,14 @@ namespace SfMorph
             var cols = new StringBuilder("# material\tcolour property\tr g b a (her original value)\n");
             var files = new Dictionary<Texture, string>();
             int wrote = 0, skipped = 0;
+            var props = new StringBuilder("# material\tshader\tproperty\ttype\tvalue (her original; textures: name format size)\n");
             foreach (var m in mats)
             {
                 var mname = m.name.Replace(" (Instance)", "").Trim();
-                foreach (var prop in TexProps)
+                Props(c, m, mname, props);
+                foreach (var prop in TexturesOf(m))
                 {
-                    if (!m.HasProperty(prop)) continue;
-                    var tex = c.Morph.OriginalTexture(m, prop);
+                    var tex = Hers(c, m, prop);
                     if (tex == null) { rows.Append(mname).Append('\t').Append(prop).Append("\t-\t-\t-\n"); skipped++; continue; }
                     string fmt = Describe(tex), size = tex.width + "x" + tex.height;
                     string file;
@@ -96,7 +103,7 @@ namespace SfMorph
                     {
                         file = Store.Safe(mname + "_" + prop.TrimStart('_')) + ".png";
                         var sw = System.Diagnostics.Stopwatch.StartNew();
-                        string err = SavePng(tex, prop == "_ColorMap", Path.Combine(dir, file));
+                        string err = SavePng(tex, IsSrgb(tex, prop), Path.Combine(dir, file));
                         sw.Stop();
                         if (err != null) { Plugin.Log.LogWarning("Export texture " + file + " failed: " + err); file = "-"; skipped++; }
                         else { wrote++; Plugin.Log.LogInfo("Export texture " + file + " (" + tex.name + ", " + fmt + ", " + size + ") in " + (sw.Elapsed.TotalSeconds).ToString("0.0", Inv) + " s"); }
@@ -112,7 +119,71 @@ namespace SfMorph
                 }
             }
             File.WriteAllText(Path.Combine(dir, "textures.txt"), rows.ToString() + cols.ToString());
+            File.WriteAllText(Path.Combine(dir, "materials.txt"), props.ToString());
             return wrote + " skin textures written" + (skipped > 0 ? ", " + skipped + " skipped (see the log)" : "") + (mats.Count == 0 ? " (no reika_face/body/foot material found)" : "");
+        }
+
+        // Every texture property of a skin material that holds a texture (colour and normal first: the pipeline reads those),
+        // minus Unity's built-in lightmap slots.
+        static List<string> TexturesOf(Material m)
+        {
+            var list = new List<string>();
+            foreach (var p in TexProps) if (m.HasProperty(p)) list.Add(p);
+            foreach (var p in m.GetTexturePropertyNames())
+                if (!list.Contains(p) && !p.StartsWith("unity_", StringComparison.Ordinal) && m.GetTexture(p) != null) list.Add(p);
+            return list;
+        }
+
+        // Her own texture in a slot: what the converted character saved, and under our render textures (wrinkles, marks) their base.
+        static Texture Hers(Character c, Material m, string prop, bool quiet = false)
+        {
+            var t = c.Morph.OriginalTexture(m, prop);
+            if (t is RenderTexture || Wrinkles.Owns(t))
+            {
+                var b = Wrinkles.BaseOf(m, prop);
+                if (b == null || b is RenderTexture)
+                {
+                    if (!quiet) Plugin.Log.LogWarning("Export: " + m.name + "." + prop + " holds our render texture and its original isn't known; skipped (turn Wrinkles and skin marks off, export again)");
+                    return null;
+                }
+                t = b;
+            }
+            return t;
+        }
+
+        static bool IsSrgb(Texture t, string prop)
+        {
+            if (prop == "_ColorMap") return true;
+            if (prop.IndexOf("Normal", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            return t.graphicsFormat.ToString().IndexOf("SRGB", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        // Every property of the material's shader with her value: materials.txt, for the pipeline's material check.
+        static void Props(Character c, Material m, string mname, StringBuilder sb)
+        {
+            try
+            {
+                var sh = m.shader;
+                int n = sh.GetPropertyCount();
+                for (int i = 0; i < n; i++)
+                {
+                    var pn = sh.GetPropertyName(i);
+                    var type = sh.GetPropertyType(i);
+                    string v;
+                    if (type == UnityEngine.Rendering.ShaderPropertyType.Color) { var col = c.Morph.OriginalColor(m, pn); v = F(col.r) + " " + F(col.g) + " " + F(col.b) + " " + F(col.a); }
+                    else if (type == UnityEngine.Rendering.ShaderPropertyType.Vector) { var x = m.GetVector(pn); v = F(x.x) + " " + F(x.y) + " " + F(x.z) + " " + F(x.w); }
+                    else if (type == UnityEngine.Rendering.ShaderPropertyType.Texture)
+                    {
+                        if (pn.StartsWith("unity_", StringComparison.Ordinal)) continue;
+                        var t = Hers(c, m, pn, true);
+                        v = t == null ? "-" : t.name + " " + Describe(t) + " " + t.width + "x" + t.height;
+                    }
+                    else v = F(m.GetFloat(pn));
+                    sb.Append(mname).Append('\t').Append(sh.name).Append('\t').Append(pn).Append('\t').Append(type).Append('\t').Append(v).Append('\n');
+                }
+                foreach (var k in m.shaderKeywords) sb.Append(mname).Append('\t').Append(sh.name).Append("\tkeyword\t-\t").Append(k).Append('\n');
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Export: properties of " + mname + ": " + e.Message); }
         }
 
         static string Describe(Texture t)

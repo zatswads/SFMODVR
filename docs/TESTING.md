@@ -97,6 +97,20 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.11.0 (character import materials, slider fit)
+
+- [ ] Log `SF Body Morphs 0.11.0`. Characters tab > Yin (re-baked on the PC): no dark or inside-out patches at the nostrils,
+      lips, eyelids, ears, under the breasts or on the fingers; skin brightness close to her own (not washed out / glowing);
+      pores still visible up close. Face-only mode (face skin on, body skin off): no seam at the neck.
+- [ ] If her lipstick, eye shadow or blush still sits on top of the VaM face: note it (her `_AttachMap_*` / `_BlushMap` layers;
+      the next step is a switch for them).
+- [ ] Presets tab > Export with Physics and Fidelity on: log `Export: the game's own mesh written instead of our clone for ...`;
+      the new folder's meshes.txt has 19469 (upper body) / 4533 (lower body) vertices and no "(SfSoft)", textures.txt no
+      RenderTexture, a materials.txt with every Shader Graphs/Skin property. Send that log: it has the full property lines.
+- [ ] Presets tab > `Lexi (fit)` > Load (with no character picked): her body takes the VaM character's proportions with her own
+      skin; nothing pokes or skews; compare with the Characters tab version.
+- [ ] Pipeline on the PC: `run.ps1 -Name <name> -Check` prints the material rows; `-Rebake` re-bakes (other characters).
+
 ## 0.10.0 (muscle definition)
 
 Copy `SfMorph.dll` + `sfmorph_shaders`. Log: `SF Body Morphs 0.10.0`, `Muscles: layouts body (27 muscles, 2048x2048)` (if it says
