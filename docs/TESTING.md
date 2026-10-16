@@ -98,6 +98,16 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.20 (pack voice in the climax scenes)
+
+Install `dist/SfMorph.dll`. A voice pack on (e.g. Southern Domme), Reactions on, Mute game voice on. In sex mode let her climax (or
+pick the climax choice) and let the player finish (creampie):
+1. Log `Reactions: voice: filling the game's climax scene 'Bedroom_Missionary_Climax' (18.7 s) with the pack`, then
+   `voice: scene clip 1 at 0.3 s: request '...'`, `scene clip 2 ...: climax`, ... and `voice: scene over (it stopped), N pack clips played`.
+2. In the headset: the scene has her pack voice throughout (a line, a climax sound, a line ...), no overlap with the game's voice,
+   her lips move with the lines; nothing new starts in the last 1.5 s; the next sex loop's moans come back as before.
+3. Creampie: request lines and high moans; clean / finish scenes: afterglow lines. `[Voice] PackInScenes = false`: silent again.
+
 ## 0.11.19 (natural back)
 
 Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`. Flex test, Back 10-16 mm: no rods or tubes along the spine or across the shoulder

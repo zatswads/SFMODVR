@@ -1836,6 +1836,97 @@ namespace SfMorph
             MuteOne(0, _srcMoan, true);   // our clip is on the moan source now: its volume back this frame
         }
 
+        // ---- 0.11.20: the game's Timeline scenes with the pack (user: the unskippable climax scenes are silent with the game's voice muted) ----
+        // The climax / creampie / condom / clean / finish scenes are Timelines (Camera_system.playableDirector, one per room / position /
+        // style, e.g. Bedroom_Missionary_Climax): one pre-mixed 10-33 s clip of her lines and moans on an Audio Track bound to the voice source.
+        // The mute silences it (Timeline audio goes through that source's volume), and StandIn never sees it (the Timeline sets no
+        // AudioSource.clip). While such a director plays, the pack fills the scene on the moan source: climax = request lines and climax
+        // sounds in turn, creampie = request lines and high moans, condom = invite lines and moans, clean / finish = afterglow lines and
+        // breaths; each next clip 0.3-0.8 s after the last ends, nothing new in the last 1.5 s of the scene.
+        static readonly string[] SceneKinds = { "climax", "creampie", "condom", "clean", "finish" };
+        Type _tCam; UnityEngine.Object _cam; FieldInfo _fCamDir; PropertyInfo _pDirState, _pDirTime, _pDirDur;
+        float _camNextFind = -10f, _sceneNext;
+        Behaviour _sceneDir; int _sceneKind = -1, _sceneStep, _sceneClips;
+        readonly System.Random _sceneRng = new System.Random();
+        public string SceneNote = "";
+
+        public void SceneFill(bool on)
+        {
+            if (!on || !Found || !Pack.Loaded) { SceneEnd(null); return; }
+            try
+            {
+                if (_cam == null || Dead(_cam))
+                {
+                    _cam = null;
+                    if (_now < _camNextFind) return;
+                    _camNextFind = _now + 2f;
+                    if (_tCam == null)
+                    {
+                        _tCam = Ty("Camera_system");
+                        if (_tCam == null) { LogOnce("scenecam", "scene fill: Camera_system not found (the Timeline scenes stay silent)"); _camNextFind = float.MaxValue; return; }
+                        _fCamDir = _tCam.GetField("playableDirector", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                        if (_fCamDir == null) { LogOnce("scenedir", "scene fill: Camera_system.playableDirector not found"); _camNextFind = float.MaxValue; return; }
+                    }
+                    _cam = UnityEngine.Object.FindObjectOfType(_tCam);
+                    if (_cam == null) return;
+                }
+                var dir = _fCamDir.GetValue(_cam) as Behaviour;
+                if (dir == null || Dead(dir)) { SceneEnd("its director is gone"); return; }
+                var td = dir.GetType();
+                if (_pDirState == null || _pDirState.DeclaringType != td)
+                {
+                    _pDirState = td.GetProperty("state"); _pDirTime = td.GetProperty("time"); _pDirDur = td.GetProperty("duration");
+                    if (_pDirState == null || _pDirTime == null || _pDirDur == null)
+                    { LogOnce("scenedirp", "scene fill: PlayableDirector state / time / duration not found"); _camNextFind = float.MaxValue; _cam = null; _tCam = typeof(void); return; }
+                }
+                bool playing = _pDirState.GetValue(dir, null).ToString() == "Playing";
+                if (!playing) { SceneEnd("it stopped"); return; }
+                double t = (double)_pDirTime.GetValue(dir, null), dur = (double)_pDirDur.GetValue(dir, null);
+                if (!ReferenceEquals(dir, _sceneDir))
+                {
+                    SceneEnd(null);
+                    string n = dir.gameObject.name.ToLowerInvariant();
+                    int kind = -1;
+                    for (int k = 0; k < SceneKinds.Length; k++) if (n.Contains(SceneKinds[k])) { kind = k; break; }
+                    if (kind == 4 && n.Contains("loop")) kind = -1;   // the finish loops have no voice
+                    _sceneDir = dir; _sceneKind = kind; _sceneStep = 0; _sceneClips = 0; _sceneNext = _now + 0.3f;
+                    if (kind < 0) return;
+                    SceneNote = "filling the game's " + SceneKinds[kind] + " scene '" + dir.gameObject.name + "' (" + dur.ToString("0.0") + " s) with the pack";
+                    Log("voice: " + SceneNote);
+                }
+                if (_sceneKind < 0 || _now < _sceneNext || t > dur - 1.5) return;
+                // one of ours still sounds (a touch moan, a breath, the last scene clip's tail): after it
+                if ((OwnVoicePlaying && _now < _ownEnd) || (_packClip && Playing(_srcMoan))) { _sceneNext = _now + 0.2f; return; }
+                bool line = (_sceneStep & 1) == 0;
+                string what = "";
+                bool ok = false;
+                int st = _sceneKind <= 1 ? VoicePack.SRequest : _sceneKind == 2 ? VoicePack.SInvite : VoicePack.SAfterglow;
+                if (line) ok = PackState(st, out what);
+                if (!ok)
+                {
+                    if (_sceneKind >= 3) { ok = PackBreath(true); what = "breath"; }
+                    else
+                    {
+                        int c = _sceneKind == 0 ? (_sceneStep % 4 == 1 ? VoicePack.MoanHigh : VoicePack.Climax) : _sceneKind == 1 ? VoicePack.MoanHigh : VoicePack.MoanMid;
+                        ok = PackVoice(c, 1f, false, false); what = VoicePack.Folders[c];
+                    }
+                }
+                _sceneStep++;
+                if (!ok) { _sceneNext = _now + 0.5f; return; }
+                _sceneClips++;
+                _sceneNext = _now + Mathf.Max(0.4f, LastClipLength) + 0.3f + 0.5f * (float)_sceneRng.NextDouble();
+                if (_sceneClips <= 12) Log("voice: scene clip " + _sceneClips + " at " + t.ToString("0.0") + " s: " + what);
+            }
+            catch (Exception e) { LogOnce("scenefill:" + e.GetType().Name, "scene fill failed: " + e.Message); _cam = null; _camNextFind = _now + 10f; }
+        }
+
+        void SceneEnd(string why)
+        {
+            if (_sceneDir == null) return;
+            if (_sceneKind >= 0 && why != null) Log("voice: scene over (" + why + "), " + _sceneClips + " pack clips played");
+            _sceneDir = null; _sceneKind = -1; SceneNote = "";
+        }
+
         // Returns the clip's name when the game just started a clip of its own on this source (a new clip, or the source started playing).
         readonly bool[] _mutePlay = new bool[MuteN];
         string MuteOne(int i, Behaviour src, bool on)

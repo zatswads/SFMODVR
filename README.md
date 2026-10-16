@@ -41,6 +41,14 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.20 (the pack's voice in the game's climax scenes):
+- With a voice pack and Mute game voice on, the unskippable climax scenes were silent. They (and the creampie, condom, clean and
+  finish scenes) are Timelines: one pre-mixed 10-33 s clip of her lines and moans on a track bound to her voice source, which the
+  mute silences; the stand-ins never answered it because a Timeline sets no clip on the source. Now, while such a scene's director
+  plays (`Camera_system.playableDirector`), the pack fills it: climax = request lines and climax sounds in turn, creampie = request
+  lines and high moans, condom = invite lines, clean / finish = afterglow lines and breaths, each 0.3-0.8 s after the last, with
+  lip sync. `[Voice] PackInScenes` (on) switches it off.
+
 0.11.19 (a natural back; stronger obliques):
 - The back's erectors read as two lone tendons down the spine and the shoulder-blade muscles as rows of rods / tubes. Cause: a
   belly's cross-section (1 - x^k)^2 with k under 2 has no flat top - it peaks sharply on its centreline - and several muscles used
