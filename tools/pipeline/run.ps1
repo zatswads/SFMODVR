@@ -318,6 +318,8 @@ if ($Daz) {
     Remove-Item "$fbx.status.txt" -ErrorAction SilentlyContinue
     $dsa = (Resolve-Path (Join-Path $here '..\sources\daz_export.dsa')).Path
     Write-Host "DAZ Studio : $exe`nCharacter  : $Daz`nFBX        : $fbx  (DAZ Studio opens, exports and closes)"
+    # DAZ Studio runs one instance: a second launch hands over nothing and quits
+    if (Get-Process DAZStudio -ErrorAction SilentlyContinue) { Write-Host 'FAILED: DAZ Studio is already running: close it (save your scene first) and run this again'; exit 1 }
     $proc = Start-Process -FilePath $exe -ArgumentList @('-scriptArg', "`"$Daz`"", '-scriptArg', "`"$fbx`"", "`"$dsa`"") -PassThru
     # a modal dialog (missing files, a login prompt) would keep DAZ Studio open: give up after 10 minutes without a status file
     $t0 = Get-Date
@@ -326,7 +328,10 @@ if ($Daz) {
         Write-Host 'FAILED: DAZ Studio did not finish in 10 minutes (a dialog is probably open in its window: missing files, login). Its log: %APPDATA%\DAZ 3D\Studio6\log.txt'
         exit 1
     }
-    if (-not $proc.HasExited) { $proc.WaitForExit(120000) | Out-Null }
+    # after the export DAZ Studio closes its window; it can linger in the background (seen with DAZ Studio 6): end the instance
+    # this run started once the status is written and it has had 90 s to quit
+    if (-not $proc.HasExited) { $proc.WaitForExit(90000) | Out-Null }
+    if (-not $proc.HasExited) { Write-Host 'DAZ Studio did not quit after the export: ending the instance this run started'; Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
     $st = if (Test-Path "$fbx.status.txt") { (Get-Content "$fbx.status.txt" -Raw).Trim() } else { 'FAIL no status file (the script did not run: check DAZ Studio''s log, Help > Troubleshooting > View Log File)' }
     Write-Host "DAZ export : $st"
     if (-not $st.StartsWith('OK') -or -not (Test-Path $fbx)) { exit 1 }

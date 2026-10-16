@@ -17,6 +17,11 @@ modal dialog; it gives up after 10 minutes without a status file. Launch tested 
 gets its arguments and opens the preset; the export itself waits for Genesis 9 Starter Essentials to be installed.
 A character product folder (data / People / Runtime) is installed by copying it into a content library (`My Library`).
 
+First real Genesis 9 run (RKS Krista 9, 0.11.5): rig g9 53/53 joints, fit residual 0.03 mm, eyes open (Krista's lids fitted),
+material checks PASS. Open: jaw / chin pulled in (chin metric 21 mm) with a step at the face / neck seam, folds under the
+breasts (54 flipped chest triangles; Lexi via the same adapter: 7). Candidates: the merged G9 mouth mesh in InnerMouth (the
+mouth-ring metrics), the Face / Neck boundary rule on G9's jaw, the 45 mm nipple disc (tuned on Genesis 2) on G9's chest.
+
 Tools looked at and not used: bluemoonfoundry/daz-mcp-server (an MCP server driving DAZ Studio through a C++ plugin with an
 HTTP port on localhost:18811 and tools that run any DazScript and write any path: safe with caveats, but more than the export
 needs; one auditable script does it), the old DazToBlender bridge (Blender 2.80-2.83, does not load in Blender 5.2; the FBX

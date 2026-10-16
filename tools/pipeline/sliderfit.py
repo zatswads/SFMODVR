@@ -217,7 +217,8 @@ def measure(f):
     _, dn, _ = trunk_section(f, nip_y, 0.008)
     m['breastP'] = float(dn - m['ubD'])
     m['nipSp'] = float(abs(f.tip[0][0] - f.tip[1][0]))
-    _, _, pg = trunk_section(f, y_hip, 0.03)
+    # the buttocks' fullest point is not at the widest hip on every figure (Genesis 9: below it): a 14 cm band round it
+    _, _, pg = trunk_section(f, y_hip, 0.07)
     _, _, pw = trunk_section(f, y_w, 0.01)
     rear = lambda p: float((-fw * p[:, 2]).max())  # noqa: E731
     m['gluteP'] = rear(pg) - rear(pw) if len(pg) and len(pw) else np.nan

@@ -41,6 +41,20 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.5 (first real DAZ Genesis 9 character through the pipeline; the plugin is unchanged):
+- RKS Krista 9 (a Genesis 9 product) went DAZ Studio -> FBX -> adapter -> fit: all 53 joints from the Genesis 9 table, body fit
+  residual 0.03 mm, eyes open and fitted, textures 9 of 9, both material checks PASS (albedo gain 0.70). Not good enough yet:
+  her jaw / chin come out pulled in (chin 21 mm off) with a step at the face / neck seam, and the chest has folds under the
+  breasts (54 flipped triangles); the Krista conversion is not installed, only the slider-fit preset `RKS Krista 9 (fit)`.
+- DAZ's FBX export leaves out the PBR shaders' image maps: `daz_export.dsa` now lists every image-mapped channel of the figure
+  (`<fbx>.materials.txt`) and the adapter fills Base Color / Normal Map from it.
+- Genesis 9 keeps eyes and mouth as separate figures and has no Lips / Ears surfaces: the adapter merges eye / mouth meshes
+  (their eyeballs become Sclera, so eyeball size and eye opening are measured), and derives Lips (face skin within 9 mm of the
+  mouth opening) and Ears (outermost head skin at eye height) from the geometry when no material names them.
+- Slider fit: glute projection measured over a 14 cm band (the buttocks' fullest point is below the widest hip on Genesis 9).
+- run.ps1 -Daz: refuses to start while DAZ Studio is open (one instance only), and ends the instance it started when DAZ
+  Studio lingers after the export (seen with DAZ Studio 6).
+
 0.11.4 (DAZ characters through DAZ Studio; the plugin is unchanged):
 - `run.ps1 -Daz <character preset .duf>`: DAZ Studio loads the character at base resolution and exports an FBX with its textures
   (`tools/sources/daz_export.dsa`), which goes on through `-Source`. run.ps1 first checks that the preset's base figure is

@@ -132,7 +132,8 @@ PREFIXES = ('mixamorig:', 'mixamorig1:', 'mixamorig2:', 'CC_Base_', 'Armature|',
 
 # material name patterns -> role (non-skin parts and skin features); everything else is skin, split by bones. Matched on
 # the lower-cased name with camelCase / separators turned into spaces, as whole words ('ear' must not hit 'Forearms').
-MAT_ROLES = [(r'\bfinger ?nails?\b', 'Fingernails'), (r'\btoe ?nails?\b', 'Toenails'), (r'\bsclera\b', 'Sclera'),
+MAT_ROLES = [(r'^eye (left|right)( \d+)?$|\beye ?balls?\b', 'Sclera'),   # Genesis 9: one material per eyeball
+             (r'\bfinger ?nails?\b', 'Fingernails'), (r'\btoe ?nails?\b', 'Toenails'), (r'\bsclera\b', 'Sclera'),
              (r'\biris(es)?\b', 'Irises'), (r'\bpupils?\b', 'Pupils'), (r'\bcornea\b', 'Cornea'),
              (r'\beye ?moisture\b|\btears?\b', 'Tear'), (r'\beye ?reflection\b', 'EyeReflection'), (r'\blacrimals?\b', 'Lacrimals'),
              (r'lash', 'Eyelashes'), (r'\bbrows?\b|eyebrow', 'Eyebrows'), (r'\bteeth\b|\btooth\b', 'Teeth'), (r'\btongue\b', 'Tongue'),
@@ -239,34 +240,54 @@ def main():
     for k, bn in bones.items():
         b = arm.data.bones[bn]
         J[k] = unity(np.array(mw @ b.head_local))
-    # the mesh in its rest shape (shape keys as set, no armature deformation), world space
-    for m in body.modifiers:
-        if m.type == 'ARMATURE':
-            m.show_viewport = False
+    # the meshes in their rest shape (shape keys as set, no armature deformation), world space: the body, plus separate
+    # eye / mouth meshes (Genesis 9 keeps eyes and mouth as their own figures): their eyeballs give the eye landmarks
+    def mat_role_of(name):
+        l = words(name)
+        if any(re.search(h, l) for h in SKIN_HINTS):
+            return None
+        return next((rr for kw, rr in MAT_ROLES if re.search(kw, l)), None)
+    PART_ROLES = {'Sclera', 'Irises', 'Pupils', 'Cornea', 'Tear', 'EyeReflection', 'Lacrimals', 'Teeth', 'Tongue', 'Gums', 'InnerMouth'}
+    parts = [body] + [o for o in meshes if o is not body and o.data.materials and
+                      all(m is not None and mat_role_of(m.name) in PART_ROLES for m in o.data.materials)]
     dg = bpy.context.evaluated_depsgraph_get()
-    ev = body.evaluated_get(dg)
-    me = ev.to_mesh()
-    me.calc_loop_triangles()
-    bw = body.matrix_world
-    nv = len(me.vertices)
-    co = np.empty(nv * 3); me.vertices.foreach_get('co', co); co = co.reshape(-1, 3)
-    co = (np.c_[co, np.ones(nv)] @ np.array(bw).T)[:, :3]
-    nl = len(me.loops)
-    lv = np.empty(nl, np.int64); me.loops.foreach_get('vertex_index', lv)
-    uvl = me.uv_layers.active
-    if uvl is None:
-        raise SystemExit('%s has no UVs' % body.name)
-    luv = np.empty(nl * 2); uvl.data.foreach_get('uv', luv); luv = luv.reshape(-1, 2)
-    lnr = np.empty(nl * 3)
-    try:
-        me.corner_normals.foreach_get('vector', lnr)
-    except AttributeError:
-        me.loops.foreach_get('normal', lnr)
-    lnr = lnr.reshape(-1, 3) @ np.array(bw.to_3x3().inverted().transposed()).T
-    nt = len(me.loop_triangles)
-    tl = np.empty(nt * 3, np.int64); me.loop_triangles.foreach_get('loops', tl); tl = tl.reshape(-1, 3)
-    tm = np.empty(nt, np.int64); me.loop_triangles.foreach_get('material_index', tm)
-    mats = [m.name if m else 'material%d' % i for i, m in enumerate(body.data.materials)] or ['default']
+    co_l, lv_l, uv_l, nr_l, tl_l, tm_l, matobjs = [], [], [], [], [], [], []
+    nv0 = nl0 = 0
+    for o in parts:
+        for m in o.modifiers:
+            if m.type == 'ARMATURE':
+                m.show_viewport = False
+        dg.update()
+        me = o.evaluated_get(dg).to_mesh()
+        me.calc_loop_triangles()
+        ow = o.matrix_world
+        n_ = len(me.vertices)
+        c_ = np.empty(n_ * 3); me.vertices.foreach_get('co', c_)
+        co_l.append((np.c_[c_.reshape(-1, 3), np.ones(n_)] @ np.array(ow).T)[:, :3])
+        nl_ = len(me.loops)
+        v_ = np.empty(nl_, np.int64); me.loops.foreach_get('vertex_index', v_); lv_l.append(v_ + nv0)
+        uvl = me.uv_layers.active
+        if uvl is None:
+            raise SystemExit('%s has no UVs' % o.name)
+        u_ = np.empty(nl_ * 2); uvl.data.foreach_get('uv', u_); uv_l.append(u_.reshape(-1, 2))
+        r_ = np.empty(nl_ * 3)
+        try:
+            me.corner_normals.foreach_get('vector', r_)
+        except AttributeError:
+            me.loops.foreach_get('normal', r_)
+        nr_l.append(r_.reshape(-1, 3) @ np.array(ow.to_3x3().inverted().transposed()).T)
+        nt_ = len(me.loop_triangles)
+        t_ = np.empty(nt_ * 3, np.int64); me.loop_triangles.foreach_get('loops', t_); tl_l.append(t_.reshape(-1, 3) + nl0)
+        m_ = np.empty(nt_, np.int64); me.loop_triangles.foreach_get('material_index', m_)
+        tm_l.append(m_ + len(matobjs))
+        matobjs += list(o.data.materials) or [None]
+        nv0 += n_; nl0 += nl_
+    if len(parts) > 1:
+        log('merged with the body: %s (eye / mouth parts)' % ', '.join(o.name for o in parts[1:]))
+    co = np.concatenate(co_l); lv = np.concatenate(lv_l); luv = np.concatenate(uv_l); lnr = np.concatenate(nr_l)
+    tl = np.concatenate(tl_l); tm = np.concatenate(tm_l)
+    nv = len(co)
+    mats = [m.name if m else 'material%d' % i for i, m in enumerate(matobjs)] or ['default']
 
     # height check / unit scale (the importers usually give metres; DAZ FBX in cm and some exports in mm do not)
     P = unity(co)
@@ -382,6 +403,39 @@ def main():
             else:
                 r = 'Torso'
         role[fi] = r
+    # Lips and Ears from geometry when no material names them (Genesis 9: both are part of 'Head'). Lips: the face skin within
+    # 9 mm of the mouth opening (the face vertices that coincide with the inner mouth's), in front of it; ears: the outermost
+    # head skin at eye height behind the eyes.
+    from mathutils.kdtree import KDTree
+
+    def kd(points):
+        t = KDTree(len(points))
+        for i_, p_ in enumerate(points):
+            t.insert(p_, i_)
+        t.balance()
+        return t
+    eye_y = 0.5 * (g2['lEye'][1] + g2['rEye'][1])
+    face_f = np.flatnonzero(role == 'Face')
+    im = np.flatnonzero(role == 'InnerMouth')
+    if not (role == 'Lips').any() and len(im) and len(face_f):
+        t_in = kd(V[np.unique(F[im])])
+        fv = np.unique(F[face_f])
+        ring = np.array([V[v] for v in fv if t_in.find(V[v])[2] < 5e-4])
+        ring = ring[ring[:, 1] < eye_y - 0.03] if len(ring) else ring   # the mouth, not the eye sockets
+        if len(ring) >= 8:
+            t_r = kd(ring)
+            near = np.array([t_r.find(cen[f_])[2] < 0.009 and cen[f_][2] > ring[:, 2].min() - 0.004 for f_ in face_f])
+            role[face_f[near]] = 'Lips'
+            log('lips from the mouth opening: %d triangles (%d ring vertices)' % (int(near.sum()), len(ring)))
+    if not (role == 'Ears').any():
+        hf = np.flatnonzero(np.isin(role, ['Face', 'Head']))
+        band = hf[(np.abs(cen[hf, 1] - (eye_y - 0.01)) < 0.04) & (cen[hf, 2] < eye_z - 0.035)]
+        if len(band):
+            cx = float(np.median(cen[hf, 0]))
+            dx = np.abs(cen[band, 0] - cx)
+            ear = band[dx > 0.82 * dx.max()]
+            role[ear] = 'Ears'
+            log('ears from the head shape: %d triangles' % len(ear))
     # nipples: the most forward chest point per side, a 45 mm disc around it (VaM's Nipples group: the breast cap round the areola, p90 47 mm)
     chest = np.flatnonzero(role == 'Torso')
     ys = g2['chest'][1]
@@ -402,7 +456,7 @@ def main():
     os.makedirs(out, exist_ok=True)
     tex_of = {}
     written = {}
-    for i, m in enumerate(body.data.materials):
+    for i, m in enumerate(matobjs):
         if m is None or not m.use_nodes:
             continue
         slots = {}
@@ -421,6 +475,8 @@ def main():
                     n = next(x.links[0].from_node for x in n.inputs if x.is_linked)
                 if n is not None and n.type == 'TEX_IMAGE' and n.image is not None:
                     img = n.image
+                    if not img.has_data and not (img.filepath and os.path.isfile(bpy.path.abspath(img.filepath))):
+                        continue   # an FBX image slot without a file (DAZ's PBR maps): the DAZ material list fills it below
                     if img.name not in written:
                         fn = "tex_%02d_%s.png" % (len(written), re.sub(r"^tex_\d+_", "", re.sub(r"[^A-Za-z0-9_.-]+", "_", os.path.splitext(img.name)[0])))
                         path = bpy.path.abspath(img.filepath) if img.filepath else ''
@@ -432,10 +488,43 @@ def main():
                                 bpy.data.images.remove(img2)
                             written[img.name] = fn
                         except Exception as e:  # noqa: BLE001
-                            log('WARN: texture %s not written (%s)' % (img.name, e))
+                            if 'image data' not in str(e):   # (an FBX slot without its file: the DAZ material list fills it)
+                                log('WARN: texture %s not written (%s)' % (img.name, e))
                             continue
                     slots[slot] = written[img.name]
         tex_of[i] = slots
+    # DAZ: the FBX exporter leaves out the maps of DAZ's PBR shaders; tools/sources/daz_export.dsa lists them next to the
+    # FBX ("<fbx>.materials.txt": surface, channel, image). Fill the slots the FBX left empty from it.
+    side = src + '.materials.txt'
+    if os.path.isfile(side):
+        chans = {}
+        with open(side, encoding='utf-8', errors='replace') as f:
+            for l in f.read().splitlines():
+                t = l.split('\t')
+                if len(t) >= 3 and not l.startswith('#'):
+                    chans.setdefault(t[0].strip(), {})[t[1].strip().lower()] = t[2].strip()
+        want = {'_MainTex': ('base color', 'diffuse color', 'translucency color'), '_BumpMap': ('normal map',)}
+        filled = 0
+        for i, m in enumerate(matobjs):
+            if m is None:
+                continue
+            ch = chans.get(re.sub(r'\.\d+$', '', m.name)) or chans.get(m.name)
+            if not ch:
+                continue
+            slots = tex_of.setdefault(i, {})
+            for slot, labels in want.items():
+                if slot in slots:
+                    continue
+                p = next((ch[lb] for lb in labels if lb in ch and os.path.isfile(ch[lb])), None)
+                if p is None:
+                    continue
+                if p not in written:
+                    fn = 'tex_%02d_%s' % (len(written), re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.basename(p)))
+                    shutil.copyfile(p, os.path.join(out, fn))
+                    written[p] = fn
+                slots[slot] = written[p]
+                filled += 1
+        log('DAZ material channels (%s): %d texture slots filled' % (os.path.basename(side), filled))
 
     # body.obj
     with open(os.path.join(out, 'body.obj'), 'w', encoding='utf-8', newline='\n') as f:

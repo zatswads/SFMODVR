@@ -62,6 +62,25 @@
 			if (n.isVisible && n.isVisible()) { n.setVisible(false); nHidden++; }
 		}
 
+		// the FBX exporter leaves out the image maps of DAZ's PBR shaders (PBRSkin, Iray Uber): list every image-mapped
+		// channel of the figure's surfaces in "<out>.materials.txt" (surface, channel label, image file) for humanoid.py
+		var sMat = "# surface\tchannel\timage (DAZ material channels with a map)\n";
+		var oShapeM = oFig.getObject() ? oFig.getObject().getCurrentShape() : null;
+		for (var mi = 0; oShapeM && mi < oShapeM.getNumMaterials(); mi++) {
+			var oMat = oShapeM.getMaterial(mi);
+			var aProps = oMat.getPropertyList();
+			for (var pi = 0; pi < aProps.length; pi++) {
+				var oProp = aProps[pi];
+				if (!oProp.isMappable || !oProp.isMappable() || !oProp.getMapValue) continue;
+				var oTex = oProp.getMapValue();
+				if (!oTex || !oTex.getFilename) continue;
+				var sFile = oTex.getFilename();
+				if (sFile) sMat += oMat.getName() + "\t" + oProp.getLabel() + "\t" + sFile + "\n";
+			}
+		}
+		var oMatFile = new DzFile(sOut + ".materials.txt");
+		if (oMatFile.open(DzFile.WriteOnly)) { oMatFile.write(sMat); oMatFile.close(); }
+
 		var oExporter = App.getExportMgr().findExporterByClassName("DzFbxExporter");
 		if (!oExporter) { status("FAIL no FBX exporter in this DAZ Studio"); finish(); return; }
 		var oSettings = new DzFileIOSettings();
