@@ -196,6 +196,18 @@ pose (from her SkinnedMeshRenderers' bind poses, as Export's skeleton.txt), so h
    (after the Animator, FinalIK, DynamicBone, the face Animator and our ApplyStep / Overlap / Embody): a recording is exactly
    the avatar's input, so the offline check covers the runtime maths.
 
+### Her reference pose: bind for the body, her neutral face for the face
+
+Her exported bind pose is not what the game shows: rendered as stored (0.00 mm from the export, so not a skinning effect)
+her lower face droops, the inner brows are bent, the trapezius / clavicle and neck look off (the user's reading of the check
+renders). In the game her face Animator holds the jaw, lips, brows and cheeks in an expression every frame and the
+animation poses the neck and shoulder helpers. Because the avatar takes her change *since the reference*, a jaw that hangs
+open at bind and is held closed in game would close the avatar's jaw past its own rest, into the skull. So the reference
+is per group: her bind pose for the limbs and trunk (what the check uses), her neutral in-game pose for the jaw, eyes, lids
+and face rig, and the neck if a recording shows the same offset there: sampled from her face Animator's idle (the face clip
+survey already samples clips against the bind face; Wrinkles keeps an idle baseline) or a quiet stretch of a recording, and
+matched to the avatar's own rest face. The first real recording shows how large the offsets are.
+
 ### Shoulders and joint correctives
 
 The clavicle follows her `Scapula` change, so the avatar's shoulder girdle rises only as far as hers does in the game's
