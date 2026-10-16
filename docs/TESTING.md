@@ -97,6 +97,16 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.9.7 (skin seams, neck / face marks, ripple impact dip)
+
+- [ ] Log: `GPU contact: skin seams stitched: reika_lowerBody_normal -> reika_upperBody_normal N on the seam + M blended, reika_neck -> ...,
+      reika_face_* -> ...`; renderer lines for reika_neck and reika_face_*; no `old sfmorph_shaders (no SeamBlend)` warning.
+- [ ] Press her stomach across the waist (where the upper and lower body meet), the neck, the jaw line: no gaps or cut-outs, no step.
+- [ ] Grope or slap her neck, cheek, shoulder-to-neck: marks on the neck and face, continuous across the neck seam. Her own hand on her
+      face: a slight dent, no redness.
+- [ ] Ripple: the first dip under the hand softer than before, the rings as high as in 0.9.6; "impact dip" 100 % = the 0.9.6 look.
+- [ ] GPU cost: the `first v2 frame` line (more renderers now) and no frame drops while touching her face.
+
 ## 0.9.6 (voice filter fixed)
 
 - [ ] Voice pitch 1.2 / 0.85 and formant 1.15 / 0.88 on moans and lines: no crackle, no hollow or phasey sound, no warble on long moans.

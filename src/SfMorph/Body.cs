@@ -709,7 +709,7 @@ namespace SfMorph
             s.SelfContact = _p.SelfContact.Value; s.PartnerBody = _p.PartnerBody.Value;
             s.BendAmount = _p.BendBulge.Value; s.BicepsMm = _p.BendBicepsMm.Value; s.KneeMm = _p.BendKneeMm.Value; s.CalfMm = _p.BendCalfMm.Value;
             s.HipMm = _p.BendHipMm.Value; s.BellyFoldMm = _p.BendBellyFoldMm.Value;
-            s.Ripple = _p.RippleAmount.Value; s.RippleSpeed = _p.RippleSpeed.Value; s.RippleWavelength = _p.RippleWavelength.Value; s.RippleDamping = _p.RippleDamping.Value;
+            s.Ripple = _p.RippleAmount.Value; s.RippleSpeed = _p.RippleSpeed.Value; s.RippleImpact = _p.RippleImpact.Value; s.RippleWavelength = _p.RippleWavelength.Value; s.RippleDamping = _p.RippleDamping.Value;
             s.Marks = _p.SkinMarksOn.Value; s.MarkFade = _p.MarksFade.Value;
             // 0.8.9 (user: marks too subtle): the boost multiplies the build-up, the redness (saturates sooner) and the pressed darkening (capped so
             // the shade never passes 0.3 of the albedo)

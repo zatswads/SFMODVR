@@ -662,6 +662,9 @@ namespace SfMorph
             if (Mathf.Abs(v - _p.RippleWavelength.Value) > 0.00001f) _p.RippleWavelength.Value = v;
             v = Slider("    duration", _p.RippleDamping.Value, 0.1f, 2f, "0.00", 0.6f, ro, " s");
             if (Mathf.Abs(v - _p.RippleDamping.Value) > 0.0001f) _p.RippleDamping.Value = v;
+            // 0.9.7 (user: the first hit is too spiky, the spreading rings are a good height)
+            v = Slider("    impact dip", _p.RippleImpact.Value * 100f, 0f, 100f, "0", 35f, ro, " %") / 100f;
+            if (Mathf.Abs(v - _p.RippleImpact.Value) > 0.0001f) _p.RippleImpact.Value = v;
             GUI.enabled = en;
             bool mk = GUILayout.Toggle(_p.SkinMarksOn.Value, " Marks: hand prints and slap redness");
             GUI.enabled = true;
@@ -682,7 +685,7 @@ namespace SfMorph
             GUILayout.Label("Dent edge: how far around a hand the skin follows the dent (5 mm = the old hard edge). Rim bulge: the pressed flesh rises " +
                             "around it. Bend bulges: biceps, thighs and calves thicken as the joints bend, her belly rounds forward when she sits or squats. " +
                             "Ripple: a slap or a thrust sends a wave through her glutes, thighs and breasts (speed: how fast it travels; wavelength: crest " +
-                            "to crest, a longer one reaches farther; duration: seconds to fade to a third). Marks come from hands, the partner and slaps; " +
+                            "to crest, a longer one reaches farther; duration: seconds to fade to a third; impact dip: how deep the first dip under the hand is next to the rings). Marks come from hands, the partner and slaps; " +
                             "her own limbs dent her skin but never redden it.", _hint);
         }
 

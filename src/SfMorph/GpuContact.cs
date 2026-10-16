@@ -78,8 +78,10 @@ namespace SfMorph
             public Action<AsyncGPUReadbackRequest> OnHits;
             // overlay meshes (areola caps, tattoo, vulva rim) lying on the body: each vertex follows the body vertex under it (ApplyMap)
             public RendState Parent;
-            public GraphicsBuffer MapBuf;
+            public GraphicsBuffer MapBuf, MapWBuf;   // 0.9.7 MapWBuf: per vertex the parent's share (overlays 1; skin seams 1 at the seam, 0 a cm in)
             public int Mapped;
+            public bool Extra;                       // 0.9.7: her neck / face skin, not a soft-zone mesh (marks and small bony dents, no v1 imprint)
+            public int Level;                        // dispatch pass: 0 no parent, then one more than its parent (a parent's Grad is ready first)
             // this frame's plan
             public bool Run, NeedCalib, IsV2, Imprint1, Depth, Bend, Wave, MarkOn, Decay, Work, Probe, SelfOnly, ChainRan, MapOnly;
             public int DiscMask, CapOff, CapN, CapN1;
@@ -93,7 +95,7 @@ namespace SfMorph
             PCapOff = Shader.PropertyToID("_CapOff"), PTanOff = Shader.PropertyToID("_TanOff"),
             PCanon = Shader.PropertyToID("_Canon"), PAdjOff = Shader.PropertyToID("_AdjOff"), PAdjV = Shader.PropertyToID("_AdjV"), PTissue = Shader.PropertyToID("_Tissue"),
             PClass = Shader.PropertyToID("_Class"), PBend = Shader.PropertyToID("_Bend"), PFieldIn = Shader.PropertyToID("_FieldIn"), PFieldOut = Shader.PropertyToID("_FieldOut"),
-            PFieldN = Shader.PropertyToID("_FieldN"), PFieldW = Shader.PropertyToID("_FieldW"), PFieldR = Shader.PropertyToID("_FieldR"), PForeign = Shader.PropertyToID("_Foreign"), PForeignR = Shader.PropertyToID("_ForeignR"), PMarks = Shader.PropertyToID("_Marks"), PGrad = Shader.PropertyToID("_Grad"),
+            PFieldN = Shader.PropertyToID("_FieldN"), PFieldW = Shader.PropertyToID("_FieldW"), PFieldR = Shader.PropertyToID("_FieldR"), PForeign = Shader.PropertyToID("_Foreign"), PForeignR = Shader.PropertyToID("_ForeignR"), PMapW = Shader.PropertyToID("_MapW"), PWaveImpact = Shader.PropertyToID("_WaveImpact"), PMarks = Shader.PropertyToID("_Marks"), PGrad = Shader.PropertyToID("_Grad"),
             PWaves = Shader.PropertyToID("_Waves"), PWaveCount = Shader.PropertyToID("_WaveCount"), PNoField = Shader.PropertyToID("_NoField"), PMarkOn = Shader.PropertyToID("_MarkOn"),
             PSoftScale = Shader.PropertyToID("_SoftScale"), PDepth = Shader.PropertyToID("_Depth"), PSkirt = Shader.PropertyToID("_SkirtLen"), PBulge = Shader.PropertyToID("_Bulge"),
             PBulgeCap = Shader.PropertyToID("_BulgeCap"), PNormalBend = Shader.PropertyToID("_NormalBend"), PDt = Shader.PropertyToID("_Dt"), PMarkGain = Shader.PropertyToID("_MarkGain"),
@@ -112,7 +114,8 @@ namespace SfMorph
         int _kSmoke, _kImprint;
         int _kDepth, _kDilate, _kSmooth, _kCompose, _kGrad, _kApply, _kDisc, _kDecay, _kApplyMap;   // 0.8.0 v2 kernels
         bool _v2Kernels, _v2Failed, _loggedFirstV2;
-        bool _foreignMarks;                   // 0.9.4 bundle: Depth writes the foreign-only press (_Foreign) that Compose takes marks from
+        bool _foreignMarks;
+        bool _seamBlend;                      // 0.9.7 bundle: ApplyMap blends by _MapW (skin seams), Compose reads _WaveImpact                   // 0.9.4 bundle: Depth writes the foreign-only press (_Foreign) that Compose takes marks from
         ComputeBuffer _capBuf, _waveBuf;
         readonly CapData[] _capArr = new CapData[CapBufCount];
         // the frame's world-space capsules (PrepareCaps) before they are copied per renderer
@@ -176,9 +179,11 @@ namespace SfMorph
                 g._kDisc = Kernel(g._cs, "MarkDisc", ref miss); g._kDecay = Kernel(g._cs, "MarksDecay", ref miss); g._kApplyMap = Kernel(g._cs, "ApplyMap", ref miss);
                 g._v2Kernels = miss.Length == 0;
                 g._foreignMarks = g._cs.HasKernel("ForeignMarks");
+                g._seamBlend = g._cs.HasKernel("SeamBlend");
                 Plugin.Log.LogInfo("GPU contact: bundle loaded, kernels Smoke=" + g._kSmoke + " Imprint=" + g._kImprint + (g._v2Kernels ? ", v2: Depth Dilate Smooth Compose Grad Apply MarkDisc MarksDecay ApplyMap" : ""));
                 if (!g._v2Kernels) Plugin.Log.LogWarning("GPU contact: bundle has no v2 kernels (old sfmorph_shaders?): v1 imprint (missing:" + miss + ")");
-                else if (!g._foreignMarks) Plugin.Log.LogWarning("GPU contact: old sfmorph_shaders (no ForeignMarks): marks still come from every contact, her own limbs too; install the bundle that came with this DLL");
+                else if (!g._seamBlend) Plugin.Log.LogWarning("GPU contact: old sfmorph_shaders (no SeamBlend): her skin meshes are not stitched at their seams, no neck / face marks, no ripple impact setting; install the bundle that came with this DLL");
+                if (g._v2Kernels && !g._foreignMarks) Plugin.Log.LogWarning("GPU contact: old sfmorph_shaders (no ForeignMarks): marks still come from every contact, her own limbs too; install the bundle that came with this DLL");
                 g._capBuf = new ComputeBuffer(CapBufCount, 48, ComputeBufferType.Structured);
                 g._waveBuf = new ComputeBuffer(2 * Ripple.MaxWaves, 16, ComputeBufferType.Structured);
                 RenderPipelineManager.beginContextRendering += g.OnBeginContext;
@@ -236,6 +241,19 @@ namespace SfMorph
                         if (s == null) { s = new RendState { R = r, Name = r.name }; _rs.Add(s); EnableRaw(s); }
                         SetupMesh(s, mask, z.ZoneFor(r));
                     }
+                // 0.9.7 (user: marks stop at her neck, the head gets none): her neck and face skin join the v2 chain (bony dents of a few mm, marks);
+                // they are not soft-zone meshes, so no v1 imprint (zero mask) and they are dropped if their bake fails
+                if (her != null && _v2Kernels && !_v2Failed && _seamBlend)
+                    for (int i = 0; i < her.Renderers.Count; i++)
+                    {
+                        var r = her.Renderers[i];
+                        if (r == null || !r.gameObject.activeInHierarchy || keep.Contains(r) || !SkinExtra(r)) continue;
+                        var s = Find(r);
+                        if (s == null) { s = new RendState { R = r, Name = r.name }; _rs.Add(s); EnableRaw(s); }
+                        s.Extra = true;
+                        SetupMesh(s, new float[r.sharedMesh.vertexCount], null);
+                        if (s.V2) keep.Add(r);
+                    }
                 RemoveRenderers(keep);
                 if (_v2Kernels && !_v2Failed) BuildMaps();
                 if (_v2Kernels && !_v2Failed && her != null) BendPose.Bind(her);
@@ -250,6 +268,7 @@ namespace SfMorph
         }
 
         const float MapDist = 0.005f;   // an overlay vertex follows a body vertex within 5 mm of it (areola caps sit ~1 mm above the breast)
+        const float SeamIn = 0.0015f, SeamOut = 0.0099f;   // 0.9.7 skin seams: the parent's move in full within 1.5 mm of its skin, faded out by 1 cm
 
         static bool IsBodyMesh(RendState s)
         {
@@ -257,43 +276,147 @@ namespace SfMorph
             return n.IndexOf("body", StringComparison.OrdinalIgnoreCase) >= 0 && n.IndexOf("uterus", StringComparison.OrdinalIgnoreCase) < 0;
         }
 
+        // 0.9.7: her neck and face skin (Wrinkles' material classes face / neck), never nails, eyes, brows, lashes or tears
+        static bool SkinExtra(SkinnedMeshRenderer r)
+        {
+            if (r.sharedMesh == null || r.sharedMesh.vertexCount <= 0) return false;
+            string n = (r.name ?? "").ToLowerInvariant();
+            if (n.Contains("nail") || n.Contains("tear") || n.Contains("eye") || n.Contains("brow") || n.Contains("lash")) return false;
+            var mats = r.sharedMaterials;
+            if (mats == null || mats.Length == 0 || mats[0] == null) return false;
+            int c = Wrinkles.Classify(mats[0], r);
+            return c == 1 || c == 2;
+        }
+
+        // Skin meshes in parent order (0.9.7): the upper body first, the other body meshes, the neck, the face. A skin mesh stitches its seam to
+        // an earlier one; -1 = not a skin mesh (an overlay).
+        static int SkinRank(RendState s)
+        {
+            if (s.Extra) return (s.Name ?? "").IndexOf("face", StringComparison.OrdinalIgnoreCase) >= 0 ? 3 : 2;
+            if (!IsBodyMesh(s)) return -1;
+            return (s.Name ?? "").IndexOf("upper", StringComparison.OrdinalIgnoreCase) >= 0 ? 0 : 1;
+        }
+
         static long Cell(Vector3 p) { return CellKey(Mathf.FloorToInt(p.x * 100f), Mathf.FloorToInt(p.y * 100f), Mathf.FloorToInt(p.z * 100f)); }
         static long CellKey(int x, int y, int z) { return ((long)x * 73856093L) ^ ((long)y * 19349663L) ^ ((long)z * 83492791L); }
 
-        // Overlay meshes (every v2 renderer that isn't a body mesh) onto the body: per overlay vertex the nearest body canonical vertex within MapDist
-        // (positions from the bakes' CPU skin, same pose), the parent = the body mesh most of its vertices found. Runs once per Sync (allocates then only).
+        // The bake's canonical vertices in 1 cm cells.
+        static Dictionary<long, List<int>> Grid(ContactBake bk)
+        {
+            var g = new Dictionary<long, List<int>>();
+            for (int v = 0; v < bk.V; v++)
+            {
+                if (bk.Canon[v] != (uint)v) continue;
+                var p = bk.WorldP[v];
+                if (float.IsNaN(p.x)) continue;
+                long key = Cell(p);
+                List<int> l;
+                if (!g.TryGetValue(key, out l)) { l = new List<int>(4); g[key] = l; }
+                l.Add(v);
+            }
+            return g;
+        }
+
+        // Nearest gridded vertex to p closer than sqrt(bd) (the 27 cells around p, so bd <= 1 cm^2); -1 none. bd is lowered to the hit.
+        static int Nearest(Dictionary<long, List<int>> g, Vector3[] wp, Vector3 p, ref float bd)
+        {
+            int best = -1;
+            int cx = Mathf.FloorToInt(p.x * 100f), cy = Mathf.FloorToInt(p.y * 100f), cz = Mathf.FloorToInt(p.z * 100f);
+            for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) for (int dz = -1; dz <= 1; dz++)
+            {
+                List<int> l;
+                if (!g.TryGetValue(CellKey(cx + dx, cy + dy, cz + dz), out l)) continue;
+                for (int k = 0; k < l.Count; k++)
+                {
+                    float d2 = (wp[l[k]] - p).sqrMagnitude;
+                    if (d2 < bd) { bd = d2; best = l[k]; }
+                }
+            }
+            return best;
+        }
+
+        // Maps, once per Sync (allocates then only), from the bakes' CPU-skinned positions (same pose):
+        // - overlay meshes (every v2 renderer that isn't skin) onto the body: per vertex the nearest body canonical vertex within MapDist, weight 1,
+        //   the parent = the body mesh most of its vertices found;
+        // - 0.9.7 (user: cut-outs in her stomach when pressing it): her skin is several meshes (upper / lower body, neck, face) whose fields were
+        //   computed apart (each mesh's skirt and smoothing see only its own side), so a press across a seam moved its two edges differently and
+        //   opened it. A later skin mesh takes an earlier one as its parent (most vertices within SeamIn): within SeamIn of the parent's skin a
+        //   vertex moves exactly like the parent's vertex there, fading to its own field by SeamOut.
         void BuildMaps()
         {
             var bodies = new List<RendState>();
+            var skins = new List<RendState>();
             for (int i = 0; i < _rs.Count; i++)
             {
                 var r = _rs[i];
-                r.Parent = null; r.Mapped = 0; Rel(ref r.MapBuf);
-                if (r.V2 && r.Bake != null && r.Bake.WorldP != null && IsBodyMesh(r)) bodies.Add(r);
+                r.Parent = null; r.Mapped = 0; r.Level = 0; Rel(ref r.MapBuf); Rel(ref r.MapWBuf);
+                if (!r.V2 || r.Bake == null || r.Bake.WorldP == null) continue;
+                if (IsBodyMesh(r)) bodies.Add(r);
+                if (SkinRank(r) >= 0) skins.Add(r);
             }
-            if (bodies.Count == 0) return;
-            var grid = new Dictionary<long, List<int>>[bodies.Count];
-            for (int b = 0; b < bodies.Count; b++)
+            if (skins.Count == 0) return;
+            skins.Sort((a, b) => SkinRank(a) != SkinRank(b) ? SkinRank(a).CompareTo(SkinRank(b)) : b.Count.CompareTo(a.Count));
+            var grids = new Dictionary<RendState, Dictionary<long, List<int>>>();
+            Func<RendState, Dictionary<long, List<int>>> gridOf = r =>
             {
-                var g = new Dictionary<long, List<int>>();
-                var bk = bodies[b].Bake;
-                for (int v = 0; v < bk.V; v++)
-                {
-                    if (bk.Canon[v] != (uint)v) continue;
-                    var p = bk.WorldP[v];
-                    if (float.IsNaN(p.x)) continue;
-                    long key = Cell(p);
-                    List<int> l;
-                    if (!g.TryGetValue(key, out l)) { l = new List<int>(4); g[key] = l; }
-                    l.Add(v);
-                }
-                grid[b] = g;
-            }
+                Dictionary<long, List<int>> g;
+                if (!grids.TryGetValue(r, out g)) { g = Grid(r.Bake); grids[r] = g; }
+                return g;
+            };
             var sb = new StringBuilder();
+            var sbS = new StringBuilder();
+            // skin seams: a parent comes earlier in `skins`, so its own map and level are known
+            if (_seamBlend)
+                for (int si = 1; si < skins.Count; si++)
+                {
+                    var r = skins[si];
+                    var bk = r.Bake;
+                    var best = new int[bk.V];
+                    var dist = new float[bk.V];
+                    var bestOf = new int[bk.V];
+                    var votes = new int[si];
+                    for (int v = 0; v < bk.V; v++)
+                    {
+                        best[v] = -1; bestOf[v] = -1; dist[v] = 1f;
+                        var p = bk.WorldP[v];
+                        if (float.IsNaN(p.x)) continue;
+                        float bd = SeamOut * SeamOut;
+                        for (int pi = 0; pi < si; pi++)
+                        {
+                            var pr = skins[pi];
+                            if (SkinRank(pr) >= SkinRank(r) && !(SkinRank(pr) == 1 && SkinRank(r) == 1)) continue;
+                            int k = Nearest(gridOf(pr), pr.Bake.WorldP, p, ref bd);
+                            if (k >= 0) { best[v] = k; bestOf[v] = pi; }
+                        }
+                        dist[v] = Mathf.Sqrt(bd);
+                        if (bestOf[v] >= 0 && dist[v] <= SeamIn) votes[bestOf[v]]++;
+                    }
+                    int pb = -1;
+                    for (int b = 0; b < si; b++) if (votes[b] > 0 && (pb < 0 || votes[b] > votes[pb])) pb = b;
+                    if (pb < 0 || votes[pb] < 4) continue;
+                    var map = new int[bk.V];
+                    var mw = new float[bk.V];
+                    int mapped = 0, exact = 0;
+                    for (int v = 0; v < bk.V; v++)
+                    {
+                        map[v] = -1;
+                        if (bestOf[v] != pb) continue;
+                        float w = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(SeamIn, SeamOut, dist[v]));
+                        if (w <= 0.001f) continue;
+                        map[v] = best[v]; mw[v] = w >= 0.999f ? 1f : w; mapped++;
+                        if (w >= 0.999f) exact++;
+                    }
+                    try { r.MapBuf = Upload(map, bk.V, 4); r.MapWBuf = Upload(mw, bk.V, 4); }
+                    catch (Exception e) { Plugin.Log.LogWarning("GPU contact: seam map of " + r.Name + " failed: " + e.Message); Rel(ref r.MapBuf); Rel(ref r.MapWBuf); continue; }
+                    r.Parent = skins[pb]; r.Mapped = mapped; r.Level = skins[pb].Level + 1;
+                    sbS.Append(sbS.Length > 0 ? ", " : "").Append(r.Name).Append(" -> ").Append(skins[pb].Name).Append(' ').Append(exact).Append(" on the seam + ")
+                        .Append(mapped - exact).Append(" blended");
+                }
+            // overlays onto the body meshes
             for (int i = 0; i < _rs.Count; i++)
             {
                 var r = _rs[i];
-                if (!r.V2 || r.Bake == null || r.Bake.WorldP == null || IsBodyMesh(r)) continue;
+                if (!r.V2 || r.Bake == null || r.Bake.WorldP == null || SkinRank(r) >= 0 || bodies.Count == 0) continue;
                 var bk = r.Bake;
                 var best = new int[bk.V];
                 var bestBody = new int[bk.V];
@@ -306,19 +429,8 @@ namespace SfMorph
                     float bd = MapDist * MapDist;
                     for (int b = 0; b < bodies.Count; b++)
                     {
-                        var wp = bodies[b].Bake.WorldP;
-                        int cx = Mathf.FloorToInt(p.x * 100f), cy = Mathf.FloorToInt(p.y * 100f), cz = Mathf.FloorToInt(p.z * 100f);
-                        for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) for (int dz = -1; dz <= 1; dz++)
-                        {
-                            long key = CellKey(cx + dx, cy + dy, cz + dz);
-                            List<int> l;
-                            if (!grid[b].TryGetValue(key, out l)) continue;
-                            for (int k = 0; k < l.Count; k++)
-                            {
-                                float d2 = (wp[l[k]] - p).sqrMagnitude;
-                                if (d2 < bd) { bd = d2; best[v] = l[k]; bestBody[v] = b; }
-                            }
-                        }
+                        int k = Nearest(gridOf(bodies[b]), bodies[b].Bake.WorldP, p, ref bd);
+                        if (k >= 0) { best[v] = k; bestBody[v] = b; }
                     }
                     if (bestBody[v] >= 0) votes[bestBody[v]]++;
                 }
@@ -326,13 +438,15 @@ namespace SfMorph
                 for (int b = 1; b < bodies.Count; b++) if (votes[b] > votes[pb]) pb = b;
                 if (votes[pb] < 8) continue;
                 var map = new int[bk.V];
+                var mw = new float[bk.V];
                 int mapped = 0;
-                for (int v = 0; v < bk.V; v++) { map[v] = bestBody[v] == pb ? best[v] : -1; if (map[v] >= 0) mapped++; }
-                try { r.MapBuf = Upload(map, bk.V, 4); }
-                catch (Exception e) { Plugin.Log.LogWarning("GPU contact: overlay map of " + r.Name + " failed: " + e.Message); continue; }
-                r.Parent = bodies[pb]; r.Mapped = mapped;
+                for (int v = 0; v < bk.V; v++) { map[v] = bestBody[v] == pb ? best[v] : -1; mw[v] = 1f; if (map[v] >= 0) mapped++; }
+                try { r.MapBuf = Upload(map, bk.V, 4); r.MapWBuf = Upload(mw, bk.V, 4); }
+                catch (Exception e) { Plugin.Log.LogWarning("GPU contact: overlay map of " + r.Name + " failed: " + e.Message); Rel(ref r.MapBuf); Rel(ref r.MapWBuf); continue; }
+                r.Parent = bodies[pb]; r.Mapped = mapped; r.Level = bodies[pb].Level + 1;
                 sb.Append(sb.Length > 0 ? ", " : "").Append(r.Name).Append(" -> ").Append(bodies[pb].Name).Append(' ').Append(mapped).Append('/').Append(bk.V);
             }
+            if (sbS.Length > 0) Plugin.Log.LogInfo("GPU contact: skin seams stitched: " + sbS);
             if (sb.Length > 0) Plugin.Log.LogInfo("GPU contact: overlays follow the body under them: " + sb);
         }
 
@@ -452,9 +566,9 @@ namespace SfMorph
             bool had = s.Bake != null;
             Rel(ref s.CanonBuf); Rel(ref s.AdjOffBuf); Rel(ref s.AdjVBuf); Rel(ref s.TissueBuf); Rel(ref s.ClassBuf); Rel(ref s.BendBuf);
             Rel(ref s.FieldA); Rel(ref s.FieldB); Rel(ref s.FieldC); Rel(ref s.FieldD); Rel(ref s.Foreign); Rel(ref s.MarksBuf); Rel(ref s.GradBuf);
-            Rel(ref s.HitsBuf); Rel(ref s.MapBuf);
-            s.Parent = null; s.Mapped = 0;
-            for (int i = 0; i < _rs.Count; i++) if (_rs[i].Parent == s) { _rs[i].Parent = null; Rel(ref _rs[i].MapBuf); _rs[i].Mapped = 0; }
+            Rel(ref s.HitsBuf); Rel(ref s.MapBuf); Rel(ref s.MapWBuf);
+            s.Parent = null; s.Mapped = 0; s.Level = 0;
+            for (int i = 0; i < _rs.Count; i++) if (_rs[i].Parent == s) { _rs[i].Parent = null; Rel(ref _rs[i].MapBuf); Rel(ref _rs[i].MapWBuf); _rs[i].Mapped = 0; _rs[i].Level = 0; }
             s.Bake = null;
             s.V2 = false;
             if (had) BakeVersion++;
@@ -775,7 +889,7 @@ namespace SfMorph
                 var s = _rs[i];
                 s.Run = false;
                 if (s.R == null || !s.R.enabled || !s.R.gameObject.activeInHierarchy) continue;
-                if (s.Mesh != s.R.sharedMesh && _z != null) { SetupMesh(s, _z.MaskFor(s.R), _z.ZoneFor(s.R)); }   // the mesh was swapped under us
+                if (s.Mesh != s.R.sharedMesh && _z != null) { if (s.Extra) SetupMesh(s, new float[s.R.sharedMesh != null ? s.R.sharedMesh.vertexCount : 0], null); else SetupMesh(s, _z.MaskFor(s.R), _z.ZoneFor(s.R)); }   // the mesh was swapped under us
                 if (!s.Ok) continue;
                 s.NeedCalib = s.Space == 0 && s.CalibState == 0 && s.CalibTries < CalibMaxTries && frame >= s.CalibNextFrame;
                 bool v2 = useV2 && s.V2 && s.Space > 0;
@@ -834,11 +948,13 @@ namespace SfMorph
 
             int dispatches = 0, v2Count = 0;
             for (int i = 0; i < _rs.Count; i++) _rs[i].ChainRan = false;
-            for (int pass = 0; pass < 2; pass++)   // bodies (and everything without a parent) first: an overlay's ApplyMap reads its body's Grad of this frame
+            int levels = 0;
+            for (int i = 0; i < _rs.Count; i++) if (_rs[i].Parent != null && _rs[i].Level > levels) levels = _rs[i].Level;
+            for (int pass = 0; pass <= levels; pass++)   // parents first: an overlay's / a seam's ApplyMap reads its parent's Grad of this frame
             for (int i = 0; i < _rs.Count; i++)
             {
                 var s = _rs[i];
-                if (!s.Run || (s.Parent != null) != (pass == 1)) continue;
+                if (!s.Run || (s.Parent != null ? s.Level : 0) != pass) continue;
                 using (var vb = s.R.GetVertexBuffer())
                 {
                     if (vb == null)
@@ -996,7 +1112,7 @@ namespace SfMorph
             cs.SetBuffer(_kCompose, PBend, s.BendBuf); cs.SetBuffer(_kCompose, PFieldN, s.FieldC); cs.SetBuffer(_kCompose, PFieldW, A);
             cs.SetBuffer(_kCompose, PFieldR, s.FieldD); cs.SetBuffer(_kCompose, PFieldOut, B); cs.SetBuffer(_kCompose, PMarks, s.MarksBuf); cs.SetBuffer(_kCompose, PWaves, _waveBuf);
             if (_foreignMarks) cs.SetBuffer(_kCompose, PForeignR, s.Foreign);
-            cs.SetInt(PNoField, s.Depth ? 0 : 1); cs.SetInt(PWaveCount, s.Wave ? nWaves : 0); cs.SetFloat(PWaveAmt, 1f);
+            cs.SetInt(PNoField, s.Depth ? 0 : 1); cs.SetInt(PWaveCount, s.Wave ? nWaves : 0); cs.SetFloat(PWaveAmt, 1f); cs.SetFloat(PWaveImpact, Mathf.Clamp01(_set.RippleImpact));
             var amt = BendPose.Amt;
             cs.SetVector(PBendAmt0, new Vector4(amt[0], amt[1], amt[2], amt[3])); cs.SetVector(PBendAmt1, new Vector4(amt[4], amt[5], amt[6], amt[7]));
             cs.SetVector(PBendAmt2, new Vector4(amt[8], 0f, 0f, 0f));
@@ -1027,7 +1143,7 @@ namespace SfMorph
         {
             var cs = _cs;
             var par = s.Parent;
-            if (par == null || s.MapBuf == null || par.GradBuf == null)
+            if (par == null || s.MapBuf == null || s.MapWBuf == null || par.GradBuf == null)
             {
                 if (!own) return 0;
                 cs.SetBuffer(_kApply, PVerts, vb); cs.SetBuffer(_kApply, PCanon, s.CanonBuf); cs.SetBuffer(_kApply, PGrad, s.GradBuf);
@@ -1035,7 +1151,7 @@ namespace SfMorph
                 return 1;
             }
             cs.SetBuffer(_kApplyMap, PVerts, vb); cs.SetBuffer(_kApplyMap, PCanon, s.CanonBuf); cs.SetBuffer(_kApplyMap, PGrad, s.GradBuf);
-            cs.SetBuffer(_kApplyMap, PMap, s.MapBuf); cs.SetBuffer(_kApplyMap, PParentGrad, par.GradBuf);
+            cs.SetBuffer(_kApplyMap, PMap, s.MapBuf); cs.SetBuffer(_kApplyMap, PParentGrad, par.GradBuf); cs.SetBuffer(_kApplyMap, PMapW, s.MapWBuf);
             cs.SetInt(PParentOn, par.ChainRan ? 1 : 0); cs.SetInt(POwnOn, own ? 1 : 0);
             if (!par.ChainRan && !own) return 0;
             cs.Dispatch(_kApplyMap, groups, 1, 1);

@@ -24,6 +24,7 @@
 #pragma kernel MarksDecay
 #pragma kernel ApplyMap
 #pragma kernel ForeignMarks
+#pragma kernel SeamBlend
 
 RWByteAddressBuffer _Verts;          // skinned output: per vertex _Stride bytes, position at _PosOff, normal at _NrmOff
 uint _Stride, _PosOff, _NrmOff, _Count;
@@ -181,10 +182,13 @@ RWStructuredBuffer<float2> _Foreign;// 0.9.4 Depth: per canonical vertex x = the
 StructuredBuffer<float2> _ForeignR;  // the same buffer, read by Compose
 RWStructuredBuffer<uint> _Hits;      // [0]: canonical vertices Depth found pressed (read back: her own limbs run the full chain only while they touch)
 StructuredBuffer<int> _Map;          // ApplyMap: per vertex of an overlay mesh (areola, tattoo...) the body canonical vertex under it, -1 = its own field
+StructuredBuffer<float> _MapW;       // 0.9.7 ApplyMap: how much of the parent's Grad (1 = an overlay / the seam itself; a skin mesh blends toward its
+                                     // own field over 1 cm from a seam with another skin mesh, so the two sides of a seam move as one surface)
 StructuredBuffer<float4> _ParentGrad;// ApplyMap: the body renderer's _Grad of this frame
 uint _WaveCount, _TanOff, _NoField, _MarkOn, _ParentOn, _OwnOn, _CountHits;
 float _SoftScale, _Depth;            // Tissue.SoftScale(softness), ContactSettings.Depth: cap = (hard + soft x _SoftScale) x _Depth
 float _SkirtLen, _Bulge, _BulgeCap, _NormalBend, _Dt, _MarkGain, _MarkFade, _DentFade, _WaveAmt;
+float _WaveImpact;                   // 0.9.7: the wave's share at the impact point (1 = full dip there; the rings beyond one wavelength keep A)
 float4 _BendAmt0, _BendAmt1, _BendAmt2;   // 9 slot amplitudes (m): [0..3], [4..7], [8]
 float4 _Disc;                        // MarkDisc: xyz world centre, w radius (m)
 float _DiscAmt;
@@ -353,7 +357,8 @@ void Compose(uint3 id : SV_DispatchThreadID)
             float r = length(pw - o.xyz);
             float x = r - p.y * o.w;
             // 0.9.4: the reach grows with the wavelength (12 cm at most 6 cm long waves, 2 wavelengths beyond)
-            wave += p.x * exp(-o.w / p.w) * exp(-r / max(0.12, 2.0 * p.z)) * exp(-2.0 * x * x / (p.z * p.z)) * -cos(6.2831853 * x / p.z);   // the impact point dips (a trough at x = 0), the ring rises around it
+            float imp = lerp(_WaveImpact, 1.0, smoothstep(0.0, p.z, r));   // 0.9.7 (user: the first dip is too spiky, the rings are right)
+            wave += imp * p.x * exp(-o.w / p.w) * exp(-r / max(0.12, 2.0 * p.z)) * exp(-2.0 * x * x / (p.z * p.z)) * -cos(6.2831853 * x / p.z);   // the impact point dips (a trough at x = 0), the ring rises around it
         }
         wave *= _WaveAmt * saturate(t.y / 0.016);   // fleshy skin ripples (breast, glute), bony skin does not
         float wcap = 1.5 * TissueCap(t);
@@ -435,15 +440,28 @@ void ApplyMap(uint3 id : SV_DispatchThreadID)
     uint v = id.x;
     if (v >= _Count) return;
     int m = _Map[v];
-    if (m >= 0)
+    uint c = _Canon[v];
+    if (m < 0)
     {
-        if (_ParentOn == 0u) return;
+        if (_OwnOn == 0u) return;
+        ApplyCore(v, _Grad[2 * c], _Grad[2 * c + 1]);
+        return;
+    }
+    float w = _MapW[v];
+    if (w >= 0.999)
+    {
+        if (_ParentOn == 0u) return;   // the body under it is at rest this frame
         ApplyCore(v, _ParentGrad[2 * (uint)m], _ParentGrad[2 * (uint)m + 1]);
         return;
     }
-    if (_OwnOn == 0u) return;
-    uint c = _Canon[v];
-    ApplyCore(v, _Grad[2 * c], _Grad[2 * c + 1]);
+    // 0.9.7 near a seam with another skin mesh: blend the two sides' moves (a side that did not run this frame is at rest: zeros)
+    float4 o0 = float4(0, 0, 0, 0), o1 = float4(0, 0, 0, 0), p0 = float4(0, 0, 0, 0), p1 = float4(0, 0, 0, 0);
+    if (_OwnOn != 0u) { o0 = _Grad[2 * c]; o1 = _Grad[2 * c + 1]; }
+    if (_ParentOn != 0u) { p0 = _ParentGrad[2 * (uint)m]; p1 = _ParentGrad[2 * (uint)m + 1]; }
+    float3 d = o1.w > 0.5 ? (p1.w > 0.5 ? lerp(o1.xyz, p1.xyz, w) : o1.xyz) : p1.xyz;
+    float dl = dot(d, d);
+    if (dl < 1e-8) return;
+    ApplyCore(v, lerp(o0, p0, w), float4(d * rsqrt(dl), 1));
 }
 
 void ApplyCore(uint v, float4 g0, float4 g1)
@@ -514,5 +532,11 @@ void MarksDecay(uint3 id : SV_DispatchThreadID)
 // ForeignMarks: never dispatched; its presence tells the plugin this bundle has the 0.9.4 foreign-only marks (Depth writes _Foreign).
 [numthreads(1, 1, 1)]
 void ForeignMarks(uint3 id : SV_DispatchThreadID)
+{
+}
+
+// SeamBlend: never dispatched; its presence tells the plugin ApplyMap reads _MapW (0.9.7 skin seams) and Compose reads _WaveImpact.
+[numthreads(1, 1, 1)]
+void SeamBlend(uint3 id : SV_DispatchThreadID)
 {
 }

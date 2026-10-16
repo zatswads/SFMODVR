@@ -13,7 +13,7 @@ namespace SfMorph
         public float Skirt = 0.015f, Bulge = 0.6f, Depth = 1f;
         public bool Normals = true, SelfContact = true, PartnerBody = true;
         public float BendAmount = 0.6f, BicepsMm = 8f, KneeMm = 8f, CalfMm = 6f, HipMm = 5f, BellyFoldMm = 3f;
-        public float Ripple = 1f, RippleSpeed = 0.5f, RippleWavelength = 0.1f, RippleDamping = 0.6f;
+        public float Ripple = 1f, RippleSpeed = 0.5f, RippleWavelength = 0.1f, RippleDamping = 0.6f, RippleImpact = 0.35f;
         public bool Marks = true;
         public float Redness = 0.5f, MarkFade = 15f, MarkGain = 0.6f, Ao = 0.5f, MarkBoost = 1f;
     }

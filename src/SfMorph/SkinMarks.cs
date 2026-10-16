@@ -391,7 +391,7 @@ namespace SfMorph
                     var tris = bake.SubTris[sub];
                     if (mat == null || tris == null || tris.Length < 3) continue;
                     int region = Wrinkles.Classify(mat, r);
-                    if (region != 2 && region != 3) continue;   // body / neck skin only: never the face, clothes, eyes, hair
+                    if (region < 1 || region > 3) continue;   // skin only (0.9.7: her face too): never clothes, eyes, hair
                     var sh = GetSheet(mat);
                     Rend rd = null;
                     for (int k = 0; k < sh.Rends.Count; k++) if (sh.Rends[k].R == r && sh.Rends[k].Sub == sub) { rd = sh.Rends[k]; break; }

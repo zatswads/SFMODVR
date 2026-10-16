@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.9.6";
+        public const string Version = "0.9.7";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -44,7 +44,7 @@ namespace SfMorph
         // 0.8.0 contact visuals v2 (GPU contact: dent edge, rim bulge, bent normals, self-contact, partner body, bend bulges, ripple, skin marks)
         internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn, ReactRubSound;
         internal ConfigEntry<float> ContactSkirt, ContactBulge, ContactDepth, BendBulge, BendBicepsMm, BendKneeMm, BendCalfMm, BendHipMm, BendBellyFoldMm,
-            RippleAmount, RippleSpeed, RippleWavelength, RippleDamping, MarksRedness, MarksFade, MarksAo, MarksBoost;
+            RippleAmount, RippleSpeed, RippleWavelength, RippleDamping, RippleImpact, MarksRedness, MarksFade, MarksAo, MarksBoost;
         internal ConfigEntry<Vector3> LeftHandPos, LeftHandRot, RightHandPos, RightHandRot;
         internal ConfigEntry<string> PanelRect;
         internal ConfigEntry<int> Tab;
@@ -86,6 +86,7 @@ namespace SfMorph
             RippleSpeed = Config.Bind("Physics", "RippleSpeed", 0.5f, new ConfigDescription("How fast the ripple travels over her skin (m/s).", new AcceptableValueRange<float>(0.2f, 3f)));
             RippleWavelength = Config.Bind("Physics", "RippleWavelength", 0.1f, new ConfigDescription("Distance between ripple crests (m); a longer wave also reaches farther.", new AcceptableValueRange<float>(0.03f, 0.2f)));
             RippleDamping = Config.Bind("Physics", "RippleDamping", 0.6f, new ConfigDescription("How long a ripple lasts: seconds for it to fade to a third.", new AcceptableValueRange<float>(0.1f, 2f)));
+            RippleImpact = Config.Bind("Physics", "RippleImpact", 0.35f, new ConfigDescription("How deep the first dip at the impact point is, as a share of the ripple (the rings that spread out keep their height): 1 = as deep as the rings could be, lower = a softer first hit.", new AcceptableValueRange<float>(0f, 1f)));
             SkinMarksOn = Config.Bind("Physics", "SkinMarks", true, "A hand pressed on her glutes, thighs, belly or breasts leaves a fading print; slaps leave redness.");
             MarksRedness = Config.Bind("Physics", "MarksRedness", 0.5f, new ConfigDescription("How red marks get (0 only the pressed shading).", new AcceptableValueRange<float>(0f, 1f)));
             MarksFade = Config.Bind("Physics", "MarksFade", 15f, new ConfigDescription("Seconds for redness to fade to a third.", new AcceptableValueRange<float>(3f, 60f)));

@@ -41,6 +41,21 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.9.7 (skin seams stitched, marks on her neck and face, ripple impact dip):
+- Pressing her stomach opened cut-outs in her skin. Cause: her skin is several meshes (upper body, lower body, neck, face) and each one
+  worked out its dent alone; its skirt and smoothing only saw its own side of a seam, so a press across the seam (her stomach is where the
+  upper and lower body meet) moved the two edges by different amounts and the seam opened. Now the lower body is stitched to the upper
+  body, the neck to the body and the face to the neck: within 1.5 mm of the other mesh a vertex moves exactly like the vertex across the
+  seam, fading to its own dent over 1 cm. Log: `GPU contact: skin seams stitched: ...`.
+- Marks stopped at her neck and her head had none, so the neck seam showed. Her neck and face skin now join the contact chain: hands and
+  the partner leave marks there too, the face sheet gets its own marks, and both get small dents limited by her anatomy (a few mm on
+  bone). Her own hands on her face dent it a little, without marks.
+- Ripple: the first dip under the hand was too spiky while the spreading rings had a good height. New Physics slider "impact dip"
+  ([Physics] RippleImpact, default 35 %): the wave's depth at the impact point, rising to the full ring height one wavelength out.
+- The face wrinkle lines under her mouth and the line around her neck are wrinkle work (authored maps); they went to that work with the
+  references you sent.
+- Needs the new `sfmorph_shaders` (rebuilt); with an older bundle the log warns and none of the three above apply.
+
 0.9.6 (voice pitch / formant: crackle and hollowness fixed):
 - 0.9.3's voice samples sounded crackled and hollow: its grain marks snapped to the loudest sample, which jumps between the peaks of a
   cycle, the new grain positions started at an arbitrary phase, and each grain was cut with a symmetric window, so neighbouring grains
