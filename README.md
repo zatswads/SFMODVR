@@ -46,7 +46,7 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
   strokes (0.3-1 s), so a rub made of them now plays as a shuffled run of one-shots that overlap a little, each at the current slide
   level and a slightly different pitch, like a game's footsteps (a first clip of 1.5 s or more still loops). Every category already
   picks from all its files without repeats, so a folder of similar clips gives the variation.
-- On the user's PC (not in the repo, personal use): `Soundsub` = 9 skin-rub strokes, `Sounds\grab` = 6 hand-on-skin presses,
+- On the user's PC (not in the repo, personal use): `Sounds\rub` = 9 skin-rub strokes, `Sounds\grab` = 6 hand-on-skin presses,
   `Sounds\pat` = 7 soft skin taps (the earlier pat files moved to `Sounds\_previous\pat`), all from VaM scene packages, rolled off
   above 3 kHz and levelled to -30 dBFS RMS (peaks -17 to -21 dBFS: the audition copies were too loud).
 
