@@ -49,6 +49,15 @@ Pipeline, after 0.11.6 (skin bake fixes found on the Genesis 9 character's face;
   (dark nostrils, dark eye rims, lip colour past the mouth corners). A VaM character's fuller lips still come from the wide pass.
 - Her neck mesh (a cap inside the neck whose UVs lie on the throat) is baked before the upper body, so its rays' misses no
   longer paint a flat disc on her throat.
+- Eyelids, when the character's eyes are open: her lid edges are landmarked onto the character's as seen from the front (both
+  corners, upper and lower edge at 1/4, 1/2, 3/4 of the width) and her lids' inner edge onto the fitted eyeball, so the opening
+  takes the character's shape (Krista: 8.8 mm tall like hers 8.6, was 10.4 and round). The lids keep the character's own skin
+  (lash line, crease) instead of the flat skin average, and skin round the eye that faces the eyeball (a Genesis 9 face's eye
+  socket, a flat never-seen texture island) is left out of the bake source: it was what her lid rays found (a pale shelf). Face
+  texels no ray reaches take the nearest baked colour instead of the flat skin tone.
+- Ears: the ear landmark is now the centroid of the whole ear (the head skin beyond 82 % of the half-width at ear height, the
+  same rule on both heads; the adapter's ear labels are per side too). The outermost point at eye height it replaces fell on
+  different parts of an asymmetric ear's rim (Krista: 11 mm apart), pulled one of her ears 16 mm down and crumpled it.
 
 0.11.6 (fit fixes found on the Genesis 9 character; the plugin is unchanged):
 - Jaw and chin: the rigid VaM head was blended into the body warp up to her Head_M (mouth height), so a large body warp sheared

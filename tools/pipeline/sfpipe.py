@@ -117,9 +117,7 @@ def face_metrics(pts, eL, eR, mouth_pts=None, mouth=None, mesh=None):
     lm_ = (np.abs(pts[:, 0] - em[0]) < 0.012) & (pts[:, 1] < nose[1] - 0.008) & (pts[:, 1] > chin[1] + 0.015)
     q = pts[lm_]; lip = q[q[:, 2] > q[:, 2].max() - 0.0015].mean(0)
     x0, x1 = slice_x_extent(mesh[0], mesh[1], em[1], em[2] - 0.045)
-    # lateral extreme at eye height, ears included (her ear landmark)
-    ew = np.abs(pts[:, 1] - em[1]) < 0.01
-    lat = {sg: pts[ew & (np.sign(pts[:, 0]) == sg)][np.argmax(np.abs(pts[ew & (np.sign(pts[:, 0]) == sg)][:, 0]))] for sg in (-1, 1)}
+    lat = {sg: ear_tip(pts, em, sg) for sg in (-1, 1)}   # her ear landmark
     return dict(eL=eL, eR=eR, em=em, mouth=mouth, lip=lip, spacing=np.linalg.norm(eL - eR), eye_mouth=np.linalg.norm(em - mouth),
                 eye_lip=np.linalg.norm(em - lip),
                 nose=nose, chin=chin, width=x1 - x0, lat=lat, mrange=mrange)
@@ -138,6 +136,18 @@ def log_face_metrics(tag, m, log):
     log('  face metrics %-26s eye spacing %.1f mm, eye-mouth %.1f mm (lip front %.1f, opening y %.1f..%.1f), nose (%.1f %.1f %.1f) mm, chin (%.1f %.1f %.1f) mm, head width at eyes %.1f mm' % (
         (tag,) + (1000 * m['spacing'], 1000 * m['eye_mouth'], 1000 * m['eye_lip']) + tuple(1000 * np.array(m['mrange'])) + tuple(1000 * (m['nose'] - m['em'])) + tuple(1000 * (m['chin'] - m['em'])) + (1000 * m['width'],)))
 
+
+
+def ear_tip(pts, em, sg, band=0.04, frac=0.82):
+    """An ear landmark, the same rule on her and the character's head skin: the centroid of the points on side sg (of em's x)
+    within band of the eye height, behind the eyes, further out than frac of that side's lateral extreme (the whole ear, as
+    the adapter labels Ears). A single extreme point was noisy: on RKS Krista 9 it fell 11 mm lower on one ear's rim than
+    the other's, the pre-alignment pulled her ear 16 mm down and the fit crumpled it."""
+    m = (np.sign(pts[:, 0] - em[0]) == sg) & (np.abs(pts[:, 1] - em[1]) < band) & (pts[:, 2] < em[2] - 0.035)
+    if not m.any():
+        return None
+    q = pts[m]; dx = np.abs(q[:, 0] - em[0])
+    return q[dx > frac * dx.max()].mean(0)
 
 def face_landmarks(m, pts, ears=None):
     """Landmarks for the face pre-alignment. Ear centres: the centroid of VaM's 'Ears' per side (ears), or, for her,
@@ -1239,15 +1249,16 @@ def run(a, chk):
         log('%d mouth-interior vertices keep her shape (no data); %d shoulder vertices keep her shape (no data within 12 cm, stiffness ramp to 10 out to 18 cm)' % (mouth_in.sum(), n_sh.sum()))
         # Face pre-alignment: her head (only) is warped onto VaM's face landmarks first, so the ICP starts with the
         # nose, chin, ears and mouth near their targets (its smoothness term anchors to the aligned shape).
+        eye_rim_v = []   # her eye-opening rim vertices landmarked onto the character's (they keep that placement)
         if fm_her is not None and fm_vam is not None:
             lm_her = face_landmarks(fm_her, wc[face_w], ears=None)
             # her ear landmark is the lateral extreme of the face at eye height, so VaM's is the lateral extreme of its
             # 'Ears' at eye height too (their centroid sits lower and further in: it squashed her ears by 3 cm)
             ears_dst = None
             if len(vears):
-                ve = vam_b[vears]; ve = ve[np.abs(ve[:, 1] - eye_mid_b[1]) < 0.01]
-                if (ve[:, 0] < 0).any() and (ve[:, 0] > 0).any():
-                    ears_dst = np.array([ve[np.argmax(np.abs(ve[:, 0]) * (np.sign(ve[:, 0]) == sg))] for sg in (-1, 1)])
+                tips = [ear_tip(vam_b[vhead], eye_mid_b, sg) for sg in (-1, 1)]
+                if all(t_ is not None for t_ in tips):
+                    ears_dst = np.array(tips)
                 else:
                     warn('VaM Ears have no vertices at eye height on both sides: ear landmarks use the head width instead')
             lm_vam = face_landmarks(fm_vam, vam_b[vhead], ears=ears_dst)
@@ -1264,13 +1275,52 @@ def run(a, chk):
                 vr = lv_ if len(lv_) >= 10 else vam_b[ring]
                 for fn_, nm_ in ((np.argmin, 'cornerL'), (np.argmax, 'cornerR')):
                     lsrc.append(hr[fn_(hr[:, 0])]); ldst.append(vr[fn_(vr[:, 0])]); lnames.append(nm_)
+            # eye openings (the character's eyes open, its lids fitted): her lid edges onto the character's, 8 points per eye
+            # (both corners; upper and lower edge at 1/4, 1/2, 3/4 of the width). Matched by surface alone her lid edge slid
+            # along the character's lid and opened 2 mm wider than it (10.4 vs 8.2 mm on RKS Krista 9); the rim vertices
+            # then keep this placement in the ICP (no data)
+            if eye_open is not None and not eye_open[1]:
+                vfm = np.isin(vf, vhead).all(1)
+                for sgn in (-1, 1):
+                    he = next((e for e in ('Eye_L', 'Eye_R') if np.sign(bind_pos[e][0]) == sgn), None)
+                    ve = next((e for e in ('Eye_L', 'Eye_R') if np.sign(eye_c[e][0]) == sgn), None)
+                    if he is None or ve is None:
+                        continue
+                    rh_ = r_her.get(he) if r_her else None
+                    hp_ = eye_edge(wc, wf, bind_pos[he], rh_ or 0.0136)
+                    vp_ = eye_edge(vam_b, vf[vfm], eye_c[ve], r_vam or 0.0111)
+                    if hp_ is None or vp_ is None:
+                        log('eye opening %s: no opening found on %s: lid edges not landmarked' % ('LR'[sgn > 0], 'her face' if hp_ is None else 'the VaM skin'))
+                        continue
+                    for k, (a_, b_) in enumerate(zip(hp_, vp_)):
+                        lsrc.append(a_); ldst.append(b_); lnames.append('eye%s%d' % ('LR'[sgn > 0], k))
+                    # her vertices at those edge points (within 1.5 mm) keep the landmarked placement in the ICP
+                    dd, ii = cKDTree(wc).query(np.array(hp_))
+                    eye_rim_v.append(ii[dd < 0.0015])
+                    # her lid's inner edge (the mesh boundary round the eye) onto the character's eyeball, 0.3 mm out, in its
+                    # own direction from her eye centre: with the front edge moved and the inner edge free, the fit turned her
+                    # lid margin forward into a pale shelf 1 mm in front of the eyeball (the character's lids hug theirs)
+                    bnd = eye_boundary(wc, wf, bind_pos[he])
+                    if bnd is not None and r_vam:
+                        dirs = wc[bnd] - bind_pos[he]; dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+                        for i_, d_ in zip(bnd, dirs):
+                            lsrc.append(wc[i_]); ldst.append(eye_c[ve] + (r_vam + 0.0003) * d_); lnames.append('lid%s' % 'LR'[sgn > 0])
+                        eye_rim_v.append(bnd)
+                        log('eye opening %s: %d lid inner-edge vertices onto the eyeball (radius %.1f + 0.3 mm)' % ('LR'[sgn > 0], len(bnd), 1000 * r_vam))
+                    log('eye opening %s (front view): hers %.1f x %.1f mm, VaM %.1f x %.1f mm (width x height at the middle)' % (
+                        'LR'[sgn > 0], 1000 * np.linalg.norm(hp_[0] - hp_[1]), 1000 * np.linalg.norm(hp_[4] - hp_[5]),
+                        1000 * np.linalg.norm(vp_[0] - vp_[1]), 1000 * np.linalg.norm(vp_[4] - vp_[5])))
             lsrc = np.array(lsrc); ldst = np.array(ldst)
-            log('face pre-alignment landmarks, her -> VaM (mm): ' + ', '.join('%s %.1f' % (k, 1000 * np.linalg.norm(b_ - a_)) for k, a_, b_ in zip(lnames, lsrc, ldst)))
+            log('face pre-alignment landmarks, her -> VaM (mm): ' + ', '.join('%s %.1f' % (k, 1000 * np.linalg.norm(b_ - a_)) for k, a_, b_ in zip(lnames, lsrc, ldst) if not k.startswith('lid')))
             if 'cornerL' in lnames:
                 log('mouth width: hers %.1f mm, VaM %.1f mm' % (1000 * np.ptp(hr[:, 0]), 1000 * np.ptp(vr[:, 0])))
             pre = fit.tps_warp(wc, lsrc, ldst, smoothing=1e-4)
             w_her = np.where(np.isin(hlab, head_names), np.clip((wc[:, 1] - yN) / (yH - yN), 0, 1), 0.0)
             x_start = wc + (pre - wc) * w_her[:, None]
+            for r_ in eye_rim_v:
+                nodata[r_] = True
+            if eye_rim_v:
+                log('eye openings: %d lid edge vertices keep the landmarked placement (no data)' % sum(len(r_) for r_ in eye_rim_v))
         else:
             warn('face metrics failed: no face pre-alignment (the fit starts from her own face)')
             x_start = wc.copy()
@@ -1698,7 +1748,8 @@ def run(a, chk):
             shapes['rows'].append((True, "%s at 1: before/after render input written to %s (render: blender -b --factory-startup -P blend.py -- --out %s --no-bake)" % (
                 title, os.path.relpath(os.path.join(rdir, 'stage.npz'), a.out), os.path.dirname(rdir))))
     np.savez_compressed(os.path.join(chk, 'stage.npz'),
-                        vam_v=vam_out, vam_eyes=vam_eyes, vam_eye_r=np.float64(r_vam if r_vam else np.nan), vam_f=vam.faces, vam_g=vam.face_group, vam_uv=vam.uv, vam_vn=vam.vn * vsign,
+                        vam_v=vam_out, vam_eyes=vam_eyes, vam_eye_r=np.float64(r_vam if r_vam else np.nan),
+                        vam_lids_fitted=np.bool_(eye_open is not None and not eye_open[1]), vam_f=vam.faces, vam_g=vam.face_group, vam_uv=vam.uv, vam_vn=vam.vn * vsign,
                         vam_groups=np.array(vam.groups), names=np.array([m.name for m in results]), active=np.array([m.name for m in results if getattr(m, 'active', True)]),
                         dbg_wp=wp, dbg_x0=x0, dbg_xfit=xfit, dbg_wf=wf, dbg_lab=hlab, dbg_match=wmatch,
                         **{'%s|%s' % (m.name, k): getattr(m, k) for m in results
@@ -1768,6 +1819,82 @@ def untangle_toward(v, faces, d, target, region, rings=2, step=0.25, iters=60):
         d = d0 * (1 - t[:, None]) + target * t[:, None]
     return d, first, int(bad(d).sum())
 
+
+
+def eye_boundary(v, f, c, reach=0.022):
+    """Her eye opening's inner edge: the mesh boundary vertices within reach of the eye centre c, in front of its middle."""
+    e = np.sort(np.concatenate([f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]]), axis=1)
+    u, cnt = np.unique(e, axis=0, return_counts=True)
+    b = np.unique(u[cnt == 1])
+    b = b[(np.linalg.norm(v[b] - c, axis=1) < reach) & (v[b][:, 2] > c[2] - 0.002)]
+    return b if len(b) >= 12 else None
+
+def eye_edge(v, f, c, er, reach=0.022):
+    """An eye opening's edge as seen from the front, on mesh (v, f) round the eye centre c (er: the eyeball radius). The
+    triangles in front of the eyeball's middle (centroid z > c_z + 0.5 er) within reach of c are cut by vertical planes
+    x = const; in each the opening is the uncovered y interval round the eye's height. Not the mesh boundary: a Genesis 9
+    skin goes on round the lid margin into the socket, its boundary deeper and wider than the visible edge. Corners: the
+    last planes with an opening of 0.5 mm or more, scanning out from the centre in 0.25 mm steps. Returns 8 surface points:
+    both corners, then the upper and lower edge at 1/4, 1/2 and 3/4 of the width; None when there is no opening."""
+    t = v[f]; cen = t.mean(1)
+    t = t[(np.linalg.norm(cen[:, :2] - c[:2], axis=1) < reach) & (cen[:, 2] > c[2] + 0.5 * er)]
+    if len(t) < 20:
+        return None
+
+    def cut(x):
+        segs = []
+        for i, j in ((0, 1), (1, 2), (2, 0)):
+            a, b = t[:, i], t[:, j]
+            d = b[:, 0] - a[:, 0]
+            with np.errstate(divide='ignore', invalid='ignore'):
+                u = (x - a[:, 0]) / d
+            ok = (u >= 0) & (u <= 1) & (np.abs(d) > 1e-12)
+            segs.append(np.where(ok[:, None], a + u[:, None] * (b - a), np.nan))
+        P = np.stack(segs, 1)                                    # (n, 3 edges, xyz): a cut triangle crosses 2 edges
+        y = P[:, :, 1]
+        ok = np.isfinite(y).sum(1) >= 2
+        if not ok.any():
+            return None
+        P, y = P[ok], y[ok]
+        lo, hi = np.nanmin(y, 1), np.nanmax(y, 1)
+        o = np.argsort(lo); lo, hi, P = lo[o], hi[o], P[o]
+        # walk the covered intervals; the opening is the uncovered gap that contains (or is nearest) the eye's height
+        best, reach_hi, top_k = None, -np.inf, -1
+        for k in range(len(lo)):
+            if lo[k] > reach_hi and top_k >= 0:
+                g = (reach_hi, lo[k], top_k, k)
+                dist = 0.0 if g[0] <= c[1] <= g[1] else min(abs(g[0] - c[1]), abs(g[1] - c[1]))
+                if best is None or dist < best[0]:
+                    best = (dist, g)
+            if hi[k] > reach_hi:
+                reach_hi, top_k = hi[k], k
+        if best is None or best[0] > 0.6 * er:
+            return None
+        y0, y1, kb, ka = best[1]
+        pb = P[kb][np.nanargmax(P[kb][:, 1])]; pa = P[ka][np.nanargmin(np.where(np.isfinite(P[ka][:, 1]), P[ka][:, 1], np.inf))]
+        return y1 - y0, pa, pb                                   # (size, upper edge point, lower edge point)
+
+    g0 = cut(c[0])
+    if g0 is None:
+        return None
+    ends = []
+    for sgn in (-1, 1):
+        x, last = c[0], (c[0], g0)
+        while abs(x - c[0]) < reach:
+            x += sgn * 0.00025
+            gx = cut(x)
+            if gx is None or gx[0] < 0.0005:
+                break
+            last = (x, gx)
+        ends.append(last)
+    (xa, ga), (xb, gb) = ends
+    out = [0.5 * (ga[1] + ga[2]), 0.5 * (gb[1] + gb[2])]
+    for f_ in (0.25, 0.5, 0.75):
+        g_ = cut(xa + f_ * (xb - xa))
+        if g_ is None:
+            return None
+        out += [g_[1], g_[2]]
+    return out
 
 def summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, proportions, lid_chk=(), breast_diff=None, nip_chk=None, extra=()):
     """PASS/WARN lines for the things that matter, printed and written to _check/summary.txt (the Blender stage

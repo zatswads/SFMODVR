@@ -436,9 +436,17 @@ def main():
         if len(band):
             cx = float(np.median(cen[hf, 0]))
             dx = np.abs(cen[band, 0] - cx)
-            ear = band[dx > 0.82 * dx.max()]
+            # per side: with one threshold for both, the ear that sticks out less (RKS Krista 9: 2 mm) lost its inner part to
+            # 'Head', and the fit crumpled that ear (its rim had no ear skin to match)
+            side = np.sign(cen[band, 0] - cx)
+            keep = np.zeros(len(band), bool)
+            for s_ in (-1, 1):
+                ms = side == s_
+                if ms.any():
+                    keep |= ms & (dx > 0.82 * dx[ms].max())
+            ear = band[keep]
             role[ear] = 'Ears'
-            log('ears from the head shape: %d triangles' % len(ear))
+            log('ears from the head shape: %d triangles (%d, %d per side)' % (len(ear), (keep & (side < 0)).sum(), (keep & (side > 0)).sum()))
     # nipples: the most forward chest point per side, a 45 mm disc around it (VaM's Nipples group: the breast cap round the areola, p90 47 mm)
     chest = np.flatnonzero(role == 'Torso')
     ys = g2['chest'][1]

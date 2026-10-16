@@ -213,6 +213,7 @@ def bake_pass(kind, tight, sc):
         b.use_clear, b.margin = clear, margin
         b.cage_extrusion, b.max_ray_distance = WIDE_CAGE
 
+
 def flat_emission(name, color):
     """A material without a texture (slot missing or unreadable): the flat skin colour."""
     m = bpy.data.materials.new(name)
@@ -319,7 +320,7 @@ def to_byte(x):
     return int(min(255, max(0, int(float(x) * 255.0 + 0.5))))
 
 
-def fill_and_save(img, res, kind, fill_rgb, sentinel, path, sc, scratch, log):
+def fill_and_save(img, res, kind, fill_rgb, sentinel, path, sc, scratch, log, nearest=False):
     """Fill the pixels no ray reached and write the final file. Returns the share of such pixels.
 
     The baked 8-bit image is saved as a raw BMP and memory-mapped; the fill runs CHUNK_ROWS rows at a time, so even
@@ -358,13 +359,39 @@ def fill_and_save(img, res, kind, fill_rgb, sentinel, path, sc, scratch, log):
             a[miss] = fb
         n_miss += int(miss.sum())
     mm.flush()
-    del mm, a, miss
+    del a, miss
+    if nearest:
+        nearest_fill(mm[:, :res * 3].reshape(res, res, 3), fb, log)
+        mm.flush()
+    del mm
     im2 = bpy.data.images.load(tmp, check_existing=False)
     im2.colorspace_settings.name = colorspace
     im2.save_render(path, scene=sc)
     bpy.data.images.remove(im2)
     os.remove(tmp)
     return n_miss / float(res * res)
+
+
+def nearest_fill(a, fb, log):
+    """Give the pixels fill_and_save filled with the flat colour fb (no ray hit) the colour of the nearest pixel that was hit
+    instead (a: the raw H x W x 3 BGR bytes, edited in place). Used on faces: the misses there are small (her lid margins
+    lying over the character's eye opening, nostril and mouth insides), and the lid edge / lash line next to them reads right
+    where a flat skin tone shows as a pale band."""
+    miss = (a == fb).all(axis=2)
+    if not miss.any() or miss.all():
+        return
+    try:
+        try:
+            from scipy import ndimage
+        except ImportError:
+            import sys
+            sys.path.append(os.path.join(os.environ.get('LOCALAPPDATA', ''), 'SfMorph', 'pydeps'))
+            from scipy import ndimage
+    except Exception as e:  # noqa: BLE001
+        log('  nearest fill skipped (%s): the flat skin tone stays' % e)
+        return
+    iy, ix = ndimage.distance_transform_edt(miss, return_distances=False, return_indices=True)
+    a[miss] = a[iy[miss], ix[miss]]
 
 
 # ---- face-only variant ---------------------------------------------------------------------------------------
@@ -883,7 +910,33 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
     m = np.isin(Z['vam_g'], keep)
     # VaM's eyelids (often caught mid-blink) sit where her open eyes are: left out, her lids get the skin average.
     # The exclusion zone is relative to the VaM eyeball radius (15.3 mm on the character it was tuned on).
+    # When the fit found the character's eyes open and fitted her lids onto its lids, the lids keep their own skin (lash
+    # line, lid crease, liner): without it her lid margins came out as a flat pale band.
+    lids_fitted = 'vam_lids_fitted' in Z.files and bool(Z['vam_lids_fitted'])
+    if lids_fitted:
+        log("eyelids: the character's lids are open and fitted, so their own skin is baked onto hers")
+    # Skin round the eye that faces the eyeball (a Genesis 9 face goes on round the lid margin into an eye socket that wraps
+    # the eyeball, textured as a flat island since it is never seen) is left out: her lid rays reached it before the
+    # character's outer lid (a flat pale shelf above and below her eyeball).
     if 'vam_eyes' in Z.files:
+        er = float(Z['vam_eye_r']) if 'vam_eye_r' in Z.files and np.isfinite(float(Z['vam_eye_r'])) else 0.0153
+        cen = Z['vam_v'][Z['vam_f']].mean(1)
+        fnr = Z['vam_vn'][Z['vam_f']].mean(1) if 'vam_vn' in Z.files else None
+        if fnr is not None and len(fnr) == len(cen):
+            # the stored normals' sign varies with the export: point them away from the head's middle
+            em = np.mean(Z['vam_eyes'], axis=0)
+            hd = np.linalg.norm(cen - em, axis=1) < 0.12
+            hc = cen[hd].mean(0) if hd.any() else em
+            if hd.any() and np.median(np.einsum('ij,ij->i', fnr[hd], cen[hd] - hc)) < 0:
+                fnr = -fnr
+            sock = np.zeros(len(cen), bool)
+            for e in Z['vam_eyes']:
+                to_e = e - cen; r = np.linalg.norm(to_e, axis=1)
+                sock |= (r < 1.5 * er) & (np.einsum('ij,ij->i', fnr, to_e / np.maximum(r, 1e-9)[:, None]) > 0.3)
+            if (sock & m).any():
+                log('eye sockets: %d skin triangles round the eyes face the eyeball: left out of the bake source' % (sock & m).sum())
+            m &= ~sock
+    if 'vam_eyes' in Z.files and not lids_fitted:
         er = float(Z['vam_eye_r']) if 'vam_eye_r' in Z.files and np.isfinite(float(Z['vam_eye_r'])) else 0.0153
         cen = Z['vam_v'][Z['vam_f']].mean(1)
         for e in Z['vam_eyes']:
@@ -1063,7 +1116,7 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
                     frgb = (0.5, 0.5, 1.0)
                 else:
                     frgb = (gloss_fill,) * 3
-                miss = fill_and_save(img, res, kind, frgb, sentinel, path, sc, scratch, log)
+                miss = fill_and_save(img, res, kind, frgb, sentinel, path, sc, scratch, log, nearest=mat in R.faces)
                 log('  %s %s: %.2f%% of pixels had no hit (filled)' % (mat, kind, 100.0 * miss))
                 written.append((mat, kind, os.path.basename(path)))
                 log('baked %s %s (%dx%d) -> %s in %.1f s' % (mat, kind, res, res, path, time.time() - t0))
