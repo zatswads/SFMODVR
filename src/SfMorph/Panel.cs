@@ -288,6 +288,7 @@ namespace SfMorph
             PushesSection(c);
             GUILayout.Space(10);
             WrinklesSection(c);
+            MusclesSection(c);
         }
 
         void VrTab(Character c)
@@ -739,6 +740,59 @@ namespace SfMorph
                             "the bottom of each line in her skin colour (her skin's subsurface scattering blurs the normal-map shading, most of all " +
                             "on her face). Debug: Activation tints active lines red, Regions shows every region in its own colour. " +
                             "Speed and texture size are in the config file ([Wrinkles]).", _hint);
+        }
+
+        static readonly string[] MuscleDebugs = { "Off", "Tension", "Muscles" };
+
+        // 0.10.0 muscle definition: a layer of the wrinkle sheets (same textures, same shader bundle), its own switch
+        void MusclesSection(Character c)
+        {
+            GUILayout.Label("Muscle definition", _bold);
+            string off = !_p.Apply.Value ? "'Apply changes' is off"
+                       : !c.Female || c.IsPlayer ? "only for the game's woman"
+                       : _body.Wrink != null && !_body.Wrink.HasMuscles ? "the shader bundle is older than this DLL (install dist/sfmorph_shaders)" : null;
+            GUI.enabled = off == null;
+            bool on = GUILayout.Toggle(_p.MuscleOn.Value, " Muscles: a resting tone, more where her pose tenses them");
+            GUI.enabled = true;
+            if (off == null && on != _p.MuscleOn.Value) _p.MuscleOn.Value = on;
+            string sliderOff = off ?? (_p.MuscleOn.Value ? null : "muscles are off");
+            string why = sliderOff == null ? null : "off: " + sliderOff;
+            float fit = Slider("Fitness", _p.MuscleFitness.Value, 0f, 1f, "0.00", 0.3f, why);
+            if (Mathf.Abs(fit - _p.MuscleFitness.Value) > 0.0001f) _p.MuscleFitness.Value = fit;
+            float gain = Slider("Tension gain", _p.MuscleGain.Value, 0f, 2f, "0.00", 1f, why);
+            if (Mathf.Abs(gain - _p.MuscleGain.Value) > 0.0001f) _p.MuscleGain.Value = gain;
+            float st = Slider("Strength", _p.MuscleStrength.Value, 0f, 2f, "0.00", 1f, why);
+            if (Mathf.Abs(st - _p.MuscleStrength.Value) > 0.0001f) _p.MuscleStrength.Value = st;
+            float sh = Slider("Groove shade", _p.MuscleShade.Value, 0f, 1f, "0.00", 0.3f, why);
+            if (Mathf.Abs(sh - _p.MuscleShade.Value) > 0.0001f) _p.MuscleShade.Value = sh;
+            GUI.enabled = sliderOff == null;
+            GUILayout.BeginHorizontal();
+            bool core = GUILayout.Toggle(_p.MuscleCore.Value, " Core", GUILayout.Width(80));
+            bool back = GUILayout.Toggle(_p.MuscleBack.Value, " Back", GUILayout.Width(80));
+            bool legs = GUILayout.Toggle(_p.MuscleLegs.Value, " Legs", GUILayout.Width(80));
+            bool arms = GUILayout.Toggle(_p.MuscleArms.Value, " Arms", GUILayout.Width(80));
+            GUILayout.EndHorizontal();
+            if (sliderOff == null)
+            {
+                if (core != _p.MuscleCore.Value) _p.MuscleCore.Value = core;
+                if (back != _p.MuscleBack.Value) _p.MuscleBack.Value = back;
+                if (legs != _p.MuscleLegs.Value) _p.MuscleLegs.Value = legs;
+                if (arms != _p.MuscleArms.Value) _p.MuscleArms.Value = arms;
+            }
+            GUILayout.Label("Debug view", _hint);
+            int dbg = GUILayout.Toolbar(Mathf.Clamp(_p.MuscleDebug.Value, 0, 2), MuscleDebugs);
+            if (sliderOff == null && dbg != _p.MuscleDebug.Value) _p.MuscleDebug.Value = dbg;
+            GUI.enabled = true;
+            if (off != null) GUILayout.Label("off: " + off, _off);
+            else if (_p.MuscleOn.Value && _body.WrinkleStatus.Length > 0) GUILayout.Label(_body.WrinkleStatus, _body.WrinkleStatus.Contains("off:") ? _off : _hint);
+            GUILayout.Label("Authored muscle relief (abs, obliques, serratus, ribcage; spine, lats, shoulder blades; glutes, quads, hamstrings, " +
+                            "adductors, calves; deltoids, biceps, triceps, forearms) in her skin's normal map. Fitness: the resting tone every muscle " +
+                            "keeps. Tension gain: how much her pose adds: her spine bent forward or held leaning back tenses the abs, an arch or a " +
+                            "bend over the back, a squat the glutes and thighs, a bent elbow the biceps, tiptoes the calves, arms overhead the " +
+                            "serratus and lats, propping herself up the arms. Groove shade darkens the grooves in her skin colour. Surface detail " +
+                            "only: a converted character's Fitness body slider (Characters tab) is the shape; this sits on top of either. Debug: " +
+                            "Tension tints relaxed muscles green and tensed ones red, Muscles shows each in its own colour. Speed is in the config " +
+                            "file ([Muscles]).", _hint);
         }
 
         bool Card(Texture2D thumb, string name, bool on, float size)

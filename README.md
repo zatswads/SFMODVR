@@ -41,6 +41,20 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.10.0 (muscle definition that follows her pose):
+- Her body had no muscle definition beyond the shape: a converted VaM character's Fitness slider (Characters tab) moves the shape, but
+  the definition a fit VaM look gets from its normal maps (linea alba, the upper abs, serratus lines, the iliac V, back and calf
+  detail) never reached her, and nothing reacted to what her body was doing.
+- New: authored muscle maps on her body atlas (`tools/muscles/author.py`, 27 muscles: abs, obliques, serratus, ribcage; spine, lats,
+  shoulder blades; glutes, quads, hamstrings, adductors, calves; deltoids, biceps, triceps, forearms), blended into the same
+  normal-map / albedo copy as the wrinkles (one texture per sheet, one blend pass). Each muscle fades between a resting tone and full
+  definition by her pose, like wrinkle maps by an expression: spine bent forward (or held leaning back with the hips bent) = abs, an
+  arch or a bend over = back, a squat or hip / knee flexion under her weight = glutes and thighs, elbow flexion = biceps, tiptoes =
+  calves, arms overhead = serratus and lats, propping herself up = arms. Physics tab -> Muscle definition: on, Fitness (resting
+  tone), Tension gain, Strength, Groove shade, Core / Back / Legs / Arms, debug view (Tension: green relaxed to red tensed; Muscles:
+  each in its own colour). Works with the wrinkles on or off. Cost: about 30 bone reads per frame on the CPU; the blend re-runs only
+  when a muscle moves by 1/32, at most 10 times a second, and no strain is measured for it. Needs the new `sfmorph_shaders`.
+
 0.9.9 (timing line, small per-frame savings):
 - Nobody knew what the plugin costs per frame: the logs only hinted at the frame rate (about 23 fps from the hands' fixed steps per frame).
   New: every 10 s a `Perf last 10 s` line in the log and at the top of the panel: fps and frame time, fixed steps per frame, the GPU

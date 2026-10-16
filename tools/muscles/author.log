@@ -1,0 +1,34 @@
+export: E:/Bak/New folder/Misc/SF/VR/BepInEx/config/SfMorphs/export/Reika-20261016-023017
+body: 180112 triangles, rasterising 2048x2048
+body: 59.1% of the texels on her skin
+navel: s 0.120 m above Root_M (y 0.971), 7.6 mm deep
+muscles: 140 primitives in 27 regions (navel at s 0.120 m above Root_M)
+body: slope max 0.245 (encoded up to 0.60), groove shade max 1.00
+  muscle  1 abs           core C:  119696 texels
+  muscle  2 obliques_L    core L:   67113 texels
+  muscle  3 serratus_L    core L:   14166 texels
+  muscle  4 obliques_R    core R:   66859 texels
+  muscle  5 serratus_R    core R:   14064 texels
+  muscle  6 ribcage       core C:   13553 texels
+  muscle  7 back          back C:  106473 texels
+  muscle  8 lats_L        back L:  146369 texels
+  muscle  9 lats_R        back R:  146435 texels
+  muscle 10 glutes_L      legs L:   31313 texels
+  muscle 11 quads_L       legs L:   59935 texels
+  muscle 12 hams_L        legs L:   34715 texels
+  muscle 13 adductors_L   legs L:    5972 texels
+  muscle 14 calves_L      legs L:   49972 texels
+  muscle 15 glutes_R      legs R:   30141 texels
+  muscle 16 quads_R       legs R:   56605 texels
+  muscle 17 hams_R        legs R:   36560 texels
+  muscle 18 adductors_R   legs R:    5719 texels
+  muscle 19 calves_R      legs R:   48453 texels
+  muscle 20 deltoids_L    arms L:   81854 texels
+  muscle 21 biceps_L      arms L:   30789 texels
+  muscle 22 triceps_L     arms L:   56158 texels
+  muscle 23 forearms_L    arms L:   65770 texels
+  muscle 24 deltoids_R    arms R:   81388 texels
+  muscle 25 biceps_R      arms R:   30200 texels
+  muscle 26 triceps_R     arms R:   55258 texels
+  muscle 27 forearms_R    arms R:   65528 texels
+preview: C:\Users\rings\Claude\Projects\Modding\SFMODVR\.claude\worktrees\serene-fermi-8b6a4e\tools\muscles\preview

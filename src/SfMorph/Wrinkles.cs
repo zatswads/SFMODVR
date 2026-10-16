@@ -19,6 +19,8 @@ namespace SfMorph
         public float Attack = 0.12f, Release = 0.3f, CullDistance = 3f;
         public int Resolution;        // 0 base size (cap 4096), else 2048/1024
         public float Cavity = 0.3f;   // 0.8.4: crease shade in the albedo copy (0 = no albedo copy unless the debug view is on)
+        // 0.10.0: muscle definition, a second layer of the same sheets (Muscles.cs); On above = the wrinkles themselves
+        public readonly MuscleSettings Muscles = new MuscleSettings();
     }
 
     // PlayerLoop marker type of the wrinkle step (right after PostLateUpdate.UpdateAllSkinnedMeshes).
@@ -137,6 +139,11 @@ namespace SfMorph
             PRegTri = Shader.PropertyToID("_RegTri"), PSums = Shader.PropertyToID("_Sums"), PSumCount = Shader.PropertyToID("_SumCount"),
             PDetail = Shader.PropertyToID("_Detail"), PRegion = Shader.PropertyToID("_Region"), PRegionSize = Shader.PropertyToID("_RegionSize"),
             PAct = Shader.PropertyToID("_Act");
+        // 0.10.0 muscle layer
+        static readonly int PMOn = Shader.PropertyToID("_MOn"), PMDetail = Shader.PropertyToID("_MDetail"), PMRegion = Shader.PropertyToID("_MRegion"),
+            PMRegionSize = Shader.PropertyToID("_MRegionSize"), PMAct = Shader.PropertyToID("_MAct"), PMStrength = Shader.PropertyToID("_MStrength"),
+            PMShade = Shader.PropertyToID("_MShade"), PMDebug = Shader.PropertyToID("_MDebug"), PMSlopeMax = Shader.PropertyToID("_MSlopeMax");
+        const float MuscleStep = 1f / 32f, MuscleMinInterval = 0.1f;
 
         // ---- state ----
 
@@ -208,6 +215,12 @@ namespace SfMorph
             public float PendingSince;
             public int Res;
             public MaterialPropertyBlock Mpb = new MaterialPropertyBlock();
+            // 0.10.0 muscles: the layer of this sheet's layout (null: none), tension from her pose, faded activation, what the last raster had
+            public MuscleLayer Muscle;
+            public readonly float[] MTension = new float[MaxRegions], MAct = new float[MaxRegions], MActSent = new float[MaxRegions], MPeak = new float[MaxRegions];
+            public float MLastAt, MLastDirty, MStrengthApplied = -1f, MShadeApplied = -1f;
+            public int MDebugApplied = -1;
+            public bool MOnApplied;
         }
 
         ComputeShader _cs;
@@ -216,6 +229,8 @@ namespace SfMorph
         CommandBuffer _cmd;
         int _kClear, _kStrain;
         readonly List<WrinkleLayout> _layouts = new List<WrinkleLayout>();
+        readonly List<MuscleLayer> _muscleLayers = new List<MuscleLayer>();
+        bool _muscleShader;                       // the bundle's WrinkleRaster has the muscle layer (_MDetail)
         RenderTexture _testA, _testB;
         Texture2D _flat;
         MaterialPropertyBlock _mpbTestA = new MaterialPropertyBlock(), _mpbTestB = new MaterialPropertyBlock();
@@ -270,6 +285,15 @@ namespace SfMorph
                 w._layouts.AddRange(WrinkleLayout.Parse(table.text, n => ShaderBundle.Load<Texture2D>(n), notes));
                 foreach (var n in notes) Plugin.Log.LogWarning("Wrinkles: layout " + n);
                 if (w._layouts.Count == 0) { Fail("bundle (no usable wrinkle layout)"); w.Teardown(); return null; }
+                // 0.10.0 muscle layers (optional: an older bundle has none; the muscles then say so and the wrinkles work as before)
+                w._muscleShader = w._shader.FindPropertyIndex("_MDetail") >= 0;
+                var mtable = ShaderBundle.Load<TextAsset>("muscle_layouts");
+                if (mtable != null && w._muscleShader)
+                {
+                    var mnotes = new List<string>();
+                    w._muscleLayers.AddRange(MuscleLayer.Parse(mtable.text, n => ShaderBundle.Load<Texture2D>(n), mnotes));
+                    foreach (var n in mnotes) Plugin.Log.LogWarning("Muscles: layout " + n);
+                }
                 w._cmd = new CommandBuffer { name = "SfMorph wrinkles" };
                 w._flat = new Texture2D(1, 1, TextureFormat.RGBA32, false, true) { name = "SfMorph flat normal", hideFlags = HideFlags.HideAndDontSave };
                 w._flat.SetPixel(0, 0, new Color(0.5f, 0.5f, 1f, 1f));
@@ -282,6 +306,9 @@ namespace SfMorph
                 foreach (var L in w._layouts)
                     ls.Append(ls.Length > 0 ? "; " : "").Append(L.Name).Append(" (").Append(L.Count).Append(" regions: ").Append(string.Join(" ", L.RegionName.ToArray()))
                       .Append(", creases ").Append(L.Detail.width).Append('x').Append(L.Detail.height).Append(')');
+                var mls = new StringBuilder();
+                foreach (var M in w._muscleLayers) mls.Append(mls.Length > 0 ? "; " : "").Append(M.Name).Append(" (").Append(M.Count).Append(" muscles, ").Append(M.Detail.width).Append('x').Append(M.Detail.height).Append(')');
+                Plugin.Log.LogInfo("Muscles: " + (mls.Length > 0 ? "layouts " + mls : !w._muscleShader ? "none (the bundle's WrinkleRaster has no muscle layer: install the sfmorph_shaders that came with this DLL)" : "no muscle layout in the bundle"));
                 Plugin.Log.LogInfo("Wrinkles: loaded on " + SystemInfo.graphicsDeviceType + ", authored layouts: " + ls
                     + ", PlayerLoop step " + (w._inLoop ? "inserted after UpdateAllSkinnedMeshes" : "not inserted (BeforeImprint + SRP hooks only)"));
                 w.Status = "Wrinkles: loaded";
@@ -302,6 +329,8 @@ namespace SfMorph
 
         // The crease shade (albedo pass) is there (always with a 0.9.0 bundle; the load refuses older ones).
         public bool HasCavity { get { return _albedoPass; } }
+        // 0.10.0: the bundle carries the muscle layer (maps + shader)
+        public bool HasMuscles { get { return _muscleLayers.Count > 0; } }
 
         // Called by Morph.cs by reflection: the base texture Wrinkles saw under its own texture in this material slot (her own / Morph's
         // normal map for the normal slot, her own albedo for the albedo copy's slot); null when Wrinkles doesn't own the slot or doesn't know.
@@ -399,7 +428,8 @@ namespace SfMorph
                     sh.Asleep = true;
                     TransLog(sh, now, "Wrinkles: sheet '" + sh.Name + "' idle (no change for 0.5 s): strain every 4th frame");
                 }
-                bool compute = (!sh.Asleep || (frame & 3) == 0) && sh.Inflight < MaxInflight;
+                // 0.10.0: the strain only drives the wrinkles; with only the muscles on there is nothing to measure
+                bool compute = _s.On && (!sh.Asleep || (frame & 3) == 0) && sh.Inflight < MaxInflight;
                 if (compute)
                 {
                     var cs = _cs;
@@ -561,7 +591,7 @@ namespace SfMorph
             for (int k = 0; k < L.Count; k++)
             {
                 string cls = L.RegionClass[k];
-                bool on = cls == "face" ? s.Face : cls == "neck" ? s.Neck : s.BodyOn;
+                bool on = s.On && (cls == "face" ? s.Face : cls == "neck" ? s.Neck : s.BodyOn);
                 // 0.9.8: face and neck measure from their idle baseline: her idle face animation keeps the neck at ~0.03 and the brows at
                 // 0.04-0.06, which held those lines on (headset: a ring around her neck at 72 %). The baseline drops at once to a lower
                 // compression and rises over BaseRise s, so an expression shows and a held one fades; the body creases stay absolute
@@ -672,6 +702,24 @@ namespace SfMorph
             sh.Mpb.SetFloat(PMarksOn, mon ? 1f : 0f);
             sh.Mpb.SetFloat(PMarksScale, mon ? msc : 1f);
             sh.Mpb.SetVector(PMarksTexel, mon ? new Vector4(1f / mrt.width, 1f / mrt.height, 0f, 0f) : new Vector4(0.000488f, 0.000488f, 0f, 0f));
+            // 0.10.0: the muscle layer of this sheet (off: _MOn 0, the shader skips it)
+            var M = sh.Muscle;
+            var ms = _s.Muscles;
+            bool mOn = M != null && ms.On;
+            for (int k = 0; k < MaxRegions; k++) sh.MActSent[k] = mOn && !initial && k < M.Count ? sh.MAct[k] : 0f;
+            sh.Mpb.SetFloat(PMOn, mOn ? 1f : 0f);
+            sh.Mpb.SetFloatArray(PMAct, sh.MActSent);
+            sh.Mpb.SetTexture(PMDetail, mOn ? (Texture)M.Detail : Texture2D.blackTexture);
+            sh.Mpb.SetTexture(PMRegion, mOn ? (Texture)M.Region : Texture2D.blackTexture);
+            sh.Mpb.SetVector(PMRegionSize, mOn ? new Vector4(M.Region.width, M.Region.height, 0f, 0f) : new Vector4(1f, 1f, 0f, 0f));
+            sh.Mpb.SetFloat(PMSlopeMax, mOn ? M.SlopeMax : 0.6f);
+            sh.Mpb.SetFloat(PMStrength, mOn ? ms.Strength : 0f);
+            sh.Mpb.SetFloat(PMShade, mOn ? Mathf.Clamp01(ms.Shade) : 0f);
+            sh.Mpb.SetFloat(PMDebug, mOn ? ms.Debug : 0f);
+            sh.MOnApplied = mOn;
+            sh.MStrengthApplied = ms.Strength;
+            sh.MShadeApplied = ms.Shade;
+            sh.MDebugApplied = ms.Debug;
             cmd.SetRenderTarget(sh.Normal);
             cmd.DrawProcedural(Matrix4x4.identity, _mat, BlendPass, MeshTopology.Triangles, 3, 1, sh.Mpb);
             cmd.GenerateMips(sh.Normal);
@@ -769,7 +817,7 @@ namespace SfMorph
                 if (_dead) { if (!_tornDown) Teardown(); return; }
                 float now = Time.unscaledTime;
                 _updateCount++;
-                bool want = s != null && s.On && her != null && (s.Face || s.Neck || s.BodyOn);
+                bool want = s != null && her != null && ((s.On && (s.Face || s.Neck || s.BodyOn)) || (s.Muscles.On && _muscleLayers.Count > 0));
                 if (!want)
                 {
                     if (_active) GoIdle(now);
@@ -782,7 +830,8 @@ namespace SfMorph
                 {
                     _active = true;
                     _offSince = -1f;
-                    Plugin.Log.LogInfo("Wrinkles: on, authored creases (face " + s.Face + ", neck " + s.Neck + ", body " + s.BodyOn + ", strength " + s.Strength.ToString("0.00") + ", threshold " + s.Threshold.ToString("0.000")
+                    Plugin.Log.LogInfo("Wrinkles: on, authored creases " + (s.On ? "on" : "off") + ", muscles " + (s.Muscles.On ? "on (fitness " + s.Muscles.Fitness.ToString("0.00") + ", tension gain " + s.Muscles.Gain.ToString("0.00")
+                        + ", strength " + s.Muscles.Strength.ToString("0.00") + ", shade " + s.Muscles.Shade.ToString("0.00") + ")" : "off") + " (face " + s.Face + ", neck " + s.Neck + ", body " + s.BodyOn + ", strength " + s.Strength.ToString("0.00") + ", threshold " + s.Threshold.ToString("0.000")
                         + ", attack " + s.Attack.ToString("0.00") + " s, release " + s.Release.ToString("0.00") + " s, crease shade " + s.Cavity.ToString("0.00")
                         + ", resolution " + (s.Resolution == 0 ? "base (cap 4096)" : s.Resolution.ToString()) + ", cull " + s.CullDistance.ToString("0.0") + " m)");
                 }
@@ -840,7 +889,9 @@ namespace SfMorph
         {
             // 0.9.8: the front of her neck is on the body atlas (the body layout's neck region): her body meshes are wanted for Body or
             // Neck; each region class is gated on its own in UpdateActs
-            return region == 1 ? s.Face : region == 2 ? s.Neck : region == 3 && (s.BodyOn || s.Neck);
+            // 0.10.0: and for the muscles (body atlas only)
+            bool w = s.On;
+            return region == 1 ? w && s.Face : region == 2 ? w && s.Neck : region == 3 && ((w && (s.BodyOn || s.Neck)) || s.Muscles.On);
         }
 
         Rend FindRend(SkinnedMeshRenderer r, int sub)
@@ -856,6 +907,7 @@ namespace SfMorph
             var cap = sh;
             sh.OnSums = req => SumsDone(cap, req);
             sh.Layout = LayoutFor(face);
+            sh.Muscle = MuscleFor(face);
             foreach (var p in NormalProps) if (mat.HasProperty(p)) { sh.Prop = p; break; }
             // the albedo: the first of the usual names holding a real texture (ours or SkinMarks' copy count), else the first that exists
             foreach (var p in AlbedoProps)
@@ -888,10 +940,18 @@ namespace SfMorph
             return null;
         }
 
+        // 0.10.0: the muscle layer of a sheet's layout (the face has none)
+        MuscleLayer MuscleFor(bool face)
+        {
+            string want = face ? "face" : "body";
+            for (int i = 0; i < _muscleLayers.Count; i++) if (_muscleLayers[i].Name == want) return _muscleLayers[i];
+            return null;
+        }
+
         // Which renderer slots feed which sheet; rebuilt about once a second and whenever settings change what is wanted.
         void Discover(Character her, WrinkleSettings s, float now)
         {
-            int key = (s.Face ? 1 : 0) | (s.Neck ? 2 : 0) | (s.BodyOn ? 4 : 0) | (her.Renderers.Count << 4);
+            int key = (s.Face ? 1 : 0) | (s.Neck ? 2 : 0) | (s.BodyOn ? 4 : 0) | (s.On ? 8 : 0) | (s.Muscles.On ? 16 : 0) | (her.Renderers.Count << 5);
             if (now < _nextDiscover && key == _lastDiscoverKey) return;
             _nextDiscover = now + 1f;
             _lastDiscoverKey = key;
@@ -1173,7 +1233,7 @@ namespace SfMorph
                         // nothing of these renderers lies under a region (the neck mesh alone on the body atlas while Body is off): no copy
                         int rt = 0;
                         for (int k = 0; k < sh.Rends.Count; k++) if (sh.Rends[k].Ready) rt += sh.Rends[k].RT;
-                        if (rt == 0)
+                        if (rt == 0 && !(sh.Muscle != null && s.Muscles.On))
                         {
                             if (!sh.Empty) Plugin.Log.LogInfo("Wrinkles: sheet '" + sh.Name + "': no wrinkle region on its renderers; left alone");
                             sh.Empty = true;
@@ -1185,6 +1245,7 @@ namespace SfMorph
                     continue;
                 }
                 UpdateActs(sh, s, now);
+                UpdateMuscles(sh, her, s, now);
                 if (!check) continue;
                 // base normal: Morph's baked one when it offers one, else whatever the slot holds that isn't ours
                 Texture slot = sh.Mat.GetTexture(sh.Prop);
@@ -1209,7 +1270,79 @@ namespace SfMorph
                 if (sh.Albedo != null && Mathf.Abs(sh.CavityApplied - s.Cavity) > 0.001f) sh.Dirty = true;
                 ServiceAlbedo(sh, her, s, now);
                 if (sh.Albedo != null && sh.DebugApplied != sh.DebugMode) sh.Dirty = true;
+                var ms = s.Muscles;
+                bool mOn = sh.Muscle != null && ms.On;
+                if (mOn != sh.MOnApplied || (mOn && (Mathf.Abs(sh.MStrengthApplied - ms.Strength) > 0.001f || Mathf.Abs(sh.MShadeApplied - ms.Shade) > 0.001f || sh.MDebugApplied != ms.Debug))) sh.Dirty = true;
             }
+        }
+
+        // 0.10.0: the muscles' activations from her pose (MusclePose), faded with attack / release. A muscle whose area is off goes to 0;
+        // the rest sit at the resting tone (Fitness) plus the pose's tension x Gain. The sheet blends again when one moves by 1/32, at most
+        // every MuscleMinInterval s (her muscles change slowly; a raster of the 2048 normal RT costs GPU time every time).
+        void UpdateMuscles(Sheet sh, Character her, WrinkleSettings s, float now)
+        {
+            var M = sh.Muscle;
+            var ms = s.Muscles;
+            if (M == null || !ms.On) return;
+            float dt = sh.MLastAt > 0f ? Mathf.Clamp(now - sh.MLastAt, 0f, 0.1f) : 0f;
+            sh.MLastAt = now;
+            bool posed = MusclePose.Tension(her, M, sh.MTension);
+            float ka = 1f - Mathf.Exp(-dt / Mathf.Max(0.01f, ms.Attack)), kr = 1f - Mathf.Exp(-dt / Mathf.Max(0.01f, ms.Release));
+            float fit = Mathf.Clamp01(ms.Fitness);
+            bool moved = false;
+            for (int k = 0; k < M.Count && k < MaxRegions; k++)
+            {
+                string area = M.Area[k];
+                bool on = area == "core" ? ms.Core : area == "back" ? ms.Back : area == "legs" ? ms.Legs : area == "arms" ? ms.Arms : true;
+                float tens = posed ? sh.MTension[k] : 0f;
+                if (tens > sh.MPeak[k]) sh.MPeak[k] = tens;
+                float target = on ? fit + (1f - fit) * Mathf.Clamp01(ms.Gain * tens) : 0f;
+                float a = sh.MAct[k];
+                a = dt == 0f ? target : a + (target - a) * (target > a ? ka : kr);    // first frame: straight to the target
+                sh.MAct[k] = a;
+                if (Mathf.Abs(a - sh.MActSent[k]) >= MuscleStep || (a == 0f) != (sh.MActSent[k] == 0f)) moved = true;
+            }
+            if (moved && now - sh.MLastDirty >= MuscleMinInterval)
+            {
+                sh.MLastDirty = now;
+                sh.Dirty = true;
+                sh.LastChange = now;
+                if (sh.Asleep) sh.Asleep = false;
+            }
+            if (now >= _nextMusclePeak)
+            {
+                _nextMusclePeak = now + PeakLogEvery;
+                var idx = new List<int>();
+                for (int k = 0; k < M.Count; k++) if (sh.MPeak[k] >= 0.1f) idx.Add(k);
+                idx.Sort((x, y) => sh.MPeak[y].CompareTo(sh.MPeak[x]));
+                var sb = new StringBuilder();
+                for (int i = 0; i < idx.Count && i < 10; i++)
+                    sb.Append(sb.Length > 0 ? ", " : "").Append(M.MuscleName[idx[i]]).Append(' ').Append(sh.MPeak[idx[i]].ToString("0.00"));
+                string line = sb.Length > 0 ? sb.ToString() : "none";
+                if (line != _lastMusclePeak)
+                    Plugin.Log.LogInfo("Muscles: peak tension over " + PeakLogEvery.ToString("0") + " s: " + line + " (now: " + MusclePose.PoseLine() + ")");
+                _lastMusclePeak = line;
+                for (int k = 0; k < MaxRegions; k++) sh.MPeak[k] = 0f;
+            }
+        }
+        float _nextMusclePeak;
+        string _lastMusclePeak = "";
+
+        // The muscles tensed now, for the panel: "abs 80%, quads_L 55%" (tension, strongest first), "" when none.
+        public string ActiveMuscles()
+        {
+            var parts = new List<KeyValuePair<float, string>>();
+            for (int i = 0; i < _sheets.Count; i++)
+            {
+                var sh = _sheets[i];
+                if (!sh.Built || sh.Muscle == null) continue;
+                for (int k = 0; k < sh.Muscle.Count; k++)
+                    if (sh.MTension[k] >= 0.1f) parts.Add(new KeyValuePair<float, string>(sh.MTension[k], sh.Muscle.MuscleName[k] + " " + (sh.MTension[k] * 100f).ToString("0") + "%"));
+            }
+            parts.Sort((a, b) => b.Key.CompareTo(a.Key));
+            var sb = new StringBuilder();
+            for (int i = 0; i < parts.Count && i < 6; i++) sb.Append(i > 0 ? ", " : "").Append(parts[i].Value);
+            return sb.ToString();
         }
 
         int CountBaked(Sheet sh)
@@ -1229,7 +1362,8 @@ namespace SfMorph
             sh.Orig = (slot != null && !Owns(slot) && slot != nf) ? slot : (OriginalVia(her != null ? her.Morph : null, sh.Mat, sh.Prop) ?? ext);
             if (sh.Sums == null) sh.Sums = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 2 * MaxRegions, 4);
             sh.Inflight = 0;
-            for (int k = 0; k < MaxRegions; k++) { sh.Comp[k] = 0f; sh.Act[k] = 0f; sh.ActSent[k] = 0f; sh.Peak[k] = 0f; sh.Idle[k] = 0f; sh.IdleSet[k] = false; }
+            for (int k = 0; k < MaxRegions; k++) { sh.Comp[k] = 0f; sh.Act[k] = 0f; sh.ActSent[k] = 0f; sh.Peak[k] = 0f; sh.Idle[k] = 0f; sh.IdleSet[k] = false; sh.MAct[k] = 0f; sh.MActSent[k] = 0f; sh.MTension[k] = 0f; }
+            sh.MLastAt = 0f; sh.MOnApplied = false;
             sh.LastActAt = 0f;
             sh.NextPeakLog = now + PeakLogEvery;
             MakeNormalRT(sh, s);
@@ -1318,8 +1452,9 @@ namespace SfMorph
         // there HandBack seconds (Morph may be about to replace it).
         void ServiceAlbedo(Sheet sh, Character her, WrinkleSettings s, float now)
         {
-            int mode = sh.AlbedoProp != null ? s.Debug : 0;
-            bool cav = sh.AlbedoProp != null && _albedoPass && s.Cavity > 0.001f;
+            int mode = sh.AlbedoProp != null && s.On ? s.Debug : 0;
+            bool cav = sh.AlbedoProp != null && _albedoPass && ((s.On && s.Cavity > 0.001f)
+                       || (sh.Muscle != null && s.Muscles.On && (s.Muscles.Shade > 0.001f || s.Muscles.Debug > 0)));   // 0.10.0: muscle shade / debug view
             if (mode == 0 && !cav)
             {
                 if (sh.Albedo != null) RestoreAlbedo(sh);
@@ -1602,6 +1737,8 @@ namespace SfMorph
             else
             {
                 string act = ActiveRegions();
+                string mact = _s != null && _s.Muscles.On ? ActiveMuscles() : "";
+                if (mact.Length > 0) act = act.Length > 0 ? act + "; tensed: " + mact : "tensed: " + mact;
                 Status = "Wrinkles: on, " + built + " sheets, " + rn + "/" + _rends.Count + " renderers baked" + (culled > 0 ? ", " + culled + " culled" : "") + (asleep > 0 ? ", " + asleep + " idle" : "")
                     + (noVb > 0 ? ", " + noVb + " without skinned vertex buffer (CPU skinning?)" : "") + (act.Length > 0 ? "; active: " + act : "");
             }
@@ -1630,6 +1767,7 @@ namespace SfMorph
         // Settings turned it off: give the skin back (the baked data and buffers stay for a few seconds in case it is toggled again).
         void GoIdle(float now)
         {
+            MusclePose.Release();
             _active = false;
             _offSince = now;
             for (int i = 0; i < _sheets.Count; i++) { RestoreSheet(_sheets[i]); }

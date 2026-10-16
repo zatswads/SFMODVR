@@ -778,7 +778,8 @@ namespace SfMorph
         // this feeds it the settings and the character every frame.
         void WrinkleStep(Character her)
         {
-            if (!_p.Apply.Value || !_p.WrinkOn.Value || her == null) { WrinkleOff(); return; }
+            // 0.10.0: the muscles are a layer of the same sheets: either switch keeps the system up
+            if (!_p.Apply.Value || !(_p.WrinkOn.Value || _p.MuscleOn.Value) || her == null) { WrinkleOff(); return; }
             if (Wrink == null && !_wrTried)
             {
                 _wrTried = true;
@@ -798,7 +799,11 @@ namespace SfMorph
             try
             {
                 var s = _wset;
-                s.On = true;
+                s.On = _p.WrinkOn.Value;
+                var m = s.Muscles;
+                m.On = _p.MuscleOn.Value; m.Fitness = _p.MuscleFitness.Value; m.Gain = _p.MuscleGain.Value; m.Strength = _p.MuscleStrength.Value; m.Shade = _p.MuscleShade.Value;
+                m.Core = _p.MuscleCore.Value; m.Back = _p.MuscleBack.Value; m.Legs = _p.MuscleLegs.Value; m.Arms = _p.MuscleArms.Value;
+                m.Debug = _p.MuscleDebug.Value; m.Attack = _p.MuscleAttack.Value; m.Release = _p.MuscleRelease.Value;
                 s.Face = _p.WrinkFace.Value; s.Neck = _p.WrinkNeck.Value; s.BodyOn = _p.WrinkBody.Value;
                 s.Strength = _p.WrinkStrength.Value; s.Threshold = _p.WrinkThreshold.Value; s.Debug = _p.WrinkDebug.Value;
                 s.Attack = _p.WrinkAttack.Value; s.Release = _p.WrinkRelease.Value;
@@ -813,6 +818,7 @@ namespace SfMorph
             {
                 Plugin.Log.LogError("Wrinkles failed, turned off: " + e);
                 _p.WrinkOn.Value = false;
+                _p.MuscleOn.Value = false;
                 _wrFail = "Wrinkles: off: " + e.Message;
                 try { Wrink.Release(); } catch { }
                 Wrink = null; _wrOn = false;

@@ -13,3 +13,6 @@ dist/dist.manifest
 
 # wrinkle authoring previews (tools/wrinkles/author.py --preview)
 tools/wrinkles/preview/
+
+# muscle authoring previews (tools/muscles/author.py --preview)
+tools/muscles/preview/

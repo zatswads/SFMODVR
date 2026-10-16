@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.9.9";
+        public const string Version = "0.10.0";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -36,6 +36,10 @@ namespace SfMorph
         internal ConfigEntry<bool> WrinkOn, WrinkFace, WrinkNeck, WrinkBody;
         internal ConfigEntry<float> WrinkStrength, WrinkThreshold, WrinkAttack, WrinkRelease, WrinkCullDistance, WrinkCavity;
         internal ConfigEntry<int> WrinkDebug, WrinkResolution;
+        // 0.10.0 muscle definition (a layer of the wrinkle sheets)
+        internal ConfigEntry<bool> MuscleOn, MuscleCore, MuscleBack, MuscleLegs, MuscleArms;
+        internal ConfigEntry<float> MuscleFitness, MuscleGain, MuscleStrength, MuscleShade, MuscleAttack, MuscleRelease;
+        internal ConfigEntry<int> MuscleDebug;
         // 0.7.9 reactions
         internal ConfigEntry<bool> ReactOn, ReactVoice, ReactFace, ReactFlinch, ReactSound, ReactBlush, ReactBlushBody, ReactGaze, ReactFeedDesire, ReactAuto, ReactClimax, VoiceGuard, ReactLines, ReactFaceClips, ReactLinesGamePath, ReactFoley;
         internal ConfigEntry<float> ReactSensitivity, ReactCooldown, ReactVolume, ReactBlushGain, ReactVoicePitchVar, ReactLineChance, ReactFaceStrength, VoicePitch, VoiceFormant;
@@ -126,6 +130,18 @@ namespace SfMorph
             WrinkResolution = Config.Bind("Wrinkles", "Resolution", 0, new ConfigDescription("Wrinkle texture size: 0 the skin texture's size (at most 4096), 1 at most 2048, 2 at most 1024.", new AcceptableValueRange<int>(0, 2)));
             WrinkCavity = Config.Bind("Wrinkles", "Cavity", 0.3f, new ConfigDescription("Crease shade: how much darker her skin colour is at the bottom of a line (0 off, 1 strong). Her skin's subsurface scattering blurs normal-map detail, most of all on her face; the darker crease stays visible.", new AcceptableValueRange<float>(0f, 1f)));
             WrinkCullDistance = Config.Bind("Wrinkles", "CullDistance", 3f, new ConfigDescription("No wrinkle updates while her head is farther than this from your headset (metres).", new AcceptableValueRange<float>(0.5f, 20f)));
+            MuscleOn = Config.Bind("Muscles", "On", false, "Muscle definition: authored muscle relief (abs, obliques, serratus, ribcage, back, lats, glutes, thighs, calves, shoulders, arms) in her skin's normal map, a faint resting tone everywhere and more where her pose tenses a muscle (shares the wrinkles' textures and shader bundle).");
+            MuscleFitness = Config.Bind("Muscles", "Fitness", 0.3f, new ConfigDescription("Resting tone: how defined her muscles are when relaxed (0 none, 1 fully).", new AcceptableValueRange<float>(0f, 1f)));
+            MuscleGain = Config.Bind("Muscles", "TensionGain", 1f, new ConfigDescription("How much her pose adds on top (a crunch for the abs, a squat for the thighs and glutes, a bent elbow for the biceps, tiptoes for the calves; 0 = resting tone only, 2 = full definition at half the tension).", new AcceptableValueRange<float>(0f, 2f)));
+            MuscleStrength = Config.Bind("Muscles", "Strength", 1f, new ConfigDescription("Depth of the muscle relief (0 none, 2 strong).", new AcceptableValueRange<float>(0f, 2f)));
+            MuscleShade = Config.Bind("Muscles", "Shade", 0.3f, new ConfigDescription("Groove shade: how much darker her skin colour is in the grooves between muscles (0 off, 1 strong).", new AcceptableValueRange<float>(0f, 1f)));
+            MuscleCore = Config.Bind("Muscles", "Core", true, "Abs, obliques, serratus, ribcage.");
+            MuscleBack = Config.Bind("Muscles", "Back", true, "Spine (erectors), lats, shoulder blades.");
+            MuscleLegs = Config.Bind("Muscles", "Legs", true, "Glutes, quads, hamstrings, adductors, calves.");
+            MuscleArms = Config.Bind("Muscles", "Arms", true, "Deltoids, biceps, triceps, forearms.");
+            MuscleDebug = Config.Bind("Muscles", "Debug", 0, new ConfigDescription("0 off, 1 tint the muscles green (relaxed) to red (tensed), 2 show every muscle in its own colour.", new AcceptableValueRange<int>(0, 2)));
+            MuscleAttack = Config.Bind("Muscles", "Attack", 0.25f, new ConfigDescription("Seconds for a muscle to tense.", new AcceptableValueRange<float>(0.02f, 2f)));
+            MuscleRelease = Config.Bind("Muscles", "Release", 0.8f, new ConfigDescription("Seconds for a muscle to relax.", new AcceptableValueRange<float>(0.02f, 3f)));
             EmbodyOn = Config.Bind("Embody", "On", false, "See through the partner's eyes (VR), his head hidden, his hands on your controllers.");
             EmbodyHands = Config.Bind("Embody", "Hands", 3, new ConfigDescription("His hands follow the controllers: 0 none, 1 left, 2 right, 3 both.", new AcceptableValueRange<int>(0, 3)));
             EmbodyHideHead = Config.Bind("Embody", "HideHead", true, "Hide his head so it doesn't block the view.");

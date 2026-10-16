@@ -97,6 +97,22 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.10.0 (muscle definition)
+
+Copy `SfMorph.dll` + `sfmorph_shaders`. Log: `SF Body Morphs 0.10.0`, `Muscles: layouts body (27 muscles, 2048x2048)` (if it says
+"none ... install the sfmorph_shaders", the bundle is old) and, once on, `Muscles: 13 of 13 joints`. Physics tab -> Muscle definition
+on (Wrinkles may stay off):
+1. At rest: faint tone only (Fitness 0.3). Fitness 0 -> 1 makes all of it stronger; Strength 0 removes the relief; Groove shade 0 / 1.
+2. Debug Muscles: the colours sit on the right muscles (abs on her belly, not her ribs; erectors either side of the spine; calves on the
+   back of the shin; biceps on the front of the upper arm, triceps behind). Debug Tension: green at rest, the worked muscles turn red.
+3. Poses (watch `Muscles: peak tension over 10 s: ... (now: trunk flex .. hip flex .. knee ..)` every 10 s): she curls forward or sits
+   leaning back -> abs; arches or bends over -> back; squats / cowgirl -> glutes, quads; on all fours -> back, lats, arms; tiptoes ->
+   calves; arms overhead -> serratus, lats; bent elbows -> biceps. Wrong sign = a muscle that tenses in the opposite pose: send the
+   line with her pose. Lying flat should stay near rest.
+4. No seams on the body atlas islands (shoulders, hips, thigh fronts); the abs' lines don't run under her breasts.
+5. Areas Core / Back / Legs / Arms each switch only theirs off. Wrinkles on together: creases and muscles both show.
+6. Cost: the `Perf` line's wrinkles values with Muscles on vs off.
+
 ## 0.9.9 (timing line)
 
 Copy `SfMorph.dll`. Log: `SF Body Morphs 0.9.9`, then every 10 s `Perf last 10 s: N fps ...` (also at the top of the panel). Read

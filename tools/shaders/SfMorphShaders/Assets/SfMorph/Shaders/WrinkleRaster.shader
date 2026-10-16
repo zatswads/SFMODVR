@@ -9,6 +9,10 @@
 //                      x crease shade (_Cavity x the crease depth _Detail.b x activation x fade: her skin shader's subsurface
 //                      scattering blurs fine normal detail out of the diffuse light, a darker crease survives it) [+ debug tint:
 //                      _DebugMode 1 = activation, 2 = the regions in their own colours, brighter when active].
+// 0.10.0 muscle layer (_MOn > 0.5): the authored muscle relief (_MDetail.rg, tools/muscles/author.py) x the texel's muscle activation
+// (_MRegion: two muscle ids + the first one's share, the activation interpolated bilinearly between region texels) x _MStrength is
+// added to the crease slope before the whiteout (pass 0); pass 2 darkens the grooves (_MDetail.b x activation x _MShade) and has the
+// muscle debug views (_MDebug 1 = activation, 2 = muscles in their own colours).
 // The maps come from tools/wrinkles/author.py: _Detail RGBA = slope x, y (along +u, +v; *0.5/1.5+0.5), crease depth, region fade;
 // _Region RGBA8 = region index + 1 (0 none, 255 off her islands), weight, crease direction (CPU only).
 // Normal encoding of the output: R = x, G = y, B = z (all *0.5+0.5), A = 1 -> HDRP's RGorAG unpack takes x from R when A == 1; the
@@ -34,6 +38,13 @@ Shader "SfMorph/WrinkleRaster"
         _MarksAlbedoOn ("Skin marks in the albedo", Float) = 0
         _Redness ("Marks redness", Float) = 0.5
         _Ao ("Marks pressure darkening", Float) = 0.175
+        _MOn ("Muscles on", Float) = 0
+        _MDetail ("Muscle relief", 2D) = "black" {}
+        _MRegion ("Muscle regions", 2D) = "black" {}
+        _MStrength ("Muscle strength", Float) = 1
+        _MShade ("Muscle groove shade", Float) = 0
+        _MDebug ("Muscle debug", Float) = 0
+        _MSlopeMax ("Muscle slope max", Float) = 0.6
     }
     SubShader
     {
@@ -59,6 +70,11 @@ Shader "SfMorph/WrinkleRaster"
         Texture2D _Region;
         float4 _RegionSize;                     // width, height of the region map (set by the CPU)
         Texture2D _Test; SamplerState sampler_Test;
+        float _MOn, _MStrength, _MShade, _MDebug, _MSlopeMax;
+        float _MAct[32];
+        Texture2D _MDetail; SamplerState sampler_MDetail;
+        Texture2D _MRegion;
+        float4 _MRegionSize;
 
         static const float SlopeMax = 1.5;
 
@@ -144,6 +160,55 @@ Shader "SfMorph/WrinkleRaster"
             return saturate(abs(k * 6.0 - 3.0) - 1.0);
         }
 
+        // 0.10.0: the activation of one muscle-region texel: share x act[id1] + (1 - share) x act[id2] (ids 0 = none)
+        float MuscleActAt(int2 p)
+        {
+            float4 r = _MRegion.Load(int3(p, 0));
+            int i1 = (int)(r.r * 255.0 + 0.5), i2 = (int)(r.g * 255.0 + 0.5);
+            float a1 = (i1 >= 1 && i1 <= 32) ? _MAct[i1 - 1] : 0.0;
+            float a2 = (i2 >= 1 && i2 <= 32) ? _MAct[i2 - 1] : 0.0;
+            return lerp(a2, a1, r.b);
+        }
+
+        // the muscle activation at uv, bilinear between the four nearest region texels (no seam between neighbouring muscles)
+        float MuscleAct(float2 uv)
+        {
+            int2 sz = int2(_MRegionSize.xy);
+            float2 f = uv * _MRegionSize.xy - 0.5;
+            int2 p0 = int2(floor(f));
+            float2 t = f - p0;
+            int2 lo = int2(0, 0), hi = sz - 1;
+            float a00 = MuscleActAt(clamp(p0, lo, hi)), a10 = MuscleActAt(clamp(p0 + int2(1, 0), lo, hi));
+            float a01 = MuscleActAt(clamp(p0 + int2(0, 1), lo, hi)), a11 = MuscleActAt(clamp(p0 + int2(1, 1), lo, hi));
+            return lerp(lerp(a00, a10, t.x), lerp(a01, a11, t.x), t.y);
+        }
+
+        // the muscle relief at uv, faded in: xy = slope (metres/metre) x strength, z = groove depth x activation, w = activation
+        float4 Muscles(float2 uv)
+        {
+            if (_MOn < 0.5) return float4(0, 0, 0, 0);
+            float a = MuscleAct(uv);
+            if (a <= 0.0) return float4(0, 0, 0, 0);
+            float4 d = _MDetail.SampleLevel(sampler_MDetail, uv, 0);
+            return float4((d.rg * 2.0 - 1.0) * _MSlopeMax * a * _MStrength, d.b * a, a);
+        }
+
+        // the muscle debug view: activation (1, green -> red) or the muscles in their own colours (2), over the authored coverage
+        float3 MuscleTint(float3 rgb, float2 uv)
+        {
+            float4 d = _MDetail.SampleLevel(sampler_MDetail, uv, 0);
+            if (d.a <= 0.01) return rgb;
+            if (_MDebug > 1.5)
+            {
+                int2 p = clamp(int2(uv * _MRegionSize.xy), int2(0, 0), int2(_MRegionSize.xy) - 1);
+                int id = (int)(_MRegion.Load(int3(p, 0)).r * 255.0 + 0.5);
+                if (id < 1) return rgb;
+                return lerp(rgb, Hue(frac(id * 0.381966 + 0.13)), saturate(d.a) * (0.3 + 0.4 * saturate(MuscleAct(uv))));
+            }
+            float a = saturate(MuscleAct(uv));
+            return lerp(rgb, lerp(float3(0.1, 0.9, 0.2), float3(1.0, 0.1, 0.05), a), saturate(d.a) * 0.6);
+        }
+
         // the debug view: activation (mode 1) or the regions (mode 2) as a tint over rgb
         float3 DebugTint(float3 rgb, float2 uv)
         {
@@ -173,7 +238,9 @@ Shader "SfMorph/WrinkleRaster"
                 if (l2 > 1.0) xy *= rsqrt(l2);
                 float3 n = float3(xy, sqrt(max(0.0, 1.0 - dot(xy, xy))));
                 float4 c = Creases(i.uv);
-                if (c.w > 0.0)
+                float4 mu = Muscles(i.uv);                                           // 0.10.0: the muscle relief adds to the creases' slope
+                c.xy += mu.xy;
+                if (c.w > 0.0 || mu.w > 0.0)
                 {
                     float3 nd = normalize(float3(-c.x, -c.y, 1.0));
                     n = normalize(float3(n.xy + nd.xy, n.z * nd.z));                 // whiteout
@@ -237,7 +304,13 @@ Shader "SfMorph/WrinkleRaster"
                     float4 cr = Creases(i.uv);
                     c *= saturate(1.0 - _Cavity * saturate(cr.z * _Strength) * CreaseTint);
                 }
+                if (_MShade > 0.0)
+                {
+                    float4 mu = Muscles(i.uv);
+                    c *= saturate(1.0 - _MShade * saturate(mu.z * _MStrength) * CreaseTint);
+                }
                 if (_DebugMode > 0.5) c = DebugTint(c, i.uv);
+                if (_MDebug > 0.5 && _MOn > 0.5) c = MuscleTint(c, i.uv);
                 return float4(c, a.a);
             }
             ENDHLSL

@@ -1,0 +1,571 @@
+"""Authored muscle definition maps for SF Body Morphs (0.9.9).
+
+The muscle counterpart of tools/wrinkles/author.py: from her export (Presets tab -> Export) one pair of textures for her body atlas
+("body" = the reika_body sheet, the same layout as the body wrinkles), blended by the plugin into the same normal-map copy as the
+wrinkles and faded in per muscle by her pose:
+
+  muscle_<layout>_detail.png  RGBA8 linear, NxN: R,G = slope of the muscle relief in tangent space (x along +u, y along +v, metres per
+                              metre, *0.5/SLOPE_MAX + 0.5), B = groove depth 0..1 (the albedo's groove shade), A = coverage 0..1 (debug).
+  muscle_<layout>_region.png  RGBA8 linear, MxM, point-fetched in the blend: R = first muscle index + 1 (0 = none), G = second muscle
+                              index + 1 (0 = none), B = the first muscle's share 0..1 (the texel's activation = B x act[R] + (1-B) x
+                              act[G]; the shader interpolates that between region texels), A = coverage.
+  muscle_layouts.txt          the muscle table the plugin reads (index, name, area core|back|legs|arms, side L|R|C).
+
+The relief is a height field on her bind-pose skin made of muscle bellies (smooth bumps) and the grooves between them (linea alba,
+tendinous intersections, linea semilunaris, iliac V line, serratus digitations, costal margin, spinal groove, quad / hamstring /
+gastrocnemius separations, deltoid insertion, triceps horseshoe ...). Every primitive is placed in a limb's own cylinder coordinates
+(s = metres along the bone from its joint, phi = degrees around it: 0 front, +90 her outer side, 180 back) from her skeleton, so it lands
+on any UV layout of the same body; the height and its analytic gradient are evaluated per texel in 3D (no finite differences across
+UV seams). A texel belongs to the limb whose axis is closest (minus a nominal radius); a primitive only reaches the limbs it lists, so
+an inner-thigh muscle never shows on the other thigh. Breasts and genitals carry nothing (exclusion spheres).
+
+The shape of a fit body is the Characters pipeline's job (a converted VaM character's "Fitness" body slider = Bodybuilder Details /
+Torso Fitness / Fitness Size morphs); this is the surface definition on top of whatever shape she has, so it works with or without one.
+Reference look: a VaM preset with Torso Fitness 0.26, Body Tone 0.71, Back Definition 0.90, RibCageDefine 0.54 and a game-ported
+torso / limbs normal map (linea alba, the upper abs' intersections, serratus lines, the iliac V, knee and calf detail).
+
+Usage:  python tools/muscles/author.py [export dir] [--preview]
+        (default: the newest export under <game>\\BepInEx\\config\\SfMorphs\\export; output into the shader bundle project)
+Needs numpy only. --preview writes her colour map with the muscles drawn on and front / back / side renders of her bind-pose body lit
+with the muscle relief (rest tone and full tension) into tools/muscles/preview (gitignored).
+"""
+import math
+import os
+import sys
+
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, '..', 'pipeline'))
+sys.path.insert(0, os.path.join(HERE, '..', 'wrinkles'))
+import sfio  # noqa: E402
+import author as wr  # noqa: E402  (the wrinkle author: PNG io, Surf, raster, dilate)
+
+OUT = os.path.join(HERE, '..', 'shaders', 'SfMorphShaders', 'Assets', 'SfMorph', 'Muscles')
+PREVIEW = os.path.join(HERE, 'preview')
+GAME_EXPORT = r'E:\Bak\New folder\Misc\SF\VR\BepInEx\config\SfMorphs\export'
+SLOPE_MAX = 0.6          # slope encoded in R,G: +-SLOPE_MAX -> 0..1 (muscles are gentler than creases: finer steps)
+SHADE_DEPTH = 0.0015     # groove depth (m) that gives a full groove shade (B = 1)
+BULGE_GAIN = 2.0         # muscle bellies: heights below are x this (the first preview read flat next to the grooves)
+LIMB_WIDTH = 1.6         # grooves on the limbs are wider than the torso's (thin ones read as drawn lines)
+
+# ---------------------------------------------------------------- segments (her limbs as cylinders)
+
+
+class Seg:
+    def __init__(self, name, a, b, radius, side, ext=(0.0, 0.0)):
+        self.name = name
+        self.a = np.asarray(a, np.float64)
+        self.b = np.asarray(b, np.float64)
+        self.len = float(np.linalg.norm(self.b - self.a))
+        self.axis = (self.b - self.a) / self.len
+        self.radius = radius
+        self.ext = ext                       # membership reaches this far beyond A / B (metres)
+        sx = -1.0 if side == 'L' else 1.0    # her left = -x; the torso uses her left as +phi
+        f = np.array([0, 0, 1.0]) - self.axis[2] * self.axis
+        self.front = f / np.linalg.norm(f)
+        l = np.array([sx, 0, 0]) - np.dot([sx, 0, 0], self.axis) * self.axis - np.dot([sx, 0, 0], self.front) * self.front
+        self.lat = l / np.linalg.norm(l)
+
+    def coords(self, X):
+        """-> s (metres along the axis from A), phi (radians, 0 front, +pi/2 lateral), r (distance from the axis), e_phi (unit, the
+        direction of growing phi on the surface)."""
+        d = X - self.a
+        s = d @ self.axis
+        rad = d - s[:, None] * self.axis
+        r = np.linalg.norm(rad, axis=1)
+        phi = np.arctan2(rad @ self.lat, rad @ self.front)
+        e = np.cross(self.axis, rad)
+        # e = axis x rad turns from front towards lat when lat = axis x front; else flip
+        if np.dot(np.cross(self.axis, self.front), self.lat) < 0:
+            e = -e
+        e /= np.maximum(np.linalg.norm(e, axis=1), 1e-12)[:, None]
+        return s, phi, r, e
+
+    def member_dist(self, X):
+        d = X - self.a
+        s = np.clip(d @ self.axis, -self.ext[0], self.len + self.ext[1])
+        c = self.a + s[:, None] * self.axis
+        return np.linalg.norm(X - c, axis=1) - self.radius
+
+
+# ---------------------------------------------------------------- primitives
+
+
+class Bulge:
+    """A muscle belly: h = height x exp(-(ds/a)^2 - (arc/b)^2), arc = r x dphi. Negative height = a hollow (a dimple, a fossa)."""
+
+    def __init__(self, seg, s, phi, a, b, height_mm, segs=None):
+        self.seg, self.s, self.phi, self.a, self.b, self.h = seg, s, math.radians(phi), a, b, height_mm * 0.001 * BULGE_GAIN
+        self.segs = segs
+
+
+class Groove:
+    """The furrow between muscles along a polyline of (s, phi deg): h = -depth x taper x exp(-(d/w)^2), d = the distance in (s, arc)."""
+
+    def __init__(self, seg, pts, depth_mm, width_mm, taper=(1, 1), segs=None):
+        self.seg = seg
+        self.p = np.array([(s, math.radians(f)) for s, f in pts], np.float64)
+        self.d = depth_mm * 0.001
+        self.w = width_mm * 0.001 * (1.0 if seg == 'torso' else LIMB_WIDTH)
+        self.taper = taper
+        self.segs = segs
+
+
+def wrap(a):
+    return (a + math.pi) % (2 * math.pi) - math.pi
+
+
+# ---------------------------------------------------------------- her muscles
+
+
+def muscles(sk, navel_s, log):
+    """-> segments, regions [(name, area, side)], primitives per region index."""
+    P = lambda b: np.asarray(sk[b]['pos'], np.float64)  # noqa: E731
+    segs = {}
+    root, neck = P('Root_M'), P('Neck_M')
+    segs['torso'] = Seg('torso', root, neck, 0.10, 'L', ext=(0.08, 0.02))
+    segs['neck'] = Seg('neck', neck, P('Head_M'), 0.05, 'L', ext=(0.0, 0.1))
+    for sd in ('L', 'R'):
+        segs['thigh' + sd] = Seg('thigh' + sd, P('Hip_' + sd), P('Knee_' + sd), 0.075, sd, ext=(0.03, 0.02))
+        segs['shin' + sd] = Seg('shin' + sd, P('Knee_' + sd), P('Ankle_' + sd), 0.05, sd, ext=(0.02, 0.06))
+        segs['upperarm' + sd] = Seg('upperarm' + sd, P('Shoulder_' + sd), P('Elbow_' + sd), 0.045, sd, ext=(0.03, 0.02))
+        segs['forearm' + sd] = Seg('forearm' + sd, P('Elbow_' + sd), P('Wrist_' + sd), 0.035, sd, ext=(0.02, 0.0))
+        w = P('Wrist_' + sd)
+        segs['hand' + sd] = Seg('hand' + sd, w, w + segs['forearm' + sd].axis * 0.12, 0.03, sd)
+
+    regions, prims = [], []
+
+    def reg(name, area, side):
+        regions.append((name, area, side))
+        prims.append([])
+        return len(regions) - 1
+
+    nv = navel_s
+    # ---- core: abs (one region, both sides), obliques, serratus, ribcage
+    r_abs = reg('abs', 'core', 'C')
+    T = 'torso'
+    prims[r_abs].append(Groove(T, [(nv + 0.012, 0), (0.27, 0)], 1.0, 4.5))                       # linea alba
+    prims[r_abs].append(Groove(T, [(nv - 0.075, 0), (nv - 0.012, 0)], 0.45, 5.0))                # its faint lower part
+    for sgn in (1, -1):
+        for k, (ds, dep) in enumerate(((0.006, 0.6), (0.062, 0.8), (0.118, 0.85))):             # tendinous intersections
+            s0 = nv + ds
+            prims[r_abs].append(Groove(T, [(s0, 2.5 * sgn), (s0 + 0.004, 15 * sgn), (s0 + 0.011, 29 * sgn)], dep, 5.5, taper=(0, 1)))
+        for ds in (0.034, 0.090, 0.145):                                                          # the bellies between them
+            prims[r_abs].append(Bulge(T, nv + ds, 15 * sgn, 0.022, 0.026, 1.5))
+        prims[r_abs].append(Bulge(T, nv - 0.05, 13 * sgn, 0.04, 0.028, 1.0))                      # lower belly
+        prims[r_abs].append(Groove(T, [(nv - 0.07, 29 * sgn), (nv, 35 * sgn), (nv + 0.08, 37 * sgn), (0.265, 33 * sgn)], 0.8, 7.0))  # semilunaris
+    for sd, sgn in (('L', 1), ('R', -1)):
+        r = reg('obliques_' + sd, 'core', sd)
+        prims[r].append(Bulge(T, nv + 0.025, 62 * sgn, 0.06, 0.045, 2.0))
+        prims[r].append(Groove(T, [(0.085, 54 * sgn), (0.03, 38 * sgn), (-0.045, 19 * sgn)], 1.0, 6.0))      # iliac V line
+        prims[r].append(Groove(T, [(0.105, 88 * sgn), (0.095, 68 * sgn), (0.085, 54 * sgn)], 0.7, 8.0, taper=(1, 0)))  # iliac crest
+        for k in range(2):                                                                         # oblique digitations
+            s0 = 0.17 + 0.025 * k
+            prims[r].append(Groove(T, [(s0 + 0.02, 88 * sgn), (s0, 66 * sgn)], 0.45, 4.5))
+        r = reg('serratus_' + sd, 'core', sd)
+        for k in range(3):
+            s0 = 0.225 + 0.028 * k
+            prims[r].append(Groove(T, [(s0 + 0.022, 102 * sgn), (s0, 76 * sgn)], 0.6, 4.0))
+            prims[r].append(Bulge(T, s0 + 0.012, 88 * sgn, 0.011, 0.016, 0.9))
+    r_rib = reg('ribcage', 'core', 'C')
+    for sgn in (1, -1):
+        prims[r_rib].append(Groove(T, [(0.272, 2 * sgn), (0.245, 18 * sgn), (0.205, 38 * sgn), (0.175, 58 * sgn), (0.165, 72 * sgn)], 0.65, 9.0, taper=(0, 1)))
+        prims[r_rib].append(Groove(T, [(0.195, 62 * sgn), (0.21, 82 * sgn)], 0.4, 6.0))
+    prims[r_rib].append(Groove(T, [(0.27, 0), (0.39, 0)], 0.55, 6.0))                            # sternum
+    # ---- back: erectors (one region), lats + scapula per side
+    r_back = reg('back', 'back', 'C')
+    prims[r_back].append(Groove(T, [(0.03, 180), (0.43, 180)], 1.3, 6.5))                         # spinal groove
+    for sgn in (1, -1):
+        prims[r_back].append(Bulge(T, 0.16, 180 - 14 * sgn, 0.10, 0.022, 2.4))                    # erector columns
+        prims[r_back].append(Bulge(T, 0.30, 180 - 10 * sgn, 0.07, 0.018, 1.2))
+        prims[r_back].append(Groove(T, [(0.07, 180 - 25 * sgn), (0.25, 180 - 23 * sgn)], 0.7, 10.0))
+        prims[r_back].append(Bulge(T, 0.05, 180 - 17 * sgn, 0.012, 0.012, -1.3))               # dimples of Venus
+    for sd, sgn in (('L', 1), ('R', -1)):
+        r = reg('lats_' + sd, 'back', sd)
+        prims[r].append(Bulge(T, 0.30, 130 * sgn, 0.08, 0.05, 1.8))
+        prims[r].append(Groove(T, [(0.40, 112 * sgn), (0.30, 118 * sgn), (0.18, 128 * sgn)], 0.8, 12.0))
+        prims[r].append(Bulge(T, 0.43, 145 * sgn, 0.04, 0.035, 1.4))                              # infraspinatus / teres
+        prims[r].append(Groove(T, [(0.47, 158 * sgn), (0.38, 155 * sgn)], 0.6, 10.0))             # scapula's inner edge
+    # ---- legs
+    for sd in ('L', 'R'):
+        sgn = 1 if sd == 'L' else -1
+        th, sh = 'thigh' + sd, 'shin' + sd
+        both = (T, th)
+        r = reg('glutes_' + sd, 'legs', sd)
+        prims[r].append(Bulge(T, -0.06, 108 * sgn, 0.045, 0.035, -1.6, segs=both))               # the hollow at the side
+        prims[r].append(Bulge(T, 0.0, 118 * sgn, 0.035, 0.04, 1.2, segs=both))                    # gluteus medius
+        prims[r].append(Bulge(T, -0.05, 150 * sgn, 0.06, 0.05, 1.5, segs=both))                   # gluteus maximus, upper outer
+        prims[r].append(Groove(th, [(0.15, 140), (0.172, 165), (0.178, 190), (0.165, 215)], 1.0, 8.0, segs=both))  # glute fold
+        r = reg('quads_' + sd, 'legs', sd)
+        prims[r].append(Bulge(th, 0.17, 8, 0.11, 0.028, 1.6))                                     # rectus femoris
+        prims[r].append(Bulge(th, 0.21, 60, 0.11, 0.035, 1.9))                                    # vastus lateralis
+        prims[r].append(Bulge(th, 0.33, -32, 0.04, 0.033, 2.4))                                   # vastus medialis (teardrop)
+        prims[r].append(Groove(th, [(0.28, -12), (0.31, -28), (0.35, -45)], 0.8, 6.0))
+        prims[r].append(Groove(th, [(0.08, 32), (0.20, 30), (0.32, 22)], 0.8, 6.0))
+        prims[r].append(Groove(th, [(0.10, 95), (0.36, 100)], 0.7, 8.0))                          # iliotibial band
+        r = reg('hams_' + sd, 'legs', sd)
+        prims[r].append(Groove(th, [(0.20, 180), (0.34, 180)], 0.9, 6.5))
+        prims[r].append(Bulge(th, 0.22, 150, 0.10, 0.03, 1.7))                                    # biceps femoris
+        prims[r].append(Bulge(th, 0.22, 210, 0.10, 0.03, 1.7))                                    # semitendinosus
+        prims[r].append(Groove(th, [(0.10, 122), (0.33, 118)], 0.6, 7.0))
+        r = reg('adductors_' + sd, 'legs', sd)
+        prims[r].append(Bulge(th, 0.10, -95, 0.07, 0.035, 1.6))
+        prims[r].append(Groove(th, [(0.03, 30), (0.15, -20), (0.28, -55), (0.36, -75)], 0.7, 7.0))  # sartorius
+        prims[r].append(Groove(th, [(0.08, -125), (0.32, -135)], 0.5, 7.0))                       # gracilis
+        r = reg('calves_' + sd, 'legs', sd)
+        prims[r].append(Bulge(sh, 0.12, -150, 0.075, 0.03, 2.8))                                  # gastrocnemius, inner head
+        prims[r].append(Bulge(sh, 0.10, 152, 0.065, 0.028, 2.3))                                  # outer head
+        prims[r].append(Groove(sh, [(0.03, 180), (0.15, 180)], 0.9, 5.0))
+        prims[r].append(Groove(sh, [(0.15, 118), (0.185, 160), (0.205, 185), (0.215, 210), (0.20, 240)], 0.8, 7.0))  # lower edge
+        prims[r].append(Bulge(sh, 0.22, 105, 0.05, 0.02, 1.0))                                    # soleus
+        prims[r].append(Bulge(sh, 0.23, -110, 0.05, 0.02, 1.0))
+        prims[r].append(Bulge(sh, 0.13, 35, 0.09, 0.02, 1.1))                                     # tibialis anterior
+        prims[r].append(Groove(sh, [(0.05, 12), (0.30, 5)], 0.5, 6.0))
+    # ---- arms
+    for sd in ('L', 'R'):
+        ua, fa = 'upperarm' + sd, 'forearm' + sd
+        r = reg('deltoids_' + sd, 'arms', sd)
+        prims[r].append(Bulge(ua, 0.04, 90, 0.06, 0.05, 2.3))
+        prims[r].append(Bulge(ua, 0.03, 30, 0.05, 0.025, 1.4))
+        prims[r].append(Bulge(ua, 0.03, 150, 0.05, 0.025, 1.4))
+        prims[r].append(Groove(ua, [(-0.01, 5), (0.06, 40), (0.105, 85), (0.06, 135), (-0.01, 170)], 0.9, 6.0))
+        r = reg('biceps_' + sd, 'arms', sd)
+        prims[r].append(Bulge(ua, 0.125, 0, 0.06, 0.022, 2.4))
+        prims[r].append(Groove(ua, [(0.08, 52), (0.18, 48)], 0.7, 5.0))
+        prims[r].append(Groove(ua, [(0.07, -55), (0.17, -50)], 0.6, 5.0))
+        r = reg('triceps_' + sd, 'arms', sd)
+        prims[r].append(Bulge(ua, 0.09, 138, 0.05, 0.025, 1.7))
+        prims[r].append(Bulge(ua, 0.10, 205, 0.06, 0.025, 1.7))
+        prims[r].append(Groove(ua, [(0.06, 120), (0.135, 145), (0.15, 180), (0.135, 215), (0.07, 240)], 0.9, 6.0))
+        r = reg('forearms_' + sd, 'arms', sd)
+        prims[r].append(Bulge(fa, 0.05, 55, 0.06, 0.02, 1.8))                                     # brachioradialis
+        prims[r].append(Bulge(fa, 0.06, -45, 0.07, 0.025, 1.4))                                   # flexors
+        prims[r].append(Bulge(fa, 0.07, 150, 0.07, 0.022, 1.2))                                   # extensors
+        prims[r].append(Groove(fa, [(0.01, 20), (0.12, 25)], 0.6, 5.0))
+    n = sum(len(p) for p in prims)
+    log('muscles: %d primitives in %d regions (navel at s %.3f m above Root_M)' % (n, len(regions), navel_s))
+    return segs, regions, prims
+
+
+def find_navel(surf, segs, log):
+    """The navel: the deepest dip of her front midline between 0.05 and 0.20 m above Root_M (rays from the front)."""
+    T = segs['torso']
+    best, bs = None, 0.12
+    zs = []
+    for s in np.arange(0.04, 0.20, 0.002):
+        o = T.a + T.axis * s + T.front * 0.4
+        h = surf.ray(o, -T.front)
+        zs.append((s, (h - T.a) @ T.front if h is not None else np.nan))
+    zs = np.array(zs)
+    ok = ~np.isnan(zs[:, 1])
+    if ok.sum() > 10:
+        z = zs[ok]
+        # depth below the straight line through the neighbours 2 cm away
+        dip = []
+        for i in range(len(z)):
+            j0 = np.argmin(np.abs(z[:, 0] - (z[i, 0] - 0.02)))
+            j1 = np.argmin(np.abs(z[:, 0] - (z[i, 0] + 0.02)))
+            dip.append(0.5 * (z[j0, 1] + z[j1, 1]) - z[i, 1])
+        dip = np.array(dip)
+        k = int(np.argmax(dip))
+        if dip[k] > 0.002:
+            best, bs = z[k, 0], dip[k]
+    if best is None:
+        log('navel: no clear dip on the midline; using s 0.12')
+        return 0.12
+    log('navel: s %.3f m above Root_M (y %.3f), %.1f mm deep' % (best, (T.a + T.axis * best)[1], bs * 1000))
+    return float(best)
+
+
+# ---------------------------------------------------------------- evaluation
+
+
+def evaluate(surf, X, N, t, segs, regions, prims, excl, log):
+    M = len(X)
+    names = list(segs.keys())
+    md = np.stack([segs[k].member_dist(X) for k in names], 1)
+    member = md.argmin(1)
+    cache = {}
+
+    def seg_coords(k):
+        if k not in cache:
+            cache[k] = segs[k].coords(X)
+        return cache[k]
+
+    keep = np.ones(M)
+    for ec, er in excl:
+        keep *= np.clip((np.linalg.norm(X - ec, axis=1) - er) / 0.015, 0, 1)
+    G = np.zeros((M, 3))
+    shade = np.zeros(M)
+    wreg = np.zeros((M, len(regions)), np.float32)
+    for ri, plist in enumerate(prims):
+        for pr in plist:
+            sg = segs[pr.seg]
+            allowed = [names.index(x) for x in (pr.segs or (pr.seg,))]
+            s, phi, r, e = seg_coords(pr.seg)
+            if isinstance(pr, Bulge):
+                ds = s - pr.s
+                arc = r * wrap(phi - pr.phi)
+                m = (np.abs(ds) < 3 * pr.a) & (np.abs(arc) < 3 * pr.b) & np.isin(member, allowed)
+                if not m.any():
+                    log('  %s: a bulge at s %.2f phi %.0f on %s reaches no texel' % (regions[ri][0], pr.s, math.degrees(pr.phi), pr.seg))
+                    continue
+                ii = np.nonzero(m)[0]
+                g = np.exp(-(ds[ii] / pr.a) ** 2 - (arc[ii] / pr.b) ** 2) * keep[ii]
+                h = pr.h * g
+                grad = h[:, None] * (-2 * ds[ii, None] / pr.a ** 2 * sg.axis[None] - 2 * arc[ii, None] / pr.b ** 2 * e[ii])
+                env = g * abs(pr.h) / 0.002
+                if pr.h < 0:
+                    shade[ii] += -h / SHADE_DEPTH * 0.3
+            else:
+                q = pr.p
+                lo, hi = q[:, 0].min() - 3 * pr.w - 0.01, q[:, 0].max() + 3 * pr.w + 0.01
+                m = (s > lo) & (s < hi) & np.isin(member, allowed)
+                if not m.any():
+                    log('  %s: a groove on %s reaches no texel' % (regions[ri][0], pr.seg))
+                    continue
+                ii = np.nonzero(m)[0]
+                si, ri_, pi = s[ii], r[ii], phi[ii]
+                # the polyline in this texel's (s, arc) plane: arc of each point relative to the texel
+                best = np.full(len(ii), np.inf)
+                bvec = np.zeros((len(ii), 2))
+                bpos = np.zeros(len(ii))
+                seglen = np.concatenate([[0], np.cumsum(np.hypot(np.diff(q[:, 0]), np.diff(q[:, 1]) * 0.1))])
+                total = max(seglen[-1], 1e-9)
+                # the points' phi are continuous along the line (140, 190, 215 deg): unwrap from the first point only, so a line
+                # around the back never jumps across the front of the limb
+                a0 = wrap(q[0, 1] - pi)
+                for k in range(len(q) - 1):
+                    ax, ay = q[k, 0] - si, ri_ * (a0 + q[k, 1] - q[0, 1])
+                    bx, by = q[k + 1, 0] - si, ri_ * (a0 + q[k + 1, 1] - q[0, 1])
+                    vx, vy = bx - ax, by - ay
+                    l2 = np.maximum(vx * vx + vy * vy, 1e-14)
+                    tt = np.clip(-(ax * vx + ay * vy) / l2, 0, 1)
+                    cx, cy = ax + tt * vx, ay + tt * vy          # closest point relative to the texel
+                    d = np.hypot(cx, cy)
+                    u = d < best
+                    best[u] = d[u]
+                    bvec[u, 0] = cx[u]
+                    bvec[u, 1] = cy[u]
+                    bpos[u] = (seglen[k] + tt[u] * (seglen[k + 1] - seglen[k])) / total
+                tap = wr.taper_fn(bpos, pr.taper)
+                g = np.exp(-(best / pr.w) ** 2) * tap * keep[ii]
+                h = -pr.d * g
+                # dh/dd = 2 d D g / w^2, along the direction from the line to the texel (= -bvec / d)
+                dd = 2 * best * pr.d * g / pr.w ** 2
+                inv = 1.0 / np.maximum(best, 1e-9)
+                gs, ga = -bvec[:, 0] * inv * dd, -bvec[:, 1] * inv * dd
+                grad = gs[:, None] * sg.axis[None] + ga[:, None] * e[ii]
+                env = g * pr.d / 0.001
+                shade[ii] += -h / SHADE_DEPTH
+            nn = N[ii]
+            grad = grad - (grad * nn).sum(1)[:, None] * nn
+            G[ii] += grad
+            wreg[ii, ri] += env.astype(np.float32)
+    # slope in the texel's tangent frame (tangent = d pos/du, bitangent = d pos/dv, normalised), as the wrinkle maps
+    pu, pv = surf.pu[t], surf.pv[t]
+    tu = pu / np.maximum(np.linalg.norm(pu, axis=1), 1e-12)[:, None]
+    tv = pv / np.maximum(np.linalg.norm(pv, axis=1), 1e-12)[:, None]
+    sx = (G * tu).sum(1)
+    sy = (G * tv).sum(1)
+    order = np.argsort(-wreg, axis=1)[:, :2]
+    w1 = wreg[np.arange(M), order[:, 0]]
+    w2 = wreg[np.arange(M), order[:, 1]]
+    tot = wreg.sum(1)
+    return dict(G=G, sx=sx, sy=sy, shade=np.clip(shade, 0, 1), id1=order[:, 0], id2=order[:, 1], w1=w1, w2=w2, tot=tot, member=member)
+
+
+def build(name, surf, sk, n, nreg, log, preview_dir=None, colour=None):
+    log('%s: %d triangles, rasterising %dx%d' % (name, len(surf.f), n, n))
+    tri, bary = surf.raster(n)
+    cov = tri >= 0
+    idx = np.nonzero(cov)[0]
+    t = tri[idx]
+    X = (surf.v[surf.f[t]] * bary[idx][:, :, None]).sum(1)
+    N = (surf.vn[surf.f[t]] * bary[idx][:, :, None]).sum(1)
+    N /= np.maximum(np.linalg.norm(N, axis=1), 1e-12)[:, None]
+    log('%s: %.1f%% of the texels on her skin' % (name, 100.0 * cov.mean()))
+    P = lambda b: np.asarray(sk[b]['pos'], np.float64)  # noqa: E731
+    segs0 = {'torso': Seg('torso', P('Root_M'), P('Neck_M'), 0.1, 'L')}
+    nav = find_navel(surf, segs0, log)
+    segs, regions, prims = muscles(sk, nav, log)
+    excl = []
+    for side in ('Left', 'Right'):
+        c = P(side + '_LowerBreast')
+        rr = max(np.linalg.norm(P(side + '_Breast_' + k) - c) for k in ('out', 'up', 'down', 'in')) + 0.02
+        excl.append((c, rr))
+    # genitals: a sphere below the pubis, between the thighs
+    root = P('Root_M')
+    excl.append((root + np.array([0, -0.08, 0.035]), 0.045))
+    ev = evaluate(surf, X, N, t, segs, regions, prims, excl, log)
+    sx, sy = ev['sx'], ev['sy']
+    smax = np.abs(np.concatenate([sx, sy])).max()
+    log('%s: slope max %.3f (encoded up to %.2f), groove shade max %.2f' % (name, smax, SLOPE_MAX, ev['shade'].max()))
+
+    det = np.zeros((n * n, 4), np.float32)
+    det[:, 0] = det[:, 1] = 0.5
+    det[idx, 0] = 0.5 + 0.5 * np.clip(sx / SLOPE_MAX, -1, 1)
+    det[idx, 1] = 0.5 + 0.5 * np.clip(sy / SLOPE_MAX, -1, 1)
+    det[idx, 2] = ev['shade']
+    det[idx, 3] = np.clip(ev['tot'], 0, 1)
+    det = wr.dilate(det.reshape(n, n, 4), cov.reshape(n, n), 6)
+
+    # region map at nreg: id pair + share, from the full-res texels (nearest), dilated the same way so the shader's bilinear
+    # interpolation of the activation never pulls in "none" at an island edge
+    has = ev['tot'] > 0.01
+    full = np.zeros((n * n, 4), np.float32)
+    full[idx, 0] = np.where(has, ev['id1'] + 1, 0)
+    full[idx, 1] = np.where(has & (ev['w2'] > 0.02), ev['id2'] + 1, 0)
+    share = ev['w1'] / np.maximum(ev['w1'] + ev['w2'], 1e-9)
+    full[idx, 2] = np.where(has, np.where(full[idx, 1] > 0, share, 1.0), 0)
+    full[idx, 3] = np.clip(ev['tot'], 0, 1)
+    step = n // nreg
+    sel = (np.arange(nreg) * step + step // 2)
+    pick = (sel[:, None] * n + sel[None, :]).ravel()
+    covc = cov.reshape(nreg, step, nreg, step).any(axis=(1, 3))
+    reg = full[pick].reshape(nreg, nreg, 4)
+    # ids must not be averaged: dilate by copying the neighbour (the wrinkle dilate averages; here take the first covered neighbour)
+    rc = reg.copy()
+    cv = covc.copy() & (reg[:, :, 0] > 0)
+    for _ in range(3):
+        grow = np.zeros_like(cv)
+        for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+            sh = np.roll(np.roll(cv, dy, 0), dx, 1)
+            nb = np.roll(np.roll(rc, dy, 0), dx, 1)
+            take = sh & ~cv & ~grow
+            rc[take] = nb[take]
+            rc[take, 3] = 0
+            grow |= take
+        cv |= grow
+    out = np.zeros((nreg, nreg, 4), np.uint8)
+    out[:, :, 0] = rc[:, :, 0].astype(np.uint8)
+    out[:, :, 1] = rc[:, :, 1].astype(np.uint8)
+    out[:, :, 2] = np.clip(rc[:, :, 2] * 255 + 0.5, 0, 255).astype(np.uint8)
+    out[:, :, 3] = np.clip(rc[:, :, 3] * 255 + 0.5, 0, 255).astype(np.uint8)
+    for k, (rn, ra, rs) in enumerate(regions):
+        m1 = (ev['id1'] == k) & has
+        log('  muscle %2d %-13s %-4s %s: %7d texels' % (k + 1, rn, ra, rs, m1.sum()))
+    if preview_dir:
+        previews(name, n, idx, X, N, ev, regions, colour, preview_dir, log)
+    return det, out, regions
+
+
+# ---------------------------------------------------------------- previews
+
+
+HUE = np.array([[1, .25, .25], [.25, 1, .25], [.3, .45, 1], [1, 1, .25], [1, .25, 1], [.25, 1, 1], [1, .6, .2], [.6, .25, 1], [.6, 1, .5], [1, .7, .8]])
+
+
+def previews(name, n, idx, X, N, ev, regions, colour, d, log):
+    os.makedirs(d, exist_ok=True)
+    img = np.full((n, n, 3), 110.0)
+    if colour is not None:
+        ys = (np.arange(n) * colour.shape[0] // n)
+        xs = (np.arange(n) * colour.shape[1] // n)
+        img = colour[ys][:, xs].astype(np.float64)
+    flat = img.reshape(-1, 3).copy()
+    # 1) regions tinted + relief shading on the colour map (UV layout)
+    has = ev['tot'] > 0.01
+    tint = HUE[ev['id1'] % len(HUE)]
+    a = (0.35 * has * np.clip(ev['tot'], 0, 1))[:, None]
+    shadeL = lambert(N - ev['G'] * 1.0, np.array([-0.35, 0.75, 0.55]))
+    reg_img = flat.copy()
+    reg_img[idx] = flat[idx] * (1 - a) + tint * 255 * a
+    reg_img[idx] *= (0.55 + 0.45 * shadeL)[:, None] / 0.85
+    wr.write_png(os.path.join(d, 'muscle_%s_layout.png' % name), np.clip(reg_img.reshape(n, n, 3), 0, 255).astype(np.uint8))
+    # 2) her body from the front, the back and her left side, lit: plain, rest tone (0.3), full tension (1.0)
+    base_col = flat[idx] / 255.0
+    rows = []
+    for vname, axis_x, axis_z in (('front', np.array([1, 0, 0.0]), np.array([0, 0, 1.0])), ('back', np.array([-1, 0, 0.0]), np.array([0, 0, -1.0])),
+                                  ('side', np.array([0, 0, 1.0]), np.array([-1, 0, 0.0]))):
+        L = 0.6 * axis_z + 0.7 * np.array([0, 1.0, 0]) - 0.35 * axis_x     # a key light above, beside and in front of the viewer
+        row = []
+        for label, k in (('plain', 0.0), ('rest 0.3', 0.3), ('full', 1.0)):
+            Nn = N - ev['G'] * k
+            sh = lambert(Nn, L)
+            c = base_col * (0.3 + 0.75 * sh[:, None]) * (1 - 0.3 * k * ev['shade'])[:, None]
+            row.append(splat(X, c, axis_x, axis_z))
+        rows.append(np.concatenate(row, 1))
+    wr.write_png(os.path.join(d, 'muscle_%s_render.png' % name), np.clip(np.concatenate(rows, 0) * 255, 0, 255).astype(np.uint8))
+    log('preview: %s' % d)
+
+
+def lambert(Nn, L):
+    L = L / np.linalg.norm(L)
+    nn = Nn / np.maximum(np.linalg.norm(Nn, axis=1), 1e-12)[:, None]
+    return np.clip(nn @ L, 0, 1) * 0.8 + 0.05
+
+
+def splat(X, c, ax, az, H=900):
+    """Orthographic view of the texel points (nearest to the viewer wins), y up."""
+    ay = np.array([0, 1.0, 0])
+    px = X @ ax
+    py = X @ ay
+    pz = X @ az
+    y0, y1 = 0.0, 1.75
+    s = H / (y1 - y0)
+    W = int(1.2 * s)
+    ix = np.clip(((px + 0.6) * s).astype(np.int64), 0, W - 1)
+    iy = np.clip(((y1 - py) * s).astype(np.int64), 0, H - 1)
+    img = np.full((H, W, 3), 0.12)
+    zb = np.full(H * W, -np.inf)
+    lin = iy * W + ix
+    o = np.argsort(pz)
+    zb[lin[o]] = pz[o]
+    imgf = img.reshape(-1, 3)
+    imgf[lin[o]] = c[o]
+    return img
+
+
+# ---------------------------------------------------------------- main
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    preview = '--preview' in sys.argv
+    d = args[0] if args else sfio.newest_subdir(GAME_EXPORT)
+    lines = []
+
+    def log(m):
+        print(m)
+        lines.append(m)
+    log('export: ' + d)
+    meshes, sk, missing = sfio.read_game_export(d)
+    by = {m.name.replace(' (SfSoft)', ''): m for m in meshes}
+    parts = []
+    for nm in ['reika_upperBody_normal', 'reika_lowerBody_normal', 'reika_neck', 'reika_foot']:
+        m = by.get(nm)
+        if m is None:
+            continue
+        for gi, g in enumerate(m.groups):
+            if g == 'reika_body':
+                parts.append((m.v, m.uv, m.faces[m.face_group == gi]))
+    if not parts:
+        log('body: none of her body meshes in the export')
+        sys.exit(1)
+    surf = wr.Surf(parts)
+    col = None
+    if preview:
+        for f in os.listdir(d):
+            if f.lower() == 'reika_body_colormap.png':
+                col = wr.read_png_rgb(os.path.join(d, f))
+    n, nreg = 2048, 1024
+    det, reg, regions = build('body', surf, sk, n, nreg, log, PREVIEW if preview else None, col)
+    os.makedirs(OUT, exist_ok=True)
+    wr.write_png(os.path.join(OUT, 'muscle_body_detail.png'), wr.to_u8(det))
+    wr.write_png(os.path.join(OUT, 'muscle_body_region.png'), reg)
+    table = ['# SF Body Morphs muscle layouts (tools/muscles/author.py). layout <name> <detail size> <region size> <slope max>; then',
+             '# muscle <index from 1> <name> <area core|back|legs|arms> <side L|R|C>',
+             '# export ' + os.path.basename(d),
+             'layout body %d %d %.3f' % (n, nreg, SLOPE_MAX)]
+    for k, (rn, ra, rs) in enumerate(regions):
+        table.append('muscle %d %s %s %s' % (k + 1, rn, ra, rs))
+    with open(os.path.join(OUT, 'muscle_layouts.txt'), 'w', newline='\n') as f:
+        f.write('\n'.join(table) + '\n')
+    with open(os.path.join(HERE, 'author.log'), 'w', newline='\n') as f:
+        f.write('\n'.join(lines) + '\n')
+
+
+if __name__ == '__main__':
+    main()
