@@ -1,6 +1,6 @@
 # SF Body Morphs — handoff
 
-State at **0.9.4** (branch `main`). 0.9.4 (ripple slower / longer / bigger with Physics-tab sliders; marks only from foreign capsules: Depth writes
+State at **0.9.5** (branch `main`). 0.9.5 (wrinkles tuned from the 0.9.1 headset log: face ranges 0.025-0.035 and lines x1.3, belly = one soft roll following the belly curve + a faint fold, crease shade scaled by depth; bundle rebuilt) built, not yet run in the game. 0.9.4 (ripple slower / longer / bigger with Physics-tab sliders; marks only from foreign capsules: Depth writes
 `_Foreign` (weighted press, foreign depth) from capsule mark weights in `Capsule.c.y` (0 = her own limbs, foreign 0.4-1.5 by speed vs Root_M),
 Compose reddens past a 0.25 knee; BendPose slot 8 now an outward belly roll; softer built rub + [Reactions] RubSound; bundle rebuilt with a
 ForeignMarks marker kernel) built, not yet run in the game. 0.9.3 (VoiceShift rewritten as streaming TD-PSOLA: YIN pitch on a 4x decimated copy, pulse-snapped
@@ -176,7 +176,7 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
 
 ## Open items
 
-- 0.9.1 to check in the headset (TESTING.md 0.9.1): the regions sit on the right skin (Debug = Regions), which regions actually activate
+- 0.9.1/0.9.5 to check in the headset (TESTING.md 0.9.5, 0.9.1; 0.9.1 log: face peaks 0.03-0.05, belly 0.29, knee/elbow 0.2-0.25 = full, hipfold 0.05-0.08, armpit 0.010 = never active: check its placement / direction): the regions sit on the right skin (Debug = Regions), which regions actually activate
   with her expressions and bends (the 10 s peak-compression lines; the per-region ranges in `author.py` are first guesses: face 0.08-0.10,
   body 0.20-0.25 beyond Threshold), the elbow flexion side (both sides are regions; only the compressed one should show), line depth at
   Strength 1. The maps were authored on export Reika-20261016-023017 (face_a only); the 0.8.8 log also showed a face_c sheet: if its UVs

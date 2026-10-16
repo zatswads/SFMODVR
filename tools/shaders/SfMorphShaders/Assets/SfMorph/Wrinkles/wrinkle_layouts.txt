@@ -2,17 +2,17 @@
 # region <index from 1> <name> <class face|neck|body> <compression range>
 # export Reika-20261016-023017
 layout face 2048 1024
-region 1 forehead_L face 0.080
-region 2 crowsfeet_L face 0.080
-region 3 undereye_L face 0.080
-region 4 nasolabial_L face 0.100
-region 5 forehead_R face 0.080
-region 6 crowsfeet_R face 0.080
-region 7 undereye_R face 0.080
-region 8 nasolabial_R face 0.100
-region 9 glabella face 0.080
-region 10 nose face 0.080
-region 11 neck neck 0.100
+region 1 forehead_L face 0.030
+region 2 crowsfeet_L face 0.025
+region 3 undereye_L face 0.025
+region 4 nasolabial_L face 0.030
+region 5 forehead_R face 0.030
+region 6 crowsfeet_R face 0.025
+region 7 undereye_R face 0.025
+region 8 nasolabial_R face 0.030
+region 9 glabella face 0.035
+region 10 nose face 0.030
+region 11 neck neck 0.030
 layout body 2048 1024
 region 1 elbow_in_L body 0.200
 region 2 elbow_back_L body 0.200

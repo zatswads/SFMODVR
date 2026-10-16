@@ -222,13 +222,14 @@ class Surf:
 
 
 class Crease:
-    def __init__(self, pts, region, depth, width, taper=(1, 1), seed=0):
+    def __init__(self, pts, region, depth, width, taper=(1, 1), seed=0, ridge=0.25):
         self.p = np.asarray(pts, np.float64)
         self.region = region
         self.depth = depth
         self.width = width
         self.taper = taper            # (start, end): 1 = fade to 0 at that end, 0 = full depth to the end (a half of a symmetric line)
         self.seed = seed
+        self.ridge = ridge            # height of the rounded skin beside the crease, as a share of its depth (a soft roll: ~0.6)
 
 
 def resample(p, step):
@@ -310,6 +311,9 @@ def build(name, surf, creases, regions, n, nreg, region_radius, log, excl=()):
     w_reg = np.zeros((M, len(regions)))
     dir_reg = np.zeros((M, len(regions), 3))
 
+    deepest = {}
+    for c in creases:
+        deepest[c.region] = max(deepest.get(c.region, 0.0), c.depth)
     for ci, c in enumerate(creases):
         q, s = resample(c.p, 0.0004)
         ctr = q.mean(0)
@@ -333,8 +337,8 @@ def build(name, surf, creases, regions, n, nreg, region_radius, log, excl=()):
         g1 = np.exp(-(d / w) ** 2)
         r = (d - 1.9 * w) / (1.2 * w)
         g2 = np.exp(-r ** 2)
-        h = c.depth * amp * (-g1 + 0.25 * g2)
-        dh = c.depth * amp * (2 * d / (w * w) * g1 - 0.25 * 2 * r / (1.2 * w) * g2)    # dh/dd
+        h = c.depth * amp * (-g1 + c.ridge * g2)
+        dh = c.depth * amp * (2 * d / (w * w) * g1 - c.ridge * 2 * r / (1.2 * w) * g2)    # dh/dd
         rad_dir = x - cp
         rad_dir /= np.maximum(np.linalg.norm(rad_dir, axis=1), 1e-12)[:, None]
         grad = dh[:, None] * rad_dir
@@ -344,7 +348,7 @@ def build(name, surf, creases, regions, n, nreg, region_radius, log, excl=()):
         tk = near[take]
         h_best[tk] = h[take]
         g_best[tk] = grad[take]
-        cav[near] = np.maximum(cav[near], amp * g1)
+        cav[near] = np.maximum(cav[near], amp * g1 * (c.depth / deepest[c.region]))   # a fainter fold shades less
         # region weight: around the creases, out to the region's radius, faded with the crease's own taper (wider ends)
         rr = region_radius[c.region]
         wr = keep * np.exp(-(d / rr) ** 2) * np.clip(taper_fn(sp, c.taper) * 1.5, 0, 1)
@@ -473,7 +477,8 @@ def face_creases(surf, sk, log):
         mx = lambda pts: [(p[0] * sgn, p[1]) for p in pts]  # noqa: E731
         sx = -1.0 * sgn         # her left = -x
         # forehead: 4 lines across the forehead, each a half from the midline to the temple (full depth at the midline)
-        rf = reg('forehead_' + sn, 'face', 0.08)
+        # 0.9.2: face ranges from the headset log (her bone-driven face peaks at 0.03-0.05 compression, 0.08-0.10 left it at 0-30 %)
+        rf = reg('forehead_' + sn, 'face', 0.03)
         for i, f in enumerate((0.20, 0.42, 0.63, 0.82)):
             y = brow_y + 0.006 + f * (top - brow_y - 0.006)
             span = 0.052 - 0.010 * f
@@ -487,7 +492,7 @@ def face_creases(surf, sk, log):
                 out.append(Crease(wobble(np.array(line), lambda q: np.tile(front, (len(q), 1)), 0.0006, 11 + i + 50 * (sgn > 0)),
                                   rf, 0.00045 - 0.00006 * i, 0.0009, taper=(0, 1), seed=i + 100 * (sgn > 0)))
         # crow's feet: 4 short lines fanning out of the outer eye corner, on the temple
-        rc = reg('crowsfeet_' + sn, 'face', 0.08)
+        rc = reg('crowsfeet_' + sn, 'face', 0.025)
         c = np.array([canth[0] * (1 if sgn > 0 else -1), canth[1], canth[2]])
         lat = unit([sx * 0.85, 0.0, -0.5])
         nrm = unit([sx * 0.8, 0.05, 0.6])
@@ -501,7 +506,7 @@ def face_creases(surf, sk, log):
             if len(pts) > 3:
                 out.append(Crease(np.array(pts), rc, 0.0004, 0.0008, seed=20 + i + 50 * (sgn > 0)))
         # under the eye: one soft arc below the lower lid (the lid bones' skin), when the cheek pushes up
-        ru = reg('undereye_' + sn, 'face', 0.08)
+        ru = reg('undereye_' + sn, 'face', 0.025)
         l1 = np.array([low1[0] * (1 if sgn > 0 else -1), low1[1], low1[2]])
         m1 = np.array([med[0] * (1 if sgn > 0 else -1), med[1], med[2]])
         pts2 = []
@@ -517,7 +522,7 @@ def face_creases(surf, sk, log):
         if len(line) > 3:
             out.append(Crease(np.array(line), ru, 0.00025, 0.0008, seed=41 + 50 * (sgn > 0)))
         # nasolabial fold: from beside the nose wing down and out to beside the mouth corner
-        rn = reg('nasolabial_' + sn, 'face', 0.10)
+        rn = reg('nasolabial_' + sn, 'face', 0.03)
         mc = np.array([corner[0] * (1 if sgn > 0 else -1), corner[1], corner[2]])
         nose_wing = (sx * 0.0175, mc[1] + 0.024)
         end = (mc[0] + sx * 0.008, mc[1] - 0.006)
@@ -531,7 +536,7 @@ def face_creases(surf, sk, log):
         if len(line) > 3:
             out.append(Crease(np.array(line), rn, 0.0007, 0.0014, taper=(0, 1), seed=60 + 50 * (sgn > 0)))
     # glabella: two short vertical lines between the brows (frown), plus a faint horizontal one at the nose root
-    rg = reg('glabella', 'face', 0.08)
+    rg = reg('glabella', 'face', 0.035)
     bi = P('Eyebrow_Left_Insite')
     for i, x in enumerate((-0.0055, 0.0055)):
         line = line_front([(x + 0.0008 * (k - 3) * (1 if x > 0 else -1) * 0.3, bi[1] - 0.004 + 0.0035 * k) for k in range(7)])
@@ -541,7 +546,7 @@ def face_creases(surf, sk, log):
     if len(line) > 3:
         out.append(Crease(np.array(line), rg, 0.0003, 0.0009, seed=83))
     # bunny lines: short oblique lines on the sides of the nose bridge (nose wrinkle)
-    rb = reg('nose', 'face', 0.08)
+    rb = reg('nose', 'face', 0.03)
     for sgn in (1.0, -1.0):
         for i in range(2):
             x0, y0 = sgn * 0.006, med[1] - 0.008 - 0.004 * i
@@ -549,7 +554,7 @@ def face_creases(surf, sk, log):
             if len(line) > 3:
                 out.append(Crease(np.array(line), rb, 0.00022, 0.0007, seed=90 + i + 5 * (sgn > 0)))
     # front of the neck: two horizontal bands when she looks down / tucks her chin
-    rk = reg('neck', 'neck', 0.10)
+    rk = reg('neck', 'neck', 0.03)
     for i, y in enumerate((1.437, 1.452)):
         pts = []
         for k in range(15):
@@ -562,6 +567,8 @@ def face_creases(surf, sk, log):
         if len(pts) > 5:
             out.append(Crease(wobble(np.array(pts), lambda q: unit_rows(q - np.array([0, y, -0.03])), 0.0007, 70 + i),
                               rk, 0.0005, 0.0012, seed=70 + i))
+    for c in out:
+        c.depth *= 1.3        # 0.9.2: her skin's subsurface scattering softens the lines (headset: 'barely affects her face')
     log('face: %d creases in %d regions' % (len(out), len(regions)))
     return out, regions, {k: (0.010 if regions[k][1] != 'neck' else 0.015) for k in range(len(regions))}, []
 
@@ -660,19 +667,21 @@ def body_creases(surf, sk, log):
                     pts.append(h)
             if len(pts) > 4:
                 out.append(Crease(np.array(pts), ra, 0.0005, 0.0013, seed=280 + i + (10 if side == 'R' else 0)))
-    # belly: two horizontal folds across the lower belly when she bends forward or sits
+    # belly: when she squats or leans forward the belly folds into one soft roll that follows its curve (lowest at the middle, rising
+    # to the sides), with a fainter one above; broad and shallow with a raised rounded edge. 0.9.1's two thin straight lines read as a
+    # scar (headset, 0.9.1).
     rbel = reg('belly', 'body', 0.20)
-    rr[rbel] = 0.035
-    for i, y in enumerate((0.962, 0.932)):
+    rr[rbel] = 0.04
+    for i, (y0, dep, wid) in enumerate(((0.948, 0.0013, 0.0065), (0.972, 0.0005, 0.005))):
         pts = []
-        for k in range(15):
-            x = -0.085 + 0.17 * k / 14.0
-            h = surf.ray(np.array([x, y - 0.006 * (1 - (2 * k / 14.0 - 1) ** 2), 0.4]), np.array([0, 0, -1.0]))
+        for k in range(17):
+            x = -0.095 + 0.19 * k / 16.0
+            h = surf.ray(np.array([x, y0 + 0.018 * (x / 0.095) ** 2, 0.4]), np.array([0, 0, -1.0]))
             if h is not None:
                 pts.append(h)
         if len(pts) > 6:
-            out.append(Crease(wobble(np.array(pts), lambda q: np.tile([0, 0, 1.0], (len(q), 1)), 0.0012, 300 + i),
-                              rbel, 0.0009 - 0.0002 * i, 0.0022, seed=300 + i))
+            out.append(Crease(wobble(np.array(pts), lambda q: np.tile([0, 0, 1.0], (len(q), 1)), 0.0008, 300 + i),
+                              rbel, dep, wid, seed=300 + i, ridge=0.6))
     log('body: %d creases in %d regions' % (len(out), len(regions)))
     excl = []
     for side in ('Left', 'Right'):

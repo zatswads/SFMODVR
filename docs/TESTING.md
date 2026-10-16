@@ -97,6 +97,12 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.9.5 (wrinkles tuned)
+
+Copy `SfMorph.dll` + `sfmorph_shaders`. Log: `SF Body Morphs 0.9.5`. Then the 0.9.1 list. Face: expressions should now bring the lines to
+60-100 % (the `peak compression` lines: a region at 0.03-0.04 should show ~70-100 % in brackets). Squat / lean forward: one soft roll
+across the lower belly following its curve, no thin scar-like line. Armpit: does it ever show (it never did in 0.9.1)?
+
 ## 0.9.4 (ripple, marks only from hands, belly roll, rub sound)
 
 - [ ] Log: no `old sfmorph_shaders (no ForeignMarks)` warning; `Config migration: [Physics] Ripple 1, RippleSpeed 0.5, ...` once.

@@ -2,28 +2,28 @@ export: E:\Bak\New folder\Misc\SF\VR\BepInEx\config\SfMorphs\export\Reika-202610
 face: 31 creases in 11 regions
 face: 8992 triangles, rasterising 2048x2048
 face: 95.0% of the texels on her skin
-  region  1 forehead_L       face range 0.08:  56530 texels, 5555 with creases
-  region  2 crowsfeet_L      face range 0.08:  21549 texels, 1388 with creases
-  region  3 undereye_L       face range 0.08:  22181 texels, 1412 with creases
-  region  4 nasolabial_L     face range 0.10:  39085 texels, 2280 with creases
-  region  5 forehead_R       face range 0.08:  56590 texels, 5655 with creases
-  region  6 crowsfeet_R      face range 0.08:  21587 texels, 1363 with creases
-  region  7 undereye_R       face range 0.08:  21924 texels, 1409 with creases
-  region  8 nasolabial_R     face range 0.10:  39179 texels, 2155 with creases
-  region  9 glabella         face range 0.08:  32447 texels, 3357 with creases
-  region 10 nose             face range 0.08:  32389 texels, 2367 with creases
-  region 11 neck             neck range 0.10: 576018 texels, 41025 with creases
+  region  1 forehead_L       face range 0.03:  56530 texels, 4945 with creases
+  region  2 crowsfeet_L      face range 0.03:  21549 texels, 1388 with creases
+  region  3 undereye_L       face range 0.03:  22181 texels, 1294 with creases
+  region  4 nasolabial_L     face range 0.03:  39085 texels, 2280 with creases
+  region  5 forehead_R       face range 0.03:  56590 texels, 4982 with creases
+  region  6 crowsfeet_R      face range 0.03:  21587 texels, 1363 with creases
+  region  7 undereye_R       face range 0.03:  21924 texels, 1281 with creases
+  region  8 nasolabial_R     face range 0.03:  39179 texels, 2155 with creases
+  region  9 glabella         face range 0.04:  32447 texels, 2968 with creases
+  region 10 nose             face range 0.03:  32389 texels, 2367 with creases
+  region 11 neck             neck range 0.03: 576018 texels, 41025 with creases
 body: 26 creases in 11 regions
 body: 180112 triangles, rasterising 2048x2048
 body: 59.1% of the texels on her skin
   region  1 elbow_in_L       body range 0.20:  16896 texels, 952 with creases
   region  2 elbow_back_L     body range 0.20:   9643 texels, 541 with creases
   region  3 knee_back_L      body range 0.20:  13154 texels, 580 with creases
-  region  4 hipfold_L        body range 0.20:  24982 texels, 377 with creases
+  region  4 hipfold_L        body range 0.20:  26842 texels, 322 with creases
   region  5 armpit_L         body range 0.25:  34953 texels, 1904 with creases
   region  6 elbow_in_R       body range 0.20:  16424 texels, 945 with creases
   region  7 elbow_back_R     body range 0.20:  10204 texels, 524 with creases
   region  8 knee_back_R      body range 0.20:  15123 texels, 675 with creases
-  region  9 hipfold_R        body range 0.20:  24022 texels, 336 with creases
+  region  9 hipfold_R        body range 0.20:  25945 texels, 289 with creases
   region 10 armpit_R         body range 0.25:  34718 texels, 1911 with creases
-  region 11 belly            body range 0.20:  73876 texels, 4304 with creases
+  region 11 belly            body range 0.20:  98972 texels, 9737 with creases

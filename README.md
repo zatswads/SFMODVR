@@ -41,6 +41,16 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.9.5 (wrinkles tuned from the first headset run of 0.9.1):
+- Her face barely wrinkled: her bone-driven face compresses only 0.03-0.05 in an expression (log: glabella 0.047, nasolabial 0.029),
+  but the face regions needed 0.08-0.10 beyond the threshold for full lines, so they stayed at 0-30 %. The face ranges are now
+  0.025-0.035, and the face lines are 30 % deeper (her skin's subsurface scattering softens them).
+- Squatting drew a thin line across her lower belly like a scar: the belly region was two thin straight creases. It is now one broad,
+  shallow roll that follows the belly's curve (lowest in the middle, rising to the sides) with a raised rounded edge, and a fainter
+  fold above; the crease shade of a fainter fold is weaker too. (The red band and the inward groove in that screenshot were skin marks
+  from her own thighs and the bend groove, both fixed in 0.9.4.)
+- Bundle rebuilt (maps); includes 0.9.4's shaders.
+
 0.9.4 (ripple, marks only from hands, belly roll, rub sound):
 - The ripple was better but still too subtle and gone too fast. Cause: a 1.5 m/s slap started an 8 mm wave that ran out at 1 m/s
   through a fixed 12 cm falloff, so it was over in about 0.15 s. Now it starts bigger (14 mm per m/s above 0.3 m/s, up to 35 mm;
@@ -61,7 +71,8 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 - The skin rub sounded like rubbing carpet. Cause: the built rub loop was 0.5-4 kHz noise with a random level jump every 10 ms, a rough
   crackle. Now a soft, breathy swish (180 Hz - 1.2 kHz with a faint airy sheen, a slow stroke-like swell, no grain), a little quieter.
   Reactions tab: "Rub sound" turns just the rub off ([Reactions] RubSound); slaps, pats and grabs keep sounding. Your own WAVs in
-  Soundsub still come first.
+  Sounds
+ub still come first.
 - Needs the new `sfmorph_shaders` (rebuilt); with the old bundle the log warns and marks still come from every contact.
 
 0.9.3 (voice pitch / formant redone):
