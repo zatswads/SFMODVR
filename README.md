@@ -41,6 +41,14 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.3 (Surprise face built from her face bones):
+- The Surprise face was wrong (should be wide-open eyes and raised brows): her face Animator has no clip named for surprise and none
+  that widens the eyes or raises the brows, so the pick by "most eye movement" played blink / sad / angry clips that close or narrow
+  them. Surprise is now composed from her face bones (the ones the Face sliders move): upper lids up 2.6 mm, lower lids down 1 mm,
+  brows up 4 mm, inner brows 5 mm, a fifth of her widest jaw opening (not while she speaks), along her up direction in the head frame
+  taken from her bind pose (signed: it can't close the eyes); in 60 ms, held, out over 0.4 s. Only bones her Animator rewrites every
+  frame are used (no accumulation; the log names any left out). A clip picked for Surprise in the panel still wins.
+
 0.11.2 (other character sources: the plugin is unchanged, the pipeline takes any rigged humanoid):
 - `run.ps1 -Source <file>` (`tools/sources/humanoid.py`): a DAZ Genesis 2/3/8/9 FBX, a Unity / VRChat avatar FBX, Mixamo, VRM,
   GLB, Character Creator or Unreal figure becomes the same folder the VaM plugin writes (Genesis 2 joints from a bone table

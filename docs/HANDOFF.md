@@ -1,6 +1,6 @@
 # SF Body Morphs — handoff
 
-State at **0.11.2** (branch `main`). 0.11.2 (source adapter `tools/sources/humanoid.py` + `run.ps1 -Source`: any rigged humanoid -> an SfExport folder; groups `Role@material`; verified by a G2 FBX round trip, the G8/G9 / VRChat tables not yet run on a real file; see docs/SOURCES.md). 0.11.1 (pipeline by role, not by her default mesh names: `tools/pipeline/roles.py`;
+State at **0.11.3** (branch `main`). 0.11.3 (ReactionsFace: Surprise built from lid / brow / jaw bones along her bind-pose up in the head frame, only Animator-written bones; a panel pick still wins) built, not yet run in the game. 0.11.2 (source adapter `tools/sources/humanoid.py` + `run.ps1 -Source`: any rigged humanoid -> an SfExport folder; groups `Role@material`; verified by a G2 FBX round trip, the G8/G9 / VRChat tables not yet run on a real file; see docs/SOURCES.md). 0.11.1 (pipeline by role, not by her default mesh names: `tools/pipeline/roles.py`;
 Export writes every variant under her with an `active` column; sfpipe fits the worn variant of each role and lets the others
 follow; bake targets / face-only per face material; `docs/SOURCES.md` = the design for non-VaM sources, not built). 0.11.0 (character import materials, built, pipeline run locally on Yin, not yet seen in
 the game): the baked normal maps carried body shape (detail-only bake now), the albedo was ~2x too bright (gain to her body),

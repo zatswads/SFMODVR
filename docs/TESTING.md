@@ -97,6 +97,13 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+
+## 0.11.3 (built Surprise face)
+
+- [ ] Log `surprise: built from 16 face bones ...` and the `moods:` line shows `Surprise = built: wide eyes, raised brows`; no
+      `left out` line (else those bones are not animated by her controller).
+- [ ] Reactions -> face test Surprise, and soft slaps: eyes open wider, brows go up (inner most), mouth drops a little; never closes the
+      eyes or frowns. Too strong / weak: the constants SUpMm / SBrowMm in ReactionsFace.cs.
 ## 0.11.1 (pipeline by role)
 
 - [ ] Presets tab > Export: the message says "N of them variants she doesn't wear now"; meshes.txt lists reika_face_a and

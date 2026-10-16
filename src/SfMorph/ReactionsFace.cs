@@ -72,6 +72,20 @@ namespace SfMorph
         // 0.9.1: the jaw for audio-driven mouth movement (a voice pack's clips have no lip sync of the game's): the widest jaw opening any
         // face clip writes, as a rotation relative to her neutral jaw (head frame), found by the survey
         int _jaw = -1; Quaternion _jawD = Quaternion.identity; float _jawDeg; string _jawFrom = "";
+        // 0.9.7 Surprise (user: "it should be wide-open, shocked eyes and raised eyebrows"; her controller has no clip that widens the eyes
+        // or raises the brows, so the strength pick played closing / frowning clips): composed from her face bones, the ones the Face sliders
+        // move. Offsets along her up direction in Head_M's frame (pelvis -> chest at bind, so the sign is fixed and it can never close the
+        // eyes), mm at full weight; jaw: a fifth of the widest jaw opening. A clip picked in the panel for Surprise still plays instead.
+        static readonly string[] SUp = { "Eyelid_LeftUpper_skin_0", "Eyelid_LeftUpper_skin_1", "Eyelid_LeftUpper_skin_2", "Eyelid_RightUpper_skin_0", "Eyelid_RightUpper_skin_1", "Eyelid_RightUpper_skin_2" };
+        static readonly string[] SLow = { "Eyelid_LeftLower_skin_0", "Eyelid_LeftLower_skin_1", "Eyelid_LeftLower_skin_2", "Eyelid_RightLower_skin_0", "Eyelid_RightLower_skin_1", "Eyelid_RightLower_skin_2" };
+        static readonly string[] SBrow = { "Eyebrow_Left_Middle", "Eyebrow_Left_Outsite", "Eyebrow_Right_Middle", "Eyebrow_Right_Outsite" };
+        static readonly string[] SBrowIn = { "Eyebrow_Left_Insite", "Eyebrow_Right_Insite" };
+        const float SUpMm = 2.6f, SLowMm = -1.0f, SBrowMm = 4.0f, SBrowInMm = 5.0f, SJaw = 0.22f;
+        int[] _sBones; float[] _sMm;
+        Vector3 _upH = Vector3.up;
+        bool _sOn, _sRel; float _sT, _sW, _sHold;
+        public bool HasBuiltSurprise { get { return _face != null && _sBones != null && _sBones.Length > 0; } }
+
         public bool HasJaw { get { return _phase == 3 && _jaw >= 0 && _jawDeg >= 2f && _face != null && _face[_jaw] != null; } }
         readonly Dictionary<string, string> _hooked = new Dictionary<string, string>();
         string _map = null;
@@ -160,7 +174,49 @@ namespace SfMorph
             _jaw = -1; _jawDeg = 0f; _jawD = Quaternion.identity; _jawFrom = "";
             for (int b = 0; b < nf; b++) { string jn = _face[b].name.ToLowerInvariant(); if (jn == "jaw_m") { _jaw = b; break; } if (_jaw < 0 && jn.Contains("jaw")) _jaw = b; }
             L("bound to '" + _root.name + "' (" + n + " transforms, " + _rends.Length + " renderers), " + nf + " face bones under Head_M (" + nb + " with a bind pose; eyeballs and hair left out)");
+            BindSurprise(bp);
             return nf > 0;
+        }
+
+        // Only bones whose position the controller writes (some clip has them in PosB): the Animator rewrites those every frame, so our offset
+        // never accumulates. Others are dropped (logged).
+        void FilterSurprise()
+        {
+            if (_sBones == null || _sBones.Length == 0) return;
+            var keep = new List<int>(); var mm = new List<float>(); var dropped = new StringBuilder();
+            for (int i = 0; i < _sBones.Length; i++)
+            {
+                int b = _sBones[i]; bool w = false;
+                foreach (var c in _clips) if (c.PosB != null && c.PosB[b]) { w = true; break; }
+                if (w) { keep.Add(b); mm.Add(_sMm[i]); } else { if (dropped.Length > 0) dropped.Append(", "); dropped.Append(_face[b].name); }
+            }
+            _sBones = keep.ToArray(); _sMm = mm.ToArray();
+            if (dropped.Length > 0) L("surprise: left out (no clip animates their position, an offset would add up): " + dropped);
+            if (_sBones.Length == 0) L("surprise: no animated lid or brow bone left: Surprise falls back to a clip");
+        }
+
+        void BindSurprise(Dictionary<Transform, Matrix4x4> bp)
+        {
+            var idx = new List<int>(); var mm = new List<float>();
+            for (int b = 0; b < _face.Length; b++)
+            {
+                string n = _face[b].name;
+                if (Array.IndexOf(SUp, n) >= 0) { idx.Add(b); mm.Add(SUpMm); }
+                else if (Array.IndexOf(SLow, n) >= 0) { idx.Add(b); mm.Add(SLowMm); }
+                else if (Array.IndexOf(SBrowIn, n) >= 0) { idx.Add(b); mm.Add(SBrowInMm); }
+                else if (Array.IndexOf(SBrow, n) >= 0) { idx.Add(b); mm.Add(SBrowMm); }
+            }
+            _sBones = idx.ToArray(); _sMm = mm.ToArray();
+            // her up in Head_M's frame: pelvis -> chest at bind (else as posed now)
+            Transform pel = null, chest = null;
+            foreach (var t in _all) { if (t == null) continue; if (t.name == "Root_M") pel = t; else if (t.name == "Chest_M") chest = t; }
+            Vector3 up = Vector3.zero;
+            Matrix4x4 H, Bp, Bc;
+            if (pel != null && chest != null && bp.TryGetValue(_head, out H) && bp.TryGetValue(pel, out Bp) && bp.TryGetValue(chest, out Bc))
+                up = H.MultiplyVector(Bc.inverse.MultiplyPoint3x4(Vector3.zero) - Bp.inverse.MultiplyPoint3x4(Vector3.zero));
+            else if (pel != null && chest != null) up = _head.InverseTransformDirection(chest.position - pel.position);
+            _upH = up.sqrMagnitude > 1e-8f ? up.normalized : Vector3.up;
+            L("surprise: built from " + _sBones.Length + " face bones (upper lids +" + SUpMm + " mm, lower " + SLowMm + ", brows +" + SBrowMm + ", inner +" + SBrowInMm + ", jaw " + SJaw + " of its widest), her up in the head frame " + _upH.ToString("F2"));
         }
 
         // ---------------- snapshot / restore ----------------
@@ -288,6 +344,7 @@ namespace SfMorph
             for (int i = 0; i < NM; i++) { _pick[i] = null; _pickWhy[i] = null; if (_pool[i] != null) _pool[i].Clear(); }
             _anim = null; _go = null; _root = null; _head = null; _ctrl = null; _all = null; _rends = null; _face = null;
             _cur = null; _curMood = -1; _pendMood = -1; _sampleBroken = false; _map = null; _watchTag = null;
+            _sOn = false; _sBones = null; _sMm = null;
             Status = why;
         }
 
@@ -377,6 +434,7 @@ namespace SfMorph
             var sb = new StringBuilder();
             sb.Append(_ranked.Count).Append(" of ").Append(_clips.Count).Append(" clips move her face (surveyed in ").Append((now - _t0).ToString("0.0")).Append(" s)");
             L(sb.ToString());
+            FilterSurprise();
             L(_jaw < 0 ? "jaw: no jaw bone among her face bones (no audio-driven mouth)" : _jawDeg < 2f ? "jaw: no clip opens her jaw (no audio-driven mouth)"
               : "jaw: " + _face[_jaw].name + " opens up to " + _jawDeg.ToString("0") + " deg (widest in '" + _jawFrom + "'): used for the voice pack's mouth");
             for (int i = 0; i < _ranked.Count && i < 40; i += 5)
@@ -509,6 +567,7 @@ namespace SfMorph
                 }
                 if (c != null) { _pick[m] = c; _pickWhy[m] = m == Climax || m == Ticklish ? "same as " + MoodNames[m == Climax ? Pleasure3 : Pleasure1] : "by strength only"; used.Add(c); }
             }
+            if (HasBuiltSurprise && _pickWhy[Surprise] != "your pick") { _pick[Surprise] = null; _pickWhy[Surprise] = "built: wide eyes, raised brows"; }
             if (log || !_logged)
             {
                 _logged = true;
@@ -516,7 +575,7 @@ namespace SfMorph
                 for (int m = 0; m < NM; m++)
                 {
                     if (m > 0) sb.Append(", ");
-                    sb.Append(MoodNames[m]).Append(" = ").Append(_pick[m] != null ? "'" + _pick[m].Name + "' (" + _pickWhy[m] + ")" : "none");
+                    sb.Append(MoodNames[m]).Append(" = ").Append(_pick[m] != null ? "'" + _pick[m].Name + "' (" + _pickWhy[m] + ")" : _pickWhy[m] != null ? _pickWhy[m] : "none");
                 }
                 L(sb.ToString());
             }
@@ -670,6 +729,12 @@ namespace SfMorph
         {
             why = null;
             if (_phase != 3 || _sampleBroken) { why = _sampleBroken ? "off" : "surveying"; return false; }
+            if (m == Surprise && _pick[m] == null && HasBuiltSurprise)
+            {
+                if (_cur != null && !_rel && Prio(_curMood) > Prio(m)) { why = "busy"; return false; }
+                _sOn = true; _sRel = false; _sT = 0f; _sW = Mathf.Clamp01(weight); _sHold = Mathf.Max(0.1f, hold);
+                return true;
+            }
             if (m < 0 || m >= NM || _pick[m] == null) { why = "no clip"; return false; }
             if (_cur != null && !_rel && Prio(_curMood) > Prio(m)) { why = "busy"; return false; }
             var ci = Choose(m);
@@ -687,11 +752,37 @@ namespace SfMorph
             return true;
         }
 
-        public string CurrentName { get { return _cur != null ? _cur.Ci.Name : ""; } }
+        public string CurrentName { get { return _cur != null ? _cur.Ci.Name : _sOn ? "built surprise" : ""; } }
         public int CurrentMood { get { return _cur != null ? _curMood : -1; } }
 
         // Body.ApplyAll for her, after the Animator and before the bone sliders: the face of this frame. mouthFree: she isn't speaking or moaning.
         public void Step(float dt, bool mouthFree, float scale)
+        {
+            ClipStep(dt, mouthFree, scale);
+            SurpriseStep(dt, mouthFree, scale);
+        }
+
+        // the built surprise: fast in (60 ms), held, out over 0.4 s
+        void SurpriseStep(float dt, bool mouthFree, float scale)
+        {
+            if (!_sOn || _face == null || _sBones == null || _anim == null || !_anim.isActiveAndEnabled || _head == null) return;
+            _sT += dt;
+            const float att = 0.06f, rel = 0.4f;
+            float env = _sT < att ? _sT / att : _sT < att + _sHold ? 1f : 1f - (_sT - att - _sHold) / rel;
+            if (_sT >= att + _sHold) _sRel = true;
+            if (env <= 0f) { _sOn = false; return; }
+            float w = Mathf.Clamp01(env * _sW * scale);
+            for (int i = 0; i < _sBones.Length; i++)
+            {
+                var t = _face[_sBones[i]];
+                if (t == null || t.parent == null) continue;
+                Vector3 world = _head.TransformVector(_upH * (_sMm[i] * 0.001f * w));
+                t.localPosition += t.parent.InverseTransformVector(world);
+            }
+            if (mouthFree) JawStep(SJaw * w);
+        }
+
+        void ClipStep(float dt, bool mouthFree, float scale)
         {
             if (_cur == null || _face == null || _anim == null || !_anim.isActiveAndEnabled) return;
             _t += dt;
@@ -723,7 +814,7 @@ namespace SfMorph
             }
         }
 
-        public void Stop() { _cur = null; _curMood = -1; _pendMood = -1; }
+        public void Stop() { _cur = null; _curMood = -1; _pendMood = -1; _sOn = false; }
 
         // 0.9.1: open 0..1 of the widest jaw opening, on top of what the Animator (and a face clip) left on the jaw this frame.
         public void JawStep(float open)
