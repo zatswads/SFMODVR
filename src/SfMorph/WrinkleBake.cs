@@ -1,55 +1,100 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using UnityEngine;
 using UnityEngine.Rendering;
 
 namespace SfMorph
 {
-    // One renderer's wrinkle data, baked on the CPU (0.7.4). This layout is the contract with Wrinkles.compute /
-    // WrinkleRaster.shader (see design-0.7.4.md section 3). All 3D data is in the mesh's own (bind) space.
+    // An authored wrinkle layout (0.9.0, tools/wrinkles/author.py): the creases of one UV layout (her face sheet, her body atlas) and its
+    // regions. Detail = the crease slope / depth / region fade (GPU only); Region = region id, measuring weight and crease direction per
+    // texel (read here, point-fetched in the blend).
+    internal class WrinkleLayout
+    {
+        public string Name;
+        public Texture2D Detail, Region;
+        public Color32[] Px;                 // Region's texels (row 0 = v 0)
+        public int W, H;
+        public readonly List<string> RegionName = new List<string>();
+        public readonly List<string> RegionClass = new List<string>();   // face / neck / body
+        public readonly List<float> Range = new List<float>();          // compression beyond the threshold for a full fade-in
+
+        public int Count { get { return RegionName.Count; } }
+
+        // texel of uv (nearest, clamped)
+        public Color32 At(Vector2 uv)
+        {
+            int x = Mathf.Clamp((int)(uv.x * W), 0, W - 1), y = Mathf.Clamp((int)(uv.y * H), 0, H - 1);
+            return Px[y * W + x];
+        }
+
+        // Parses wrinkle_layouts.txt and finds each layout's two textures through load(name); bad lines are skipped with a note.
+        public static List<WrinkleLayout> Parse(string text, Func<string, Texture2D> load, List<string> notes)
+        {
+            var res = new List<WrinkleLayout>();
+            WrinkleLayout cur = null;
+            foreach (var raw in text.Split('\n'))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line[0] == '#') continue;
+                var t = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                if (t[0] == "layout" && t.Length >= 2)
+                {
+                    cur = new WrinkleLayout { Name = t[1] };
+                    cur.Detail = load("wrinkle_" + cur.Name + "_detail");
+                    cur.Region = load("wrinkle_" + cur.Name + "_region");
+                    if (cur.Detail == null || cur.Region == null) { notes.Add(cur.Name + ": textures missing"); cur = null; continue; }
+                    try { cur.Px = cur.Region.GetPixels32(); cur.W = cur.Region.width; cur.H = cur.Region.height; }
+                    catch (Exception e) { notes.Add(cur.Name + ": region map unreadable (" + e.Message + ")"); cur = null; continue; }
+                    res.Add(cur);
+                }
+                else if (t[0] == "region" && cur != null && t.Length >= 5)
+                {
+                    int idx;
+                    float rg;
+                    if (!int.TryParse(t[1], out idx) || idx != cur.Count + 1 || idx > Wrinkles.MaxRegions
+                        || !float.TryParse(t[4], NumberStyles.Float, CultureInfo.InvariantCulture, out rg)) { notes.Add(cur.Name + ": bad line '" + line + "'"); continue; }
+                    cur.RegionName.Add(t[2]);
+                    cur.RegionClass.Add(t[3]);
+                    cur.Range.Add(Mathf.Max(0.01f, rg));
+                }
+            }
+            return res;
+        }
+    }
+
+    // One renderer's wrinkle data (0.9.0), baked on the CPU: the triangles under an authored region with their neutral (rest) frame.
+    // Contract with Wrinkles.compute: Tris = 3 vertex ids per region triangle; RegTri = 8 floats per region triangle: DmInv (m00 m01 m10
+    // m11), the region's compression direction in the triangle's (t, b) rest basis (unit), weight (fixed point: region weight x rest area
+    // x WeightPerM2), region index (0-based). All 3D data is in the mesh's own (bind) space.
     internal class BakeResult
     {
         public SkinnedMeshRenderer R;
         public Mesh Mesh;              // the mesh baked (the one the renderer showed)
-        public Material Mat;           // the material whose normal slot this renderer feeds (its sheet)
+        public Material Mat;           // the material whose slots this renderer feeds (its sheet)
         public int Submesh;            // which submesh/material slot of R
-        public int V, T;               // vertex count, triangle count (of the baked submesh's triangles, indices into V)
-        public int[] Tris;             // 3*T vertex indices
-        public Vector2[] Uv;           // V (UV0)
-        public uint[] Canon;           // V: canonical (welded) vertex id per vertex (a canonical vertex maps to itself)
-        public uint[] AdjOff;          // V+1: CSR offsets over canonical ids into AdjTri (empty range for non-canonical ids)
-        public uint[] AdjTri;          // triangles adjacent to each canonical vertex (across weld groups)
-        public float[] RestTri;        // 20 floats per triangle: DmInv(2x2: 4), area(1), t(3), b(3), J(2x3 row-major: 6), pad(3)
-        public float[] RestV;          // 12 floats per vertex: restPos(3), patchOrigin(3), patchRefDir(3), mask(1), spacing m(1), pad(1)
-        public int PosOff, NrmOff;     // stream-0 byte offsets of Position/Normal in the mesh's layout
-        public bool Face;              // face sheet (else neck/body)
+        public int V, T;               // vertex count, triangle count of the submesh
+        public int RT;                 // region triangles
+        public int[] Tris;             // 3*RT vertex indices
+        public float[] RegTri;         // 8*RT
+        public int[] SrcTri;           // RT: the submesh triangle each region triangle is
+        public float[] DirUv;          // 2*RT: the crease line's direction in UV (cos a, sin a)
+        public float[] Weight;         // RT: the region map's weight (0..1)
+        public float[] RestP;          // 3 per vertex for the first min(V, 512) vertices (the skinned buffer's scale check)
+        public int PosOff;             // stream-0 byte offset of Position
+        public float Coverage;         // share of the submesh's triangles on the layout's UV islands
+        public int[] PerRegion;        // region triangles per region
         public string Note = "";       // one-line stats for the log
-
-        internal WrinkleBake.Aux Aux;  // bake-private (patch seeds for Recapture); not part of the contract
     }
 
-    // CPU bake of the wrinkle data (0.7.4, design section 2). Neutral pose = the renderer's bind pose with its active blendshapes
-    // at their current weights and the body-slider bone scales (Body.ScaleOf); no animation. Nothing here throws: failures come
-    // back as an error string.
+    // CPU bake of the wrinkle data. Neutral pose = the renderer's bind pose with its active blendshapes at their current weights and the
+    // body-slider bone scales (Body.ScaleOf); no animation. Nothing here throws: failures come back as an error string.
     internal static class WrinkleBake
     {
-        // Wrinkle fold spacing in metres, written into RestV (set from the config before Bake / Recapture; a Recapture refreshes it).
-        public static float SpacingFace = 0.004f, SpacingBody = 0.008f;
-
-        const double WeldQuantum = 1e-5;                // rest positions closer than this (per axis, quantised) are one vertex
-        const float PatchRadiusFace = 0.03f, PatchRadiusBody = 0.035f;
-        const float PatchNormalAgree = 0.7f;            // dot(normal, patch seed normal) must exceed this
-        const float MaskEyelid = 0f, MaskLip = 0.5f;
-        const int RtStride = 20, RvStride = 12;
-
-        internal class Aux
-        {
-            public float[] Mask;          // V, region mask (weld-group minimum)
-            public int[] PatchOf;         // V, patch id or -1 (vertices of no triangle)
-            public int[] PatchSeed;       // canonical vertex id of each patch's seed
-            public int[] PatchTri;        // first triangle adjacent to the seed
-        }
+        public const float WeightPerM2 = 1e8f;          // fixed-point units per square metre of region weight (a region < 40 dm^2 fits 32 bits)
+        public const float MinCoverage = 0.9f;          // a mesh whose triangles mostly miss the layout's islands has another UV layout
+        const double WeldQuantum = 1e-5;                // ContactBake's weld key: rest positions closer than this (per axis, quantised) are one vertex
 
         class Src
         {
@@ -65,20 +110,22 @@ namespace SfMorph
 
         // ---- public API ----
 
-        // Full bake of renderer r (submesh sub) against the neutral pose (bind pose + active blendshapes + bone scale).
-        public static BakeResult Bake(SkinnedMeshRenderer r, int sub, Character her, bool face, out string error)
+        // Full bake of renderer r (submesh sub) against the neutral pose, on layout L. Null + error when the mesh isn't on the layout
+        // (coverage) or can't be read.
+        public static BakeResult Bake(SkinnedMeshRenderer r, int sub, Character her, WrinkleLayout L, out string error)
         {
             error = null;
             try
             {
                 var sw = Stopwatch.StartNew();
                 if (r == null) { error = "no renderer"; return null; }
+                if (L == null) { error = "no wrinkle layout"; return null; }
                 var m = r.sharedMesh;
                 if (m == null) { error = "renderer has no mesh"; return null; }
                 var mats = r.sharedMaterials;
                 if (sub < 0 || sub >= mats.Length || mats[sub] == null) { error = "no material in slot " + sub; return null; }
-                int posOff, nrmOff;
-                error = ReadLayout(m, out posOff, out nrmOff);
+                int posOff;
+                error = ReadLayout(m, out posOff);
                 if (error != null) return null;
                 Src s = ReadSrc(m, sub, out error);
                 if (s == null) return null;
@@ -86,68 +133,62 @@ namespace SfMorph
                 for (int i = 0; i < s.Tri.Length; i++)
                     if (s.Tri[i] < 0 || s.Tri[i] >= V) { error = "triangle index " + s.Tri[i] + " out of range (" + V + " vertices)"; return null; }
 
+                // which triangles lie under a region: the region map at the UV centroid; the weight averaged over the centroid and the
+                // corners (a corner in another region counts 0)
+                var src = new List<int>();
+                var reg = new List<int>();
+                var wts = new List<float>();
+                var dirs = new List<float>();
+                var per = new int[L.Count];
+                int onIsland = 0;
+                for (int t = 0; t < T; t++)
+                {
+                    Vector2 a = s.Uv[s.Tri[3 * t]], b = s.Uv[s.Tri[3 * t + 1]], c = s.Uv[s.Tri[3 * t + 2]];
+                    Color32 px = L.At((a + b + c) / 3f);
+                    if (px.r != 255) onIsland++;
+                    int id = px.r;
+                    if (id < 1 || id > L.Count || px.g == 0) continue;
+                    float w = px.g;
+                    Color32 q;
+                    q = L.At(a); if (q.r == id) w += q.g;
+                    q = L.At(b); if (q.r == id) w += q.g;
+                    q = L.At(c); if (q.r == id) w += q.g;
+                    w /= 4f * 255f;
+                    if (w < 0.01f) continue;
+                    float c2 = px.b / 127.5f - 1f, s2 = px.a / 127.5f - 1f;
+                    float ang = 0.5f * Mathf.Atan2(s2, c2);
+                    src.Add(t); reg.Add(id - 1); wts.Add(w); dirs.Add(Mathf.Cos(ang)); dirs.Add(Mathf.Sin(ang));
+                    per[id - 1]++;
+                }
+                float cov = T > 0 ? (float)onIsland / T : 0f;
+                if (cov < MinCoverage)
+                {
+                    error = "its UVs are not on the '" + L.Name + "' wrinkle layout (" + (cov * 100f).ToString("0") + "% of its triangles on the layout's islands)";
+                    return null;
+                }
+
                 string bsNote;
                 Vector3[] N = Neutral(r, m, s, her, out bsNote);
-
-                var b = new BakeResult
+                var res = new BakeResult
                 {
-                    R = r, Mesh = m, Mat = mats[sub], Submesh = sub, V = V, T = T, Tris = s.Tri, Uv = s.Uv,
-                    PosOff = posOff, NrmOff = nrmOff, Face = face
+                    R = r, Mesh = m, Mat = mats[sub], Submesh = sub, V = V, T = T, PosOff = posOff, Coverage = cov, PerRegion = per,
+                    RT = src.Count, SrcTri = src.ToArray(), Weight = wts.ToArray(), DirUv = dirs.ToArray()
                 };
-
-                // weld groups by quantised rest position
-                var canon = new uint[V];
-                var seen = new Dictionary<ulong, int>(V);
-                int groups = 0;
-                for (int i = 0; i < V; i++)
+                res.Tris = new int[3 * res.RT];
+                res.RegTri = new float[8 * res.RT];
+                for (int i = 0; i < res.RT; i++)
                 {
-                    ulong key = Quant(N[i]);
-                    int first;
-                    if (seen.TryGetValue(key, out first)) canon[i] = (uint)first;
-                    else { seen[key] = i; canon[i] = (uint)i; groups++; }
+                    for (int k = 0; k < 3; k++) res.Tris[3 * i + k] = s.Tri[3 * res.SrcTri[i] + k];
+                    res.RegTri[8 * i + 7] = reg[i];
                 }
-                b.Canon = canon;
-
-                // CSR adjacency over canonical ids
-                var off = new uint[V + 1];
-                for (int t = 0; t < T; t++)
-                {
-                    uint c0 = canon[s.Tri[3 * t]], c1 = canon[s.Tri[3 * t + 1]], c2 = canon[s.Tri[3 * t + 2]];
-                    off[c0 + 1]++;
-                    if (c1 != c0) off[c1 + 1]++;
-                    if (c2 != c0 && c2 != c1) off[c2 + 1]++;
-                }
-                for (int i = 0; i < V; i++) off[i + 1] += off[i];
-                var adj = new uint[off[V]];
-                var cur = new uint[V];
-                Array.Copy(off, cur, V);
-                for (int t = 0; t < T; t++)
-                {
-                    uint c0 = canon[s.Tri[3 * t]], c1 = canon[s.Tri[3 * t + 1]], c2 = canon[s.Tri[3 * t + 2]];
-                    adj[cur[c0]++] = (uint)t;
-                    if (c1 != c0) adj[cur[c1]++] = (uint)t;
-                    if (c2 != c0 && c2 != c1) adj[cur[c2]++] = (uint)t;
-                }
-                b.AdjOff = off;
-                b.AdjTri = adj;
-
-                // per-triangle rest basis, inverse rest edge matrix, area, UV Jacobian
-                b.RestTri = new float[T * RtStride];
-                FillTriangles(b, N);
-                Vector3[] nC = CanonNormals(b);
-
-                // patches: BFS over canonical adjacency in rest space
-                var aux = new Aux { Mask = RegionMask(r, s, canon, face) };
-                BuildPatches(b, aux, N, nC, face ? PatchRadiusFace : PatchRadiusBody);
-                b.Aux = aux;
-
-                b.RestV = new float[V * RvStride];
-                FillRestV(b, N, nC);
-
+                int bad = FillRegTri(res, N, s.Uv);
+                FillRestP(res, N);
                 sw.Stop();
-                b.Note = "V " + V + " T " + T + ", " + aux.PatchSeed.Length + " patches, " + (V - groups) + " welded, " + sw.ElapsedMilliseconds + " ms"
-                    + (bsNote.Length > 0 ? ", " + bsNote : "");
-                return b;
+                var regs = new System.Text.StringBuilder();
+                for (int k = 0; k < per.Length; k++) if (per[k] > 0) regs.Append(regs.Length > 0 ? " " : "").Append(L.RegionName[k]).Append(':').Append(per[k]);
+                res.Note = "V " + V + " T " + T + ", " + res.RT + " region triangles [" + regs + "]" + (bad > 0 ? " (" + bad + " degenerate)" : "")
+                    + ", coverage " + (cov * 100f).ToString("0") + "%, " + sw.ElapsedMilliseconds + " ms" + (bsNote.Length > 0 ? ", " + bsNote : "");
+                return res;
             }
             catch (Exception e)
             {
@@ -156,14 +197,13 @@ namespace SfMorph
             }
         }
 
-        // Recapture only: rest frames and patch origins against the current neutral (same topology). Weld groups, adjacency, patch
-        // membership and masks are kept; RestTri, RestV[0..8] (rest position, patch origin/ref dir) and spacing are rewritten in place.
+        // Recapture only: the rest frames against the current neutral (same topology and region triangles); RegTri is rewritten in place.
         public static bool Recapture(BakeResult b, Character her, out string error)
         {
             error = null;
             try
             {
-                if (b == null || b.Aux == null) { error = "no bake"; return false; }
+                if (b == null) { error = "no bake"; return false; }
                 var r = b.R;
                 if (r == null) { error = "renderer gone"; return false; }
                 var m = r.sharedMesh;
@@ -173,9 +213,8 @@ namespace SfMorph
                 if (s.P.Length != b.V || s.Tri.Length != b.T * 3) { error = "topology changed (" + s.P.Length + "/" + (s.Tri.Length / 3) + " vs " + b.V + "/" + b.T + ")"; return false; }
                 string bsNote;
                 Vector3[] N = Neutral(r, m, s, her, out bsNote);
-                FillTriangles(b, N);
-                Vector3[] nC = CanonNormals(b);
-                FillRestV(b, N, nC);
+                FillRegTri(b, N, s.Uv);
+                FillRestP(b, N);
                 return true;
             }
             catch (Exception e)
@@ -187,15 +226,14 @@ namespace SfMorph
 
         // ---- mesh data ----
 
-        // Position and Normal Float32x3 on stream 0 (what the compute shader reads from the skinned buffer); null = fine, else the reason.
-        static string ReadLayout(Mesh m, out int posOff, out int nrmOff)
+        // Position Float32x3 on stream 0 (what the compute shader reads from the skinned buffer); null = fine, else the reason.
+        static string ReadLayout(Mesh m, out int posOff)
         {
-            posOff = nrmOff = 0;
-            if (!m.HasVertexAttribute(VertexAttribute.Position) || !m.HasVertexAttribute(VertexAttribute.Normal)) return "mesh has no position/normal";
-            string w = CheckAttr(m, VertexAttribute.Position) ?? CheckAttr(m, VertexAttribute.Normal);
+            posOff = 0;
+            if (!m.HasVertexAttribute(VertexAttribute.Position)) return "mesh has no position";
+            string w = CheckAttr(m, VertexAttribute.Position);
             if (w != null) return w;
             posOff = m.GetVertexAttributeOffset(VertexAttribute.Position);
-            nrmOff = m.GetVertexAttributeOffset(VertexAttribute.Normal);
             return null;
         }
 
@@ -364,211 +402,49 @@ namespace SfMorph
 
         // ---- per-triangle rest data ----
 
-        // DmInv is row-major [[1/|e1|, -(e2.t)/(|e1| e2.b)], [0, 1/e2.b]] with Dm = [e1 e2] as columns in the (t,b) basis (e1 = (|e1|,0),
-        // e2 = (e2.t, e2.b)); J = Duv * DmInv * [t; b]. Degenerate triangles are all zeros (area 0 = ignore).
-        static void FillTriangles(BakeResult b, Vector3[] N)
+        // Per region triangle: DmInv (row-major [[1/|e1|, -(e2.t)/(|e1| e2.b)], [0, 1/e2.b]], Dm = [e1 e2] in the (t, b) basis, t along
+        // e1); the compression direction = across the crease lines (the line's UV direction mapped into 3D through d(rest)/d(u, v), turned
+        // 90 degrees in the triangle's plane) in (t, b); weight = region weight x rest area x WeightPerM2. Degenerate triangles get weight
+        // 0 (the kernel skips them). Keeps slot 7 (region index). Returns how many were degenerate.
+        static int FillRegTri(BakeResult b, Vector3[] N, Vector2[] uv)
         {
-            var tri = b.Tris;
-            var uv = b.Uv;
-            var rt = b.RestTri;
-            for (int t = 0; t < b.T; t++)
+            int bad = 0;
+            var rt = b.RegTri;
+            for (int i = 0; i < b.RT; i++)
             {
-                int o = t * RtStride;
-                for (int k = 0; k < RtStride; k++) rt[o + k] = 0f;
-                int ia = tri[3 * t], ib = tri[3 * t + 1], ic = tri[3 * t + 2];
+                int o = 8 * i;
+                for (int k = 0; k < 7; k++) rt[o + k] = 0f;
+                int ia = b.Tris[3 * i], ib = b.Tris[3 * i + 1], ic = b.Tris[3 * i + 2];
                 Vector3 p0 = N[ia], e1 = N[ib] - p0, e2 = N[ic] - p0;
                 Vector3 n = Vector3.Cross(e1, e2);
                 float len = n.magnitude, l1 = e1.magnitude;
-                if (!(len > 2e-12f) || !(l1 > 1e-7f)) continue;
+                if (!(len > 2e-12f) || !(l1 > 1e-7f)) { bad++; continue; }
                 Vector3 tv = e1 / l1, nn = n / len, bv = Vector3.Cross(nn, tv);
                 float e2t = Vector3.Dot(e2, tv), e2b = Vector3.Dot(e2, bv);
-                if (!(Mathf.Abs(e2b) > 1e-8f)) continue;
-                float m00 = 1f / l1, m01 = -e2t / (l1 * e2b), m10 = 0f, m11 = 1f / e2b;
+                if (!(Mathf.Abs(e2b) > 1e-8f)) { bad++; continue; }
                 Vector2 d1 = uv[ib] - uv[ia], d2 = uv[ic] - uv[ia];
-                float a00 = d1.x * m00 + d2.x * m10, a01 = d1.x * m01 + d2.x * m11;
-                float a10 = d1.y * m00 + d2.y * m10, a11 = d1.y * m01 + d2.y * m11;
-                Vector3 ju = a00 * tv + a01 * bv, jv = a10 * tv + a11 * bv;
-                if (float.IsNaN(ju.x + ju.y + ju.z + jv.x + jv.y + jv.z) || float.IsInfinity(ju.x + ju.y + ju.z + jv.x + jv.y + jv.z)) continue;
-                rt[o] = m00; rt[o + 1] = m01; rt[o + 2] = m10; rt[o + 3] = m11;
-                rt[o + 4] = 0.5f * len;
-                rt[o + 5] = tv.x; rt[o + 6] = tv.y; rt[o + 7] = tv.z;
-                rt[o + 8] = bv.x; rt[o + 9] = bv.y; rt[o + 10] = bv.z;
-                rt[o + 11] = ju.x; rt[o + 12] = ju.y; rt[o + 13] = ju.z;
-                rt[o + 14] = jv.x; rt[o + 15] = jv.y; rt[o + 16] = jv.z;
+                float det = d1.x * d2.y - d2.x * d1.y;
+                if (!(Mathf.Abs(det) > 1e-14f)) { bad++; continue; }
+                Vector3 pu = (e1 * d2.y - e2 * d1.y) / det, pv = (e2 * d1.x - e1 * d2.x) / det;   // d(rest)/du, d(rest)/dv
+                Vector3 line = pu * b.DirUv[2 * i] + pv * b.DirUv[2 * i + 1];
+                line -= Vector3.Dot(line, nn) * nn;
+                if (!(line.sqrMagnitude > 1e-20f)) { bad++; continue; }
+                Vector3 across = Vector3.Cross(nn, line.normalized);
+                float dt = Vector3.Dot(across, tv), db = Vector3.Dot(across, bv);
+                float dl = Mathf.Sqrt(dt * dt + db * db);
+                if (!(dl > 1e-6f)) { bad++; continue; }
+                rt[o] = 1f / l1; rt[o + 1] = -e2t / (l1 * e2b); rt[o + 2] = 0f; rt[o + 3] = 1f / e2b;
+                rt[o + 4] = dt / dl; rt[o + 5] = db / dl;
+                rt[o + 6] = b.Weight[i] * 0.5f * len * WeightPerM2;
             }
+            return bad;
         }
 
-        // Area-weighted rest normal per canonical vertex (zero for vertices of no triangle and for non-canonical ids).
-        static Vector3[] CanonNormals(BakeResult b)
+        static void FillRestP(BakeResult b, Vector3[] N)
         {
-            var nC = new Vector3[b.V];
-            var rt = b.RestTri;
-            var off = b.AdjOff;
-            var adj = b.AdjTri;
-            for (int c = 0; c < b.V; c++)
-            {
-                Vector3 sum = Vector3.zero;
-                for (uint i = off[c]; i < off[c + 1]; i++)
-                {
-                    int o = (int)adj[i] * RtStride;
-                    float area = rt[o + 4];
-                    if (area <= 0f) continue;
-                    // t x b = the triangle normal
-                    var tv = new Vector3(rt[o + 5], rt[o + 6], rt[o + 7]);
-                    var bv = new Vector3(rt[o + 8], rt[o + 9], rt[o + 10]);
-                    sum += Vector3.Cross(tv, bv) * area;
-                }
-                nC[c] = sum.sqrMagnitude > 1e-20f ? sum.normalized : Vector3.zero;
-            }
-            return nC;
-        }
-
-        // ---- region masks ----
-
-        // Face sheet: 1, but vertices weighted > 0.5 to Eyelid* bones -> 0 (blinks would flicker) and to Lip* bones -> 0.5. Body sheets: 1.
-        // The weld group takes the minimum; vertices of no triangle get 0.
-        static float[] RegionMask(SkinnedMeshRenderer r, Src s, uint[] canon, bool face)
-        {
-            int V = s.P.Length;
-            var mask = new float[V];
-            for (int i = 0; i < V; i++) mask[i] = 1f;
-            if (face)
-            {
-                var bones = r.bones;
-                int nb = s.Bind.Length;
-                var kind = new byte[nb];   // 1 = lid, 2 = lip
-                bool any = false;
-                for (int i = 0; i < nb && i < bones.Length; i++)
-                {
-                    if (bones[i] == null) continue;
-                    string n = bones[i].name;
-                    if (n.StartsWith("Eyelid", StringComparison.OrdinalIgnoreCase)) { kind[i] = 1; any = true; }
-                    else if (n.StartsWith("Lip", StringComparison.OrdinalIgnoreCase)) { kind[i] = 2; any = true; }
-                }
-                if (any)
-                    for (int v = 0; v < V; v++)
-                    {
-                        var w = s.W[v];
-                        float lid = 0f, lip = 0f;
-                        Kind(kind, w.boneIndex0, w.weight0, ref lid, ref lip);
-                        Kind(kind, w.boneIndex1, w.weight1, ref lid, ref lip);
-                        Kind(kind, w.boneIndex2, w.weight2, ref lid, ref lip);
-                        Kind(kind, w.boneIndex3, w.weight3, ref lid, ref lip);
-                        if (lid > 0.5f) mask[v] = MaskEyelid;
-                        else if (lip > 0.5f) mask[v] = MaskLip;
-                    }
-            }
-            var groupMin = new float[V];
-            for (int i = 0; i < V; i++) groupMin[i] = 1f;
-            for (int i = 0; i < V; i++) { int c = (int)canon[i]; if (mask[i] < groupMin[c]) groupMin[c] = mask[i]; }
-            for (int i = 0; i < V; i++) mask[i] = groupMin[(int)canon[i]];
-            return mask;
-        }
-
-        static void Kind(byte[] kind, int bone, float wt, ref float lid, ref float lip)
-        {
-            if (wt <= 0f || bone < 0 || bone >= kind.Length) return;
-            if (kind[bone] == 1) lid += wt; else if (kind[bone] == 2) lip += wt;
-        }
-
-        // ---- patches ----
-
-        // Greedy patches over canonical vertices (seed = lowest unassigned id): BFS through triangle neighbours, accepting a vertex within
-        // the radius of the seed (rest space) whose normal agrees with the seed's (dot > 0.7). Every vertex of a triangle gets a patch.
-        static void BuildPatches(BakeResult b, Aux aux, Vector3[] N, Vector3[] nC, float radius)
-        {
-            int V = b.V;
-            var canon = b.Canon;
-            var off = b.AdjOff;
-            var adj = b.AdjTri;
-            var tris = b.Tris;
-            var patchOf = new int[V];
-            for (int i = 0; i < V; i++) patchOf[i] = -1;
-            var seeds = new List<int>();
-            var seedTri = new List<int>();
-            var q = new Queue<int>();
-            float r2 = radius * radius;
-            for (int c = 0; c < V; c++)
-            {
-                if (canon[c] != (uint)c || off[c + 1] == off[c] || patchOf[c] >= 0 || nC[c].sqrMagnitude < 0.5f) continue;
-                int pid = seeds.Count;
-                seeds.Add(c);
-                seedTri.Add((int)adj[off[c]]);
-                patchOf[c] = pid;
-                q.Clear();
-                q.Enqueue(c);
-                Vector3 sp = N[c], sn = nC[c];
-                while (q.Count > 0)
-                {
-                    int u = q.Dequeue();
-                    for (uint i = off[u]; i < off[u + 1]; i++)
-                    {
-                        int tr = (int)adj[i];
-                        for (int k = 0; k < 3; k++)
-                        {
-                            int w = (int)canon[tris[3 * tr + k]];
-                            if (patchOf[w] >= 0) continue;
-                            if ((N[w] - sp).sqrMagnitude > r2) continue;
-                            if (Vector3.Dot(nC[w], sn) <= PatchNormalAgree) continue;
-                            patchOf[w] = pid;
-                            q.Enqueue(w);
-                        }
-                    }
-                }
-            }
-            // canonical vertices whose normal was degenerate got no patch from a seed: make them their own patch so nothing is left out
-            for (int c = 0; c < V; c++)
-            {
-                if (canon[c] != (uint)c || off[c + 1] == off[c] || patchOf[c] >= 0) continue;
-                patchOf[c] = seeds.Count;
-                seeds.Add(c);
-                seedTri.Add((int)adj[off[c]]);
-            }
-            for (int i = 0; i < V; i++) if (canon[i] != (uint)i) patchOf[i] = patchOf[canon[i]];
-            aux.PatchOf = patchOf;
-            aux.PatchSeed = seeds.ToArray();
-            aux.PatchTri = seedTri.ToArray();
-        }
-
-        // Rewrites RestV: rest position, patch origin (the seed's rest position) and reference direction (the seed triangle's tangent,
-        // projected into the seed's tangent plane), mask, spacing. Vertices of no patch: origin = own position, ref dir 0, mask 0.
-        static void FillRestV(BakeResult b, Vector3[] N, Vector3[] nC)
-        {
-            var aux = b.Aux;
-            int P = aux.PatchSeed.Length;
-            var origin = new Vector3[P];
-            var refDir = new Vector3[P];
-            var rt = b.RestTri;
-            for (int p = 0; p < P; p++)
-            {
-                int seed = aux.PatchSeed[p];
-                origin[p] = N[seed];
-                int o = aux.PatchTri[p] * RtStride;
-                Vector3 t = new Vector3(rt[o + 5], rt[o + 6], rt[o + 7]);
-                Vector3 n = nC[seed];
-                Vector3 d = t - Vector3.Dot(t, n) * n;
-                if (d.sqrMagnitude < 1e-8f)
-                {
-                    d = Vector3.Cross(n, Mathf.Abs(n.y) < 0.9f ? Vector3.up : Vector3.right);
-                    if (d.sqrMagnitude < 1e-8f) d = Vector3.right;
-                }
-                refDir[p] = d.normalized;
-            }
-            float spacing = b.Face ? SpacingFace : SpacingBody;
-            var rv = b.RestV;
-            for (int i = 0; i < b.V; i++)
-            {
-                int o = i * RvStride;
-                int p = aux.PatchOf[i];
-                Vector3 pos = N[i];
-                rv[o] = pos.x; rv[o + 1] = pos.y; rv[o + 2] = pos.z;
-                Vector3 org = p >= 0 ? origin[p] : pos, rd = p >= 0 ? refDir[p] : Vector3.zero;
-                rv[o + 3] = org.x; rv[o + 4] = org.y; rv[o + 5] = org.z;
-                rv[o + 6] = rd.x; rv[o + 7] = rd.y; rv[o + 8] = rd.z;
-                rv[o + 9] = p >= 0 ? aux.Mask[i] : 0f;
-                rv[o + 10] = spacing;
-                rv[o + 11] = 0f;
-            }
+            int n = Math.Min(512, b.V);
+            if (b.RestP == null || b.RestP.Length != 3 * n) b.RestP = new float[3 * n];
+            for (int i = 0; i < n; i++) { b.RestP[3 * i] = N[i].x; b.RestP[3 * i + 1] = N[i].y; b.RestP[3 * i + 2] = N[i].z; }
         }
     }
 }

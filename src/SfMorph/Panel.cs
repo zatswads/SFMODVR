@@ -676,7 +676,7 @@ namespace SfMorph
                             "Ripple: a slap or a thrust sends a wave through her glutes, thighs and breasts.", _hint);
         }
 
-        static readonly string[] WrinkleDebugs = { "Off", "Activation", "Axis" };
+        static readonly string[] WrinkleDebugs = { "Off", "Activation", "Regions" };
 
         void WrinklesSection(Character c)
         {
@@ -684,7 +684,7 @@ namespace SfMorph
             string off = !_p.Apply.Value ? "'Apply changes' is off"
                        : !c.Female || c.IsPlayer ? "only for the game's woman" : null;
             GUI.enabled = off == null;
-            bool on = GUILayout.Toggle(_p.WrinkOn.Value, " Wrinkles: folds in her skin where it compresses (expressions, bending)");
+            bool on = GUILayout.Toggle(_p.WrinkOn.Value, " Wrinkles: expression lines and joint creases where her skin compresses");
             GUI.enabled = true;
             if (off == null && on != _p.WrinkOn.Value) _p.WrinkOn.Value = on;
             string sliderOff = off ?? (_p.WrinkOn.Value ? null : "wrinkles are off");
@@ -700,7 +700,7 @@ namespace SfMorph
             GUILayout.BeginHorizontal();
             bool face = GUILayout.Toggle(_p.WrinkFace.Value, " Face", GUILayout.Width(90));
             bool neck = GUILayout.Toggle(_p.WrinkNeck.Value, " Neck", GUILayout.Width(90));
-            bool body = GUILayout.Toggle(_p.WrinkBody.Value, " Body (slower to build)");
+            bool body = GUILayout.Toggle(_p.WrinkBody.Value, " Body (joint creases)");
             GUILayout.EndHorizontal();
             if (sliderOff == null)
             {
@@ -719,11 +719,12 @@ namespace SfMorph
             GUI.enabled = true;
             if (off != null) GUILayout.Label("off: " + off, _off);
             else if (_p.WrinkOn.Value && _body.WrinkleStatus.Length > 0) GUILayout.Label(_body.WrinkleStatus, _body.WrinkleStatus.Contains("off:") ? _off : _hint);
-            GUILayout.Label("Where her skin compresses (a smile, a frown, bending) fine folds appear in the skin's normal map, computed on the GPU. " +
-                            "Threshold: how much it has to compress first. Crease shade darkens her skin colour at the bottom of each fold: her skin's " +
-                            "subsurface scattering blurs the fine fold shading (most of all on her face), the darker crease stays visible. " +
-                            "Debug: Activation tints compressed skin red, Axis shows the fold direction. " +
-                            "Spacing, speed and texture size are in the config file ([Wrinkles]).", _hint);
+            GUILayout.Label("Authored lines and creases (forehead, frown, crow's feet, under the eyes, smile lines, nose, neck; inside the elbows, " +
+                            "behind the knees, hip folds, armpits, belly) fade in when her skin compresses across them, measured on the GPU. " +
+                            "Nowhere else, so breasts and shoulders stay smooth. Threshold: how much it has to compress first. Crease shade darkens " +
+                            "the bottom of each line in her skin colour (her skin's subsurface scattering blurs the normal-map shading, most of all " +
+                            "on her face). Debug: Activation tints active lines red, Regions shows every region in its own colour. " +
+                            "Speed and texture size are in the config file ([Wrinkles]).", _hint);
         }
 
         bool Card(Texture2D thumb, string name, bool on, float size)

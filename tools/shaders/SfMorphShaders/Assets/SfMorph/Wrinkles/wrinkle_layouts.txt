@@ -1,0 +1,27 @@
+# SF Body Morphs wrinkle layouts (tools/wrinkles/author.py). layout <name> <detail size> <region size>; then
+# region <index from 1> <name> <class face|neck|body> <compression range>
+# export Reika-20261016-023017
+layout face 2048 1024
+region 1 forehead_L face 0.080
+region 2 crowsfeet_L face 0.080
+region 3 undereye_L face 0.080
+region 4 nasolabial_L face 0.100
+region 5 forehead_R face 0.080
+region 6 crowsfeet_R face 0.080
+region 7 undereye_R face 0.080
+region 8 nasolabial_R face 0.100
+region 9 glabella face 0.080
+region 10 nose face 0.080
+region 11 neck neck 0.100
+layout body 2048 1024
+region 1 elbow_in_L body 0.200
+region 2 elbow_back_L body 0.200
+region 3 knee_back_L body 0.200
+region 4 hipfold_L body 0.200
+region 5 armpit_L body 0.250
+region 6 elbow_in_R body 0.200
+region 7 elbow_back_R body 0.200
+region 8 knee_back_R body 0.200
+region 9 hipfold_R body 0.200
+region 10 armpit_R body 0.250
+region 11 belly body 0.200

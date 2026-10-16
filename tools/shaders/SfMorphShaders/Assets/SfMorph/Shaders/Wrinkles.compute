@@ -1,36 +1,28 @@
-// SfMorph procedural skin wrinkles (0.7.4): compression strain on the GPU.
-//   Clear        : zero the changed-vertex counter.
-//   TriStrain    : per triangle, live edges of the skinned buffer against the neutral (rest) triangle -> 2x2 right Cauchy-Green
-//                  tensor -> compression amount and compression direction (in 3D rest space).
-//   VertexGather : per canonical (welded) vertex, area-weighted compression + strain-weighted principal axis over the adjacent
-//                  triangles, activation (smoothstep, attack/release), axis hysteresis (a new axis is held before it replaces the
-//                  old one, the old crease fades out), and the changed counter the CPU reads back.
-// Strain is invariant to rigid motion of the skinned buffer, so no skinning-space calibration is needed.
-// Layouts mirror WrinkleBake.BakeResult (see Wrinkles.cs).
-#pragma kernel Clear
-#pragma kernel TriStrain
-#pragma kernel VertexGather
+// SfMorph skin wrinkles (0.9.0): how much her skin is compressed across the authored creases of each wrinkle region.
+//   RegionClear  : zero the per-region sums of a sheet (once per frame, before its renderers).
+//   RegionStrain : per region triangle (only triangles under an authored region are uploaded), the live edges of the skinned buffer
+//                  against the neutral (rest) triangle -> 2x2 right Cauchy-Green tensor C in the (t, b) rest basis -> the stretch
+//                  along the region's compression direction d (unit, in (t, b): across the crease lines there): sqrt(d^T C d);
+//                  compression = max(0, 1 - stretch). Adds weight x compression and weight (fixed point) to the region's sums.
+// The CPU reads the sums back (AsyncGPUReadback, a few frames late), takes num / den per region and fades the region's authored
+// creases in with attack / release. Strain is invariant to rigid motion of the skinned buffer (no skinning-space calibration).
+// Directional, so a frown (skin pushed together sideways) doesn't raise the forehead's horizontal lines, and only the inside of a
+// bent elbow (compressed along the arm) wrinkles, not the stretched outside.
+#pragma kernel RegionClear
+#pragma kernel RegionStrain
 
 ByteAddressBuffer _Verts;               // skinned output (vertexBufferTarget |= Raw): _Stride bytes per vertex, position at _PosOff
-uint _Stride, _PosOff, _TriCount, _VertCount;
-float _Dt, _Threshold, _Attack, _Release;
+uint _Stride, _PosOff, _TriCount, _SumCount;
 float _InvScale2;                       // 1 / (median live/rest distance ratio)^2: cancels a uniform scale of the skinned buffer
 
-StructuredBuffer<uint> _Tris;           // 3 vertex ids per triangle
-StructuredBuffer<float> _RestTri;       // 20 per triangle: DmInv(0..3, row-major: m00 m01 m10 m11), area(4), t(5..7), b(8..10), J(11..16), pad
-RWStructuredBuffer<float4> _TriOut;     // per triangle: xyz = compression direction (3D rest space, unit), w = compression (0 = none/gated)
-StructuredBuffer<float> _RestV;         // 12 per vertex: restPos(0..2), patchOrigin(3..5), patchRefDir(6..8), mask(9), spacing(10), pad
-StructuredBuffer<uint> _Canon;          // weld group representative per vertex
-StructuredBuffer<uint> _AdjOff;         // V+1, CSR offsets over canonical ids
-StructuredBuffer<uint> _AdjTri;         // triangles adjacent to each canonical vertex
-// 12 per vertex: act(0), axis(1..3) | candidate axis(4..6), hold timer(7) | fade-out act(8), fade-out axis(9..11)
-RWStructuredBuffer<float> _State;
-RWStructuredBuffer<uint> _Counter;
+StructuredBuffer<uint> _Tris;           // 3 vertex ids per region triangle
+StructuredBuffer<float4> _RegTri;       // 2 per region triangle: [DmInv m00 m01 m10 m11], [d.t, d.b, weight (fixed-point units), region]
+RWStructuredBuffer<uint> _Sums;         // 2 per region: sum(weight x compression), sum(weight)
 
-[numthreads(1, 1, 1)]
-void Clear(uint3 id : SV_DispatchThreadID)
+[numthreads(64, 1, 1)]
+void RegionClear(uint3 id : SV_DispatchThreadID)
 {
-    _Counter[0] = 0;
+    if (id.x < _SumCount) _Sums[id.x] = 0;
 }
 
 float3 LoadPos(uint v)
@@ -39,155 +31,26 @@ float3 LoadPos(uint v)
 }
 
 [numthreads(64, 1, 1)]
-void TriStrain(uint3 id : SV_DispatchThreadID)
+void RegionStrain(uint3 id : SV_DispatchThreadID)
 {
     uint i = id.x;
     if (i >= _TriCount) return;
-    uint b = i * 20;
-    float4 o = float4(0, 0, 0, 0);
-    if (_RestTri[b + 4] > 1e-12)
-    {
-        float3 p0 = LoadPos(_Tris[3 * i]);
-        float3 p1 = LoadPos(_Tris[3 * i + 1]);
-        float3 p2 = LoadPos(_Tris[3 * i + 2]);
-        float3 e1 = p1 - p0, e2 = p2 - p0;
-        // F = Ds * DmInv (3x2): column j = sum_k edge_k * DmInv[k][j]
-        float3 f0 = e1 * _RestTri[b + 0] + e2 * _RestTri[b + 2];
-        float3 f1 = e1 * _RestTri[b + 1] + e2 * _RestTri[b + 3];
-        float c00 = dot(f0, f0), c01 = dot(f0, f1), c11 = dot(f1, f1);   // C = F^T F, in the (t, b) rest basis
-        c00 *= _InvScale2; c01 *= _InvScale2; c11 *= _InvScale2;
-        float mean = 0.5 * (c00 + c11), df = 0.5 * (c00 - c11);
-        float r = sqrt(df * df + c01 * c01);
-        float lmax = mean + r, lmin = max(mean - r, 1e-8);
-        float comp = max(0.0, 1.0 - sqrt(lmin));
-        if (comp > 0.0 && r > 1e-9 && lmax > 1.3 * lmin)     // selectivity: one direction squeezed more than the other
-        {
-            float th = 0.5 * atan2(2.0 * c01, c00 - c11);    // angle of the major (stretch) axis
-            float2 u = float2(-sin(th), cos(th));            // minor axis = compression direction
-            float3 t = float3(_RestTri[b + 5], _RestTri[b + 6], _RestTri[b + 7]);
-            float3 bt = float3(_RestTri[b + 8], _RestTri[b + 9], _RestTri[b + 10]);
-            float3 d = t * u.x + bt * u.y;
-            float dl = dot(d, d);
-            if (dl > 1e-12) o = float4(d * rsqrt(dl), comp);
-        }
-    }
-    _TriOut[i] = o;
-}
-
-[numthreads(64, 1, 1)]
-void VertexGather(uint3 id : SV_DispatchThreadID)
-{
-    uint v = id.x;
-    if (v >= _VertCount) return;
-    if (_Canon[v] != v) return;                                // welded copies read the representative's state
-
-    float sumA = 0, sumC = 0;
-    float3 m0 = 0, m1 = 0, m2 = 0;                             // strain-weighted direction tensor sum w * d d^T (rows)
-    uint s0 = _AdjOff[v], s1 = _AdjOff[v + 1];
-    for (uint k = s0; k < s1; k++)
-    {
-        uint tri = _AdjTri[k];
-        float4 to = _TriOut[tri];
-        float area = _RestTri[tri * 20 + 4];
-        sumA += area;
-        sumC += area * to.w;
-        if (to.w > 0.0)
-        {
-            float w = area * to.w;
-            float3 d = to.xyz;
-            m0 += w * d.x * d; m1 += w * d.y * d; m2 += w * d.z * d;
-        }
-    }
-    uint rb = v * 12;
-    float mask = _RestV[rb + 9];
-    float comp = sumA > 1e-14 ? sumC / sumA : 0.0;
-    float target = smoothstep(0.0, 1.0, saturate((comp - _Threshold) / 0.18)) * mask;
-
-    // principal axis of the tensor by power iteration (start: its strongest column), sign tied to the vertex's reference direction
-    float3 n = float3(0, 0, 0);
-    float tr = m0.x + m1.y + m2.z;
-    bool haveAxis = tr > 1e-12 && target > 0.001;
-    if (haveAxis)
-    {
-        float3 c0 = float3(m0.x, m1.x, m2.x), c1 = float3(m0.y, m1.y, m2.y), c2 = float3(m0.z, m1.z, m2.z);
-        float3 x = c0;
-        float xl = dot(c0, c0), yl = dot(c1, c1), zl = dot(c2, c2);
-        if (yl > xl) { x = c1; xl = yl; }
-        if (zl > xl) { x = c2; xl = zl; }
-        x = x * rsqrt(max(xl, 1e-24));
-        [unroll] for (int it = 0; it < 6; it++)
-        {
-            float3 y = float3(dot(m0, x), dot(m1, x), dot(m2, x));
-            float yy = dot(y, y);
-            if (yy < 1e-24) break;
-            x = y * rsqrt(yy);
-        }
-        n = x;
-        float3 refd = float3(_RestV[rb + 6], _RestV[rb + 7], _RestV[rb + 8]);
-        if (dot(n, refd) < 0.0) n = -n;
-    }
-
-    uint sb = v * 12;
-    float act = _State[sb];
-    float3 A = float3(_State[sb + 1], _State[sb + 2], _State[sb + 3]);
-    float3 cand = float3(_State[sb + 4], _State[sb + 5], _State[sb + 6]);
-    float timer = _State[sb + 7];
-    float fo = _State[sb + 8];
-    float3 foA = float3(_State[sb + 9], _State[sb + 10], _State[sb + 11]);
-    float prevAct = act, prevFo = fo;
-    float3 prevA = A, prevFoA = foA;
-
-    fo = fo * exp(-_Dt / max(_Release, 1e-3));
-    if (fo < 0.004) fo = 0.0;
-
-    if (haveAxis)
-    {
-        if (act < 0.02 || dot(A, A) < 0.5)
-        {
-            A = n; cand = float3(0, 0, 0); timer = 0.0;        // nothing visible yet: adopt the axis freely
-        }
-        else if (dot(A, n) >= 0.866)                           // within 30 degrees: follow smoothly
-        {
-            float3 q = A + (n - A) * (1.0 - exp(-_Dt / 0.1));
-            A = q * rsqrt(max(dot(q, q), 1e-12));
-            timer = 0.0;
-        }
-        else                                                   // a different axis: hold it; if it persists, hand over
-        {
-            if (timer > 0.0 && dot(cand, n) > 0.9)
-            {
-                timer += _Dt;
-                float3 q = cand + (n - cand) * 0.3;
-                cand = q * rsqrt(max(dot(q, q), 1e-12));
-            }
-            else { cand = n; timer = _Dt; }
-            if (timer >= 0.12)
-            {
-                fo = act; foA = A;                             // the old crease fades out ...
-                A = cand; act = 0.0; timer = 0.0;              // ... the new one fades in
-            }
-        }
-    }
-    else timer = 0.0;
-
-    float kk = target > act ? 1.0 - exp(-_Dt / max(_Attack, 1e-3)) : 1.0 - exp(-_Dt / max(_Release, 1e-3));
-    act += (target - act) * kk;
-    if (target <= 0.004 && act < 0.004) act = 0.0;
-
-    // changed for the rasteriser: act or fade-out crossing a 1/64 level, or the axis crossing a grid cell, while it is visible
-    bool changed = floor(act * 64.0) != floor(prevAct * 64.0) || floor(fo * 64.0) != floor(prevFo * 64.0);
-    if (!changed && (act > 0.0 || prevAct > 0.0)) changed = any(floor(A * 24.0 + 0.5) != floor(prevA * 24.0 + 0.5));
-    if (!changed && fo > 0.0) changed = any(floor(foA * 24.0 + 0.5) != floor(prevFoA * 24.0 + 0.5));
-    if (changed)
-    {
-        uint orig;
-        InterlockedAdd(_Counter[0], 1, orig);
-    }
-
-    _State[sb] = act;
-    _State[sb + 1] = A.x; _State[sb + 2] = A.y; _State[sb + 3] = A.z;
-    _State[sb + 4] = cand.x; _State[sb + 5] = cand.y; _State[sb + 6] = cand.z;
-    _State[sb + 7] = timer;
-    _State[sb + 8] = fo;
-    _State[sb + 9] = foA.x; _State[sb + 10] = foA.y; _State[sb + 11] = foA.z;
+    float4 m = _RegTri[2 * i];
+    float4 r = _RegTri[2 * i + 1];
+    if (r.z < 0.5) return;
+    float3 p0 = LoadPos(_Tris[3 * i]);
+    float3 p1 = LoadPos(_Tris[3 * i + 1]);
+    float3 p2 = LoadPos(_Tris[3 * i + 2]);
+    float3 e1 = p1 - p0, e2 = p2 - p0;
+    // F = Ds * DmInv (3x2): column j = sum_k edge_k * DmInv[k][j]
+    float3 f0 = e1 * m.x + e2 * m.z;
+    float3 f1 = e1 * m.y + e2 * m.w;
+    float c00 = dot(f0, f0) * _InvScale2, c01 = dot(f0, f1) * _InvScale2, c11 = dot(f1, f1) * _InvScale2;
+    float lam = c00 * r.x * r.x + 2.0 * c01 * r.x * r.y + c11 * r.y * r.y;   // squared stretch along d
+    float comp = saturate(1.0 - sqrt(max(lam, 0.0)));
+    if (!(comp == comp)) comp = 0.0;                                           // NaN (a collapsed live triangle)
+    uint reg = (uint)(r.w + 0.5);
+    uint o;
+    InterlockedAdd(_Sums[2 * reg], (uint)(r.z * comp + 0.5), o);
+    InterlockedAdd(_Sums[2 * reg + 1], (uint)(r.z + 0.5), o);
 }

@@ -14,20 +14,24 @@ namespace SfMorph
     {
         public bool On, Face = true, Neck = true, BodyOn;
         public float Strength = 1f, Threshold = 0.025f;
-        public int Debug;             // 0 off, 1 activation, 2 axis
+        public int Debug;             // 0 off, 1 activation, 2 regions
         public bool Recapture;        // one-shot (panel button)
-        public float Attack = 0.12f, Release = 0.3f, SpacingFace = 0.004f, SpacingBody = 0.008f, CullDistance = 3f;
+        public float Attack = 0.12f, Release = 0.3f, CullDistance = 3f;
         public int Resolution;        // 0 base size (cap 4096), else 2048/1024
-        public float Cavity = 0.3f;   // 0.8.4: crease darkening in the albedo copy (0 = no albedo copy unless the debug view is on)
+        public float Cavity = 0.3f;   // 0.8.4: crease shade in the albedo copy (0 = no albedo copy unless the debug view is on)
     }
 
     // PlayerLoop marker type of the wrinkle step (right after PostLateUpdate.UpdateAllSkinnedMeshes).
     internal struct WrinkleStep { }
 
-    // Procedural skin wrinkles (0.7.4): compression strain of her skinned triangles on the GPU (Wrinkles.compute) -> folds rasterised in
-    // UV space (WrinkleRaster.shader) -> blended into the skin material's normal map slot. Design: docs / design-0.7.4.md.
-    // Update(her, s) runs on the main thread each frame (discovery, CPU bakes, texture assignment, culling); Run(frame) is the GPU part,
-    // hooked to GpuContact.BeforeImprint, a PlayerLoop step and beginContextRendering (whichever comes first wins, frame guard).
+    // Skin wrinkles (0.9.0, after the procedural folds of 0.7.4-0.8.9): authored crease maps per UV layout (tools/wrinkles/author.py, in the
+    // shader bundle: her face sheet, her body atlas) faded in per region, the way games blend expression wrinkle maps. The driver is her
+    // skin's compression on the GPU (Wrinkles.compute: per region triangle, the stretch across that region's crease lines against the
+    // neutral pose, pooled per region) read back to the CPU, which fades each region in with attack / release; WrinkleRaster.shader blends
+    // the faded creases into copies of the skin's normal map (and albedo, for the crease shade). Only the authored regions can wrinkle
+    // (face expressions, neck, joint creases); breasts, shoulders and the rest of her skin never do.
+    // Update(her, s) runs on the main thread each frame (discovery, CPU bakes, activations, texture assignment, culling); Run(frame) is the
+    // GPU part, hooked to GpuContact.BeforeImprint, a PlayerLoop step and beginContextRendering (whichever comes first wins, frame guard).
     // Nothing here may throw into the render loop: any exception logs, switches the system off and leaves the teardown to the next
     // main-thread call.
     internal class Wrinkles
@@ -110,30 +114,28 @@ namespace SfMorph
 
         // ---- constants ----
 
-        const float Amp = 0.15f;                 // fold depth as a fraction of the spacing (slope peak ~0.4)
-        const int SlopeSize = 2048;
+        public const int MaxRegions = 32;        // per layout (the shader's _Act array)
         const int MaxInflight = 6;
         const string BsWhy = "blendshape weights changed";
-        const float CreaseRef = 2f;              // the crease curvature (fold-profile units) that reads as a full crease in the albedo
         const float HandBack = 2.4f;             // Morph re-applies the character's textures every 2 s
-        const int AlbedoPass = 4;
+        const int BlendPass = 0, TestPass = 1, AlbedoPass = 2;
+        const float PeakLogEvery = 10f;
         static readonly string[] NormalProps = { "_NormalMap", "_BumpMap" };
         // Morph.cs's list (the game's skin is a shader graph: the property is not certain)
         internal static readonly string[] AlbedoProps = { "_ColorMap", "_BaseColorMap", "_BaseMap", "_MainTex", "_AlbedoMap", "_Albedo", "_DiffuseMap", "_Diffuse" };
 
         static readonly int PVerts = Shader.PropertyToID("_Verts"), PStride = Shader.PropertyToID("_Stride"), PPosOff = Shader.PropertyToID("_PosOff"),
-            PTriCount = Shader.PropertyToID("_TriCount"), PVertCount = Shader.PropertyToID("_VertCount"), PDt = Shader.PropertyToID("_Dt"),
-            PThreshold = Shader.PropertyToID("_Threshold"), PAttack = Shader.PropertyToID("_Attack"), PRelease = Shader.PropertyToID("_Release"),
-            PTris = Shader.PropertyToID("_Tris"), PUv = Shader.PropertyToID("_Uv"), PRestTri = Shader.PropertyToID("_RestTri"),
-            PRestV = Shader.PropertyToID("_RestV"), PCanon = Shader.PropertyToID("_Canon"), PAdjOff = Shader.PropertyToID("_AdjOff"),
-            PAdjTri = Shader.PropertyToID("_AdjTri"), PState = Shader.PropertyToID("_State"), PTriOut = Shader.PropertyToID("_TriOut"),
-            PCounter = Shader.PropertyToID("_Counter"), PFlip = Shader.PropertyToID("_FlipY"), PStrength = Shader.PropertyToID("_Strength"),
-            PAmp = Shader.PropertyToID("_Amp"), PTestMode = Shader.PropertyToID("_TestMode"), PBaseNormal = Shader.PropertyToID("_BaseNormal"),
-            PBaseAlbedo = Shader.PropertyToID("_BaseAlbedo"), PSlope = Shader.PropertyToID("_Slope"), PTest = Shader.PropertyToID("_Test"),
-            PSlopeTexel = Shader.PropertyToID("_SlopeTexel"), PDebugMode = Shader.PropertyToID("_DebugMode"), PInvScale2 = Shader.PropertyToID("_InvScale2"),
+            PTriCount = Shader.PropertyToID("_TriCount"), PTris = Shader.PropertyToID("_Tris"),
+            PFlip = Shader.PropertyToID("_FlipY"), PStrength = Shader.PropertyToID("_Strength"),
+            PTestMode = Shader.PropertyToID("_TestMode"), PBaseNormal = Shader.PropertyToID("_BaseNormal"),
+            PBaseAlbedo = Shader.PropertyToID("_BaseAlbedo"), PTest = Shader.PropertyToID("_Test"),
+            PDebugMode = Shader.PropertyToID("_DebugMode"), PInvScale2 = Shader.PropertyToID("_InvScale2"),
             PMarks = Shader.PropertyToID("_Marks"), PMarksOn = Shader.PropertyToID("_MarksOn"), PMarksTexel = Shader.PropertyToID("_MarksTexel"),
-            PMarksScale = Shader.PropertyToID("_MarksScale"), PCavity = Shader.PropertyToID("_Cavity"), PCavityScale = Shader.PropertyToID("_CavityScale"),
-            PMarksAlbedoOn = Shader.PropertyToID("_MarksAlbedoOn"), PRedness = Shader.PropertyToID("_Redness"), PAo = Shader.PropertyToID("_Ao");
+            PMarksScale = Shader.PropertyToID("_MarksScale"), PCavity = Shader.PropertyToID("_Cavity"),
+            PMarksAlbedoOn = Shader.PropertyToID("_MarksAlbedoOn"), PRedness = Shader.PropertyToID("_Redness"), PAo = Shader.PropertyToID("_Ao"),
+            PRegTri = Shader.PropertyToID("_RegTri"), PSums = Shader.PropertyToID("_Sums"), PSumCount = Shader.PropertyToID("_SumCount"),
+            PDetail = Shader.PropertyToID("_Detail"), PRegion = Shader.PropertyToID("_Region"), PRegionSize = Shader.PropertyToID("_RegionSize"),
+            PAct = Shader.PropertyToID("_Act");
 
         // ---- state ----
 
@@ -158,12 +160,9 @@ namespace SfMorph
             public bool NoVbLogged;
             public float ScaleFix = 1f;           // median live/rest vertex distance ratio (1 until measured)
             public bool ScaleChecked;
-            public int Inflight;
-            public float Mpu;                     // metres per UV of the baked rest mesh (0 = unknown)
-            public GraphicsBuffer Tris, Uv, RestTri, Canon, AdjOff, AdjTri, RestV, StateBuf, TriOut, Counter;
+            public int RT;                        // region triangles (0: nothing of this renderer is under a region)
+            public GraphicsBuffer Tris, RegTri;
             public long Bytes;
-            public MaterialPropertyBlock Mpb;
-            public Action<AsyncGPUReadbackRequest> OnCounter;
             public float[] BsSnap;
             public int SoftVer, BindVer;
             public bool NeedRecapture;
@@ -178,8 +177,18 @@ namespace SfMorph
         {
             public Material Mat;
             public string Name, Prop, AlbedoProp;
-            public bool Face, Skip;
+            public bool Face, Skip, Empty;        // Empty: its renderers have no triangle under a region (not built)
+            public WrinkleLayout Layout;
             public readonly List<Rend> Rends = new List<Rend>();
+            public GraphicsBuffer Sums;           // 2 uint per region (Wrinkles.compute)
+            public int Inflight;
+            public Action<AsyncGPUReadbackRequest> OnSums;
+            public readonly float[] Comp = new float[MaxRegions];     // pooled compression per region (latest readback)
+            public readonly float[] Act = new float[MaxRegions];      // faded-in activation per region (CPU, attack / release)
+            public readonly float[] ActSent = new float[MaxRegions];  // the activations of the last raster
+            public readonly float[] Peak = new float[MaxRegions];     // peak compression since the last peak log
+            public float LastActAt, NextPeakLog;
+            public string LastPeakLine = "";
             public Texture Base;                  // the normal map under ours (the game's, or Morph's baked one)
             public Texture AlbedoBase;            // the albedo under our copy (the game's, the character's, or what SkinMarks has under its copy)
             public Texture AlbedoOrig;            // her own albedo (Morph's saved original when a character skin is on)
@@ -190,6 +199,7 @@ namespace SfMorph
             public float LastChange, LastComputeAt, LastTransLog = -100f;
             public int LastRasterFrame = -100;
             public float StrengthApplied = -1f, CavityApplied = -1f;
+            public int DebugApplied = -1;
             public int SkinSig;                   // Morph's skin state when last checked (a change while our copy is in the slot = Morph skipped it)
             public Texture Pending;               // a texture someone else put in the albedo slot while a character skin is on: taken once it stays
             public float PendingSince;
@@ -201,8 +211,9 @@ namespace SfMorph
         Shader _shader;
         Material _mat;
         CommandBuffer _cmd;
-        int _kClear, _kStrain, _kGather;
-        RenderTexture _slope, _testA, _testB;
+        int _kClear, _kStrain;
+        readonly List<WrinkleLayout> _layouts = new List<WrinkleLayout>();
+        RenderTexture _testA, _testB;
         Texture2D _flat;
         MaterialPropertyBlock _mpbTestA = new MaterialPropertyBlock(), _mpbTestB = new MaterialPropertyBlock();
         float _flip = -1f;                        // D3D default; the self-test confirms or flips it
@@ -214,7 +225,7 @@ namespace SfMorph
         Character _her;
         bool _dead, _active, _bundleHeld, _subscribed, _inLoop, _evSeen, _evWarned, _tornDown, _released, _albedoPass;
         int _lastFrame = -1, _waitFrames, _updateCount;
-        float _nextDiscover, _recaptureAt, _seenDirtyAt = -1f, _offSince = -1f, _nextCull, _nextStatus, _lastDt;
+        float _nextDiscover, _recaptureAt, _seenDirtyAt = -1f, _offSince = -1f, _nextCull, _nextStatus;
         bool _recapAll;
         string _recapAllWhy = "";
         bool _farAway;
@@ -243,15 +254,21 @@ namespace SfMorph
                 w._shader = ShaderBundle.Load<Shader>("WrinkleRaster");
                 if (w._cs == null) { Fail("bundle (no Wrinkles compute shader inside)"); w.Teardown(); return null; }
                 if (w._shader == null) { Fail("bundle (no WrinkleRaster shader inside)"); w.Teardown(); return null; }
-                w._kClear = w._cs.FindKernel("Clear");
-                w._kStrain = w._cs.FindKernel("TriStrain");
-                w._kGather = w._cs.FindKernel("VertexGather");
-                if (w._kClear < 0 || w._kStrain < 0 || w._kGather < 0) { Fail("kernel"); w.Teardown(); return null; }
+                // 0.9.0 kernels; a bundle from before 0.9.0 has the procedural folds' kernels (Clear/TriStrain/VertexGather) and no maps
+                if (!w._cs.HasKernel("RegionClear") || !w._cs.HasKernel("RegionStrain"))
+                { Fail("the shader bundle is older than this DLL (no authored wrinkles inside): install the sfmorph_shaders that came with it"); w.Teardown(); return null; }
+                w._kClear = w._cs.FindKernel("RegionClear");
+                w._kStrain = w._cs.FindKernel("RegionStrain");
                 if (!w._shader.isSupported) { Fail("WrinkleRaster shader not supported on " + SystemInfo.graphicsDeviceType); w.Teardown(); return null; }
                 w._mat = new Material(w._shader) { hideFlags = HideFlags.HideAndDontSave };
-                // 0.8.4's albedo pass (crease darkening); an older bundle has passes 0-3 only: the debug view still works, no crease shade
                 w._albedoPass = w._mat.passCount > AlbedoPass;
-                if (!w._albedoPass) Plugin.Log.LogWarning("Wrinkles: the shader bundle has no albedo pass (" + w._mat.passCount + " passes): no crease shade; install the sfmorph_shaders that came with this DLL");
+                if (w._mat.passCount != 3) { Fail("the shader bundle's WrinkleRaster has " + w._mat.passCount + " passes (3 expected): install the sfmorph_shaders that came with this DLL"); w.Teardown(); return null; }
+                var table = ShaderBundle.Load<TextAsset>("wrinkle_layouts");
+                if (table == null) { Fail("bundle (no wrinkle_layouts inside)"); w.Teardown(); return null; }
+                var notes = new List<string>();
+                w._layouts.AddRange(WrinkleLayout.Parse(table.text, n => ShaderBundle.Load<Texture2D>(n), notes));
+                foreach (var n in notes) Plugin.Log.LogWarning("Wrinkles: layout " + n);
+                if (w._layouts.Count == 0) { Fail("bundle (no usable wrinkle layout)"); w.Teardown(); return null; }
                 w._cmd = new CommandBuffer { name = "SfMorph wrinkles" };
                 w._flat = new Texture2D(1, 1, TextureFormat.RGBA32, false, true) { name = "SfMorph flat normal", hideFlags = HideFlags.HideAndDontSave };
                 w._flat.SetPixel(0, 0, new Color(0.5f, 0.5f, 1f, 1f));
@@ -260,7 +277,11 @@ namespace SfMorph
                 RenderPipelineManager.beginContextRendering += w.OnBeginContext;
                 w._subscribed = true;
                 w._inLoop = InsertStep(w.OnLoopStep);
-                Plugin.Log.LogInfo("Wrinkles: loaded on " + SystemInfo.graphicsDeviceType + ", kernels Clear=" + w._kClear + " TriStrain=" + w._kStrain + " VertexGather=" + w._kGather
+                var ls = new StringBuilder();
+                foreach (var L in w._layouts)
+                    ls.Append(ls.Length > 0 ? "; " : "").Append(L.Name).Append(" (").Append(L.Count).Append(" regions: ").Append(string.Join(" ", L.RegionName.ToArray()))
+                      .Append(", creases ").Append(L.Detail.width).Append('x').Append(L.Detail.height).Append(')');
+                Plugin.Log.LogInfo("Wrinkles: loaded on " + SystemInfo.graphicsDeviceType + ", authored layouts: " + ls
                     + ", PlayerLoop step " + (w._inLoop ? "inserted after UpdateAllSkinnedMeshes" : "not inserted (BeforeImprint + SRP hooks only)"));
                 w.Status = "Wrinkles: loaded";
                 LastStatus = w.Status;
@@ -278,7 +299,7 @@ namespace SfMorph
 
         static Wrinkles _live;
 
-        // False when the shader bundle predates 0.8.4 (no crease shade).
+        // The crease shade (albedo pass) is there (always with a 0.9.0 bundle; the load refuses older ones).
         public bool HasCavity { get { return _albedoPass; } }
 
         // Called by Morph.cs by reflection: the base texture Wrinkles saw under its own texture in this material slot (her own / Morph's
@@ -357,8 +378,8 @@ namespace SfMorph
             }
         }
 
-        // The GPU work of a frame: strain dispatches for every visible sheet, then (when something changed, at most every 2nd frame)
-        // the slope raster + blend into the sheet's normal RT. Idempotent per frame.
+        // The GPU work of a frame: per visible sheet, the region sums (clear, one strain dispatch per renderer, a readback), then (when an
+        // activation moved, at most every 2nd frame) the blend into the sheet's normal RT. Idempotent per frame.
         void Run(int frame)
         {
             if (frame == _lastFrame) return;
@@ -369,34 +390,42 @@ namespace SfMorph
             for (int si = 0; si < _sheets.Count; si++)
             {
                 var sh = _sheets[si];
-                if (!sh.Built || sh.Culled) continue;
+                if (!sh.Built || sh.Culled || sh.Sums == null) continue;
                 if (!sh.Asleep && !sh.Dirty && now - sh.LastChange > 0.5f)
                 {
                     sh.Asleep = true;
                     TransLog(sh, now, "Wrinkles: sheet '" + sh.Name + "' idle (no change for 0.5 s): strain every 4th frame");
                 }
-                bool compute = !sh.Asleep || (frame & 3) == 0;
+                bool compute = (!sh.Asleep || (frame & 3) == 0) && sh.Inflight < MaxInflight;
                 if (compute)
                 {
-                    float dt = sh.LastComputeAt > 0f ? Mathf.Clamp(now - sh.LastComputeAt, 0.001f, 0.1f) : 0.016f;
-                    sh.LastComputeAt = now;
-                    _lastDt = dt;
+                    var cs = _cs;
+                    cs.SetInt(PSumCount, 2 * MaxRegions);
+                    cs.SetBuffer(_kClear, PSums, sh.Sums);
+                    cs.Dispatch(_kClear, 1, 1, 1);
+                    int n = 0;
                     for (int i = 0; i < sh.Rends.Count; i++)
                     {
                         var r = sh.Rends[i];
-                        if (r.Ready) Dispatch(r, dt);
+                        if (r.Ready && r.RT > 0 && Dispatch(r, sh)) n++;
+                    }
+                    if (n > 0)
+                    {
+                        sh.Inflight++;
+                        AsyncGPUReadback.Request(sh.Sums, sh.OnSums);
                     }
                 }
                 if (sh.Dirty && frame - sh.LastRasterFrame >= 2) Raster(sh, frame, false);
             }
         }
 
-        void Dispatch(Rend r, float dt)
+        // One renderer's region triangles into its sheet's sums; false when it couldn't run (hidden, no buffer yet, layout mismatch).
+        bool Dispatch(Rend r, Sheet sh)
         {
             var sr = r.R;
-            if (sr == null || !sr.enabled || !sr.gameObject.activeInHierarchy) return;
-            if (sr.sharedMesh != r.Mesh) return;               // Update re-bakes it
-            if (r.Layout < 0 || r.Inflight >= MaxInflight) return;
+            if (sr == null || !sr.enabled || !sr.gameObject.activeInHierarchy) return false;
+            if (sr.sharedMesh != r.Mesh) return false;          // Update re-bakes it
+            if (r.Layout < 0) return false;
             using (var vb = sr.GetVertexBuffer())
             {
                 if (vb == null)
@@ -406,47 +435,29 @@ namespace SfMorph
                         r.NoVbLogged = true;
                         Plugin.Log.LogWarning("Wrinkles: renderer " + r.Name + ": skinned vertex buffer unavailable (CPU skinning?)");
                     }
-                    return;
+                    return false;
                 }
                 r.NoVb = 0;
-                if (r.Layout == 0 && !CheckBuffer(r, vb)) return;
+                if (r.Layout == 0 && !CheckBuffer(r, vb)) return false;
                 if ((vb.target & GraphicsBuffer.Target.Raw) == 0)
                 {
                     if (++r.WarnedRaw == 300) Plugin.Log.LogWarning("Wrinkles: renderer " + r.Name + "'s skinned buffer has no Raw target after 300 frames; waiting");
-                    return;
+                    return false;
                 }
                 var cs = _cs;
-                var s = _s;
                 cs.SetInt(PStride, r.Stride);
                 cs.SetInt(PPosOff, r.B.PosOff);
-                cs.SetInt(PTriCount, r.T);
-                cs.SetInt(PVertCount, r.V);
-                cs.SetFloat(PDt, dt);
+                cs.SetInt(PTriCount, r.RT);
                 float sf = r.ScaleFix;
                 cs.SetFloat(PInvScale2, 1f / (sf * sf));
-                cs.SetFloat(PThreshold, s.Threshold);
-                cs.SetFloat(PAttack, Mathf.Max(0.01f, s.Attack));
-                cs.SetFloat(PRelease, Mathf.Max(0.01f, s.Release));
-                cs.SetBuffer(_kClear, PCounter, r.Counter);
-                cs.Dispatch(_kClear, 1, 1, 1);
                 cs.SetBuffer(_kStrain, PVerts, vb);
                 cs.SetBuffer(_kStrain, PTris, r.Tris);
-                cs.SetBuffer(_kStrain, PRestTri, r.RestTri);
-                cs.SetBuffer(_kStrain, PTriOut, r.TriOut);
-                cs.Dispatch(_kStrain, (r.T + 63) / 64, 1, 1);
-                cs.SetBuffer(_kGather, PTriOut, r.TriOut);
-                cs.SetBuffer(_kGather, PRestTri, r.RestTri);
-                cs.SetBuffer(_kGather, PRestV, r.RestV);
-                cs.SetBuffer(_kGather, PCanon, r.Canon);
-                cs.SetBuffer(_kGather, PAdjOff, r.AdjOff);
-                cs.SetBuffer(_kGather, PAdjTri, r.AdjTri);
-                cs.SetBuffer(_kGather, PState, r.StateBuf);
-                cs.SetBuffer(_kGather, PCounter, r.Counter);
-                cs.Dispatch(_kGather, (r.V + 63) / 64, 1, 1);
+                cs.SetBuffer(_kStrain, PRegTri, r.RegTri);
+                cs.SetBuffer(_kStrain, PSums, sh.Sums);
+                cs.Dispatch(_kStrain, (r.RT + 63) / 64, 1, 1);
                 if (!r.ScaleChecked) { r.ScaleChecked = true; RequestScaleCheck(r, vb); }
             }
-            r.Inflight++;
-            AsyncGPUReadback.Request(r.Counter, r.OnCounter);
+            return true;
         }
 
         // Sanity check of the skinned buffer's scale against the baked rest positions (a rootBone scale would read as uniform strain):
@@ -456,23 +467,23 @@ namespace SfMorph
             int n = Math.Min(512, r.V);
             int stride = r.Stride, posOff = r.B.PosOff;
             if (n < 8) return;
-            var rest = r.B.RestV;
+            var rest = r.B.RestP;
             string name = r.Name;
             AsyncGPUReadback.Request(vb, n * stride, 0, req =>
             {
                 try
                 {
-                    if (!r.Alive || _dead || req.hasError) return;
+                    if (!r.Alive || _dead || req.hasError || rest == null) return;
                     var d = req.GetData<float>();
                     var ratios = new List<float>(n);
-                    for (int i = 0; i + 1 < n; i++)
+                    for (int i = 0; i + 1 < n && 3 * (i + 1) + 2 < rest.Length; i++)
                     {
                         int f0 = (i * stride + posOff) / 4, f1 = ((i + 1) * stride + posOff) / 4;
                         if (f1 + 2 >= d.Length) break;
                         var a = new Vector3(d[f0], d[f0 + 1], d[f0 + 2]);
                         var b = new Vector3(d[f1], d[f1 + 1], d[f1 + 2]);
-                        var ra = new Vector3(rest[i * 12], rest[i * 12 + 1], rest[i * 12 + 2]);
-                        var rb = new Vector3(rest[(i + 1) * 12], rest[(i + 1) * 12 + 1], rest[(i + 1) * 12 + 2]);
+                        var ra = new Vector3(rest[3 * i], rest[3 * i + 1], rest[3 * i + 2]);
+                        var rb = new Vector3(rest[3 * i + 3], rest[3 * i + 4], rest[3 * i + 5]);
                         float dr = (rb - ra).magnitude;
                         if (dr < 1e-4f) continue;
                         ratios.Add((b - a).magnitude / dr);
@@ -486,7 +497,7 @@ namespace SfMorph
                     // handled: say so. Far from 1 the ratio itself is doubtful (wrong buffer layout, a stretched mesh): that one warns.
                     if (med >= 0.9f && med <= 1.1f) Plugin.Log.LogInfo(msg);
                     else if (med >= 0.5f && med <= 2f) Plugin.Log.LogInfo(msg + " (scaled skinning space, compensated)");
-                    else Plugin.Log.LogWarning(msg + " (expected ~1" + (r.ScaleFix == med ? "; compensated, but check the folds" : "; not compensated: folds will read as strain") + ")");
+                    else Plugin.Log.LogWarning(msg + " (expected ~1" + (r.ScaleFix == med ? "; compensated, but check the creases" : "; not compensated: creases will read it as strain") + ")");
                 }
                 catch (Exception e) { Plugin.Log.LogWarning("Wrinkles: scale check failed: " + e.Message); }
             });
@@ -510,24 +521,21 @@ namespace SfMorph
             return true;
         }
 
-        // Counter readback (1-3 frames late): something changed -> the sheet is awake and needs a raster.
-        void CounterDone(Rend r, AsyncGPUReadbackRequest req)
+        // Region sums readback (1-3 frames late): pooled compression per region = sum(weight x compression) / sum(weight).
+        void SumsDone(Sheet sh, AsyncGPUReadbackRequest req)
         {
             try
             {
-                if (r.Inflight > 0) r.Inflight--;
-                if (!r.Alive || _dead || r.S == null || req.hasError) return;
+                if (sh.Inflight > 0) sh.Inflight--;
+                if (_dead || sh.Sums == null || req.hasError || sh.Layout == null) return;
                 var d = req.GetData<uint>();
-                if (d.Length > 0 && d[0] > 0)
+                int n = Math.Min(sh.Layout.Count, d.Length / 2);
+                for (int k = 0; k < n; k++)
                 {
-                    var sh = r.S;
-                    sh.Dirty = true;
-                    sh.LastChange = Time.unscaledTime;
-                    if (sh.Asleep)
-                    {
-                        sh.Asleep = false;
-                        TransLog(sh, sh.LastChange, "Wrinkles: sheet '" + sh.Name + "' awake (" + d[0] + " vertices changed)");
-                    }
+                    uint den = d[2 * k + 1];
+                    float c = den > 0 ? (float)((double)d[2 * k] / den) : 0f;
+                    sh.Comp[k] = c;
+                    if (c > sh.Peak[k]) sh.Peak[k] = c;
                 }
             }
             catch (Exception e)
@@ -537,6 +545,82 @@ namespace SfMorph
             }
         }
 
+        // Main thread, every frame: each region's activation follows its compression (past the threshold, over the region's range) with
+        // attack / release; a region whose part is switched off (Face / Neck / Body) fades out. A visible change (1/64) asks for a blend.
+        void UpdateActs(Sheet sh, WrinkleSettings s, float now)
+        {
+            var L = sh.Layout;
+            if (L == null) return;
+            float dt = sh.LastActAt > 0f ? Mathf.Clamp(now - sh.LastActAt, 0f, 0.1f) : 0f;
+            sh.LastActAt = now;
+            float ka = 1f - Mathf.Exp(-dt / Mathf.Max(0.01f, s.Attack)), kr = 1f - Mathf.Exp(-dt / Mathf.Max(0.01f, s.Release));
+            bool changed = false;
+            for (int k = 0; k < L.Count; k++)
+            {
+                string cls = L.RegionClass[k];
+                bool on = cls == "face" ? s.Face : cls == "neck" ? s.Neck : s.BodyOn;
+                float x = on ? Mathf.Clamp01((sh.Comp[k] - s.Threshold) / L.Range[k]) : 0f;
+                float target = x * x * (3f - 2f * x);
+                float a = sh.Act[k];
+                a += (target - a) * (target > a ? ka : kr);
+                if (target <= 0.004f && a < 0.004f) a = 0f;
+                sh.Act[k] = a;
+                if (Mathf.Floor(a * 64f) != Mathf.Floor(sh.ActSent[k] * 64f) || (a == 0f) != (sh.ActSent[k] == 0f)) changed = true;
+            }
+            if (changed)
+            {
+                sh.Dirty = true;
+                sh.LastChange = now;
+                if (sh.Asleep)
+                {
+                    sh.Asleep = false;
+                    TransLog(sh, now, "Wrinkles: sheet '" + sh.Name + "' awake (a region's activation moved)");
+                }
+            }
+            if (now >= sh.NextPeakLog)
+            {
+                sh.NextPeakLog = now + PeakLogEvery;
+                var line = PeakLine(sh, s);
+                for (int k = 0; k < MaxRegions; k++) sh.Peak[k] = 0f;
+                if (line.Length > 0 && line != sh.LastPeakLine) Plugin.Log.LogInfo("Wrinkles: sheet '" + sh.Name + "' peak compression over " + PeakLogEvery.ToString("0") + " s (threshold " + s.Threshold.ToString("0.000") + "): " + line);
+                sh.LastPeakLine = line;
+            }
+        }
+
+        // The regions that compressed past half the threshold since the last log, strongest first: "name comp (activation now)".
+        static string PeakLine(Sheet sh, WrinkleSettings s)
+        {
+            var L = sh.Layout;
+            var idx = new List<int>();
+            for (int k = 0; k < L.Count; k++) if (sh.Peak[k] > s.Threshold * 0.5f) idx.Add(k);
+            idx.Sort((a, b) => sh.Peak[b].CompareTo(sh.Peak[a]));
+            var sb = new StringBuilder();
+            for (int i = 0; i < idx.Count && i < 8; i++)
+            {
+                int k = idx[i];
+                sb.Append(sb.Length > 0 ? ", " : "").Append(L.RegionName[k]).Append(' ').Append(sh.Peak[k].ToString("0.000"))
+                  .Append(" (").Append((sh.Act[k] * 100f).ToString("0")).Append("%)");
+            }
+            return sb.ToString();
+        }
+
+        // The regions active now, for the panel: "forehead_L 45%, elbow_in_R 20%" (strongest first), "" when none.
+        public string ActiveRegions()
+        {
+            var parts = new List<KeyValuePair<float, string>>();
+            for (int i = 0; i < _sheets.Count; i++)
+            {
+                var sh = _sheets[i];
+                if (!sh.Built || sh.Layout == null) continue;
+                for (int k = 0; k < sh.Layout.Count; k++)
+                    if (sh.Act[k] >= 0.05f) parts.Add(new KeyValuePair<float, string>(sh.Act[k], sh.Layout.RegionName[k] + " " + (sh.Act[k] * 100f).ToString("0") + "%"));
+            }
+            parts.Sort((a, b) => b.Key.CompareTo(a.Key));
+            var sb = new StringBuilder();
+            for (int i = 0; i < parts.Count && i < 6; i++) sb.Append(i > 0 ? ", " : "").Append(parts[i].Value);
+            return sb.ToString();
+        }
+
         void TransLog(Sheet sh, float now, string msg)
         {
             if (now - sh.LastTransLog < 5f) return;
@@ -544,40 +628,24 @@ namespace SfMorph
             Plugin.Log.LogInfo(msg);
         }
 
-        // ---- raster + blend ----
+        // ---- blend ----
 
-        void EnsureSlope()
-        {
-            if (_slope != null) return;
-            _slope = new RenderTexture(SlopeSize, SlopeSize, 0, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear)
-            {
-                name = "SfMorph wrinkle slope", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp, useMipMap = false, hideFlags = HideFlags.HideAndDontSave
-            };
-            _slope.Create();
-            _owned.Add(_slope.GetInstanceID());
-        }
-
-        // Slope raster of the sheet's renderers (unless initial: base copy only), blend into the normal RT, mips, optional debug tint.
+        // The sheet's normal RT = base normal + the layout's creases faded by the region activations (+ SkinMarks' dent); the albedo copy
+        // when it has one. initial: before the first activation (an exact copy of the base: every region at 0).
         void Raster(Sheet sh, int frame, bool initial)
         {
             var cmd = _cmd;
             cmd.Clear();
             _mat.SetFloat(PFlip, _flip);
             _mat.SetFloat(PStrength, _s.Strength);
-            _mat.SetFloat(PAmp, Amp);
-            EnsureSlope();
-            cmd.SetRenderTarget(_slope);
-            cmd.ClearRenderTarget(false, true, new Color(0f, 0f, 0f, 0f));
-            if (!initial)
-                for (int i = 0; i < sh.Rends.Count; i++)
-                {
-                    var r = sh.Rends[i];
-                    if (r.Ready && r.Mpb != null) cmd.DrawProcedural(Matrix4x4.identity, _mat, 0, MeshTopology.Triangles, 3 * r.T, 1, r.Mpb);
-                }
+            var L = sh.Layout;
+            for (int k = 0; k < MaxRegions; k++) sh.ActSent[k] = initial || L == null || k >= L.Count ? 0f : sh.Act[k];
+            sh.Mpb.SetFloatArray(PAct, sh.ActSent);
+            sh.Mpb.SetTexture(PDetail, L != null ? (Texture)L.Detail : Texture2D.blackTexture);
+            sh.Mpb.SetTexture(PRegion, L != null ? (Texture)L.Region : Texture2D.blackTexture);
+            sh.Mpb.SetVector(PRegionSize, L != null ? new Vector4(L.W, L.H, 0f, 0f) : new Vector4(1f, 1f, 0f, 0f));
             sh.Mpb.SetTexture(PBaseNormal, sh.Base != null ? sh.Base : (Texture)_flat);
-            sh.Mpb.SetTexture(PSlope, _slope);
-            sh.Mpb.SetVector(PSlopeTexel, new Vector4(1f / _slope.width, 1f / _slope.height, 0f, 0f));
-            // 0.8.0: SkinMarks' lingering dent of this material (marks RT + metres per UV), a second whiteout in pass 1; off when it has none
+            // 0.8.0: SkinMarks' lingering dent of this material (marks RT + metres per UV), a second whiteout in the blend; off when it has none
             RenderTexture mrt = null;
             float msc = 0f;
             try { mrt = SkinMarks.MarksOf(sh.Mat); msc = mrt != null ? SkinMarks.SlopeScaleOf(sh.Mat) : 0f; }
@@ -588,27 +656,22 @@ namespace SfMorph
             sh.Mpb.SetFloat(PMarksScale, mon ? msc : 1f);
             sh.Mpb.SetVector(PMarksTexel, mon ? new Vector4(1f / mrt.width, 1f / mrt.height, 0f, 0f) : new Vector4(0.000488f, 0.000488f, 0f, 0f));
             cmd.SetRenderTarget(sh.Normal);
-            cmd.DrawProcedural(Matrix4x4.identity, _mat, 1, MeshTopology.Triangles, 3, 1, sh.Mpb);
+            cmd.DrawProcedural(Matrix4x4.identity, _mat, BlendPass, MeshTopology.Triangles, 3, 1, sh.Mpb);
             cmd.GenerateMips(sh.Normal);
             if (sh.Albedo != null)
             {
                 sh.Mpb.SetTexture(PBaseAlbedo, sh.AlbedoBase != null ? sh.AlbedoBase : (Texture)Texture2D.whiteTexture);
                 _mat.SetFloat(PDebugMode, sh.DebugMode);
-                if (_albedoPass)
-                {
-                    // 0.8.4: crease darkening, and SkinMarks' albedo marks on this copy (it leaves the slot to us while we hold it)
-                    float cs = CavityScale(sh);
-                    sh.Mpb.SetFloat(PCavity, cs > 0f ? Mathf.Clamp01(_s.Cavity) : 0f);
-                    sh.Mpb.SetFloat(PCavityScale, cs);
-                    float red = 0f, ao = 0f;
-                    bool monA = mrt != null && SkinMarks.AlbedoParams(out red, out ao);
-                    sh.Mpb.SetFloat(PMarksAlbedoOn, monA ? 1f : 0f);
-                    sh.Mpb.SetFloat(PRedness, red);
-                    sh.Mpb.SetFloat(PAo, ao);
-                    if (monA && !mon) { sh.Mpb.SetTexture(PMarks, mrt); sh.Mpb.SetVector(PMarksTexel, new Vector4(1f / mrt.width, 1f / mrt.height, 0f, 0f)); }
-                }
+                sh.Mpb.SetFloat(PCavity, Mathf.Clamp01(_s.Cavity));
+                // SkinMarks' albedo marks on this copy (it leaves the slot to us while we hold it)
+                float red = 0f, ao = 0f;
+                bool monA = mrt != null && SkinMarks.AlbedoParams(out red, out ao);
+                sh.Mpb.SetFloat(PMarksAlbedoOn, monA ? 1f : 0f);
+                sh.Mpb.SetFloat(PRedness, red);
+                sh.Mpb.SetFloat(PAo, ao);
+                if (monA && !mon) { sh.Mpb.SetTexture(PMarks, mrt); sh.Mpb.SetVector(PMarksTexel, new Vector4(1f / mrt.width, 1f / mrt.height, 0f, 0f)); }
                 cmd.SetRenderTarget(sh.Albedo);
-                cmd.DrawProcedural(Matrix4x4.identity, _mat, _albedoPass ? AlbedoPass : 2, MeshTopology.Triangles, 3, 1, sh.Mpb);
+                cmd.DrawProcedural(Matrix4x4.identity, _mat, AlbedoPass, MeshTopology.Triangles, 3, 1, sh.Mpb);
                 cmd.GenerateMips(sh.Albedo);
             }
             Stopwatch sw = null;
@@ -618,44 +681,13 @@ namespace SfMorph
             sh.LastRasterFrame = frame;
             sh.StrengthApplied = _s.Strength;
             sh.CavityApplied = _s.Cavity;
+            sh.DebugApplied = sh.DebugMode;
             if (sw != null)
             {
                 sw.Stop();
                 sh.RasterLogged = true;
-                Plugin.Log.LogInfo("Wrinkles: first raster of sheet '" + sh.Name + "' (" + sh.Rends.Count + " renderers, submit " + sw.Elapsed.TotalMilliseconds.ToString("0.00") + " ms CPU)");
+                Plugin.Log.LogInfo("Wrinkles: first blend of sheet '" + sh.Name + "' (" + sh.Rends.Count + " renderers, submit " + sw.Elapsed.TotalMilliseconds.ToString("0.00") + " ms CPU)");
             }
-        }
-
-        // _CavityScale of a sheet: fold spacing / (metres per UV x CreaseRef), so the shader's divergence per UV becomes the fold profile's own
-        // curvature over CreaseRef. Metres per UV = the vertex-weighted mean of its renderers' bakes; 0 (no crease shade) while unknown.
-        static float CavityScale(Sheet sh)
-        {
-            float w = 0f, m = 0f;
-            for (int i = 0; i < sh.Rends.Count; i++)
-            {
-                var r = sh.Rends[i];
-                if (!r.Ready || !(r.Mpu > 1e-4f)) continue;
-                w += r.V; m += r.V * r.Mpu;
-            }
-            if (!(w > 0f)) return 0f;
-            float spacing = sh.Face ? WrinkleBake.SpacingFace : WrinkleBake.SpacingBody;
-            return spacing / (m / w * CreaseRef);
-        }
-
-        // sqrt(sum of rest triangle areas / sum of UV triangle areas) of a bake (RestTri[4] = rest area in m^2).
-        static float MetresPerUv(BakeResult b)
-        {
-            double a3 = 0.0, auv = 0.0;
-            for (int t = 0; t < b.T; t++)
-            {
-                float a = b.RestTri[t * 20 + 4];
-                if (!(a > 0f)) continue;
-                Vector2 p0 = b.Uv[b.Tris[3 * t]], p1 = b.Uv[b.Tris[3 * t + 1]], p2 = b.Uv[b.Tris[3 * t + 2]];
-                double u = 0.5 * Math.Abs((p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y));
-                if (u < 1e-12) continue;
-                a3 += a; auv += u;
-            }
-            return auv > 1e-9 ? (float)Math.Sqrt(a3 / auv) : 0f;
         }
 
         // ---- _FlipY self-test ----
@@ -679,9 +711,9 @@ namespace SfMorph
             var cmd = _cmd;
             cmd.Clear();
             cmd.SetRenderTarget(_testA);
-            cmd.DrawProcedural(Matrix4x4.identity, _mat, 3, MeshTopology.Triangles, 3, 1, _mpbTestA);
+            cmd.DrawProcedural(Matrix4x4.identity, _mat, TestPass, MeshTopology.Triangles, 3, 1, _mpbTestA);
             cmd.SetRenderTarget(_testB);
-            cmd.DrawProcedural(Matrix4x4.identity, _mat, 3, MeshTopology.Triangles, 3, 1, _mpbTestB);
+            cmd.DrawProcedural(Matrix4x4.identity, _mat, TestPass, MeshTopology.Triangles, 3, 1, _mpbTestB);
             Graphics.ExecuteCommandBuffer(cmd);
             _flipState = 1;
             float used = _flip;
@@ -724,7 +756,7 @@ namespace SfMorph
                 if (!want)
                 {
                     if (_active) GoIdle(now);
-                    else if (_offSince > 0f && now - _offSince > 10f && (_rends.Count > 0 || _slope != null)) { DropAll(); FreeShared(); }
+                    else if (_offSince > 0f && now - _offSince > 10f && _rends.Count > 0) { DropAll(); FreeShared(); }
                     if (!_dead) Status = "";
                     return;
                 }
@@ -733,7 +765,8 @@ namespace SfMorph
                 {
                     _active = true;
                     _offSince = -1f;
-                    Plugin.Log.LogInfo("Wrinkles: on (face " + s.Face + ", neck " + s.Neck + ", body " + s.BodyOn + ", strength " + s.Strength.ToString("0.00") + ", threshold " + s.Threshold.ToString("0.000")
+                    Plugin.Log.LogInfo("Wrinkles: on, authored creases (face " + s.Face + ", neck " + s.Neck + ", body " + s.BodyOn + ", strength " + s.Strength.ToString("0.00") + ", threshold " + s.Threshold.ToString("0.000")
+                        + ", attack " + s.Attack.ToString("0.00") + " s, release " + s.Release.ToString("0.00") + " s, crease shade " + s.Cavity.ToString("0.00")
                         + ", resolution " + (s.Resolution == 0 ? "base (cap 4096)" : s.Resolution.ToString()) + ", cull " + s.CullDistance.ToString("0.0") + " m)");
                 }
                 if (_her != null && _her.Root != her.Root) { Plugin.Log.LogInfo("Wrinkles: character changed; rebuilding"); DropAll(); }
@@ -788,7 +821,9 @@ namespace SfMorph
 
         static bool Wanted(int region, WrinkleSettings s)
         {
-            return region == 1 ? s.Face : region == 2 ? s.Neck : region == 3 && s.BodyOn;
+            // the face mesh carries the front of her neck too (the face layout's neck region): wanted for either; each region class is
+            // gated on its own in UpdateActs
+            return region == 1 ? s.Face || s.Neck : region == 2 ? s.Neck : region == 3 && s.BodyOn;
         }
 
         Rend FindRend(SkinnedMeshRenderer r, int sub)
@@ -801,6 +836,9 @@ namespace SfMorph
         {
             for (int i = 0; i < _sheets.Count; i++) if (_sheets[i].Mat == mat) return _sheets[i];
             var sh = new Sheet { Mat = mat, Name = mat.name.Replace(" (Instance)", "").Trim(), Face = face };
+            var cap = sh;
+            sh.OnSums = req => SumsDone(cap, req);
+            sh.Layout = LayoutFor(face);
             foreach (var p in NormalProps) if (mat.HasProperty(p)) { sh.Prop = p; break; }
             // the albedo: the first of the usual names holding a real texture (ours or SkinMarks' copy count), else the first that exists
             foreach (var p in AlbedoProps)
@@ -815,8 +853,22 @@ namespace SfMorph
                 sh.Skip = true;
                 if (_logged.Add("noprop|" + sh.Name)) Plugin.Log.LogWarning("Wrinkles: material '" + sh.Name + "' (" + mat.shader.name + ") has no normal map property; skipped");
             }
+            else if (sh.Layout == null)
+            {
+                sh.Skip = true;
+                if (_logged.Add("nolayout|" + sh.Name)) Plugin.Log.LogWarning("Wrinkles: material '" + sh.Name + "': no authored " + (face ? "face" : "body") + " wrinkle layout in the bundle; skipped");
+            }
             _sheets.Add(sh);
             return sh;
+        }
+
+        // The authored layout of a face sheet ("face") or any other skin sheet ("body"); whether a renderer's UVs really are on it is
+        // checked per renderer by the bake (coverage).
+        WrinkleLayout LayoutFor(bool face)
+        {
+            string want = face ? "face" : "body";
+            for (int i = 0; i < _layouts.Count; i++) if (_layouts[i].Name == want) return _layouts[i];
+            return null;
         }
 
         // Which renderer slots feed which sheet; rebuilt about once a second and whenever settings change what is wanted.
@@ -850,8 +902,6 @@ namespace SfMorph
                         if (sh.Skip) continue;              // no normal map property: no renderer for it
                         rd.S = sh;
                         sh.Rends.Add(rd);
-                        var cap = rd;
-                        rd.OnCounter = req => CounterDone(cap, req);
                         _rends.Add(rd);
                     }
                     rd.Region = region;
@@ -861,7 +911,7 @@ namespace SfMorph
             for (int i = _rends.Count - 1; i >= 0; i--)
                 if (!keep.Contains(_rends[i])) RemoveRend(_rends[i]);
             for (int i = _sheets.Count - 1; i >= 0; i--)
-                if (_sheets[i].Rends.Count == 0) { RestoreSheet(_sheets[i]); _sheets.RemoveAt(i); LogMemory(); }
+                if (_sheets[i].Rends.Count == 0) { RestoreSheet(_sheets[i]); ReleaseSheet(_sheets[i]); _sheets.RemoveAt(i); LogMemory(); }
         }
         int _lastDiscoverKey = -1;
 
@@ -968,7 +1018,7 @@ namespace SfMorph
             var sw = Stopwatch.StartNew();
             string err = null;
             BakeResult b = null;
-            try { b = WrinkleBake.Bake(r.R, r.Sub, her, r.Region == 1, out err); }
+            try { b = WrinkleBake.Bake(r.R, r.Sub, her, r.S != null ? r.S.Layout : null, out err); }
             catch (Exception e) { err = "exception: " + e.Message; Plugin.Log.LogError("Wrinkles: bake of " + r.Name + " threw: " + e); }
             sw.Stop();
             if (b != null)
@@ -979,17 +1029,22 @@ namespace SfMorph
             if (b == null)
             {
                 r.State = -1;
-                r.RetryAt = now + 15f;
-                if (err != r.LastError) { r.LastError = err; Plugin.Log.LogWarning("Wrinkles: renderer " + r.Name + " not baked: " + err + " (retrying every 15 s)"); }
+                bool otherUv = err != null && err.StartsWith("its UVs");
+                r.RetryAt = now + (otherUv ? 120f : 15f);
+                if (err != r.LastError)
+                {
+                    r.LastError = err;
+                    if (otherUv) Plugin.Log.LogInfo("Wrinkles: renderer " + r.Name + " has no wrinkles: " + err + " (the maps are authored on her export by tools/wrinkles/author.py)");
+                    else Plugin.Log.LogWarning("Wrinkles: renderer " + r.Name + " not baked: " + err + " (retrying every 15 s)");
+                }
                 return;
             }
             r.B = b;
             r.Mesh = b.Mesh != null ? b.Mesh : r.R.sharedMesh;
-            r.V = b.V; r.T = b.T;
+            r.V = b.V; r.T = b.T; r.RT = b.RT;
             r.BakeMs = sw.Elapsed.TotalMilliseconds;
-            try { r.Mpu = MetresPerUv(b); } catch { r.Mpu = 0f; }
             Upload(r, b);
-            if (!r.RawAcquired) { RawTarget.Acquire(r.R); r.RawAcquired = true; }
+            if (!r.RawAcquired && r.RT > 0) { RawTarget.Acquire(r.R); r.RawAcquired = true; }
             r.Layout = 0; r.ScaleChecked = false;
             r.State = 1;
             r.LastError = "";
@@ -1008,13 +1063,9 @@ namespace SfMorph
         static string Validate(BakeResult b, Rend r)
         {
             if (b.V <= 0 || b.T <= 0) return "empty bake (" + b.V + " verts, " + b.T + " tris)";
-            if (b.Tris == null || b.Tris.Length != 3 * b.T) return "Tris length " + (b.Tris == null ? 0 : b.Tris.Length) + " != 3*" + b.T;
-            if (b.Uv == null || b.Uv.Length != b.V) return "Uv length != vertex count";
-            if (b.Canon == null || b.Canon.Length != b.V) return "Canon length != vertex count";
-            if (b.AdjOff == null || b.AdjOff.Length != b.V + 1) return "AdjOff length != V+1";
-            if (b.AdjTri == null) return "AdjTri missing";
-            if (b.RestTri == null || b.RestTri.Length != 20 * b.T) return "RestTri length != 20*T";
-            if (b.RestV == null || b.RestV.Length != 12 * b.V) return "RestV length != 12*V";
+            if (b.Tris == null || b.Tris.Length != 3 * b.RT) return "Tris length " + (b.Tris == null ? 0 : b.Tris.Length) + " != 3*" + b.RT;
+            if (b.RegTri == null || b.RegTri.Length != 8 * b.RT) return "RegTri length != 8*RT";
+            for (int i = 0; i < b.Tris.Length; i++) if (b.Tris[i] < 0 || b.Tris[i] >= b.V) return "region triangle vertex out of range";
             var m = r.R.sharedMesh;
             if (m != null && m.vertexCount != b.V) return "baked vertex count " + b.V + " != renderer mesh " + m.vertexCount;
             return null;
@@ -1023,24 +1074,10 @@ namespace SfMorph
         void Upload(Rend r, BakeResult b)
         {
             ReleaseBuffers(r);
+            if (b.RT == 0) return;
             r.Tris = Buf(b.Tris.Length, 4, b.Tris);
-            r.Uv = Buf(b.V, 8, b.Uv);
-            r.RestTri = Buf(b.RestTri.Length, 4, b.RestTri);
-            r.Canon = Buf(b.V, 4, b.Canon);
-            r.AdjOff = Buf(b.V + 1, 4, b.AdjOff);
-            r.AdjTri = Buf(b.AdjTri.Length, 4, b.AdjTri);
-            r.RestV = Buf(b.RestV.Length, 4, b.RestV);
-            r.StateBuf = Buf(12 * b.V, 4, new float[12 * b.V]);
-            r.TriOut = Buf(b.T, 16, new Vector4[b.T]);
-            r.Counter = Buf(1, 4, new uint[1]);
-            r.Bytes = (long)(b.Tris.Length + b.RestTri.Length + b.V * 2 + b.V + b.V + 1 + b.AdjTri.Length + b.RestV.Length + 12 * b.V + 4 * b.T + 1) * 4;
-            var mp = r.Mpb ?? (r.Mpb = new MaterialPropertyBlock());
-            mp.SetBuffer(PTris, r.Tris);
-            mp.SetBuffer(PUv, r.Uv);
-            mp.SetBuffer(PRestTri, r.RestTri);
-            mp.SetBuffer(PRestV, r.RestV);
-            mp.SetBuffer(PCanon, r.Canon);
-            mp.SetBuffer(PState, r.StateBuf);
+            r.RegTri = Buf(2 * b.RT, 16, b.RegTri);
+            r.Bytes = (long)(b.Tris.Length + b.RegTri.Length) * 4;
         }
 
         static GraphicsBuffer Buf(int count, int stride, Array data)
@@ -1052,10 +1089,8 @@ namespace SfMorph
 
         void ReleaseBuffers(Rend r)
         {
-            Rel(ref r.Tris); Rel(ref r.Uv); Rel(ref r.RestTri); Rel(ref r.Canon); Rel(ref r.AdjOff); Rel(ref r.AdjTri);
-            Rel(ref r.RestV); Rel(ref r.StateBuf); Rel(ref r.TriOut); Rel(ref r.Counter);
+            Rel(ref r.Tris); Rel(ref r.RegTri);
             r.Bytes = 0;
-            if (r.Mpb != null) r.Mpb.Clear();
         }
 
         static void Rel(ref GraphicsBuffer g)
@@ -1075,7 +1110,7 @@ namespace SfMorph
             }
         }
 
-        // Rest frames and patch origins against the current neutral (same topology); the strain state restarts from zero.
+        // Rest frames against the current neutral (same topology and region triangles).
         void Recapture(Rend r, Character her)
         {
             r.NeedRecapture = false;
@@ -1097,10 +1132,7 @@ namespace SfMorph
                 return;
             }
             var b = r.B;
-            r.RestTri.SetData(b.RestTri);
-            r.RestV.SetData(b.RestV);
-            // act/axis are in rest space and stay valid across a blendshape change: only a button / bind-pose / first bake restarts them
-            if (why != BsWhy) r.StateBuf.SetData(new float[12 * r.V]);
+            if (r.RegTri != null && b.RT > 0) r.RegTri.SetData(b.RegTri);
             if (r.S != null) r.S.Dirty = true;
             Plugin.Log.LogInfo("Wrinkles: recapture " + r.Name + " (" + why + ") in " + sw.Elapsed.TotalMilliseconds.ToString("0") + " ms");
         }
@@ -1119,9 +1151,23 @@ namespace SfMorph
                 for (int k = 0; k < sh.Rends.Count; k++) if (sh.Rends[k].Ready) ready++;
                 if (!sh.Built)
                 {
-                    if (ready > 0 && ready == CountBaked(sh)) BuildSheet(sh, her, s, now);
+                    if (ready > 0 && ready == CountBaked(sh))
+                    {
+                        // nothing of these renderers lies under a region (the neck mesh alone on the body atlas while Body is off): no copy
+                        int rt = 0;
+                        for (int k = 0; k < sh.Rends.Count; k++) if (sh.Rends[k].Ready) rt += sh.Rends[k].RT;
+                        if (rt == 0)
+                        {
+                            if (!sh.Empty) Plugin.Log.LogInfo("Wrinkles: sheet '" + sh.Name + "': no wrinkle region on its renderers; left alone");
+                            sh.Empty = true;
+                            continue;
+                        }
+                        sh.Empty = false;
+                        BuildSheet(sh, her, s, now);
+                    }
                     continue;
                 }
+                UpdateActs(sh, s, now);
                 if (!check) continue;
                 // base normal: Morph's baked one when it offers one, else whatever the slot holds that isn't ours
                 Texture slot = sh.Mat.GetTexture(sh.Prop);
@@ -1145,6 +1191,7 @@ namespace SfMorph
                 if (Mathf.Abs(sh.StrengthApplied - s.Strength) > 0.001f) sh.Dirty = true;
                 if (sh.Albedo != null && Mathf.Abs(sh.CavityApplied - s.Cavity) > 0.001f) sh.Dirty = true;
                 ServiceAlbedo(sh, her, s, now);
+                if (sh.Albedo != null && sh.DebugApplied != sh.DebugMode) sh.Dirty = true;
             }
         }
 
@@ -1163,6 +1210,11 @@ namespace SfMorph
             Texture ext = slot != null && Owns(slot) ? ExternalBaseOf(sh.Mat, sh.Prop) : null;
             sh.Base = nf != null && !Owns(nf) ? nf : (slot != null && !Owns(slot) ? slot : ext);
             sh.Orig = (slot != null && !Owns(slot) && slot != nf) ? slot : (OriginalVia(her != null ? her.Morph : null, sh.Mat, sh.Prop) ?? ext);
+            if (sh.Sums == null) sh.Sums = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 2 * MaxRegions, 4);
+            sh.Inflight = 0;
+            for (int k = 0; k < MaxRegions; k++) { sh.Comp[k] = 0f; sh.Act[k] = 0f; sh.ActSent[k] = 0f; sh.Peak[k] = 0f; }
+            sh.LastActAt = 0f;
+            sh.NextPeakLog = now + PeakLogEvery;
             MakeNormalRT(sh, s);
             sh.Built = true;
             sh.LastChange = now;
@@ -1196,13 +1248,16 @@ namespace SfMorph
             return (string.IsNullOrEmpty(t.name) ? "<unnamed>" : t.name) + " " + t.width + "x" + t.height + " fmt " + fmt;
         }
 
-        // Normal RT size: the base's size capped by Resolution (0 = 4096); body sheets at most 2048.
+        // Normal RT size: the base's size, raised to the authored creases' size (her 1024 face normal map would halve the 2048 creases),
+        // capped by Resolution (0 = 4096); body sheets at most 2048.
         static int TargetSize(Sheet sh, Texture b, WrinkleSettings s)
         {
             int bw = b != null ? b.width : 1024, bh = b != null ? b.height : 1024;
             int cap = s.Resolution <= 0 ? 4096 : s.Resolution;
             if (!sh.Face) cap = Math.Min(cap, 2048);
             int mx = Math.Max(bw, bh);
+            int dm = sh.Layout != null && sh.Layout.Detail != null ? Math.Max(sh.Layout.Detail.width, sh.Layout.Detail.height) : 0;
+            if (mx < dm) { float g = (float)dm / mx; bw = Mathf.RoundToInt(bw * g); bh = Mathf.RoundToInt(bh * g); mx = Math.Max(bw, bh); }
             if (mx > cap) { float f = (float)cap / mx; bw = Math.Max(64, Mathf.RoundToInt(bw * f)); bh = Math.Max(64, Mathf.RoundToInt(bh * f)); }
             return Math.Max(64, bw) * 65536 + Math.Max(64, bh);
         }
@@ -1276,11 +1331,8 @@ namespace SfMorph
                 Raster(sh, Time.frameCount, false);   // filled before it goes into the slot
                 mat.SetTexture(sh.AlbedoProp, sh.Albedo);
                 sh.AlbedoHeld = true;
-                float cs = CavityScale(sh), sp = sh.Face ? WrinkleBake.SpacingFace : WrinkleBake.SpacingBody;
                 Plugin.Log.LogInfo("Wrinkles: sheet '" + sh.Name + "' albedo copy: " + sh.AlbedoProp + " '" + Describe(b) + "' -> RT " + sh.Albedo.width + "x" + sh.Albedo.height
-                    + (cav ? ", crease shade " + s.Cavity.ToString("0.00") + (cs > 0f ? " (folds " + (sp * 1000f).ToString("0.0") + " mm apart, " + (sp / (cs * CreaseRef)).ToString("0.000") + " m per UV)"
-                        : " (metres per UV unknown: no crease shade)") : "")
-                    + (mode != 0 ? ", debug view " + mode : "") + (skinOn ? ", character skin on" : ""));
+                    + (cav ? ", crease shade " + s.Cavity.ToString("0.00") : "") + (mode != 0 ? ", debug view " + (mode == 2 ? "regions" : "activation") : "") + (skinOn ? ", character skin on" : ""));
                 LogMemory();
                 return;
             }
@@ -1540,25 +1592,28 @@ namespace SfMorph
             if (!_active) { Status = ""; return; }
             if (_flipState != 2) Status = "Wrinkles: on, self-test running";
             else if (_rends.Count == 0) Status = "Wrinkles: on, no skin renderers found";
-            else Status = "Wrinkles: on, " + built + " sheets, " + rn + "/" + _rends.Count + " renderers baked" + (culled > 0 ? ", " + culled + " culled" : "") + (asleep > 0 ? ", " + asleep + " idle" : "")
-                + (noVb > 0 ? ", " + noVb + " without skinned vertex buffer (CPU skinning?)" : "");
+            else
+            {
+                string act = ActiveRegions();
+                Status = "Wrinkles: on, " + built + " sheets, " + rn + "/" + _rends.Count + " renderers baked" + (culled > 0 ? ", " + culled + " culled" : "") + (asleep > 0 ? ", " + asleep + " idle" : "")
+                    + (noVb > 0 ? ", " + noVb + " without skinned vertex buffer (CPU skinning?)" : "") + (act.Length > 0 ? "; active: " + act : "");
+            }
         }
 
         void LogMemory()
         {
             long buf = 0, rts = 0, dbg = 0;
             for (int i = 0; i < _rends.Count; i++) buf += _rends[i].Bytes;
-            long slope = _slope != null ? (long)_slope.width * _slope.height * 8 : 0;
             for (int i = 0; i < _sheets.Count; i++)
             {
                 var sh = _sheets[i];
                 if (sh.Normal != null) rts += (long)sh.Normal.width * sh.Normal.height * 4 * 4 / 3;
                 if (sh.Albedo != null) dbg += (long)sh.Albedo.width * sh.Albedo.height * 4 * 4 / 3;
             }
-            long tot = buf + slope + rts + dbg;
+            long tot = buf + rts + dbg;
             if (tot == _lastMemLog) return;
             _lastMemLog = tot;
-            Plugin.Log.LogInfo("Wrinkles: memory: buffers " + MB(buf) + " MB, slope RT " + MB(slope) + " MB, normal RTs " + MB(rts) + " MB" + (dbg > 0 ? ", albedo RTs " + MB(dbg) + " MB" : "") + ", total " + MB(tot) + " MB");
+            Plugin.Log.LogInfo("Wrinkles: memory: buffers " + MB(buf) + " MB, normal RTs " + MB(rts) + " MB" + (dbg > 0 ? ", albedo RTs " + MB(dbg) + " MB" : "") + ", total " + MB(tot) + " MB");
         }
 
         static string MB(long b) { return (b / 1048576.0).ToString("0.0"); }
@@ -1599,21 +1654,27 @@ namespace SfMorph
             sh.RasterLogged = false;
         }
 
+        // The sheet's GPU sums (a sheet being forgotten); a readback still in flight finds Sums null and drops its result.
+        void ReleaseSheet(Sheet sh)
+        {
+            if (sh.Sums != null) { try { sh.Sums.Release(); } catch { } sh.Sums = null; }
+            sh.Inflight = 0;
+        }
+
         void DropAll()
         {
-            for (int i = 0; i < _sheets.Count; i++) RestoreSheet(_sheets[i]);
+            for (int i = 0; i < _sheets.Count; i++) { RestoreSheet(_sheets[i]); ReleaseSheet(_sheets[i]); }
             _sheets.Clear();
             for (int i = 0; i < _rends.Count; i++) DisposeRend(_rends[i]);
             _rends.Clear();
             _lastDiscoverKey = -1;
             _nextDiscover = 0f;
-            _logged.RemoveWhere(x => x.StartsWith("noprop|"));
+            _logged.RemoveWhere(x => x.StartsWith("noprop|") || x.StartsWith("nolayout|"));
             _her = null;
         }
 
         void FreeShared()
         {
-            if (_slope != null) { DestroyRT(_slope); _slope = null; }
             _lastMemLog = -1;
         }
 

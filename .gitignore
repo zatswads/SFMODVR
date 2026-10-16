@@ -10,3 +10,6 @@ __pycache__/
 dist/dist
 dist/dist.manifest
 .claude/worktrees/
+
+# wrinkle authoring previews (tools/wrinkles/author.py --preview)
+tools/wrinkles/preview/

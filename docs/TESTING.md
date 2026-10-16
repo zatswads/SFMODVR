@@ -88,7 +88,7 @@ wrong buffer; explosion: layout); (3) with physics hands, press a thigh with one
 dent, nothing elsewhere; toggle "Per-vertex contact on the GPU" to compare; (4) Gravity 0 → 100 %: breasts hang/flatten with her
 pose, settle without jitter.
 
-## 0.7.5 (skin wrinkles)
+## 0.7.5 (skin wrinkles; procedural folds, replaced in 0.9.0)
 
 Install `dist/SfMorph.dll` + `dist/sfmorph_shaders` into `BepInEx\plugins`. Log: `Wrinkles: loaded ... kernels`, `_FlipY self-test`
 (consistent or flipped once), per renderer classification (face/neck/body/not skin), `sheet '<mat>' base ... baked in .. ms`,
@@ -96,6 +96,23 @@ Install `dist/SfMorph.dll` + `dist/sfmorph_shaders` into `BepInEx\plugins`. Log:
 Debug = Activation: red where her face folds in expressions, none at rest; (2) Debug off: smile lines/brow/eyes in the headset, look
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
+
+## 0.9.1 (authored wrinkles)
+
+Copy both `SfMorph.dll` and `sfmorph_shaders` (the maps are inside the bundle; an old bundle is refused: `Wrinkles: off: the shader bundle
+is older than this DLL`). Log: `SF Body Morphs 0.9.1`, `Wrinkles: loaded ... authored layouts: face (11 regions: ...), body (11 regions:
+...)`, `_FlipY self-test ... consistent`, per renderer `sheet '<mat>' base ...` with `N region triangles [forehead_L:.. ...]`, coverage
+~100 % for her face and body meshes (a renderer on another UV layout: `has no wrinkles: its UVs are not on the ... layout`, expected for
+the foot's own material), `skinned buffer ok`, scale check ~1.0, `first blend of sheet`.
+- [ ] VR tab -> Skin wrinkles on, Face + Neck + Body on, Debug = Regions: coloured patches only on the forehead, between the brows, beside
+      the eyes, under the eyes, along the smile lines, on the nose, front of the neck; inside/back of the elbows, behind the knees, hip
+      folds, armpit hollows, lower belly. Nothing on her breasts or shoulders.
+- [ ] Debug = Off, her at rest (idle): no lines on her body; face calm. Then expressions (reactions, her face clips) and poses that bend
+      her elbows / knees / hips / lean forward: the matching lines fade in. Debug = Activation shows which (red) live.
+- [ ] Every 10 s while something moves: `peak compression over 10 s (threshold ..): forehead_L 0.0xx (45%), ...`. Send these: they set
+      the per-region ranges. Regions that never show at all in the log never compressed past half the threshold.
+- [ ] Strength 0 -> 2 and Crease shade 0 -> 1: lines deeper / darker in the bottom; no seams at UV borders (jaw, behind the ears, arm seams).
+- [ ] Characters tab skin toggle with wrinkles on: no stuck texture; Recapture after a body slider: no lines at rest.
 
 ## 0.9.0 (skin sounds, voice packs, voice pitch/formant, face reactions)
 

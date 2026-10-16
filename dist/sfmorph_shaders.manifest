@@ -1,25 +1,34 @@
 ManifestFileVersion: 0
-CRC: 1219111815
+CRC: 2601419543
 Hashes:
   AssetFileHash:
     serializedVersion: 2
-    Hash: 318e7462db477965df38187b45f39ffe
+    Hash: dd22fb21dc7f462194e31fb7551a07b6
   TypeTreeHash:
     serializedVersion: 2
-    Hash: cc47f627a82a59fd500d95464fa77bad
+    Hash: a1a0eb92eb8f8182a449d567974cdb4a
   IncrementalBuildHash:
     serializedVersion: 2
-    Hash: 318e7462db477965df38187b45f39ffe
+    Hash: dd22fb21dc7f462194e31fb7551a07b6
 HashAppended: 0
 ClassTypes:
+- Class: 28
+  Script: {instanceID: 0}
 - Class: 48
+  Script: {instanceID: 0}
+- Class: 49
   Script: {instanceID: 0}
 - Class: 72
   Script: {instanceID: 0}
 SerializeReferenceClassIdentifiers: []
 Assets:
 - Assets/SfMorph/Shaders/SkinMarks.shader
+- Assets/SfMorph/Wrinkles/wrinkle_body_detail.png
+- Assets/SfMorph/Wrinkles/wrinkle_layouts.txt
+- Assets/SfMorph/Wrinkles/wrinkle_body_region.png
 - Assets/SfMorph/Shaders/SoftDeform.compute
+- Assets/SfMorph/Wrinkles/wrinkle_face_detail.png
 - Assets/SfMorph/Shaders/WrinkleRaster.shader
 - Assets/SfMorph/Shaders/Wrinkles.compute
+- Assets/SfMorph/Wrinkles/wrinkle_face_region.png
 Dependencies: []

@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.9.0";
+        public const string Version = "0.9.1";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -34,7 +34,7 @@ namespace SfMorph
         internal ConfigEntry<int> EmbodyHands, EmbodyView, EmbodyPartner, HandsMesh, Quality;
         // 0.7.4 procedural skin wrinkles
         internal ConfigEntry<bool> WrinkOn, WrinkFace, WrinkNeck, WrinkBody;
-        internal ConfigEntry<float> WrinkStrength, WrinkThreshold, WrinkAttack, WrinkRelease, WrinkSpacingFace, WrinkSpacingBody, WrinkCullDistance, WrinkCavity;
+        internal ConfigEntry<float> WrinkStrength, WrinkThreshold, WrinkAttack, WrinkRelease, WrinkCullDistance, WrinkCavity;
         internal ConfigEntry<int> WrinkDebug, WrinkResolution;
         // 0.7.9 reactions
         internal ConfigEntry<bool> ReactOn, ReactVoice, ReactFace, ReactFlinch, ReactSound, ReactBlush, ReactBlushBody, ReactGaze, ReactFeedDesire, ReactAuto, ReactClimax, VoiceGuard, ReactLines, ReactFaceClips, ReactLinesGamePath, ReactFoley;
@@ -111,19 +111,17 @@ namespace SfMorph
             HandsGrabButton = Config.Bind("Hands", "GrabButton", 0, new ConfigDescription("The controller button that closes the hand (all fingers together): 0 trigger (the grip is the game's menu button), 1 grip, 2 whichever is pressed further.", new AcceptableValueRange<int>(0, 2)));
             HandsRestCurl = Config.Bind("Hands", "RestCurl", 0.25f, new ConfigDescription("How much the fingers curl with nothing pressed (0 flat, 1 a fist). Physics hands and his hands.", new AcceptableValueRange<float>(0f, 1f)));
             ShowSoftPoints = Config.Bind("Physics", "ShowSoftPoints", false, "Small markers on the soft points (green at rest, red touched) and the contact capsules, to see what touches what.");
-            WrinkOn = Config.Bind("Wrinkles", "On", false, "Procedural skin wrinkles: folds appear in her skin's normal map where the skin compresses (expressions, bending), computed on the GPU (shader bundle sfmorph_shaders next to the DLL).");
-            WrinkStrength = Config.Bind("Wrinkles", "Strength", 1f, new ConfigDescription("How deep the folds look (0 none, 2 strong).", new AcceptableValueRange<float>(0f, 2f)));
-            WrinkThreshold = Config.Bind("Wrinkles", "Threshold", 0.025f, new ConfigDescription("How much the skin has to compress before a fold shows (lower = more folds).", new AcceptableValueRange<float>(0.01f, 0.06f)));
+            WrinkOn = Config.Bind("Wrinkles", "On", false, "Skin wrinkles: authored expression lines and joint creases fade into her skin's normal map where the skin compresses across them, measured on the GPU (shader bundle sfmorph_shaders next to the DLL).");
+            WrinkStrength = Config.Bind("Wrinkles", "Strength", 1f, new ConfigDescription("How deep the lines look (0 none, 2 strong).", new AcceptableValueRange<float>(0f, 2f)));
+            WrinkThreshold = Config.Bind("Wrinkles", "Threshold", 0.025f, new ConfigDescription("How much the skin has to compress across a region's lines before they show (lower = sooner).", new AcceptableValueRange<float>(0.01f, 0.06f)));
             WrinkFace = Config.Bind("Wrinkles", "Face", true, "Wrinkles on her face skin.");
             WrinkNeck = Config.Bind("Wrinkles", "Neck", true, "Wrinkles on her neck.");
-            WrinkBody = Config.Bind("Wrinkles", "Body", false, "Wrinkles on the rest of her body skin (a bigger skin texture to rebuild).");
-            WrinkDebug = Config.Bind("Wrinkles", "Debug", 0, new ConfigDescription("0 off, 1 show where skin compresses (red tint), 2 show the fold direction.", new AcceptableValueRange<int>(0, 2)));
-            WrinkAttack = Config.Bind("Wrinkles", "Attack", 0.12f, new ConfigDescription("Seconds for a fold to appear.", new AcceptableValueRange<float>(0.01f, 1f)));
-            WrinkRelease = Config.Bind("Wrinkles", "Release", 0.3f, new ConfigDescription("Seconds for a fold to fade away.", new AcceptableValueRange<float>(0.01f, 2f)));
-            WrinkSpacingFace = Config.Bind("Wrinkles", "SpacingFace", 0.004f, new ConfigDescription("Distance between folds on the face in metres (applies at the next rebuild).", new AcceptableValueRange<float>(0.001f, 0.02f)));
-            WrinkSpacingBody = Config.Bind("Wrinkles", "SpacingBody", 0.008f, new ConfigDescription("Distance between folds on the neck and body in metres (applies at the next rebuild).", new AcceptableValueRange<float>(0.002f, 0.04f)));
+            WrinkBody = Config.Bind("Wrinkles", "Body", false, "Creases at her joints (inside the elbows, behind the knees, hip folds, armpits, belly).");
+            WrinkDebug = Config.Bind("Wrinkles", "Debug", 0, new ConfigDescription("0 off, 1 tint active lines red, 2 show every region in its own colour.", new AcceptableValueRange<int>(0, 2)));
+            WrinkAttack = Config.Bind("Wrinkles", "Attack", 0.12f, new ConfigDescription("Seconds for lines to appear.", new AcceptableValueRange<float>(0.01f, 1f)));
+            WrinkRelease = Config.Bind("Wrinkles", "Release", 0.3f, new ConfigDescription("Seconds for lines to fade away.", new AcceptableValueRange<float>(0.01f, 2f)));
             WrinkResolution = Config.Bind("Wrinkles", "Resolution", 0, new ConfigDescription("Wrinkle texture size: 0 the skin texture's size (at most 4096), 1 at most 2048, 2 at most 1024.", new AcceptableValueRange<int>(0, 2)));
-            WrinkCavity = Config.Bind("Wrinkles", "Cavity", 0.3f, new ConfigDescription("Crease shade: how much darker her skin colour is at the bottom of a fold (0 off, 1 strong). Her skin's subsurface scattering blurs the folds' normal-map detail, most of all on her face; the darker crease stays visible.", new AcceptableValueRange<float>(0f, 1f)));
+            WrinkCavity = Config.Bind("Wrinkles", "Cavity", 0.3f, new ConfigDescription("Crease shade: how much darker her skin colour is at the bottom of a line (0 off, 1 strong). Her skin's subsurface scattering blurs normal-map detail, most of all on her face; the darker crease stays visible.", new AcceptableValueRange<float>(0f, 1f)));
             WrinkCullDistance = Config.Bind("Wrinkles", "CullDistance", 3f, new ConfigDescription("No wrinkle updates while her head is farther than this from your headset (metres).", new AcceptableValueRange<float>(0.5f, 20f)));
             EmbodyOn = Config.Bind("Embody", "On", false, "See through the partner's eyes (VR), his head hidden, his hands on your controllers.");
             EmbodyHands = Config.Bind("Embody", "Hands", 3, new ConfigDescription("His hands follow the controllers: 0 none, 1 left, 2 right, 3 both.", new AcceptableValueRange<int>(0, 3)));

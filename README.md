@@ -41,6 +41,29 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.9.1 (skin wrinkles redesigned: authored lines faded in per region):
+- On her body the wrinkles were dark zebra stripes over her breasts, shoulders and brow at rest, and ridges over the whole torso; on her
+  face they were barely visible. Cause: 0.7.5-0.8.8 synthesised a sine fold pattern wherever any skin compressed, along the compression
+  direction. Her bind pose isn't her rest pose (idle arms, breast scaling), so the shoulders and breasts are always a little compressed and
+  got folds; real skin only creases in a few places, and her face (bone-driven, coarse mesh) compresses smoothly, so the folds there
+  stayed faint.
+- Now, like games' expression wrinkle maps: authored crease maps on her own UV layouts (`tools/wrinkles/author.py` builds them from her
+  Presets-tab export, placed from her face and limb bones): face = forehead lines, frown lines, crow's feet, under-eye, smile lines,
+  nose, front of the neck; body = inside and back of the elbows, behind the knees, hip folds, armpits, belly. Each region's lines fade in
+  (attack / release) by how much her skin compresses *across* them, measured per region on the GPU. A frown doesn't raise the forehead
+  lines, and the stretched outside of a bent elbow stays smooth. Breasts, shoulders and the rest of her skin carry no region (her breasts
+  are also an exclusion zone in the authoring), so they never wrinkle.
+- The crease shade (Cavity) now darkens the authored line bottoms. Debug view: Activation (active lines red) or Regions (each region in
+  its own colour). The log prints each sheet's peak compression per region every 10 s while something moves (for tuning Threshold).
+  [Wrinkles] SpacingFace / SpacingBody are gone. Her face's wrinkle texture is now 2048 (the lines are authored at 2048).
+- CC4's expression wrinkles (soupday's CC Unity tools) were considered. They need CC4 4.2+, a CC3+ character exported with wrinkles on,
+  and a transfer of their maps to her face's UVs, and Reallusion's textures can't ship in this repo. CC4's runtime driver is its
+  expression blendshapes, which her bone-driven face doesn't have. Maps made with CC4 (or by hand) can replace the authored ones: same
+  file names, then rebuild the bundle.
+- A face mesh on another UV layout (another face type) gets no wrinkles; the log says so (`its UVs are not on the 'face' wrinkle
+  layout`). Export her with that face and run `tools/wrinkles/author.py` to add it.
+- Needs the new `sfmorph_shaders` (rebuilt); an older bundle is refused with a log line.
+
 0.9.0 (skin sounds, voice packs, voice pitch/formant, face reactions):
 - The slap sound was too wet: it used the game's sex_fast / sex_normal clips (thrust sounds). Slaps now come from your own WAV files in
   `BepInEx\plugins\SfMorph\Sounds\slap_soft|slap_medium|slap_hard` by strength (soft slap: soft or medium by force; hard: medium or
