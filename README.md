@@ -41,11 +41,21 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.23 (recorded skin sounds play as sets; the rub as a run of strokes):
+- The rub played one clip on a loop, which only suits a long recorded bed or the built noise. Recorded rubs are short single
+  strokes (0.3-1 s), so a rub made of them now plays as a shuffled run of one-shots that overlap a little, each at the current slide
+  level and a slightly different pitch, like a game's footsteps (a first clip of 1.5 s or more still loops). Every category already
+  picks from all its files without repeats, so a folder of similar clips gives the variation.
+- On the user's PC (not in the repo, personal use): `Soundsub` = 9 skin-rub strokes, `Sounds\grab` = 6 hand-on-skin presses,
+  `Sounds\pat` = 7 soft skin taps (the earlier pat files moved to `Sounds\_previous\pat`), all from VaM scene packages, rolled off
+  above 3 kHz and levelled to -30 dBFS RMS (peaks -17 to -21 dBFS: the audition copies were too loud).
+
 0.11.22 (grab sound on the grab button; a softer rub):
 - The grab sound "didn't work": it only played at the onset of a classified grope (a press of 20 N or 1.5 cm held for 0.25 s), so
   closing your hand on her was silent. Now the grab button closing while that physics hand touches her plays it at the contact
   point (log `Reactions: grab sound: your left hand closed on ...`); the grope onset keeps its own, at most one per 0.5 s.
-- The built rub sound (used while `Soundsub` is empty) still sounded like clothing: fabric is the bright rustle above 2.5 kHz.
+- The built rub sound (used while `Sounds
+ub` is empty) still sounded like clothing: fabric is the bright rustle above 2.5 kHz.
   It is now a duller, softer skin band (150-850 Hz), the airy sheen at a sixteenth and below 4 kHz, with slower, deeper swells.
   Recorded skin sounds from the user's VaM folder are being surveyed; nothing is installed until they are picked.
 

@@ -1706,6 +1706,9 @@ namespace SfMorph
         GameObject _folGo, _rubGo; Behaviour _folSrc, _rubSrc;
         float _rubVol;
         bool _rubOn;
+        // 0.11.23: recorded rubs are short single strokes (0.3-1 s): they play as a shuffled run of one-shots that overlap a little
+        // (like a game's footsteps) instead of one clip looped; a long clip (>= 1.5 s, or the built loop) still loops
+        bool _rubStrokes; float _rubNext;
 
         // The foley is read once, on the main thread, the first time a sound is wanted (the AudioClip type comes from the game's sources).
         public bool FoleyReady()
@@ -1761,17 +1764,44 @@ namespace SfMorph
                     float len;
                     var clip = Foley.Pick(SkinFoley.Rub, out len);
                     if (clip == null) return;
-                    _pClip.SetValue(_rubSrc, clip, null);
-                    if (_pLoop != null) _pLoop.SetValue(_rubSrc, true, null);
-                    if (_pVolume != null) _pVolume.SetValue(_rubSrc, 0f, null);
-                    _miPlay.Invoke(_rubSrc, null);
-                    if (_pTime != null && len > 0.2f) _pTime.SetValue(_rubSrc, UnityEngine.Random.Range(0f, len * 0.9f), null);   // not always from the top
+                    _rubStrokes = len > 0.05f && len < 1.5f && _miOneShot != null;
+                    if (_rubStrokes)
+                    {
+                        if (_pLoop != null) _pLoop.SetValue(_rubSrc, false, null);
+                        if (_pVolume != null) _pVolume.SetValue(_rubSrc, 1f, null);
+                        _argOneShot[0] = clip; _argOneShot[1] = Mathf.Max(0.05f, _rubVol);
+                        _miOneShot.Invoke(_rubSrc, _argOneShot);
+                        _rubNext = _now + len * UnityEngine.Random.Range(0.6f, 0.8f);
+                    }
+                    else
+                    {
+                        _pClip.SetValue(_rubSrc, clip, null);
+                        if (_pLoop != null) _pLoop.SetValue(_rubSrc, true, null);
+                        if (_pVolume != null) _pVolume.SetValue(_rubSrc, 0f, null);
+                        _miPlay.Invoke(_rubSrc, null);
+                        if (_pTime != null && len > 0.2f) _pTime.SetValue(_rubSrc, UnityEngine.Random.Range(0f, len * 0.9f), null);   // not always from the top
+                    }
                     _rubOn = true;
+                }
+                else if (_rubStrokes && _now >= _rubNext && _rubSrc != null && !Dead(_rubSrc))
+                {
+                    float len;
+                    var clip = Foley.Pick(SkinFoley.Rub, out len);
+                    if (clip != null)
+                    {
+                        if (_pPitch != null) _pPitch.SetValue(_rubSrc, pitch * UnityEngine.Random.Range(0.96f, 1.04f), null);
+                        _argOneShot[0] = clip; _argOneShot[1] = _rubVol;
+                        _miOneShot.Invoke(_rubSrc, _argOneShot);
+                        _rubNext = _now + Mathf.Max(0.12f, len * UnityEngine.Random.Range(0.6f, 0.8f));
+                    }
                 }
                 if (_rubSrc == null || Dead(_rubSrc)) { _rubOn = false; return; }
                 _rubGo.transform.position = at;
-                if (_pVolume != null) _pVolume.SetValue(_rubSrc, _rubVol, null);
-                if (_pPitch != null) _pPitch.SetValue(_rubSrc, pitch, null);
+                if (!_rubStrokes)
+                {
+                    if (_pVolume != null) _pVolume.SetValue(_rubSrc, _rubVol, null);
+                    if (_pPitch != null) _pPitch.SetValue(_rubSrc, pitch, null);
+                }
             }
             catch (Exception e) { LogOnce("rub:" + e.GetType().Name, "rub sound failed: " + e.Message); _rubOn = false; }
         }

@@ -98,6 +98,13 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.23 (skin sound sets)
+
+Install `dist/SfMorph.dll`. Log: `Skin foley: ... pat 7 files, grab 6 files, rub 9 files`.
+
+- Slide a hand over her skin: a soft run of skin strokes (no single loop, no fabric rustle); quicker sliding is louder.
+- Grab button on her / a firm grope: a hand-on-skin press. A light landing: a soft skin tap. Tell me if any category is too loud or quiet.
+
 ## 0.11.22 (grab button sound, softer rub)
 
 Install `dist/SfMorph.dll`. Reactions on, Sound and Skin sounds on, physics hands on.
