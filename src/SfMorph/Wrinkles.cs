@@ -36,6 +36,42 @@ namespace SfMorph
     // GPU part, hooked to GpuContact.BeforeImprint, a PlayerLoop step and beginContextRendering (whichever comes first wins, frame guard).
     // Nothing here may throw into the render loop: any exception logs, switches the system off and leaves the teardown to the next
     // main-thread call.
+    // 0.11.23 (user: the face wrinkles are barely noticeable; a test to judge them): Debug tab -> Wrinkle test: each expression's regions
+    // at full activation for Step s in turn (the same groups as tools/wrinkles/author.py --preview's face renders), then the body creases.
+    internal static class WrinkleTest
+    {
+        public static readonly string[] Names = { "brows up", "frown", "smile / squint", "nose scrunch", "whole face", "neck", "body creases" };
+        static readonly string[][] Groups =
+        {
+            new[] { "forehead_L", "forehead_R" },
+            new[] { "glabella" },
+            new[] { "crowsfeet_L", "crowsfeet_R", "undereye_L", "undereye_R", "nasolabial_L", "nasolabial_R" },
+            new[] { "nose", "glabella" },
+            new[] { "forehead_L", "forehead_R", "glabella", "crowsfeet_L", "crowsfeet_R", "undereye_L", "undereye_R", "nasolabial_L", "nasolabial_R", "nose" },
+            new[] { "neck" },
+            new[] { "elbow_in_L", "elbow_back_L", "knee_back_L", "hipfold_L", "armpit_L", "elbow_in_R", "elbow_back_R", "knee_back_R", "hipfold_R", "armpit_R", "belly" },
+        };
+        public const float Step = 2.5f;
+        static float _start = -1f;
+        static int _logged = -1;
+        public static void Start() { _start = Time.unscaledTime; _logged = -1; }
+        public static void Stop() { _start = -1f; }
+        public static int Index
+        {
+            get
+            {
+                if (_start < 0f) return -1;
+                int i = (int)((Time.unscaledTime - _start) / Step);
+                if (i < 0 || i >= Groups.Length) { _start = -1f; Plugin.Log.LogInfo("Wrinkles: Wrinkle test done"); return -1; }
+                if (i != _logged) { _logged = i; Plugin.Log.LogInfo("Wrinkles: Wrinkle test " + Names[i] + " at full for " + Step.ToString("0.0") + " s"); }
+                return i;
+            }
+        }
+        public static float Left { get { int i = Index; return i < 0 ? 0f : Mathf.Max(0f, _start + (i + 1) * Step - Time.unscaledTime); } }
+        // the regions at full now (null: no test running)
+        public static string[] Regions() { int i = Index; return i < 0 ? null : Groups[i]; }
+    }
+
     internal class Wrinkles
     {
         public string Status = "";
@@ -588,10 +624,19 @@ namespace SfMorph
             sh.LastActAt = now;
             float ka = 1f - Mathf.Exp(-dt / Mathf.Max(0.01f, s.Attack)), kr = 1f - Mathf.Exp(-dt / Mathf.Max(0.01f, s.Release));
             bool changed = false;
+            string[] test = WrinkleTest.Regions();
             for (int k = 0; k < L.Count; k++)
             {
                 string cls = L.RegionClass[k];
                 bool on = s.On && (cls == "face" ? s.Face : cls == "neck" ? s.Neck : s.BodyOn);
+                if (test != null)
+                {
+                    // 0.11.23 Wrinkle test: the step's regions at full at once (whatever her face does and the Face / Neck / Body switches
+                    // say), every other region off, so what the maps draw can be judged apart from how far her expressions compress the skin
+                    float ta = Array.IndexOf(test, L.RegionName[k]) >= 0 ? 1f : 0f;
+                    if (ta != sh.Act[k]) { sh.Act[k] = ta; changed = true; }
+                    continue;
+                }
                 // 0.9.8: face and neck measure from their idle baseline: her idle face animation keeps the neck at ~0.03 and the brows at
                 // 0.04-0.06, which held those lines on (headset: a ring around her neck at 72 %). The baseline drops at once to a lower
                 // compression and rises over BaseRise s, so an expression shows and a held one fades; the body creases stay absolute

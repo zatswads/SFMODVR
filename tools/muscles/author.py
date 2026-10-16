@@ -323,15 +323,17 @@ def muscles(sk, navel_s, log):
     for sd in ('L', 'R'):
         ua, fa = 'upperarm' + sd, 'forearm' + sd
         r = reg('deltoids_' + sd, 'arms', sd)
-        prims[r].append(Belly(ua, [(-0.015, 32, 18), (0.04, 42, 18), (0.095, 75, 9)], 3.6, flat=2.0, segs=(ua, T)))      # front head
-        prims[r].append(Belly(ua, [(-0.015, 90, 22), (0.05, 90, 24), (0.105, 86, 9)], 4.2, flat=2.0, segs=(ua, T)))     # side head
-        prims[r].append(Belly(ua, [(-0.015, 148, 18), (0.04, 138, 18), (0.095, 102, 9)], 3.2, flat=2.0, segs=(ua, T)))   # rear head
+        # 0.11.23 (user: a more prominent upper body, broader shoulders, thicker arms): a rounder, fuller shoulder cap - the three heads
+        # wider and higher (the side head the fullest, so the shoulder reads broad from the front), starting a little higher over the joint
+        prims[r].append(Belly(ua, [(-0.022, 30, 22), (0.035, 40, 22), (0.095, 74, 10)], 4.4, flat=2.2, segs=(ua, T)))     # front head
+        prims[r].append(Belly(ua, [(-0.022, 90, 27), (0.045, 90, 29), (0.108, 86, 10)], 5.4, flat=2.2, segs=(ua, T)))    # side head
+        prims[r].append(Belly(ua, [(-0.022, 150, 22), (0.035, 140, 22), (0.095, 104, 10)], 4.0, flat=2.2, segs=(ua, T)))  # rear head
         r = reg('biceps_' + sd, 'arms', sd)
-        prims[r].append(Belly(ua, [(0.06, 0, 15), (0.12, 2, 20), (0.17, 6, 12)], 4.0, flat=2.0))
-        prims[r].append(Belly(ua, [(0.11, 55, 10), (0.17, 50, 9)], 1.6, flat=2.0))                         # brachialis, outer side
+        prims[r].append(Belly(ua, [(0.06, 0, 16), (0.12, 2, 22), (0.17, 6, 13)], 4.4, flat=2.0))
+        prims[r].append(Belly(ua, [(0.11, 55, 11), (0.17, 50, 10)], 1.8, flat=2.0))                        # brachialis, outer side
         r = reg('triceps_' + sd, 'arms', sd)
-        prims[r].append(Belly(ua, [(0.03, 198, 17), (0.09, 200, 20), (0.14, 190, 11)], 3.6, flat=2.0))     # long head
-        prims[r].append(Belly(ua, [(0.03, 138, 15), (0.08, 135, 18), (0.13, 150, 9)], 3.4, flat=2.0))      # lateral head
+        prims[r].append(Belly(ua, [(0.03, 198, 18), (0.09, 200, 22), (0.14, 190, 12)], 4.0, flat=2.0))     # long head
+        prims[r].append(Belly(ua, [(0.03, 138, 16), (0.08, 135, 19), (0.13, 150, 10)], 3.7, flat=2.0))     # lateral head
         prims[r].append(Groove(ua, [(0.06, 120), (0.135, 145), (0.15, 180), (0.135, 215), (0.07, 240)], 0.6, 7.0))   # horseshoe
         r = reg('forearms_' + sd, 'arms', sd)
         prims[r].append(Belly(fa, [(-0.01, 62, 14), (0.05, 55, 16), (0.12, 45, 9)], 3.2, flat=2.0))        # brachioradialis
@@ -346,9 +348,21 @@ def muscles(sk, navel_s, log):
     r_tr = reg('traps', 'back', 'C')
     for sgn in (1, -1):
         sides = (B, 'neck', 'upperarmL', 'upperarmR')
-        prims[r_tr].append(Belly(B, [(0.555, 175 * sgn, 24), (0.52, 148 * sgn, 34), (0.485, 118 * sgn, 22)], 3.6, flat=1.7, end=0.4, segs=sides))   # upper
+        # 0.11.23 (user: a more prominent upper body, a thicker neck): the upper traps a fuller slope from the neck out to the shoulder,
+        # and their neck part a soft mass up the back of the neck (the neck vertices now take the geometry too)
+        prims[r_tr].append(Belly(B, [(0.555, 174 * sgn, 28), (0.52, 147 * sgn, 40), (0.49, 120 * sgn, 30), (0.475, 106 * sgn, 18)], 4.6, flat=2.0, end=0.4, segs=sides))   # upper
+        # (the first try, two 2.6 mm columns 15 mm wide, read as rods: one broad low mass whose halves merge over the spine)
+        prims[r_tr].append(Belly('neck', [(-0.01, 150 * sgn, 28), (0.03, 160 * sgn, 26), (0.07, 166 * sgn, 18)], 1.6, flat=2.6, end=0.35, segs=('neck', B)))   # on the neck
         prims[r_tr].append(Belly(B, [(0.47, 177 * sgn, 30), (0.475, 155 * sgn, 32), (0.485, 130 * sgn, 20)], 2.6, flat=1.4, end=0.6, segs=sides))   # middle (across to the shoulder)
         prims[r_tr].append(Belly(B, [(0.45, 177 * sgn, 22), (0.415, 168 * sgn, 26), (0.385, 161 * sgn, 20)], 2.8, flat=1.4, end=0.6))    # rhomboids (spine down and out to the blade)
+    # ---- 0.11.23 neck: the sternocleidomastoid per side, from behind the ear down and forward to the top of the sternum (the two meet in a
+    # V above the notch); it stands out as she turns her head away from it, tips it to its own side or lifts it. Low and broad: a neck,
+    # not cords.
+    for sd, sgn in (('L', 1), ('R', -1)):
+        r = reg('neck_' + sd, 'back', sd)
+        prims[r].append(Belly('neck', [(0.085, 106 * sgn, 8), (0.055, 76 * sgn, 12), (0.02, 44 * sgn, 13), (-0.015, 22 * sgn, 10), (-0.035, 11 * sgn, 6)],
+                              2.4, flat=2.2, end=0.35, segs=('neck', T)))
+        prims[r].append(Bulge('neck', -0.03, 0, 0.012, 0.010, -0.5, segs=('neck', T)))   # the hollow above the sternal notch (each side adds half)
     n = sum(len(p) for p in prims)
     log('muscles: %d primitives in %d regions (navel at s %.3f m above Root_M)' % (n, len(regions), navel_s))
     return segs, regions, prims
@@ -708,6 +722,12 @@ def previews(name, n, idx, X, N, ev, regions, colour, d, log):
         cl = clay[None] * (0.18 + 0.85 * lambert(Ng, Lx)[:, None])
         back_.append(splat_win(Xg, cl, ba, bz, (-0.21, 0.21), (0.86, 1.46), 1000, fat=3))
     wr.write_png(os.path.join(d, 'muscle_%s_geo_back.png' % name), np.clip(np.concatenate(back_, 1) * 255, 0, 255).astype(np.uint8))
+    # 0.11.23: the upper body (shoulders, arms, neck) from the front, her left side and the back, lit from above
+    up_ = []
+    for _, ax, az in views:
+        cl = clay[None] * (0.18 + 0.85 * lambert(Ng, 0.5 * az + 0.8 * np.array([0, 1.0, 0]) - 0.3 * ax)[:, None])
+        up_.append(splat_win(Xg, cl, ax, az, (-0.32, 0.32), (1.05, 1.55), 1000, fat=2))
+    wr.write_png(os.path.join(d, 'muscle_%s_geo_upper.png' % name), np.clip(np.concatenate(up_, 1) * 255, 0, 255).astype(np.uint8))
     log('preview: %s' % d)
 
 

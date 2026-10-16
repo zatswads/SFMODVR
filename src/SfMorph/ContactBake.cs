@@ -12,7 +12,7 @@ namespace SfMorph
         public float Softness = 0.5f;
         public float Skirt = 0.015f, Bulge = 0.6f, Depth = 1f;
         public bool Normals = true, SelfContact = true, PartnerBody = true;
-        public float BendAmount = 0.6f, BicepsMm = 8f, KneeMm = 8f, CalfMm = 6f, HipMm = 5f, BellyFoldMm = 3f;
+        public float BendAmount = 0.6f, BicepsMm = 8f, KneeMm = 8f, CalfMm = 6f, HipMm = 5f, BellyFoldMm = 3f, WaistRollMm = 10f;
         public float RippleThrustAmt = 1f, NormalSmooth = 0.008f;   // 0.11.12
         public float Ripple = 1f, RippleSpeed = 0.5f, RippleWavelength = 0.1f, RippleDamping = 0.6f, RippleImpact = 0.35f;
         // 0.11.8 tensed muscles as geometry ([Muscles] Flex, the per-area bulge in mm at full activation; Firmness is MuscleFlex.Firm)
@@ -38,7 +38,7 @@ namespace SfMorph
         public Vector2[] Tissue;      // V: x = hard depth (m), y = soft depth (m) at softness 50 % (Tissue.cs: SoftMm x max(zone share, floor)); the cap is
                                       // (x + y x Tissue.SoftScale(softness)) x depth, computed in the kernel (softness and depth change at runtime)
         public uint[] Class;          // V: bone class id (see the table below); 0 = none
-        public Vector4[] Bend;        // V: (j0, w0, j1, w1): BendPose slot 0..8 (-1 none), signed weight (+ outward bulge, - inward fold)
+        public Vector4[] Bend;        // V: (j0, w0, j1, w1): BendPose slot 0..10 (-1 none), signed weight (+ outward bulge, - inward fold)
         public int BendCount;         // canonical vertices with a bend weight
         public Vector2[] Uv;          // V: UV0 (SkinMarks' raster); null when the mesh has none
         public int[][] SubTris;       // per submesh triangle index list
@@ -546,6 +546,22 @@ namespace SfMorph
                     float y = Vector3.Dot(p - rootP, up) * mpu;
                     if (y >= -0.02f && y <= 0.17f) Push(ref b, 8, G(y, 0.07f, 0.05f) * sF);
                 }
+                // 0.11.23 (user: the waist should bunch into a fold on the side she bends toward; reference: a skin roll above the hip): on her
+                // flank between the iliac crest and the ribs (her narrowest waist is ~22 cm above Root_M, the hip widens below ~15 cm) a soft
+                // roll (centre 19 cm, sigma 3 cm) with the crease under it (15 cm, sigma 1.2 cm, inward), strongest on the side, fading toward
+                // the front and the back. Slots 9 / 10 = her left / right, driven by the trunk's side bend toward that side.
+                if (c == ClsPelvis || c == ClsSpine || c == ClsBelly || c == ClsChest)
+                {
+                    float y = Vector3.Dot(p - rootP, up) * mpu;
+                    if (y >= 0.09f && y <= 0.28f)
+                    {
+                        float lat = Vector3.Dot(n, fr.Left);
+                        int k = lat >= 0f ? 0 : 1;
+                        float side = Mathf.Abs(lat), x = Mathf.Clamp01((side - 0.15f) / 0.6f);
+                        float wl = x * x * (3f - 2f * x);
+                        if (wl > 0f) Push(ref b, 9 + k, (G(y, 0.19f, 0.03f) - 0.6f * G(y, 0.15f, 0.012f)) * wl);
+                    }
+                }
                 bend[v] = b;
                 if (b.x >= 0f && canon[v] == (uint)v) { count++; perSlot[(int)b.x]++; if (b.z >= 0f) perSlot[(int)b.z]++; }
             }
@@ -586,7 +602,8 @@ namespace SfMorph
         // belly weight: geodesic distance (Dijkstra over the welded adjacency, bind positions in metres) to the nearest vertex of another
         // muscle (or none), smoothstep over the area's ramp, x (1 - 0.7 groove) so the linea alba / spinal groove stay a valley, two
         // smoothing passes (the region is point-sampled at ~1 cm: ids step from texel to texel). A mesh's open border (the waist cut between
-        // her upper and lower body) is not an edge: the bulge carries across it. Hands, feet, head, neck, breasts and genitals carry none.
+        // her upper and lower body) is not an edge: the bulge carries across it. Hands, feet, head, breasts and genitals carry none (0.11.23:
+        // the neck does: the neck muscles and the traps' neck part; a neck vertex without a muscle texel under it stays at 0).
         static int BakeMuscles(SkinnedMeshRenderer r, MuscleMap mm, Vector3[] P, Vector2[] uv, List<int[]> subs, uint[] canon, uint[] adjOff, uint[] adjV,
                                uint[] cls, float mpu, out Vector4[] mus, out float[] belly, out string note)
         {
@@ -624,7 +641,7 @@ namespace SfMorph
                 int cv = (int)canon[v];
                 if (!onSheet[cv] || !uvOn[v]) continue;
                 uint c = cls[cv];
-                if (c == ClsHead || c == ClsNeck || c == ClsHand || c == ClsHand + 1 || c == ClsFoot || c == ClsFoot + 1 || c == ClsBreast || c == ClsBreast + 1 || c == ClsGenital) continue;
+                if (c == ClsHead || c == ClsHand || c == ClsHand + 1 || c == ClsFoot || c == ClsFoot + 1 || c == ClsBreast || c == ClsBreast + 1 || c == ClsGenital) continue;
                 Vector2 t = uv[v];
                 if (!(t.x >= 0f && t.x <= 1f && t.y >= 0f && t.y <= 1f)) continue;
                 int px = Mathf.Clamp((int)(t.x * mm.RW), 0, mm.RW - 1), py = Mathf.Clamp((int)(t.y * mm.RH), 0, mm.RH - 1);
@@ -643,7 +660,7 @@ namespace SfMorph
                 {
                     if (dom[v] != 0 || canon[v] != (uint)v || !onSheet[v] || bestA[v] >= 0) continue;
                     uint c = cls[v];
-                    if (c == ClsHead || c == ClsNeck || c == ClsHand || c == ClsHand + 1 || c == ClsFoot || c == ClsFoot + 1 || c == ClsBreast || c == ClsBreast + 1 || c == ClsGenital) continue;
+                    if (c == ClsHead || c == ClsHand || c == ClsHand + 1 || c == ClsFoot || c == ClsFoot + 1 || c == ClsBreast || c == ClsBreast + 1 || c == ClsGenital) continue;
                     int n = 0, best = 0, bestN = 0;
                     for (uint k = adjOff[v]; k < adjOff[v + 1]; k++)
                     {

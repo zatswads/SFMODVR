@@ -43,6 +43,22 @@ namespace SfMorph
             int md = GUILayout.Toolbar(Mathf.Clamp(_p.MuscleDebug.Value, 0, 2), MuscleDebugs);
             GUI.enabled = true;
             if (mOff == null && md != _p.MuscleDebug.Value) _p.MuscleDebug.Value = md;
+            // 0.11.23 Wrinkle test: each expression's lines at full in turn, apart from how far her face compresses the skin
+            int wt = WrinkleTest.Index;
+            GUILayout.BeginHorizontal();
+            GUI.enabled = wOff == null;
+            if (wt < 0)
+            {
+                if (GUILayout.Button("Wrinkle test (brows, frown, smile, nose, whole face, neck, body: " + WrinkleTest.Step.ToString("0.0") + " s each)")) WrinkleTest.Start();
+            }
+            else if (GUILayout.Button("Stop test", GUILayout.Width(90))) WrinkleTest.Stop();
+            GUI.enabled = true;
+            if (wt >= 0) GUILayout.Label("now: " + WrinkleTest.Names[wt] + " at full (" + WrinkleTest.Left.ToString("0.0") + " s)", _hint);
+            GUILayout.EndHorizontal();
+            if (wOff != null) GUILayout.Label("    Wrinkle test off: " + wOff, _off);
+            else GUILayout.Label("    Full lines at Strength " + _p.WrinkStrength.Value.ToString("0.0") + ", Cavity " + _p.WrinkCavity.Value.ToString("0.0")
+                                 + ". Faint here = the lines themselves (raise Strength / Cavity); clear here but faint in play = her expressions don't compress the skin enough (lower Threshold). Now: "
+                                 + (_body.WrinkleStatus.Length > 0 ? _body.WrinkleStatus : "-"), _hint);
             // Flex test: arms, back, core, legs in turn at full over her current animation (needs GPU contact, not the relief)
             var gpu = _body.Gpu;
             string flexOff = who ?? (!_p.GpuContactOn.Value ? "GPU contact is off (Physics tab)" : gpu == null ? "shader bundle not loaded"

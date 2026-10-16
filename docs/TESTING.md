@@ -98,6 +98,21 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.24 (athletic upper body, waist roll, wrinkle test)
+
+Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders` (new muscle maps, bend slots 9 / 10). Log: `Bend: 7 of 7 joints bound`,
+`Muscles: ...` layout with 32 muscles; `Bend: first bulge waist roll L/R ... trunk side N deg` in a side bend.
+
+- Body → Torso → Athletic upper body 0 → 1: broader shoulders, thicker upper arms / forearms / neck; elbows, wrists and her head
+  stay where they were (no longer arms); hands still meet where the animation puts them. 1.25 for more.
+- Skin tab, muscles on, Debug → Flex test: back = fuller traps and the new neck mass / neck muscles (no lumps, no cords, no seam
+  where the neck meets her face); arms = rounder deltoid caps. In play: she turns her head → the opposite neck muscle shows.
+- A side bend (a pose that leans her trunk sideways): a soft roll above the hip with a crease under it on the side she bends to,
+  nothing on the stretched side; at rest nothing. Too much / little: Physics tab → waist roll in a side bend.
+- Debug → Wrinkle test: watch her face for each step. Tell me which steps are visible at all and how strong; compare with
+  tools/wrinkles/preview/wrinkle_face_expressions.png. Then send the log's `Wrinkles: sheet 'face' peak compression` lines from
+  normal play (they say how far her expressions activate the lines).
+
 ## 0.11.23 (skin sound sets)
 
 Install `dist/SfMorph.dll`. Log: `Skin foley: ... pat 7 files, grab 6 files, rub 9 files`.

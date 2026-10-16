@@ -41,6 +41,25 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.24 (a more prominent upper body; the waist folds in a side bend; a wrinkle test):
+- Body tab → Torso → **Athletic upper body** (0–1.25): one slider over the bone sliders for broader shoulders and thicker arms and
+  neck. At 1: shoulders +1.4 cm a side, upper arms ×1.14, forearms ×1.08, neck ×1.14, ribcage width ×1.03. A limb's size was a
+  uniform scale, so it also grew longer and moved the elbow / wrist / head; the build scales the length back by the inverse, so the
+  limb gets thicker, not longer. It adds to the sliders' own values (a driven slider shows "with the build sliders: ...").
+- Muscles (re-authored maps): fuller rounder deltoid caps (the side head the fullest, so the shoulders read broad from the front),
+  slightly larger biceps / triceps, a fuller trap slope from the neck to the shoulder and a broad soft trap mass up the back of the
+  neck (a first try as two columns read as rods, so it is one low mass), and new neck muscles per side (sternocleidomastoid, from
+  behind the ear to the top of the sternum): they stand out as she turns her head away from that side, tilts it toward it, tips
+  it forward or lifts it in a crunch. Her neck took no muscle geometry before (the bake skipped every neck vertex); it does now.
+  The muscle layout is now full (32 of 32 regions).
+- Side bend: her waist bunches into a soft roll above the hip with a crease under it on the side she bends toward (the user's
+  reference photo), as part of the bend bulges: [Physics] BendWaistRollMm (10 mm at a full bend of ~28°, before Bend bulges; Physics
+  tab "waist roll in a side bend"). Shader bundle rebuilt (the bend slots grew from 9 to 11).
+- Debug tab → **Wrinkle test**: brows up, frown, smile / squint, nose scrunch, the whole face, the neck, then the body creases at
+  full, 2.5 s each, whatever her face does. If the lines are faint in the test, the maps / Strength / Cavity are the issue; if they
+  are clear in the test but faint in play, her expressions don't compress the skin enough (Threshold). `tools/wrinkles/author.py
+  --preview` now also renders her face with each of those expressions at full (`tools/wrinkles/preview/wrinkle_face_expressions.png`).
+
 0.11.23 (recorded skin sounds play as sets; the rub as a run of strokes):
 - The rub played one clip on a loop, which only suits a long recorded bed or the built noise. Recorded rubs are short single
   strokes (0.3-1 s), so a rub made of them now plays as a shuffled run of one-shots that overlap a little, each at the current slide

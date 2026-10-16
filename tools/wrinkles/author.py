@@ -407,7 +407,63 @@ def build(name, surf, creases, regions, n, nreg, region_radius, log, excl=()):
     for k, (rn, rc, rg) in enumerate(regions):
         m = (best == k) & (wbest > 0.02)
         log('  region %2d %-16s %-4s range %.2f: %6d texels, %d with creases' % (k + 1, rn, rc, rg, m.sum(), (m & (cav > 0.2)).sum()))
+    LAST.update(X=X, N=N, G=g_best, cav=cav, best=best, fade=fade, idx=idx)   # 0.11.23: for the lit previews
     return det, reg, cov.reshape(n, n), cav, idx, best, wbest
+
+
+LAST = {}
+
+# 0.11.23 (user: the face wrinkles are barely noticeable; show what they should look like with expressions): her face lit from the export
+# with each expression's regions at full, as the plugin blends them at Strength 1 (normal = base - slope x act x fade) and Cavity 0.3
+# (albedo x (1 - Cavity x depth x act x fade)); the same groups as the Debug tab's Wrinkle test.
+EXPRESSIONS = (('neutral', ()), ('brows up', ('forehead_L', 'forehead_R')), ('frown', ('glabella',)),
+               ('smile / squint', ('crowsfeet_L', 'crowsfeet_R', 'undereye_L', 'undereye_R', 'nasolabial_L', 'nasolabial_R')),
+               ('nose scrunch', ('nose', 'glabella')))
+
+
+def face_renders(regions, colour, n, d, log, strength=1.0, cavity=0.3):
+    X, N, G, cav, best, fade, idx = (LAST[k] for k in ('X', 'N', 'G', 'cav', 'best', 'fade', 'idx'))
+    base = np.full((len(idx), 3), 0.75)
+    if colour is not None:
+        ys = (np.arange(n) * colour.shape[0] // n)
+        xs = (np.arange(n) * colour.shape[1] // n)
+        base = colour[ys][:, xs].reshape(-1, 3)[idx].astype(np.float64) / 255.0
+    names = [r[0] for r in regions]
+    lo, hi = X.min(0), X.max(0)
+    xr = (lo[0] - 0.01, hi[0] + 0.01)
+    yr = (lo[1] - 0.005, hi[1] + 0.005)
+    rows = []
+    for lname, L in (('above', np.array([0.0, 0.75, 0.66])), ('side', np.array([0.7, 0.35, 0.62]))):
+        L = L / np.linalg.norm(L)
+        row = []
+        for ename, regs in EXPRESSIONS:
+            act = np.array([1.0 if names[k] in regs else 0.0 for k in range(len(names))])
+            a = act[best] * fade
+            Nn = N - G * (a * strength)[:, None]
+            Nn /= np.maximum(np.linalg.norm(Nn, axis=1), 1e-12)[:, None]
+            sh = np.clip(Nn @ L, 0, 1) * 0.85 + 0.2
+            c = base * sh[:, None] * (1 - cavity * np.clip(cav, 0, 1) * a)[:, None]
+            row.append(splat_face(X, c, xr, yr, 700))
+        rows.append(np.concatenate(row, 1))
+    path = os.path.join(d, 'wrinkle_face_expressions.png')
+    write_png(path, np.clip(np.concatenate(rows, 0) * 255, 0, 255).astype(np.uint8))
+    log('face renders (columns: %s; rows: light from above, from her left): %s' % (', '.join(e[0] for e in EXPRESSIONS), path))
+
+
+def splat_face(X, c, xr, yr, H):
+    """Orthographic front view (looking at her face along -z), nearest point wins, each point covers 2 px around it."""
+    s = H / (yr[1] - yr[0])
+    W = int((xr[1] - xr[0]) * s)
+    ix = ((xr[1] - X[:, 0]) * s).astype(np.int64)          # her left (-x) on the image's right, as seen facing her
+    iy = ((yr[1] - X[:, 1]) * s).astype(np.int64)
+    img = np.full((H, W, 3), 0.1)
+    f = img.reshape(-1, 3)
+    o = np.argsort(X[:, 2])
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            lin = np.clip(iy + dy, 0, H - 1) * W + np.clip(ix + dx, 0, W - 1)
+            f[lin[o]] = c[o]
+    return img
 
 
 def dilate(img, cov, it):
@@ -765,6 +821,8 @@ def main():
             dark = np.clip(cav, 0, 1)[:, None]
             flat[idx] = flat[idx] * (1 - 0.85 * dark)
             write_png(os.path.join(PREVIEW, 'wrinkle_%s_preview.png' % name), np.clip(flat.reshape(n, n, 3), 0, 255).astype(np.uint8))
+            if name == 'face':
+                face_renders(regions, col, n, PREVIEW, log)
     with open(os.path.join(OUT, 'wrinkle_layouts.txt'), 'w', newline='\n') as f:
         f.write('\n'.join(table) + '\n')
     with open(os.path.join(HERE, 'author.log'), 'w', newline='\n') as f:

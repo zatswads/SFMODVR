@@ -11,8 +11,10 @@ namespace SfMorph
     //   Stretch scale along one body direction; only on leaf bones, or with Keep where the
     //           bones below barely rotate (spine), since a non-uniform scale skews rotating children;
     //   Move    shift along a body direction, in cm (translation never skews);
-    //   Length  push the next joint along the bone (thigh, arm, neck length).
-    internal enum Op { Size, Stretch, Move, Length }
+    //   Length  push the next joint along the bone (thigh, arm, neck length);
+    //   Blend   (0.11.23) no bones of its own: 0..1 drives other sliders on top of their own values (Drives: id, value at 1; sizes
+    //           and lengths multiply as value^b, moves add value x b), e.g. a build that thickens a limb with its length held.
+    internal enum Op { Size, Stretch, Move, Length, Blend }
     internal enum Dir { None, Up, Out, Forward, Back, Width, Depth }
 
     internal class Detail
@@ -25,7 +27,8 @@ namespace SfMorph
         public string[] Words, Not;      // name keywords (other rigs), last
         public float Min, Max;
         public bool Keep;
-        public float Neutral { get { return Op == Op.Move ? 0f : 1f; } }
+        public string[] Drives; public float[] DriveAt;   // Op.Blend: the driven sliders and their values at 1
+        public float Neutral { get { return Op == Op.Move || Op == Op.Blend ? 0f : 1f; } }
         public string Unit { get { return Op == Op.Move ? " cm" : ""; } }
 
         // "Left_Nipple" -> both sides.
@@ -83,6 +86,13 @@ namespace SfMorph
             new Detail { Id = "ribcageDepth", Group = "Torso", Label = "Ribcage depth", Op = Op.Stretch, Dir = Dir.Depth, Part = "ribcage", Min = 0.8f, Max = 1.3f, Keep = true },
             new Detail { Id = "torsoLength", Group = "Torso", Label = "Torso length", Op = Op.Length, Part = "waist", Min = 0.85f, Max = 1.2f },
             new Detail { Id = "shoulderWidth", Group = "Torso", Label = "Shoulder width", Op = Op.Move, Dir = Dir.Out, Names = new[] { "Scapula_L", "Scapula_R" }, Min = -3f, Max = 3f },
+            // 0.11.23 (user: a more prominent upper body - broader shoulders, thicker arms and neck): one control over the bone sliders.
+            // Upper arm / forearm / neck girth are a uniform size with the length scaled back by its inverse, so the limb gets thicker,
+            // not longer (the elbow, wrist and head stay where the animation puts them); the scapulae move out for the shoulders' breadth.
+            // The muscles' fuller deltoids / traps and the neck muscles come with the sculpt ([Muscles], Skin tab).
+            new Detail { Id = "upperBuild", Group = "Torso", Label = "Athletic upper body", Op = Op.Blend, Min = 0f, Max = 1.25f,
+                         Drives = new[] { "shoulderWidth", "upperarms", "armLength", "forearms", "forearmLength", "neck", "neckLength", "ribcageWidth" },
+                         DriveAt = new[] { 1.4f, 1.14f, 1f / 1.14f, 1.08f, 1f / 1.08f, 1.14f, 1f / 1.14f, 1.03f } },
 
             new Detail { Id = "upperarms", Group = "Arms", Label = "Upper arm size", Op = Op.Size, Part = "upperarms", Words = new[] { "upperarm", "uparm", "shldr" }, Not = new[] { "twist" }, Min = 0.6f, Max = 1.6f, Keep = true },
             new Detail { Id = "armLength", Group = "Arms", Label = "Upper arm length", Op = Op.Length, Part = "upperarms", Min = 0.85f, Max = 1.2f },
@@ -327,6 +337,7 @@ namespace SfMorph
             foreach (var d in Detail.All)
             {
                 List<Transform> hits;
+                if (d.Op == Op.Blend) { c.DetailBones[d.Id] = new List<Transform>(); c.Source[d.Id] = "drives " + string.Join(", ", d.Drives); continue; }
                 if (d.Part != null && rig.TryGetValue(d.Part, out hits)) c.Source[d.Id] = "the game's own bone";
                 else
                 {
@@ -350,6 +361,14 @@ namespace SfMorph
                 if (hits.Count == 0) c.Off[d.Id] = "this rig has no bone for it";
                 else if (d.Op == Op.Stretch && !d.Keep)
                     foreach (var t in hits) if (t.childCount > 0) { c.Off[d.Id] = "would skew the bones under " + t.name; break; }
+            }
+
+            foreach (var d in Detail.All)
+            {
+                if (d.Op != Op.Blend) continue;
+                bool any = false;
+                foreach (var id in d.Drives) if (!c.Off.ContainsKey(id)) any = true;
+                if (!any) c.Off[d.Id] = "none of the sliders it drives applies to this rig";
             }
 
             Directions(c, bind, rig);
@@ -740,7 +759,7 @@ namespace SfMorph
             s.Skirt = _p.ContactSkirt.Value; s.Bulge = _p.ContactBulge.Value; s.Normals = _p.ContactNormals.Value; s.RippleThrustAmt = _p.RippleThrustAmt.Value; s.NormalSmooth = _p.ContactNormalSmooth.Value / 1000f; s.Depth = _p.ContactDepth.Value;
             s.SelfContact = _p.SelfContact.Value; s.PartnerBody = _p.PartnerBody.Value;
             s.BendAmount = _p.BendBulge.Value; s.BicepsMm = _p.BendBicepsMm.Value; s.KneeMm = _p.BendKneeMm.Value; s.CalfMm = _p.BendCalfMm.Value;
-            s.HipMm = _p.BendHipMm.Value; s.BellyFoldMm = _p.BendBellyFoldMm.Value;
+            s.HipMm = _p.BendHipMm.Value; s.BellyFoldMm = _p.BendBellyFoldMm.Value; s.WaistRollMm = _p.BendWaistRollMm.Value;
             s.Flex = _p.MuscleFlexAmt.Value; s.CoreMm = _p.MuscleCoreMm.Value; s.BackMm = _p.MuscleBackMm.Value; s.LegsMm = _p.MuscleLegsMm.Value; s.ArmsMm = _p.MuscleArmsMm.Value; s.Obliques = _p.MuscleObliques.Value;
             MuscleFlex.Firm = _p.MuscleOn.Value ? _p.MuscleFirmness.Value : 0f;   // 0.11.8 (the activations stop being published with the muscles off anyway)
             s.Ripple = _p.RippleAmount.Value; s.RippleSpeed = _p.RippleSpeed.Value; s.RippleImpact = _p.RippleImpact.Value; s.RippleWavelength = _p.RippleWavelength.Value; s.RippleDamping = _p.RippleDamping.Value;
@@ -868,8 +887,9 @@ namespace SfMorph
             }
             foreach (var d in Detail.All)
             {
-                float v;
-                if (!c.Look.Regions.TryGetValue(d.Id, out v) || Mathf.Abs(v - d.Neutral) < 0.0001f || c.Off.ContainsKey(d.Id)) continue;
+                if (d.Op == Op.Blend || c.Off.ContainsKey(d.Id)) continue;
+                float v = Effective(c.Look, d);
+                if (Mathf.Abs(v - d.Neutral) < 0.0001f) continue;
                 foreach (var b in c.DetailBones[d.Id])
                 {
                     if (b == null) continue;
@@ -938,6 +958,27 @@ namespace SfMorph
                 t.Last = target;
                 t.Used = _frame;
             }
+        }
+
+        // A slider's value with the Blend sliders on top (0.11.23): sizes / lengths x DriveAt^b, moves + DriveAt x b, clamped to its range.
+        internal static float Effective(Look look, Detail d)
+        {
+            float v;
+            if (!look.Regions.TryGetValue(d.Id, out v)) v = d.Neutral;
+            bool driven = false;
+            foreach (var bd in Detail.All)
+            {
+                if (bd.Op != Op.Blend) continue;
+                float b;
+                if (!look.Regions.TryGetValue(bd.Id, out b) || Mathf.Abs(b) < 0.0001f) continue;
+                for (int i = 0; i < bd.Drives.Length; i++)
+                {
+                    if (bd.Drives[i] != d.Id) continue;
+                    v = d.Op == Op.Move ? v + bd.DriveAt[i] * b : v * Mathf.Pow(bd.DriveAt[i], b);
+                    driven = true;
+                }
+            }
+            return driven ? Mathf.Clamp(v, Mathf.Min(d.Min, d.Neutral), Mathf.Max(d.Max, d.Neutral)) : v;
         }
 
         void Mul(Transform t, Vector3 f)
