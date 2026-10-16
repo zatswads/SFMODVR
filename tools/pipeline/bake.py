@@ -28,6 +28,8 @@ import time
 import bpy
 import numpy as np
 
+import roles
+
 # her material -> (mesh, submesh material) pairs that carry it; uv offset for UVs outside 0..1
 TARGETS = {
     'reika_body': ['reika_upperBody_normal', 'reika_lowerBody_normal', 'reika_foot', 'reika_neck',
@@ -74,6 +76,7 @@ def read_materials(vamdir):
 
 
 _CACHE = {}
+EXPECTED = 9  # textures a full bake writes (3 kinds x targets), set by run()
 INFO = {}    # facts for the material check (matcheck.py): albedo gain, normal tilt removed
 WARNS = []   # appended to _check/summary.txt by blend.py
 BAD = {}     # unusable texture files: file name -> reason
@@ -639,13 +642,16 @@ def face_only(Z, names, out, size, make_obj, u2b, log):
         len(idx), FACE_BAND_MM, '/'.join('%.2f' % x for x in gain), '/'.join('%.2f' % x for x in tint), note)
 
 
-def add_summary_row(out, row):
-    """Put the face-only row into _check/summary.txt (blend.py's own rows are added after it and keep it)."""
+def add_summary_row(out, row, keep=()):
+    """Put a face-only row into _check/summary.txt (blend.py's own rows are added after it and keep it); older face-only
+    rows go, except those in keep (this bake's other faces)."""
     path = os.path.join(out, '_check', 'summary.txt')
     lines = []
     if os.path.exists(path):
         with open(path, encoding='utf-8') as f:
-            lines = [l for l in f.read().splitlines() if l and 'face-only seam blend' not in l]
+            lines = [l for l in f.read().splitlines() if l and ('face-only seam blend' not in l or l in keep)]
+        if row in lines:
+            return
     if not lines:
         return
     with open(path, 'w', encoding='utf-8', newline='\n') as f:
@@ -812,8 +818,22 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
     """Bake the textures. Returns (textures written, WARN messages). A texture that is missing or fails to load
     never stops the bake: that material falls back to the flat skin colour (_MainTex), a flat normal (_BumpMap) or
     the median gloss (_GlossTex)."""
+    global TARGETS, RES_DIV, NO_NORMAL, FACE_MAT, SEAM_NEIGHBOURS, EXPECTED
     clear()
     setup_cycles(log)
+    # her bake targets from the exported meshes (roles.py): the body sheet (every body / nipple / nail / genital variant), one
+    # target per face material (every face the game can swap in), the foot
+    R = roles.Roles(names, set(str(n) for n in Z['active']) if 'active' in Z.files else set(names))
+    TARGETS = {roles.BODY_MAT: R.body_sheet()}
+    for fc in R.faces:
+        TARGETS[fc] = [fc]
+    if R.foot:
+        TARGETS[roles.FOOT_MAT] = [R.foot]
+    RES_DIV = {k: (1 if k == roles.BODY_MAT else 2) for k in TARGETS}
+    NO_NORMAL = set(R.nails + R.pussies)
+    SEAM_NEIGHBOURS = tuple(n for n in (R.neck, R.upper) if n)
+    EXPECTED = 3 * len(TARGETS)
+    log('bake targets: %s' % '; '.join('%s <- %s' % (k, ', '.join(v)) for k, v in TARGETS.items()))
     vmats = read_materials(vamdir)
     props = read_matprops(vamdir)
     if not props:
@@ -1019,14 +1039,21 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
                     bpy.data.images.remove(img)
                 if tm is not None:
                     bpy.data.materials.remove(tm)
-    extra = []   # face-only variant lines (not counted in `written`: blend.py expects the 9 main maps there)
-    if FACE_MAT in names and any(m == FACE_MAT and k == 'albedo' for m, k, _ in written):
+    extra = []   # face-only variant lines (not counted in `written`: blend.py compares that with EXPECTED)
+    frows = []
+    for fc in R.faces:   # every face material gets its face-only variant (FACE_MAT is the face being done)
+        FACE_MAT = fc
+        if not any(m == fc and k == 'albedo' for m, k, _ in written):
+            continue
         try:
-            extra, row = face_only(Z, names, out, size, make_obj, u2b, log)
+            e_, row = face_only(Z, names, out, size, make_obj, u2b, log)
+            extra += e_
         except Exception as e:  # noqa: BLE001
-            extra, row = [], 'WARN  face-only seam blend: failed (%s: %s)' % (type(e).__name__, e)
+            row = 'WARN  face-only seam blend: failed (%s: %s)' % (type(e).__name__, e)
             log('WARN: ' + row)
-        add_summary_row(out, row)
+        frows.append(row.replace('face-only seam blend: ', 'face-only seam blend %s: ' % fc.replace('reika_', '')) if len(R.faces) > 1 else row)
+    for row in frows:
+        add_summary_row(out, row, keep=frows)
     # character.txt: replace any texture lines from an earlier bake, then list this one's
     cpath = os.path.join(out, 'character.txt')
     keep_lines = []

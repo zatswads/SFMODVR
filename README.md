@@ -41,6 +41,17 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.1 (the pipeline is no longer tied to one face and one set of her parts):
+- The pipeline only knew her default variants by name (`reika_face_a`, `reika_nipple_type_1`, ...), while the game swaps her
+  face, nipples, genitals, nails, lashes, brows and bodies by customisation: a character converted while she wore face_a had
+  no face when the game put face_c on. Now the Presets-tab export writes every variant under her, worn or not (meshes.txt
+  column `active`), and `tools/pipeline/roles.py` finds each role by pattern: the variant she wears (else the default) is
+  fitted, the others follow the fitted skin, every face material gets its baked skin and face-only variant, renders show only
+  what she wears. The material check, slider fit and bake targets follow the same roles.
+- `docs/SOURCES.md`: the design for other sources (any rigged humanoid through one Blender adapter: Unity Humanoid / VRChat,
+  Mixamo, VRM, DAZ Genesis 3/8/9, Character Creator, Unreal, Rigify; quick rigging of unrigged meshes; UABEA; a VRChat-style
+  avatar replacement mode).
+
 0.11.0 (character import: why the skin came out wrong, a material check, and a slider fit as the low-risk alternative):
 - Imported skins looked wrong for three measured reasons (Yin, checked on the files): (1) the baked normal maps carried body
   shape, not skin detail: the selected-to-active bake records VaM's normal relative to hers, so every fit residual, faceting

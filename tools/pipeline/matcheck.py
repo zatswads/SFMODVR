@@ -14,7 +14,7 @@ What it looks at, per baked material (tex_* lines of character.txt):
            map that carries the shape of the body (fit residual, a different mesh) shades wrong on the morphed geometry.
   her layers  the game's skin shader draws her own layers on top of any albedo (_AttachMap_0..2 with _AttachColor_*,
            _BlushMap, _AddMap, _NormalMap_2): listed from her export's materials.txt, so it is known what stays hers.
-Contact sheet: one row per material (body, face, foot), columns: her albedo x tint | baked albedo | her normal |
+Contact sheet: one row per material (body, each face, foot), columns: her albedo x tint | baked albedo | her normal |
 baked normal | baked normal's large-scale tilt (black 0 deg -> red 15 -> yellow 30+).
 """
 import os
@@ -34,7 +34,6 @@ TILT_P99_OK = 12.0       # deg
 TILT_SHARE_OK = 0.02     # share of texels over 10 deg
 CLIP_OK = 0.05           # share of skin texels with a channel at 255
 LAYERS = ('_AttachMap_0', '_AttachMap_1', '_AttachMap_2', '_BlushMap', '_AddMap', '_NormalMap_2', '_SkinColorMaskMap', '_SmoothnessMap')
-MATS = ('reika_body', 'reika_face_a', 'reika_foot')
 
 
 def log(s):
@@ -173,9 +172,9 @@ def run(out, her, log=log, info=None):
     rows = []
     sheet = []
     alb_bad, nrm_bad, clip_bad = [], [], []
-    for mat in MATS:
-        if not any(m == mat for m, _ in tex):
-            continue
+    # every baked material (body, each face variant, foot), body first
+    mats = sorted({m for m, _ in tex}, key=lambda m: (m != 'reika_body', m))
+    for mat in mats:
         tint = np.array(htint.get((mat, '_SkinColor'), (1.0, 1.0, 1.0)), np.float32)
         tlin = bake.srgb_to_lin(tint)
         her_alb = her_lin = None
@@ -234,7 +233,7 @@ def run(out, her, log=log, info=None):
         row.append(heat(bt) if bt is not None else np.zeros((N, N, 3), np.float32))
         sheet.append(np.concatenate([tile(r) for r in row], axis=1))
     layers = read_layers(her)
-    for mat in MATS:
+    for mat in sorted(layers):
         for l in layers.get(mat, []):
             lines.append('%s her layer on top of any skin: %s' % (mat, l))
     if not tex:

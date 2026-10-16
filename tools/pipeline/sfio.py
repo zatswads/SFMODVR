@@ -101,6 +101,7 @@ def read_game_export(d):
         m.v, m.vn, m.uv, m.faces, m.face_group, m.groups = read_obj(obj)
         m.expected = int(r[2])
         m.materials = [x for x in r[4].split(';') if x] if len(r) > 4 else []
+        m.active = len(r) <= 6 or r[6].strip() != '0'   # SfMorph 0.11.1+: '0' = a variant she doesn't wear now
         if os.path.exists(skin):
             read_skin(skin, m)
         meshes.append(m)

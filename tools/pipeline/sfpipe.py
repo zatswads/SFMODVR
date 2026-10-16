@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sfio  # noqa: E402
 import rig  # noqa: E402
 import fit  # noqa: E402
+import roles  # noqa: E402
 
 # Her skin surface that is fitted onto the VaM body (mesh -> submesh materials). Everything else (nails and
 # nipples are shells over the skin, genitals have an inner canal, eyes, mouth, hair, decals, interior parts)
@@ -35,6 +36,8 @@ FIT = {
     'reika_neck': {'reika_body'},
     'reika_face_a': {'reika_face_a'},
 }
+# the primary meshes of the roles below; set from the export by set_roles() (roles.py): the variant she wears, else the default
+FACE, UPPER, NIPPLE = 'reika_face_a', 'reika_upperBody_normal', 'reika_nipple_type_1'
 RIGID = {  # moved without deforming: mesh -> joint it is centred on (None = its own centroid)
     'reika_left_sclera': 'Eye_L', 'reika_left_iris': 'Eye_L', 'reika_leftEye_Glow': 'Eye_L',
     'reika_right_sclera': 'Eye_R', 'reika_right_iris': 'Eye_R', 'reika_rightEye_Glow': 'Eye_R',
@@ -271,6 +274,23 @@ def validate_vam(vam, vamdir):
     # (texture slots: a missing/unreadable _MainTex or _BumpMap is reported by the bake stage, which falls back to
     # a flat skin colour / flat normals)
     return feat
+
+
+def set_roles(meshes):
+    """FIT / ATTACH / PATCH_RIGID / HIDE and the primary FACE / UPPER / NIPPLE from the exported mesh names (roles.py): every
+    variant of the game (faces, nipples, nails, lashes, brows, bodies) gets its role; the primary one of each is fitted, the
+    others follow the fitted skin."""
+    global FIT, ATTACH, PATCH_RIGID, HIDE, FACE, UPPER, NIPPLE
+    r = roles.Roles([m.name for m in meshes], {m.name for m in meshes if getattr(m, 'active', True)})
+    FIT = r.fit()
+    ATTACH = tuple(r.attach)
+    PATCH_RIGID = tuple(r.lashes)
+    HIDE = tuple(r.brows)
+    FACE, UPPER, NIPPLE = r.face, r.upper, r.nipple
+    extra = [n for n in r.faces if n != r.face] + [n for n in r.nipples if n != r.nipple]
+    log('her roles: face %s, upper body %s, nipple %s; fitted %s%s' % (FACE, UPPER, NIPPLE, ', '.join(sorted(FIT)),
+        ('; variants that follow the fitted skin: ' + ', '.join(extra)) if extra else ''))
+    return r
 
 
 def check_game(meshes, canon, missing):
@@ -790,6 +810,7 @@ def run(a, chk):
     for m in meshes:
         if len(m.v) != m.expected:
             die('%s: obj has %d vertices, meshes.txt says %d' % (m.name, len(m.v), m.expected))
+    set_roles(meshes)
     feat = validate_vam(vam, a.vam)
 
     # --- common bind space -------------------------------------------------------------------------------
@@ -865,7 +886,7 @@ def run(a, chk):
     hlab = rig.labels(wp, hsegs, P)
     # mouth: her mouth opening = boundary edges of the face mesh near her teeth; VaM's = its 'Lips' material.
     # Upper and lower lip become separate labels so the fit can't hang one lip on the other.
-    face = next(m for m in meshes if m.name == 'reika_face_a')
+    face = next(m for m in meshes if m.name == FACE)
     teeth = np.concatenate([m.vp for m in meshes if 'Teeth' in m.name])
     tc = teeth.mean(0)
     e = np.sort(np.concatenate([face.faces[:, [0, 1]], face.faces[:, [1, 2]], face.faces[:, [2, 0]]]), axis=1)
@@ -913,7 +934,7 @@ def run(a, chk):
     # --- proportion warp on anatomical joint centres, then non-rigid ICP --------------------------------
     src = [P[h] for h, v in lm]; dst = [vj[v] for h, v in lm]
     # surface landmarks: nipple tips (her nipple mesh's front-most point per side, VaM's 'Nipples' material)
-    nip = next((m for m in meshes if 'nipple' in m.name), None)
+    nip = next((m for m in meshes if m.name == NIPPLE), None)
     use_nip = nip is not None and feat['Nipples']
     vn_i = group_verts(vam, ['Nipples'])
     if use_nip:
@@ -1043,8 +1064,8 @@ def run(a, chk):
                 {e: np.round(o * 1000, 1).tolist() for e, o in eye_off.items()}))
         # face metrics source points: her face mesh (welded), VaM's head skin
         used = face.fit_idx
-        face_w = widx[fit_off['reika_face_a'] + np.arange(len(used))]
-        mouth_w = widx[fit_off['reika_face_a'] + np.searchsorted(used, bv)]
+        face_w = widx[fit_off[FACE] + np.arange(len(used))]
+        mouth_w = widx[fit_off[FACE] + np.searchsorted(used, bv)]
         vhead = group_verts(vam, ['Face', 'Nostrils', 'Lips', 'Ears', 'Head'])
         vears = group_verts(vam, ['Ears'])
         fm_her = safe_metrics('her face', lambda: face_metrics(wc[face_w], bind_pos['Eye_L'], bind_pos['Eye_R'], mouth_pts=wc[mouth_w], mesh=(wc, wf)))
@@ -1401,7 +1422,7 @@ def run(a, chk):
         sets = {'Reika': (wc, hlab), 'fitted': (wc + wd, hlab), 'VaM-warped': (vam_out[skin_vi], vlab_vb[skin_vi])}
         # breast projection: her upperBody plus her nipple overlay (the cap that fills the hole in the upperBody under the
         # nipple) against the VaM skin, within +-6 cm of each nipple centre of the set; the upperBody alone is logged too
-        ub = next((m for m in meshes if m.name == 'reika_upperBody_normal'), None)
+        ub = next((m for m in meshes if m.name == UPPER), None)
         bp_sets = bp_body = None
         if ub is not None and nip is not None and len(nip_c) == 2:
             ub_w = np.unique(widx[fit_off[ub.name] + np.arange(len(ub.fit_idx))])
@@ -1469,7 +1490,7 @@ def run(a, chk):
         if nip_chk['prot']:
             log('  nipple protrusion (tip above the plane of the cap rim), fitted / VaM, L and R in mm: ' + '   '.join('%.2f / %.2f' % (1000 * a_, 1000 * b_) for a_, b_ in nip_chk['prot']))
         # upperBody triangles flipped in the chest (within 12 cm in x, y of a nipple centre)
-        ubm = next((m for m in results if m.name == 'reika_upperBody_normal'), None)
+        ubm = next((m for m in results if m.name == UPPER), None)
         if ubm is not None:
             n0_, a0_ = sfio.face_normals(ubm.vc, ubm.faces); n1_, _ = sfio.face_normals(ubm.vc + ubm.dc, ubm.faces)
             fl_ = (np.einsum('ij,ij->i', n0_, n1_) < 0) & (a0_ > 1e-12)
@@ -1559,7 +1580,7 @@ def run(a, chk):
             # stage.npz as blend.py reads it: 'bind' = the base fitted character (s0), 'morph' = the slider at 1
             np.savez_compressed(os.path.join(rdir, 'stage.npz'),
                                 vam_v=vam_out, vam_f=vam.faces, vam_g=vam.face_group, vam_uv=vam.uv, vam_vn=vam.vn * vsign,
-                                vam_groups=np.array(vam.groups), names=np.array([m.name for m in results]),
+                                vam_groups=np.array(vam.groups), names=np.array([m.name for m in results]), active=np.array([m.name for m in results if getattr(m, 'active', True)]),
                                 **{'%s|%s' % (m.name, k_): v_ for m in results for k_, v_ in (
                                     ('vc', m.vc + m.dc), ('dc', fac * dmesh.get(m.name, np.zeros_like(m.dc))), ('vp', m.vc + m.dc),
                                     ('vp1', m.vc + m.dc + fac * dmesh.get(m.name, np.zeros_like(m.dc))), ('faces', m.faces),
@@ -1569,7 +1590,7 @@ def run(a, chk):
                 title, os.path.relpath(os.path.join(rdir, 'stage.npz'), a.out), os.path.dirname(rdir))))
     np.savez_compressed(os.path.join(chk, 'stage.npz'),
                         vam_v=vam_out, vam_eyes=vam_eyes, vam_eye_r=np.float64(r_vam if r_vam else np.nan), vam_f=vam.faces, vam_g=vam.face_group, vam_uv=vam.uv, vam_vn=vam.vn * vsign,
-                        vam_groups=np.array(vam.groups), names=np.array([m.name for m in results]),
+                        vam_groups=np.array(vam.groups), names=np.array([m.name for m in results]), active=np.array([m.name for m in results if getattr(m, 'active', True)]),
                         dbg_wp=wp, dbg_x0=x0, dbg_xfit=xfit, dbg_wf=wf, dbg_lab=hlab, dbg_match=wmatch,
                         **{'%s|%s' % (m.name, k): getattr(m, k) for m in results
                            for k in ('vc', 'dc', 'vp', 'vp1', 'faces', 'face_group', 'uv')},
@@ -1678,7 +1699,7 @@ def summarize(chk, name, results, wmatch, dist, eye_open, fm_diff, joint_off, pr
             dp = max(abs(a_ - b_) for a_, b_ in nip_chk['prot'])
             add(dp < 0.001, 'nipple protrusion vs VaM (limit 1 mm): worst difference %.2f mm (fitted %s mm, VaM %s mm)' % (
                 1000 * dp, '/'.join('%.1f' % (1000 * a_) for a_, b_ in nip_chk['prot']), '/'.join('%.1f' % (1000 * b_) for a_, b_ in nip_chk['prot'])))
-        cap_m = next((m for m in results if m.name == 'reika_nipple_type_1'), None)
+        cap_m = next((m for m in results if m.name == NIPPLE), None)
         if cap_m is not None:
             add(cap_m.stats['emax'] <= 1.7, 'nipple cap edge stretch p99.9 %.2f (limit 1.7)' % cap_m.stats['emax'])
         if 'flip_chest' in nip_chk:

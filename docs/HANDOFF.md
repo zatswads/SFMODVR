@@ -1,6 +1,8 @@
 # SF Body Morphs — handoff
 
-State at **0.11.0** (branch `main`). 0.11.0 (character import materials, built, pipeline run locally on Yin, not yet seen in
+State at **0.11.1** (branch `main`). 0.11.1 (pipeline by role, not by her default mesh names: `tools/pipeline/roles.py`;
+Export writes every variant under her with an `active` column; sfpipe fits the worn variant of each role and lets the others
+follow; bake targets / face-only per face material; `docs/SOURCES.md` = the design for non-VaM sources, not built). 0.11.0 (character import materials, built, pipeline run locally on Yin, not yet seen in
 the game): the baked normal maps carried body shape (detail-only bake now), the albedo was ~2x too bright (gain to her body),
 her export held our clones (Export now writes the game's meshes / her textures, `Morph.GameMesh`); `tools/pipeline/matcheck.py`
 material check after every bake and `run.ps1 -Check / -Rebake`; slider fit `run.ps1 -Sliders` (`sliderfit.py`, a preset of her

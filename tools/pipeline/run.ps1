@@ -85,7 +85,9 @@ $bad = @($allExports | Where-Object { Test-CloneExport $_.FullName })
 foreach ($b in $bad) { Write-Host "WARN: her export $($b.Name) holds SfMorph's own mesh clones (Physics / Fidelity were on, SfMorph before 0.11): not used. Export her again with SfMorph 0.11+." }
 $usable = @($allExports | Where-Object { -not (Test-CloneExport $_.FullName) })
 if (-not $GameExport) {
-    $full = $usable | Where-Object { $d = $_.FullName; -not ($bodyMeshes | Where-Object { -not (Test-Path (Join-Path $d $_)) }) } | Select-Object -First 1
+    # her full body: the body meshes and at least one face (any face type the game has)
+    $full = $usable | Where-Object { $d = $_.FullName; -not ($bodyMeshes | Where-Object { $_ -ne 'reika_face_a.obj' -and -not (Test-Path (Join-Path $d $_)) }) -and
+        (Get-ChildItem $d -Filter 'reika_face_*.obj' -ErrorAction SilentlyContinue) } | Select-Object -First 1
     if (-not $full -and -not ($Check -or $Rebake -or $Sliders)) { throw "no usable export of her in $exportRoot (Presets tab > Export, SfMorph 0.11+)" }
     $GameExport = if ($full) { $full.FullName } else { $null }
 }

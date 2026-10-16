@@ -26,11 +26,14 @@ namespace SfMorph
             var failed = new List<string>();
             var bind = new Dictionary<Transform, Matrix4x4>();
             var seen = new HashSet<Mesh>();
-            var index = new StringBuilder("# mesh\trenderer\tvertices\tsubmeshes\tmaterials\tread from\n");
+            var index = new StringBuilder("# mesh\trenderer\tvertices\tsubmeshes\tmaterials\tread from\tactive (0 = a variant she doesn't wear now)\n");
             var swapped = new List<string>();
-            foreach (var r in c.Renderers)
+            var all = AllRenderers(c);
+            int variants = 0;
+            foreach (var r in all)
             {
                 if (r == null || r.sharedMesh == null) continue;
+                bool active = c.Renderers.Contains(r);
                 // the game's mesh, never our clones: soft zones / Fidelity (subdivided) and the character morph change the vertex set
                 var m = c.Morph.GameMesh(r) ?? r.sharedMesh;
                 if (!seen.Add(m)) continue;
@@ -48,16 +51,17 @@ namespace SfMorph
                 File.WriteAllText(Path.Combine(dir, name + ".skin.txt"), Skin(d, bones, bp));
                 var mats = new StringBuilder();
                 foreach (var mat in r.sharedMaterials) mats.Append(mat != null ? mat.name : "-").Append(';');
-                index.Append(name).Append('\t').Append(r.name).Append('\t').Append(m.vertexCount).Append('\t').Append(m.subMeshCount).Append('\t').Append(mats).Append('\t').Append(d.Source).Append('\n');
+                index.Append(name).Append('\t').Append(r.name).Append('\t').Append(m.vertexCount).Append('\t').Append(m.subMeshCount).Append('\t').Append(mats).Append('\t').Append(d.Source).Append('\t').Append(active ? 1 : 0).Append('\n');
                 written++;
+                if (!active) variants++;
             }
             File.WriteAllText(Path.Combine(dir, "meshes.txt"), index.ToString());
             File.WriteAllText(Path.Combine(dir, "skeleton.txt"), Skeleton(c, bind));
             string texMsg;
-            try { texMsg = Textures(c, dir); }
+            try { texMsg = Textures(c, all, dir); }
             catch (Exception e) { texMsg = "textures failed: " + e.Message; Plugin.Log.LogWarning("Export textures: " + e); }
             if (swapped.Count > 0) Plugin.Log.LogInfo("Export: the game's own mesh written instead of our clone for " + string.Join(", ", swapped.ToArray()));
-            var msg = "Exported " + written + " meshes of '" + c.Key + "' to " + dir + (failed.Count > 0 ? "; " + failed.Count + " failed: " + string.Join(", ", failed.ToArray()) : "") + "; " + texMsg;
+            var msg = "Exported " + written + " meshes of '" + c.Key + "'" + (variants > 0 ? " (" + variants + " of them variants she doesn't wear now)" : "") + " to " + dir + (failed.Count > 0 ? "; " + failed.Count + " failed: " + string.Join(", ", failed.ToArray()) : "") + "; " + texMsg;
             Plugin.Log.LogInfo(msg);
             return msg;
         }
@@ -71,10 +75,22 @@ namespace SfMorph
         //   # material<TAB>colour property<TAB>r g b a                                          her original tint colours
         // _ColorMap goes through an sRGB render texture (PNG holds the sRGB values), _NormalMap through a linear one.
         // One texture at a time (8K readbacks are big), temporaries destroyed at once.
-        static string Textures(Character c, string dir)
+        // Her active renderers, then every inactive skinned renderer under her (the game's other faces, nipples, genitals,
+        // lashes, brows, hair and bodies, swapped in by its customisation): the pipeline converts every variant, so a
+        // character keeps working when the game swaps one. Our own hand meshes are not hers.
+        static List<SkinnedMeshRenderer> AllRenderers(Character c)
+        {
+            var list = new List<SkinnedMeshRenderer>(c.Renderers);
+            if (c.Root == null) return list;
+            foreach (var r in c.Root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+                if (r != null && r.sharedMesh != null && !list.Contains(r) && !VrHands.UnderSf(r.transform)) list.Add(r);
+            return list;
+        }
+
+        static string Textures(Character c, List<SkinnedMeshRenderer> all, string dir)
         {
             var mats = new List<Material>();
-            foreach (var r in c.Renderers)
+            foreach (var r in all)
             {
                 if (r == null) continue;
                 foreach (var m in r.sharedMaterials)

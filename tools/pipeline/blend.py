@@ -34,9 +34,10 @@ if REPLAY:   # the replay needs no stage.npz
 else:
     Z = np.load(os.path.join(CHK, 'stage.npz'))
     NAMES = [str(n) for n in Z['names']]
-
-# Her skin materials baked from VaM's skin (her material -> which of her meshes' submeshes carry it)
-BAKE = ['reika_body', 'reika_face_a']
+import roles  # noqa: E402
+# the variants she wears (renders show only those: two faces in one place would z-fight); older stage files: all
+ACTIVE = set(str(n) for n in Z['active']) if Z is not None and 'active' in Z.files else set(NAMES)
+ROLES = roles.Roles(NAMES, ACTIVE)
 VAM_SKIN = {'Legs', 'Nostrils', 'Lips', 'Face', 'Toenails', 'Fingernails', 'Head', 'Hands', 'Shoulders', 'Neck',
             'Hips', 'Torso', 'Nipples', 'Forearms', 'Feet', 'Ears', 'defaultMat'}
 SKIP_RENDER = ('uterus', 'rectum', 'Mouth', 'Teeth', 'tongue', 'Glow')
@@ -84,7 +85,7 @@ def her(key, dx, skip=SKIP_RENDER):
     obs = []
     pair = []   # her upper body and her nipple cap share their rim: one welded object, so the seam shades like the game's joint normals
     for n in NAMES:
-        if any(s in n for s in skip):
+        if any(s in n for s in skip) or n not in ACTIVE:
             continue
         if key == 'bind':
             v = Z[n + '|vc']
@@ -92,7 +93,7 @@ def her(key, dx, skip=SKIP_RENDER):
             v = Z[n + '|vc'] + Z[n + '|dc']
         else:
             v = Z[n + '|' + key]
-        if n in ('reika_upperBody_normal', 'reika_nipple_type_1'):
+        if n in (ROLES.upper, ROLES.nipple):
             pair.append((n, v))
             continue
         obs.append(make_obj(n + '_' + key, u2b(v, dx), Z[n + '|faces']))
@@ -314,7 +315,8 @@ if __name__ == '__main__':
             written, warns = [], ['bake stopped (%s: %s)' % (type(e).__name__, e)]
             log('WARN: ' + warns[0])
         log('baked %d textures in %.0f s' % (len(written), time.time() - tb))
-        rows.append(('PASS  ' if len(written) >= 9 else 'WARN  ') + 'textures baked: %d of 9 (albedo, normal, smooth x body, face, foot)' % len(written))
+        rows.append(('PASS  ' if len(written) >= bake.EXPECTED else 'WARN  ') + 'textures baked: %d of %d (albedo, normal, smooth x %s)' % (
+            len(written), bake.EXPECTED, ', '.join(k.replace('reika_', '') for k in bake.TARGETS)))
         rows += ['WARN  bake: ' + w for w in warns]
         try:
             import matcheck

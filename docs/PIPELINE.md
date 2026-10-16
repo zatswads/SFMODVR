@@ -12,7 +12,11 @@ transfer the **shape** and **skin textures** of a VaM character onto her:
    game's vertex order with UVs, bone weights and the bind-pose skeleton (`BepInEx\config\SfMorphs\export\…`).
    Since 0.11.0 always the game's own meshes and textures, even with Physics / Fidelity / Wrinkles / a character on (before,
    an export taken that way held our subdivided clones and render textures; `run.ps1` skips such exports), plus every
-   texture and property of her skin materials (`textures.txt`, `materials.txt`).
+   texture and property of her skin materials (`textures.txt`, `materials.txt`). Since 0.11.1 every variant under her too,
+   worn or not (`active` column in meshes.txt): the pipeline works by role (`tools/pipeline/roles.py`: upper / lower body,
+   foot, neck, face, nipples, nails, lashes, brows, genitals); the worn variant of each role is fitted (else the default),
+   the others follow the fitted skin, and each face material gets its own bake, so a game-side swap keeps the character.
+   Other sources than VaM: `docs/SOURCES.md` (design).
    All 36 of her meshes are GPU-only (0.5.0 exported nothing), so `MeshData` reads their vertex and index buffers
    back from the GPU and decodes them with the mesh's vertex layout; `meshes.txt` says CPU or GPU per mesh.
 2. **VaM side** (written, compile-checked against VaM's Assembly-CSharp, not yet run): `tools/vam/SfExport.cs`, a

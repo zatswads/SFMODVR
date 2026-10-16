@@ -29,9 +29,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sfio  # noqa: E402
 import rig  # noqa: E402
+import roles  # noqa: E402
 
-# her skin meshes (an export taken with physics on names them "<mesh> (SfSoft)"; the shape is the same)
-SKIN = ('reika_upperBody_normal', 'reika_lowerBody_normal', 'reika_foot', 'reika_neck', 'reika_face_a')
 VAM_SKIN = {'Legs', 'Nostrils', 'Lips', 'Face', 'Head', 'Hands', 'Shoulders', 'Neck', 'Hips', 'Torso', 'Nipples',
             'Forearms', 'Feet', 'Ears', 'defaultMat'}
 # slider ranges (Body.cs Detail.All), in the order they are written
@@ -84,9 +83,11 @@ def load_her(gdir):
         m.base = m.name.replace(' (SfSoft)', '').replace(' (SfMorph)', '')
     canon = rig.canonical_binds(meshes)
     bp = {b: np.linalg.inv(canon[b])[:3, 3] for b in canon}
-    pts = [rig.apply(rig.to_canonical(m, canon), m.v) for m in meshes if m.base in SKIN]
+    # her skin: the body / face variants she wears (roles.py; an export taken with physics on names them "<mesh> (SfSoft)")
+    skin = roles.Roles([m.base for m in meshes], {m.base for m in meshes if getattr(m, 'active', True)}).skin()
+    pts = [rig.apply(rig.to_canonical(m, canon), m.v) for m in meshes if m.base in skin]
     if not pts:
-        raise SystemExit('her export %s has none of her skin meshes (%s)' % (gdir, ', '.join(SKIN)))
+        raise SystemExit('her export %s has none of her skin meshes (upper / lower body, foot, neck, face)' % gdir)
     pts = np.concatenate(pts)
     joints = {}
     for role, (h, _) in J.items():

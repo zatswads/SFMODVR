@@ -97,6 +97,15 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.11.1 (pipeline by role)
+
+- [ ] Presets tab > Export: the message says "N of them variants she doesn't wear now"; meshes.txt lists reika_face_a and
+      reika_face_c (and the other variants) with the active column 1 / 0.
+- [ ] `run.ps1` on that export logs `her roles: face ..., fitted ...; variants that follow ...` and `bake targets: ...` with one
+      line per face material; character.txt has texture lines for each face.
+- [ ] In the game: a converted character, then the game's customisation switches her face (a / c): the character's face shape
+      and skin stay on the new face (log `Character '...' on 'Reika': N meshes morphed`, no "skipped").
+
 ## 0.11.0 (character import materials, slider fit)
 
 - [ ] Log `SF Body Morphs 0.11.0`. Characters tab > Yin (re-baked on the PC): no dark or inside-out patches at the nostrils,
