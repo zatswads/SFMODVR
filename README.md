@@ -41,6 +41,14 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.9.6 (voice pitch / formant: crackle and hollowness fixed):
+- 0.9.3's voice samples sounded crackled and hollow: its grain marks snapped to the loudest sample, which jumps between the peaks of a
+  cycle, the new grain positions started at an arbitrary phase, and each grain was cut with a symmetric window, so neighbouring grains
+  partly cancelled and clicked. Now each mark is placed where the waveform best matches the previous cycle (cross-correlation), the grain
+  windows reach exactly to the neighbouring marks (they sum to 1: at pitch 1 / formant 1 the input comes back exactly, 135-145 dB),
+  synthesis starts every voiced stretch on its own mark, breaths and hiss are copied in place, voicing has hysteresis (no on/off inside a
+  vowel), and pitch below 1 stretches the grain windows to the new spacing (no buzz between pulses).
+
 0.9.5 (wrinkles tuned from the first headset run of 0.9.1):
 - Her face barely wrinkled: her bone-driven face compresses only 0.03-0.05 in an expression (log: glabella 0.047, nasolabial 0.029),
   but the face regions needed 0.08-0.10 beyond the threshold for full lines, so they stayed at 0-30 %. The face ranges are now

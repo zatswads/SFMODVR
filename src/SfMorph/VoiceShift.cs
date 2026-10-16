@@ -64,17 +64,19 @@ namespace SfMorph
             public readonly int Rate;
             const int N = 1 << 15, M = N - 1;              // input / output rings
             const int DN = 1 << 12, DM = DN - 1;           // decimated ring
-            readonly float[] _in = new float[N], _acc = new float[N], _d = new float[DN];
+            readonly float[] _in = new float[N], _acc = new float[N], _accS = new float[N], _ws = new float[N], _d = new float[DN];
             readonly float[] _df, _cm;
             readonly int _tMin, _tMax, _hop, _w, _lagMin, _lagMax, _tu, _lat;
             long _n;                                        // samples written
             long _dn; float _dacc; int _dk;                 // decimation
             int _hopCnt;
-            float _T; bool _voiced;                         // current pitch period (samples) and voicing
+            float _T; bool _voiced; int _unv;               // current pitch period (samples), voicing, analyses without a dip
             // analysis marks (a small ring, oldest first)
             readonly double[] _ma = new double[64]; readonly float[] _mt = new float[64]; readonly bool[] _mv = new bool[64];
             int _mHead, _mCount;
             double _nextA, _nextS;
+            bool _synVoiced;
+            public int Switches;           // voiced <-> unvoiced changes of the synthesis (diagnostics)
 
             public Psola(int rate)
             {
@@ -107,15 +109,32 @@ namespace SfMorph
                     float T = _voiced ? _T : _tu;
                     if (_voiced)
                     {
-                        int r = (int)(T / 6f); long best = (long)a; float bv = -1f;
-                        for (int k = -r; k <= r; k++)
+                        int last = _mCount > 0 ? (_mHead + _mCount - 1) % _ma.Length : -1;
+                        if (last >= 0 && _mv[last])
                         {
-                            long j = (long)a + k;
-                            if (j < 0 || j >= _n) continue;
-                            float v = System.Math.Abs(_in[j & M]);
-                            if (v > bv) { bv = v; best = j; }
+                            // 0.9.3 fix: the waveform's own period: the offset within +-T/4 of the prediction where the next cycle matches the
+                            // last mark's cycle best (cross-correlation over one period). Snapping to the loudest sample flipped between the
+                            // peaks of a cycle and misaligned the grains (hollow, crackling).
+                            long mp = (long)_ma[last], pred = (long)a;
+                            int r = Mathf.Max(1, (int)(T / 4f)), L = Mathf.Max(4, (int)(T / 2f)), step = L > 160 ? 2 : 1;
+                            long best = pred; double bv = double.MinValue;
+                            for (int d = -r; d <= r; d++)
+                            {
+                                long q = pred + d;
+                                if (q - L < 0 || q + L >= _n || mp - L < 0 || q - mp > _tMax || q - mp < _tMin) continue;   // marks stay a valid period apart
+                                double sum = 0;
+                                for (int j = -L; j <= L; j += step) sum += _in[(mp + j) & M] * _in[(q + j) & M];
+                                if (sum > bv) { bv = sum; best = q; }
+                            }
+                            a = best;
                         }
-                        a = best;
+                        else
+                        {
+                            // a voiced start: the strongest positive sample within half a period (later marks follow it by correlation)
+                            int r = (int)(T / 2f); long best = (long)a; float bv = float.MinValue;
+                            for (int k = -r; k <= r; k++) { long j = (long)a + k; if (j < 0 || j >= _n) continue; float v = _in[j & M]; if (v > bv) { bv = v; best = j; } }
+                            a = best;
+                        }
                     }
                     if (_mCount == _ma.Length) { _mHead = (_mHead + 1) % _ma.Length; _mCount--; }
                     int slot = (_mHead + _mCount) % _ma.Length;
@@ -136,39 +155,61 @@ namespace SfMorph
                         if (d < bd) { bd = d; bi = s; } else if (_ma[s] > _nextS) break;
                     }
                     if (bi < 0) break;
-                    float T = _mt[bi]; bool v = _mv[bi];
-                    float spacing = v ? T / p : T;
+                    bool v = _mv[bi];
                     double c = _ma[bi];
-                    long s0 = (long)System.Math.Round(_nextS);
-                    // the grain is one pulse response: windowed over +-T in the INPUT (Hann, so grains one period apart sum to exactly 1), then
-                    // laid down resampled by f (its output half-length T / f). Voiced grains are added as they are (each output period gets
-                    // one pulse response, as in the voice); unvoiced ones are scaled by f so their overlap stays 1 on average.
-                    float hOut = T / f;
-                    float gain = v ? 1f : f;
-                    int h = (int)hOut;
-                    for (int k = -h; k <= h; k++)
+                    // the grain's two halves reach exactly to the neighbouring marks (asymmetric Hann): the windows of consecutive marks sum to 1,
+                    // so grains laid back at their own marks rebuild the input exactly (pitch 1)
+                    int nx = (bi + 1) % _ma.Length, pv = (bi - 1 + _ma.Length) % _ma.Length;
+                    bool hasNx = ((bi - _mHead + _ma.Length) % _ma.Length) + 1 < _mCount, hasPv = bi != _mHead;
+                    float TR = hasNx ? Mathf.Clamp((float)(_ma[nx] - c), 8f, _tMax) : _mt[bi];
+                    float TL = hasPv ? Mathf.Clamp((float)(c - _ma[pv]), 8f, _tMax) : TR;
+                    double at;
+                    if (!v) { at = c; _nextS = c + TR; }                                      // breath, hiss: copied in place
+                    else
                     {
-                        long o = s0 + k;
+                        if (!_synVoiced) _nextS = c;                                           // a voiced stretch starts on its own mark
+                        at = _nextS;
+                        _nextS += System.Math.Max(TR / p, 8f);
+                    }
+                    if (v != _synVoiced) Switches++;
+                    _synVoiced = v;
+                    // laid down resampled by f: output offset k reads the input at k * f around the mark
+                    // pitch below 1 spreads the grains further apart than one period: their windows stretch to the new spacing (normalised by
+                    // the window sum below) so the level doesn't dip between pulses (a buzz). Kept inside the latency budget.
+                    if (v && p < 1f)
+                    {
+                        float lim = Mathf.Min(_tMax * 1.25f, (_lat / 2 - _tMax / 2 - 8) * f);
+                        TL = Mathf.Min(TL / p, Mathf.Max(TL, lim)); TR = Mathf.Min(TR / p, Mathf.Max(TR, lim));
+                    }
+                    bool stretched = v && p < 1f;
+                    long o0 = (long)System.Math.Ceiling(at - TL / f), o1 = (long)System.Math.Floor(at + TR / f);
+                    float gain = v ? 1f : f;   // unvoiced grains overlap 1/f on average when compressed / stretched
+                    for (long o = o0; o <= o1; o++)
+                    {
                         if (o < outPos || o < 0) continue;
-                        float u = k * f;                              // input offset from the pulse
-                        if (u <= -T || u >= T) continue;
-                        float w = gain * (0.5f + 0.5f * Mathf.Cos(Mathf.PI * u / T));
+                        float u = (float)((o - at) * f);
+                        float hl = u < 0f ? TL : TR;
+                        if (u <= -hl || u >= hl) continue;
+                        float w = gain * (0.5f + 0.5f * Mathf.Cos(Mathf.PI * u / hl));
                         double src = c + u;
                         long i0 = (long)System.Math.Floor(src);
                         if (i0 < 0 || i0 + 1 >= _n || i0 + 1 <= _n - N) continue;
                         float fr = (float)(src - i0);
                         float a0 = _in[i0 & M], a1 = _in[(i0 + 1) & M];
-                        _acc[o & M] += w * (a0 + (a1 - a0) * fr);
+                        float sv = a0 + (a1 - a0) * fr;
+                        if (stretched) { _accS[o & M] += w * sv; _ws[o & M] += w; }   // normalised by their window sum at the output
+                        else _acc[o & M] += w * sv;
                     }
-                    _nextS += System.Math.Max(spacing, 8f);
                     // forget marks well behind the synthesis time
                     while (_mCount > 1 && _ma[_mHead] < _nextS - 2 * _tMax) { _mHead = (_mHead + 1) % _ma.Length; _mCount--; }
                 }
 
                 if (outPos < 0) return 0f;
                 long oi = outPos & M;
-                float y = _acc[oi];
-                _acc[oi] = 0f;
+                // stretched grains (pitch below 1) divided by their window sum; the rest as laid down
+                float ws = _ws[oi];
+                float y = _acc[oi] + (ws > 1e-4f ? _accS[oi] / Mathf.Max(ws, 0.5f) : 0f);
+                _acc[oi] = 0f; _accS[oi] = 0f; _ws[oi] = 0f;
                 return y;
             }
 
@@ -190,10 +231,14 @@ namespace SfMorph
                 double run = 0;
                 _cm[0] = 1f;
                 for (int tau = 1; tau <= _lagMax; tau++) { run += _df[tau]; _cm[tau] = run > 0 ? (float)(_df[tau] * tau / run) : 1f; }
+                // hysteresis: a voiced stretch starts at a dip below 0.25 and ends only when two analyses in a row (16 ms) find none below
+                // 0.45 (a breathy moan stays voiced; the shift no longer flips on and off inside a vowel)
+                float thr = _voiced ? 0.45f : 0.25f;
                 int t = -1;
                 for (int tau = _lagMin; tau < _lagMax; tau++)
-                    if (_cm[tau] < 0.2f) { while (tau + 1 < _lagMax && _cm[tau + 1] < _cm[tau]) tau++; t = tau; break; }
-                if (t < 1) { _voiced = false; return; }
+                    if (_cm[tau] < thr) { while (tau + 1 < _lagMax && _cm[tau + 1] < _cm[tau]) tau++; t = tau; break; }
+                if (t < 1) { if (_voiced && ++_unv < 2) return; _voiced = false; return; }
+                _unv = 0;
                 // parabolic refinement
                 float a = _cm[t - 1], b2 = _cm[t], c = _cm[t + 1], den = a - 2f * b2 + c;
                 float tt = t + (Mathf.Abs(den) > 1e-9f ? Mathf.Clamp(0.5f * (a - c) / den, -0.5f, 0.5f) : 0f);

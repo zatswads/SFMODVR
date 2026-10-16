@@ -97,6 +97,10 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.9.6 (voice filter fixed)
+
+- [ ] Voice pitch 1.2 / 0.85 and formant 1.15 / 0.88 on moans and lines: no crackle, no hollow or phasey sound, no warble on long moans.
+
 ## 0.9.5 (wrinkles tuned)
 
 Copy `SfMorph.dll` + `sfmorph_shaders`. Log: `SF Body Morphs 0.9.5`. Then the 0.9.1 list. Face: expressions should now bring the lines to
