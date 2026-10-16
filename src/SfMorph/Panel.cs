@@ -891,12 +891,26 @@ namespace SfMorph
             // 0.11.8 tensed muscles as geometry (GPU contact v2) and their firmness under a hand
             GUILayout.Label("Shape: tensed muscles bulge", _hint);
             var gpu = _body.Gpu;
-            string flexOff = sliderOff ?? (!_p.GpuContactOn.Value ? "GPU contact is off (Physics tab)" : gpu == null ? "shader bundle not loaded"
+            string gpuOff = off ?? (!_p.GpuContactOn.Value ? "GPU contact is off (Physics tab)" : gpu == null ? "shader bundle not loaded"
                            : !gpu.MuscleKernels ? "the shader bundle is older than this DLL (install dist/sfmorph_shaders)"
                            : gpu.MuscleVerts == 0 ? (gpu.FlexNote.Length > 0 ? gpu.FlexNote : "no muscle on her baked body meshes (yet)") : null);
+            string flexOff = sliderOff ?? gpuOff;
             string fwhy = flexOff == null ? null : "off: " + flexOff;
             float fx = Slider("Flex", _p.MuscleFlexAmt.Value, 0f, 2f, "0.00", 1f, fwhy);
             if (Mathf.Abs(fx - _p.MuscleFlexAmt.Value) > 0.0001f) _p.MuscleFlexAmt.Value = fx;
+            // 0.11.8 Flex test: arms, back, core, legs in turn at full over her current animation (needs GPU contact, not the relief)
+            string testing = MuscleFlex.TestArea();
+            GUILayout.BeginHorizontal();
+            GUI.enabled = gpuOff == null;
+            if (testing == null)
+            {
+                if (GUILayout.Button("Flex test (arms, back, core, legs: 2 s each)")) MuscleFlex.StartTest();
+            }
+            else if (GUILayout.Button("Stop test", GUILayout.Width(90))) MuscleFlex.StopTest();
+            GUI.enabled = true;
+            if (testing != null) GUILayout.Label("now: " + testing + " at full (" + MuscleFlex.TestLeft(testing).ToString("0.0") + " s)", _hint);
+            GUILayout.EndHorizontal();
+            if (gpuOff != null) GUILayout.Label("Flex test off: " + gpuOff, _off);
             string awhy = fwhy ?? (_p.MuscleFlexAmt.Value <= 0f ? "off: Flex is 0" : null);
             float cm = Slider("Core", _p.MuscleCoreMm.Value, 0f, 12f, "0.0", 3f, awhy ?? (_p.MuscleCore.Value ? null : "off: Core is off"), " mm");
             if (Mathf.Abs(cm - _p.MuscleCoreMm.Value) > 0.0001f) _p.MuscleCoreMm.Value = cm;
@@ -919,7 +933,9 @@ namespace SfMorph
                             "Tension tints relaxed muscles green and tensed ones red, Muscles shows each in its own colour. Speed is in the config " +
                             "file ([Muscles]). Shape: with GPU contact on, each muscle's belly also pushes out (mm at full activation, fading to " +
                             "nothing at its edges and tendons; Fitness counts, so a high resting tone keeps a little shape); the relief above stays " +
-                            "the fine detail. Firmness: a tensed muscle dents less under a hand and the physics hands meet more resistance there.", _hint);
+                            "the fine detail. Firmness: a tensed muscle dents less under a hand and the physics hands meet more resistance there. Flex test: " +
+                            "each area at full (at least 3 mm) for 2 s over whatever she is doing, whatever her pose's tension; the log says how far " +
+                            "and on how many vertices each one went.", _hint);
         }
 
         bool Card(Texture2D thumb, string name, bool on, float size)

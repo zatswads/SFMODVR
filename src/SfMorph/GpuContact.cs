@@ -638,23 +638,65 @@ namespace SfMorph
         // activation x the muscle's area mm x Flex. Returns the largest bulge.
         float FillMuscles()
         {
-            _musLive = _mmap != null && MuscleFlex.Live;
+            string test = MuscleFlex.TestArea();
+            if (test != _testArea) LogTest(test);
+            _musLive = _mmap != null && (test != null || MuscleFlex.Live);
             for (int i = 0; i < 8; i++) { _musAmp[i] = Vector4.zero; _musAct[i] = Vector4.zero; }
             if (!_musLive) return 0f;
             var L = _mmap.Layer;
-            float flex = Mathf.Max(0f, _set.Flex), mx = 0f;
+            float flex = test != null ? Mathf.Max(1f, _set.Flex) : Mathf.Max(0f, _set.Flex), mx = 0f;
             for (int k = 0; k < L.Count && k < MuscleFlex.Max; k++)
             {
                 string a = L.Area[k];
                 float mm = a == "core" ? _set.CoreMm : a == "back" ? _set.BackMm : a == "legs" ? _set.LegsMm : a == "arms" ? _set.ArmsMm : 0f;
+                if (test != null) mm = Mathf.Max(3f, mm);       // the test always shows something (Flex at least 1, 3 mm at least)
                 if (L.MuscleName[k] == "ribcage") mm = 0f;   // bone showing through, not a muscle belly: relief only, never pushed out
-                float act = MuscleFlex.Act[k];
+                float act = test != null ? (a == test ? 1f : 0f) : MuscleFlex.Act[k];
                 float amp = act * Mathf.Max(0f, mm) * 0.001f * flex;
                 _musAmp[k >> 2][k & 3] = amp;
                 _musAct[k >> 2][k & 3] = act;
                 if (amp > mx) mx = amp;
             }
             return mx;
+        }
+
+        // 0.11.8 Flex test: one log line per step (how far the area's bellies go, on how many vertices of which meshes) and at the end
+        string _testArea;
+        void LogTest(string area)
+        {
+            string prev = _testArea;
+            _testArea = area;
+            if (area == null) { if (prev != null) Plugin.Log.LogInfo("Muscles: Flex test done, back to her pose's tension"); return; }
+            if (_mmap == null) { Plugin.Log.LogInfo("Muscles: Flex test " + area + ": nothing to bulge (" + (FlexNote.Length > 0 ? FlexNote : "no muscle map") + ")"); return; }
+            var L = _mmap.Layer;
+            int verts = 0;
+            float maxBelly = 0f, mmMax = 0f;
+            var meshes = new List<string>();
+            for (int i = 0; i < _rs.Count; i++)
+            {
+                var b = _rs[i].Bake;
+                if (!_rs[i].V2 || b == null || b.Muscle == null) continue;
+                int n = 0;
+                for (int v = 0; v < b.V; v++)
+                {
+                    if (b.Canon[v] != (uint)v) continue;
+                    var m = b.Muscle[v];
+                    int id = (int)(m.x + 0.5f);
+                    if (m.x < 0f || id >= L.Count || L.Area[id] != area) continue;
+                    n++;
+                    if (b.Belly[v] > maxBelly) maxBelly = b.Belly[v];
+                }
+                if (n > 0) { verts += n; meshes.Add(_rs[i].Name + " " + n); }
+            }
+            for (int k = 0; k < L.Count; k++)
+            {
+                if (L.Area[k] != area || L.MuscleName[k] == "ribcage") continue;
+                float mm = area == "core" ? _set.CoreMm : area == "back" ? _set.BackMm : area == "legs" ? _set.LegsMm : _set.ArmsMm;
+                mmMax = Mathf.Max(3f, mm) * Mathf.Max(1f, _set.Flex);
+            }
+            Plugin.Log.LogInfo("Muscles: Flex test " + area + " at full for " + MuscleFlex.TestStep.ToString("0") + " s: bulge up to "
+                + (mmMax * maxBelly).ToString("0.0") + " mm (" + mmMax.ToString("0.0") + " mm x belly " + maxBelly.ToString("0.00") + ") on " + verts + " verts"
+                + (meshes.Count > 0 ? " (" + string.Join(", ", meshes.ToArray()) + ")" : " - none baked: no bulge"));
         }
 
         // The muscle inputs of Depth / Compose for one renderer (dummies with _MusOn 0 when it has none this frame).

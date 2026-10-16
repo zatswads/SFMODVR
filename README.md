@@ -41,6 +41,12 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.10 (a test for the muscle shape):
+- No way to see the muscle bulge without finding a pose that tenses each muscle. Skin tab, Muscles: **Flex test** puts arms,
+  back, core and legs in turn at full activation for 2 s each (at least 3 mm, Flex at least 1) over whatever she is playing, the
+  other areas at 0, then hands back to her pose's tension. It needs only GPU contact (works with the relief off). The log says per
+  step how far the bellies go and on how many vertices of which meshes (`Muscles: Flex test arms at full for 2 s: bulge up to ...`).
+
 0.11.9 (the tickle face is a helpless laugh):
 - Ticklish now reads as an agonizing laugh instead of a plain smile: the smile / laugh clip keeps her mouth and cheeks, the Pain
   clip's squeezed eyes (85 %) and half of its knitted brows go over it, and her inner brows rise while the rest of the brows drop

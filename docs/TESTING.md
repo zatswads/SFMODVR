@@ -98,6 +98,15 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.10 (Flex test)
+
+Install `dist/SfMorph.dll` (the 0.11.8 `sfmorph_shaders` stays). Log: `SF Body Morphs 0.11.10`. GPU contact on (Physics tab), any
+scene with her animating. Skin tab, Muscles, **Flex test**:
+1. The label counts down "now: arms / back / core / legs at full"; each area visibly rises in turn (side view of the upper arm,
+   her back from behind, the belly in profile, the thighs and calves) and settles back after its 2 s. Stop test ends it at once.
+2. Log, 4 lines + `Flex test done`: `Muscles: Flex test <area> at full for 2 s: bulge up to X mm (... x belly 0.9x) on N verts
+   (<meshes>)`. Send the lines: N = 0 or a belly far below 1 means that area has no geometry to move.
+3. A bulge in the wrong place (e.g. "arms" lifting her chest): the Muscles debug view "Muscles" shows the region; screenshot both.
 
 ## 0.11.9 (agonizing laugh for Ticklish)
 

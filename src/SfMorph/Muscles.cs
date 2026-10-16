@@ -331,6 +331,27 @@ namespace SfMorph
         // the activations are this frame's (or at most a few frames old: the muscles stop publishing when switched off or her sheet goes)
         public static bool Live { get { return Layer != null && Time.frameCount - _frame <= 3; } }
 
+        // 0.11.8 Flex test (panel): each area in turn at full activation for TestStep s over whatever she is playing, the others at 0, so
+        // the geometry can be checked apart from the pose's tension (works with the muscle relief off too: only GPU contact is needed)
+        public static readonly string[] TestAreas = { "arms", "back", "core", "legs" };
+        public const float TestStep = 2f;
+        static float _testStart = -1f;
+        public static void StartTest() { _testStart = Time.time; }
+        public static void StopTest() { _testStart = -1f; }
+        // the area under test now (null: no test running); the test ends by itself after the last area
+        public static string TestArea()
+        {
+            if (_testStart < 0f) return null;
+            int i = (int)((Time.time - _testStart) / TestStep);
+            if (i < 0 || i >= TestAreas.Length) { _testStart = -1f; return null; }
+            return TestAreas[i];
+        }
+        public static float TestLeft(string area)
+        {
+            int i = Array.IndexOf(TestAreas, area);
+            return i < 0 || _testStart < 0f ? 0f : Mathf.Max(0f, _testStart + (i + 1) * TestStep - Time.time);
+        }
+
         public static void Clear()
         {
             Layer = null;
