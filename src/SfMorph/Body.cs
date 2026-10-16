@@ -510,6 +510,7 @@ namespace SfMorph
             _physicsWas = physics;
             if (physics || embody || physHands)
             {
+                Perf.Begin(Perf.S.Hands);
                 if (Time.unscaledTime >= _nextHands)   // hands/controllers come and go with scenes: every 2 s, cheap when unchanged
                 {
                     _nextHands = Time.unscaledTime + 2f;
@@ -518,17 +519,23 @@ namespace SfMorph
                 }
                 _handsOn = true;
                 try { VrHands.UpdateLive(); } catch (Exception e) { Plugin.Log.LogWarning("Hands visibility: " + e.Message); }   // once per frame, before anything reads Live
+                Perf.End(Perf.S.Hands);
             }
             else if (_handsOn) { _handsOn = false; try { VrHands.Release(); } catch { } }
             Grip.GrabButton = _p.HandsGrabButton.Value;
+            Perf.Begin(Perf.S.Grip);
             if (physHands || embody) try { Grip.Update(); } catch (Exception e) { Plugin.Log.LogWarning("Grip: " + e.Message); }
+            Perf.End(Perf.S.Grip);
             int quality = _p.Quality.Value;
             foreach (var c in Found)
             {
                 // 0.8.7: her reaction face clip over the Animator's face, before the bone sliders (they add on top of it)
+                Perf.Begin(Perf.S.FaceClip);
                 if (c == her && _reactOn && _p.ReactOn.Value)
                     try { React.FaceStep(Time.deltaTime); }
                     catch (Exception e) { Plugin.Log.LogError("Reactions face clips failed, turned off: " + e); _p.ReactFaceClips.Value = false; try { React.Face.Stop(); } catch { } }
+                Perf.End(Perf.S.FaceClip);
+                Perf.Begin(Perf.S.Morph);
                 try { c.Morph.Update(c, _p.Apply.Value && c.Root != null); }  // before Apply: its joint moves go through the trackers
                 catch (Exception e)
                 {
@@ -536,6 +543,8 @@ namespace SfMorph
                     c.Look.Morph = null; Touch(c);
                     try { c.Morph.Release(); } catch { }
                 }
+                Perf.End(Perf.S.Morph);
+                Perf.Begin(Perf.S.SoftUpdate);
                 try { c.Soft.Update(c, physics && c == her, _p.Softness.Value, _p.Springiness.Value, Found, quality); }
                 catch (Exception e)
                 {
@@ -543,7 +552,10 @@ namespace SfMorph
                     _p.Physics.Value = false;
                     try { c.Soft.Release(); } catch { }
                 }
+                Perf.End(Perf.S.SoftUpdate);
+                Perf.Begin(Perf.S.Trackers);
                 if (_p.Apply.Value && !c.Look.Empty && c.Root != null) Apply(c);
+                Perf.End(Perf.S.Trackers);
                 // her segments BEFORE Overlap (0.8.0): the yield is measured against the animation's pose, so a limb that already yielded
                 // does not feed its own displacement back (the 0.7.8/0.7.9 Newton's cradle). Overlap.Unwind puts the animation's rotation
                 // back on bones the animation did not rewrite this frame, so the query never sees last frame's yield.
@@ -551,8 +563,10 @@ namespace SfMorph
                 {
                     if (_overlapOn) Overlap.Unwind();
                     _hb.On = true; _hb.PushByTouch = _p.HandsPushByTouch.Value; _hb.PushByPartner = _p.HandsPushByPartner.Value; _hb.Embodied = embody && Embody != null ? Embody.PartnerRoot : null; _hb.Softness = _p.Softness.Value; _hb.SoftZonesOn = physics; _hb.Caps = Contacts();
+                    Perf.Begin(Perf.S.HerBody);
                     try { HerBody.Update(c, _hb); }
                     catch (Exception e) { Plugin.Log.LogError("Her body failed, retrying in 10 s: " + e); try { HerBody.Fail(); } catch { } }
+                    Perf.End(Perf.S.HerBody);
                 }
                 // her secondary motion after our bone changes, before the soft points read her bones
                 if (c == her && _p.Apply.Value)
@@ -562,6 +576,7 @@ namespace SfMorph
                     _ovs.Ripple = _p.OverlapRipple.Value; _ovs.Strength = _p.OverlapStrength.Value; _ovs.PlantedLock = _p.OverlapPlanted.Value; _ovs.YieldLock = _p.HandsYieldLock.Value; _ovs.LimbPush = _p.HandsLimbPush.Value;
                     _ovs.Bounce[0] = _p.ArmsBounce.Value; _ovs.Bounce[1] = _p.LegsBounce.Value; _ovs.Bounce[2] = _p.HeadBounce.Value; _ovs.Bounce[3] = _p.SpineBounce.Value;
                     _ovs.Caps = physics || physHands ? Contacts() : null;
+                    Perf.Begin(Perf.S.Overlap);
                     try { Overlap.Update(c, _ovs, Time.deltaTime); _overlapOn = true; }
                     catch (Exception e)
                     {
@@ -569,6 +584,7 @@ namespace SfMorph
                         _p.OverlapAmount.Value = 0f;
                         try { Overlap.Release(); } catch { }
                     }
+                    Perf.End(Perf.S.Overlap);
                 }
                 // the physics hands' visual pose for this frame (the soft points read their capsules)
                 if (c == her)
@@ -581,6 +597,7 @@ namespace SfMorph
                         _hands.DrawnOffsetFade = _p.HandsDrawnFade.Value; _hands.FingerConform = _p.HandsFingerConform.Value; _hands.RestCurl = _p.HandsRestCurl.Value; _hands.SoftZonesOn = physics;
                         _hands.HideVisual = _p.EmbodyOn.Value && _p.EmbodyHands.Value != 0;   // his own hands are shown then
                         _hands.LeftPos = _p.LeftHandPos.Value; _hands.LeftRot = _p.LeftHandRot.Value; _hands.RightPos = _p.RightHandPos.Value; _hands.RightRot = _p.RightHandRot.Value;
+                        Perf.Begin(Perf.S.PhysHands);
                         try { PhysicsHands.Update(c, _hands); _physHandsOn = true; }
                         catch (Exception e)
                         {
@@ -588,11 +605,13 @@ namespace SfMorph
                             _p.HandsOn.Value = false;
                             try { PhysicsHands.Release(); } catch { }
                         }
+                        Perf.End(Perf.S.PhysHands);
                     }
                 }
                 // her reactions: read what HerBody/PhysicsHands wrote this frame; a flinch is queued for Overlap's next frame, a jiggle lands in the Simulate below
                 if (c == her && (_p.ReactOn.Value || _p.VoiceGuard.Value))
                 {
+                    Perf.Begin(Perf.S.Reactions);
                     _rs.Fill(_p);
                     bool reactWasOn = _p.ReactOn.Value;
                     try
@@ -610,9 +629,12 @@ namespace SfMorph
                         try { React.Release(); } catch { }
                         _reactOn = false;
                     }
+                    Perf.End(Perf.S.Reactions);
                 }
             }
+            Perf.Begin(Perf.S.Wrinkles);
             WrinkleStep(her);
+            Perf.End(Perf.S.Wrinkles);
             Release();
             if ((her == null || !(_p.ReactOn.Value || _p.VoiceGuard.Value)) && _reactOn) { _reactOn = false; try { React.Release(); } catch { } }
             if ((her == null || !_p.Apply.Value) && _overlapOn) { _overlapOn = false; try { Overlap.Release(); } catch { } }
@@ -631,6 +653,7 @@ namespace SfMorph
                 _emb.NeutralFingers = _p.EmbodyNeutralFingers.Value; _emb.ElbowAvoid = _p.EmbodyElbowAvoid.Value; _emb.RestCurl = _p.HandsRestCurl.Value; _emb.Softness = _p.Softness.Value; _emb.SoftZonesOn = physics;
                 _emb.ViewAlign = _p.EmbodyViewAlign.Value; _emb.ViewYaw = _p.EmbodyViewYaw.Value; _emb.ViewPitch = _p.EmbodyViewPitch.Value; _emb.ViewRoll = _p.EmbodyViewRoll.Value;
                 _emb.LeftPos = _p.LeftHandPos.Value; _emb.LeftRot = _p.LeftHandRot.Value; _emb.RightPos = _p.RightHandPos.Value; _emb.RightRot = _p.RightHandRot.Value;
+                Perf.Begin(Perf.S.Embody);
                 try { Embody.Update(her, Found, _emb); _embodyOn = true; }
                 catch (Exception e)
                 {
@@ -639,6 +662,7 @@ namespace SfMorph
                     try { Embody.Release(); } catch { }
                     _embodyOn = false;
                 }
+                Perf.End(Perf.S.Embody);
             }
             else if (_embodyOn) { _embodyOn = false; try { Embody.Release(); } catch { } }
             // the soft points after her bones carry our changes AND after Embody (0.8.5), before the game's physics and IK: the Animator
@@ -654,11 +678,13 @@ namespace SfMorph
         {
             try
             {
+                Perf.Begin(Perf.S.Simulate);
                 her.Soft.Simulate(Time.deltaTime, Contacts(), _p.Softness.Value, _p.Springiness.Value, _p.ShowSoftPoints.Value, quality, _p.Gravity.Value);
-                RippleStep(her);
-                GpuStep(her);
-                MarksStep(her);
-                VrHands.MirrorLive();
+                Perf.End(Perf.S.Simulate);
+                Perf.Begin(Perf.S.Ripple); RippleStep(her); Perf.End(Perf.S.Ripple);
+                Perf.Begin(Perf.S.GpuSync); GpuStep(her); Perf.End(Perf.S.GpuSync);
+                Perf.Begin(Perf.S.Marks); MarksStep(her); Perf.End(Perf.S.Marks);
+                Perf.Begin(Perf.S.Mirror); VrHands.MirrorLive(); Perf.End(Perf.S.Mirror);
             }
             catch (Exception e)
             {
@@ -714,7 +740,9 @@ namespace SfMorph
             // 0.8.9 (user: marks too subtle): the boost multiplies the build-up, the redness (saturates sooner) and the pressed darkening (capped so
             // the shade never passes 0.3 of the albedo)
             float boost = Mathf.Clamp(_p.MarksBoost.Value, 1f, 4f);
-            s.MarkBoost = boost; s.MarkGain = 0.35f * boost;   // 0.9.4: was 0.6; the GPU now feeds it only a firm or moving foreign press s.Redness = _p.MarksRedness.Value * boost; s.Ao = Mathf.Min(2f, _p.MarksAo.Value * boost);
+            s.MarkBoost = boost; s.MarkGain = 0.35f * boost;   // 0.9.4: was 0.6; the GPU now feeds it only a firm or moving foreign press
+            // 0.9.9: these two had slipped into the comment above in 0.9.4, so the redness / shading sliders and the boost did nothing to them
+            s.Redness = _p.MarksRedness.Value * boost; s.Ao = Mathf.Min(2f, _p.MarksAo.Value * boost);
         }
 
         // 0.8.0: impacts of this frame's Simulate -> ripple waves (GpuContact draws them) and the breast pulse.

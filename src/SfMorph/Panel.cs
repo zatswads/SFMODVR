@@ -76,6 +76,7 @@ namespace SfMorph
             foreach (var c in _body.Found) if (c.Female && !c.IsPlayer) people.Add(c);
             if (people.Count == 0) foreach (var c in _body.Found) if (!c.IsPlayer && c.BoneList.Count > 0) people.Add(c);
             GUILayout.Label(_body.Status, _hint);
+            if (_p.PerfLog.Value && Perf.Summary.Length > 0) GUILayout.Label(Perf.Summary, _hint);   // 0.9.9: the last 10 s timing line, readable in the headset
             if (_sel != null && !people.Contains(_sel)) _sel = null;
             if (_sel == null && people.Count > 0) _sel = people[0];
             GUILayout.BeginHorizontal();

@@ -1,6 +1,6 @@
 # SF Body Morphs — handoff
 
-State at **0.9.8** (branch `main`). 0.9.8 (wrinkles: neck lines moved to the body atlas (they had landed on her chin), face / neck regions measured from an idle baseline (slow minimum, 20 s rise), nasolabial shorter; bundle rebuilt) built, not yet run in the game. 0.9.7 (GPU contact: skin meshes stitched at their seams (BuildMaps: SkinRank upper 0 / other body 1 /
+State at **0.9.9** (branch `main`). 0.9.9 (`Perf` timing line every 10 s in log + panel: per-stage avg/max ms (Perf.cs, Stopwatch around each stage of Body.ApplyAll, PhysicsHands.FixedStep, GpuContact.Run, Wrinkles' hook, SkinMarks' raster, panel), PlayerLoop phase markers (physx = FixedUpdate.PhysicsFixedUpdate, wait = gap between frames), fps, fixed steps/frame, GPU ms from XRDisplaySubsystem.TryGetAppGPUTimeLastFrame by reflection else FrameTimingManager; small allocation / reflection fixes; skin-mark Redness/Ao settings restored (lost in a comment since 0.9.4)) built, not yet run in the game. 0.9.8 (wrinkles: neck lines moved to the body atlas (they had landed on her chin), face / neck regions measured from an idle baseline (slow minimum, 20 s rise), nasolabial shorter; bundle rebuilt) built, not yet run in the game. 0.9.7 (GPU contact: skin meshes stitched at their seams (BuildMaps: SkinRank upper 0 / other body 1 /
 neck 2 / face 3, a later skin mesh maps to an earlier one, `_MapW` = 1 within 1.5 mm fading to 0 by 1 cm, ApplyMap blends own and parent
 Grad; dispatch passes by parent Level); her neck and face skin added as `Extra` v2 renderers (zero mask, no v1 imprint) so marks reach
 them, SkinMarks allows the face class; [Physics] RippleImpact = the wave share at the impact point (`_WaveImpact`); bundle marker kernel
@@ -74,6 +74,7 @@ commit them). Toolchain: `apt-get update && apt-get install -y mono-mcs mono-dev
 
 | File | Role |
 |---|---|
+| `Perf.cs` | 0.9.9 timing: `Perf.Begin/End(stage)` (Stopwatch ticks summed per frame), PlayerLoop markers at the start/end of each top-level phase and around PhysicsFixedUpdate, the 10 s `Perf last 10 s` line (`Perf.Summary` is shown in the panel); `[General] PerfLog`. |
 | `Plugin.cs` | Entry point, `ConfigEntry`s, hidden `Runner` (Update = key + scan, OnGUI = panel), `ApplyStep` = the apply step inserted in Unity's PlayerLoop before `PreLateUpdate.ScriptRunBehaviourLateUpdate` (re-checked every 2 s; LateUpdate fallback), unfocused hotkey via `GetAsyncKeyState`. |
 | `GameRig.cs` | Reflection into Assembly-CSharp: the woman (`MovePlayerAndGirl.reika`) and her body-part bones from the game's own references. |
 | `Body.cs` | `Detail` table (slider: group, Op Size/Stretch/Move/Length, Dir, bones by game part → exact rig names → keywords, range, Keep), `Character` (renderers, skin bones, slider bones, bind-pose axes/move directions, look), scan every 2 s (cached; rebuilt only when the renderer set changes), apply/restore trackers for scale and position, one `Character '...'` log block per session. |

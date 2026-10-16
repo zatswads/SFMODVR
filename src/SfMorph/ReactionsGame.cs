@@ -1467,7 +1467,8 @@ namespace SfMorph
         // How loud the pack voice on the moan source is now (RMS of its last 1024 output samples), -1 when no pack clip is sounding. For the jaw.
         MethodInfo _miOut; bool _outTried;
         readonly float[] _outBuf = new float[1024];
-        readonly object[] _outArgs = new object[2];
+        // 0.9.9: a delegate bound to the moan source (rebound when the source changes) instead of MethodInfo.Invoke with a boxed int each frame
+        Action<float[], int> _getOut; object _getOutFor;
         float _packBreathEnd;
         public float PackLevel()
         {
@@ -1478,12 +1479,16 @@ namespace SfMorph
             if (_miOut == null) return -1f;
             try
             {
-                _outArgs[0] = _outBuf; _outArgs[1] = 0;
-                _miOut.Invoke(_srcMoan, _outArgs);
+                if (_getOut == null || !ReferenceEquals(_getOutFor, _srcMoan))
+                {
+                    _getOut = (Action<float[], int>)Delegate.CreateDelegate(typeof(Action<float[], int>), _srcMoan, _miOut);
+                    _getOutFor = _srcMoan;
+                }
+                _getOut(_outBuf, 0);
                 double e = 0; for (int i = 0; i < _outBuf.Length; i++) e += _outBuf[i] * _outBuf[i];
                 return (float)Math.Sqrt(e / _outBuf.Length);
             }
-            catch (Exception ex) { LogOnce("getout:" + ex.GetType().Name, "reading the voice level failed: " + ex.Message); _miOut = null; return -1f; }
+            catch (Exception ex) { LogOnce("getout:" + ex.GetType().Name, "reading the voice level failed: " + ex.Message); _miOut = null; _getOut = null; return -1f; }
         }
 
         // A pack clip of category c on the moan source, like MoanClip (talking stopped, a sounding moan cut, the voice loop stopped, the

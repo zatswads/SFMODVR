@@ -691,7 +691,7 @@ namespace SfMorph
             }
             if (b.Prox != null && rest.magnitude > 1e-6f)
             {
-                if (rest.magnitude > 0.035f)
+                if (rest.magnitude > 0.035f && !(_loggedHinge[0] && _loggedHinge[1]))   // 0.9.9: the name (a new string per read) only until both are logged
                 {
                     int ix = b.T.name.StartsWith("Elbow_", StringComparison.Ordinal) ? 0 : 1;
                     if (!_loggedHinge[ix])

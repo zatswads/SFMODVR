@@ -41,6 +41,20 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.9.9 (timing line, small per-frame savings):
+- Nobody knew what the plugin costs per frame: the logs only hinted at the frame rate (about 23 fps from the hands' fixed steps per frame).
+  New: every 10 s a `Perf last 10 s` line in the log and at the top of the panel: fps and frame time, fixed steps per frame, the GPU
+  time of the frame when the VR runtime reports it, avg/max ms of each part of the plugin (apply step, her body, overlap, physics hands
+  per frame and per fixed step, reactions, wrinkles, embody, soft zones, GPU contact dispatch, skin marks raster, panel), and the
+  frame's phases (the game's and ours together: physics, update, late update, render submit, and the wait for the GPU / compositor).
+  `[General] PerfLog` turns it off.
+- Per-frame garbage and reflection removed without changing what you see: mesh names for hidden meshes (character conversions), bone
+  names of her self-contact capsules, the skin marks' off status, the morph's missing-folder status, the elbow/knee hinge name, the
+  voice-level read for the audio-driven jaw (a bound delegate instead of `MethodInfo.Invoke`), the wrinkles' baked-normal lookup
+  (a direct call instead of reflection).
+- Skin marks: the redness / shading sliders and the marks boost had no effect since 0.9.4 (two settings had slipped into a code
+  comment). They work again; at the default values nothing changes.
+
 0.9.8 (face wrinkles: no lines under her mouth, no ring around her neck at rest):
 - Two lines ran down from under her mouth like marionette lines. Cause: they were the neck creases. They were placed by casting onto
   her face from the front, and at the neck's height the front of her face is her chin, so the neck bands landed on the chin. The front of

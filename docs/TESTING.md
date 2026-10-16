@@ -97,6 +97,16 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.9.9 (timing line)
+
+Copy `SfMorph.dll`. Log: `SF Body Morphs 0.9.9`, then every 10 s `Perf last 10 s: N fps ...` (also at the top of the panel). Read
+the line after ~20 s in each state, one change at a time, same spot in the scene (hands still, then while touching her):
+(1) baseline as you play; (2) Physics hands off; (3) soft zones Quality Fidelity -> Balanced (watch `simulate`, `gpuRun`, GPU ms);
+(4) GPU contact off; (5) Wrinkles off; (6) Reactions off; (7) Embody off; (8) all of SF Body Morphs' Apply off (`applyAll` near 0:
+the rest is the game); (9) SF Neural Rendering on vs off (F6). What to read: `ours` = our CPU ms per frame; `physx` = the game's physics
+(incl. the physics hands' bodies) summed over the fixed steps; `postLate` = HDRP's render submit on the CPU; `wait` = the main thread
+waiting for the GPU / compositor (large wait + GPU ms near the frame time = GPU bound). Send the log.
+
 ## 0.9.8 (face wrinkles)
 
 Copy `SfMorph.dll` + `sfmorph_shaders`. Log: `SF Body Morphs 0.9.8`. With Face/Neck on (Body may be off): no lines under her mouth; no

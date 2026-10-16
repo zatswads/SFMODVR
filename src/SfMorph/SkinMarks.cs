@@ -189,6 +189,14 @@ namespace SfMorph
             }
         }
 
+        // 0.9.9: the off status is set every frame while marks are off; built only when the reason changes (no string per frame)
+        string _offWhy, _offStatus;
+        void Off(string why)
+        {
+            if ((object)why != _offWhy || (object)Status != _offStatus) { _offWhy = why; _offStatus = "Skin marks: off: " + why; }
+            Status = _offStatus;
+        }
+
         void UpdateInner(Character her, ContactSettings s, GpuContact gpu, float now)
         {
             _cur = this;
@@ -198,12 +206,12 @@ namespace SfMorph
                 if (_sheets.Count > 0 || _shader != null || _marksOn) { Teardown(); Plugin.Log.LogInfo("Skin marks: off (" + why + "), slots restored"); }
                 _marksOn = false; _discN = 0;
                 _loadFailed = false; _dead = false;
-                Status = "Skin marks: off: " + why;
+                Off(why);
                 return;
             }
             _her = her; _set = s; _gpu = gpu;
-            if (_dead) { if (_shader != null || _sheets.Count > 0) Teardown(); Status = "Skin marks: off: " + _why; _marksOn = false; _discN = 0; return; }
-            if (_shader == null && !Load()) { Status = "Skin marks: off: " + _why; _marksOn = false; _discN = 0; return; }
+            if (_dead) { if (_shader != null || _sheets.Count > 0) Teardown(); Off(_why); _marksOn = false; _discN = 0; return; }
+            if (_shader == null && !Load()) { Off(_why); _marksOn = false; _discN = 0; return; }
             _marksOn = true;
             EnsureFlip();
             if (_flipState != 2) { Status = "Skin marks: starting (orientation self-test)"; return; }

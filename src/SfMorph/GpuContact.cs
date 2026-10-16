@@ -680,7 +680,7 @@ namespace SfMorph
                         if (len <= 2f * inset) continue;
                         Vector3 d = ab / len;
                         a += d * inset; b -= d * inset;
-                        mask = SelfMask(kind, c.T.name);
+                        mask = SelfMask(kind, NameOf(c.T));
                         if (mask == 0u) continue;
                         self++;
                     }
@@ -717,6 +717,15 @@ namespace SfMorph
         // The vertex classes (ContactBake class ids) one of her own capsules never presses, on its side (from the capsule bone's _L/_R name, thighs
         // also from the kind): thigh -> thigh, butt, pelvis, genital; calf -> calf, foot; upper arm -> upper arm, scapula, forearm;
         // forearm -> forearm, hand, upper arm; hand -> hand, forearm. 0 = unknown side (the capsule is left out).
+        // 0.9.9: Transform.name allocates a new string per call; this runs per self capsule every frame. Bone names don't change.
+        readonly Dictionary<Transform, string> _boneNames = new Dictionary<Transform, string>();
+        string NameOf(Transform t)
+        {
+            string n;
+            if (!_boneNames.TryGetValue(t, out n)) { n = t.name; _boneNames[t] = n; }
+            return n;
+        }
+
         static uint SelfMask(string kind, string boneName)
         {
             int s = kind == "thighL" ? 0 : kind == "thighR" ? 1 : ContactBake.SideOf(boneName);
@@ -833,10 +842,15 @@ namespace SfMorph
             int frame = Time.frameCount;
             if (frame == _lastFrame) return;   // Imprint is not idempotent: the first caller of the frame wins
             RunChains(frame);
+            Perf.End(Perf.S.GpuRun);
             var after = AfterImprint;
             if (after != null)
+            {
+                Perf.Begin(Perf.S.MarksRaster);   // the skin marks' raster is the only AfterImprint handler
                 try { after(frame); }
                 catch (Exception e) { Plugin.Log.LogWarning("GPU contact: AfterImprint handler failed: " + e.Message); }
+                Perf.End(Perf.S.MarksRaster);
+            }
         }
 
         void RunChains(int frame)
@@ -848,6 +862,7 @@ namespace SfMorph
             if (before != null)
                 try { before(frame); }
                 catch (Exception e) { Plugin.Log.LogWarning("GPU contact: BeforeImprint handler failed: " + e.Message); }
+            Perf.Begin(Perf.S.GpuRun);   // after the wrinkle strain (timed on its own), ended in Run
             if (_rs.Count == 0) return;
             float cpu0 = Time.realtimeSinceStartup;
             float now = Time.time;

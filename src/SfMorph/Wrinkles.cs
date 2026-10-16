@@ -234,8 +234,6 @@ namespace SfMorph
         bool _farAway;
         Camera _cam;
         float _nextCamFind;
-        MethodInfo _nfMethod;
-        Type _nfType;
         long _lastMemLog = -1;
 
         Wrinkles() { }
@@ -372,7 +370,9 @@ namespace SfMorph
             try
             {
                 if (_dead || _released) return;
+                Perf.Begin(Perf.S.WrinkleRun);
                 Run(frame);
+                Perf.End(Perf.S.WrinkleRun);
             }
             catch (Exception e)
             {
@@ -1530,27 +1530,17 @@ namespace SfMorph
         MethodInfo _otMethod;
         Type _otType;
 
-        // Morph.NormalFor(Material) (the baked normal when its textures are on), called by reflection if that method exists.
+        // Morph.NormalFor(Material) (the baked normal when its textures are on). 0.9.9: a direct call (it was a reflection Invoke with a new
+        // argument array every 4th frame per sheet; MorphState is in this assembly).
         Texture NormalFor(Character her, Material mat)
         {
             try
             {
                 var morph = her != null ? her.Morph : null;
-                if (morph == null) return null;
-                var t = morph.GetType();
-                if (t != _nfType)
-                {
-                    _nfType = t;
-                    _nfMethod = t.GetMethod("NormalFor", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(Material) }, null);
-                    if (_nfMethod != null && !typeof(Texture).IsAssignableFrom(_nfMethod.ReturnType)) _nfMethod = null;
-                    Plugin.Log.LogInfo("Wrinkles: Morph.NormalFor " + (_nfMethod != null ? "found" : "not available (using the material's current normal map as the base)"));
-                }
-                if (_nfMethod == null) return null;
-                return _nfMethod.Invoke(morph, new object[] { mat }) as Texture;
+                return morph != null ? morph.NormalFor(mat) : null;
             }
             catch (Exception e)
             {
-                _nfMethod = null;
                 Plugin.Log.LogWarning("Wrinkles: Morph.NormalFor failed (" + e.Message + "); using the material's current normal map");
                 return null;
             }

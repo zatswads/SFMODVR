@@ -477,7 +477,8 @@ namespace SfMorph
         {
             var look = c.Look;
             var set = apply && look.Morph != null ? MorphSet.Find(look.Morph) : null;
-            if (apply && look.Morph != null && set == null) Status = "off: no folder '" + look.Morph + "' in " + MorphSet.Root;
+            if (apply && look.Morph != null && set == null && (object)_missing != look.Morph) { _missing = look.Morph; Status = "off: no folder '" + look.Morph + "' in " + MorphSet.Root; }   // 0.9.9: built once, not every frame
+            if (set != null) _missing = null;
             float face = set != null ? Mathf.Clamp01(look.MorphFace) : 0f;
             float body = set != null ? Mathf.Clamp01(look.MorphBody) : 0f;
             if (set == null || (face <= 0f && body <= 0f)) { Release(); JointWeight = 0f; return; }
@@ -631,9 +632,15 @@ namespace SfMorph
         string OrigName(SkinnedMeshRenderer r)
         {
             Slot s;
-            if (_slots.TryGetValue(r, out s) && s.Orig != null) return s.Orig.name;
-            return r.sharedMesh != null ? r.sharedMesh.name : "";
+            Mesh m = _slots.TryGetValue(r, out s) && s.Orig != null ? s.Orig : r.sharedMesh;
+            if (m == null) return "";
+            // 0.9.9: Object.name allocates a new string per call and this runs per renderer every frame; a mesh's name doesn't change
+            string n;
+            if (!_meshNames.TryGetValue(m, out n)) { n = m.name; _meshNames[m] = n; }
+            return n;
         }
+        readonly Dictionary<Mesh, string> _meshNames = new Dictionary<Mesh, string>();
+        string _missing;
 
         void ShowHidden()
         {

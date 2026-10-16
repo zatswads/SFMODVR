@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.9.8";
+        public const string Version = "0.9.9";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -48,6 +48,7 @@ namespace SfMorph
         internal ConfigEntry<Vector3> LeftHandPos, LeftHandRot, RightHandPos, RightHandRot;
         internal ConfigEntry<string> PanelRect;
         internal ConfigEntry<int> Tab;
+        internal ConfigEntry<bool> PerfLog;
 
         void Awake()
         {
@@ -57,6 +58,7 @@ namespace SfMorph
             UiScale = Config.Bind("Interface", "PanelScale", 1.25f, new ConfigDescription("Size of the panel's text and controls.", new AcceptableValueRange<float>(0.75f, 2.5f)));
             PanelRect = Config.Bind("Interface", "PanelRect", "", "Panel position and size (x,y,width,height), saved when you move or resize it.");
             Tab = Config.Bind("Interface", "Tab", 0, "Last panel tab.");
+            PerfLog = Config.Bind("General", "PerfLog", true, "Every 10 s a 'Perf' line in the log (and at the top of the panel): what each part of SF Body Morphs costs per frame (avg/max ms), the frame rate, fixed steps per frame, the GPU time when the VR runtime reports it, and where the rest of the frame goes (the game's physics, rendering, waiting). Costs about 0.01 ms a frame.");
             Apply = Config.Bind("General", "Apply", true, "Apply the body changes (off = the game's own look, for comparing).");
             Physics = Config.Bind("Physics", "SoftZones", true, "Hands and limbs press into her glutes, thighs, belly and breasts (helper bones driven by the game's DynamicBone).");
             Softness = Config.Bind("Physics", "Softness", 0.5f, new ConfigDescription("How much the soft zones give (0 firm, 1 soft).", new AcceptableValueRange<float>(0f, 1f)));
@@ -218,6 +220,8 @@ namespace SfMorph
             if (_broken) return;
             try
             {
+                Perf.On = _p.PerfLog.Value;
+                if (!Perf.LoopOk) Perf.Roll();   // without the phase markers the frame is rolled here
                 if (Keys.Pressed(_p.PanelKey.Value, _p.KeysUnfocused.Value)) _panel.Visible = !_panel.Visible;
                 _body.Tick();
                 if (Time.unscaledTime >= _nextLoopCheck)
@@ -225,6 +229,7 @@ namespace SfMorph
                     _nextLoopCheck = Time.unscaledTime + 2f;
                     bool was = _inLoop;
                     _inLoop = ApplyStep.Ensure(Apply);
+                    Perf.EnsureLoop();
                     if (_inLoop != was)
                         Plugin.Log.LogInfo(_inLoop ? "Body changes apply after the game's animation, before its physics and IK"
                                                    : "Couldn't join Unity's frame loop; body changes apply in LateUpdate (breast physics may jitter)");
@@ -237,8 +242,11 @@ namespace SfMorph
         void FixedUpdate()
         {
             if (_broken) return;
+            if (!Perf.LoopOk) Perf.Step();
+            Perf.Begin(Perf.S.HandsFixed);
             try { PhysicsHands.FixedStep(); }
             catch (Exception e) { Plugin.Log.LogError("Physics hands failed, turned off: " + e); _p.HandsOn.Value = false; try { PhysicsHands.Release(); } catch { } }
+            Perf.End(Perf.S.HandsFixed);
         }
 
         // Fallback only: in LateUpdate the game's physics may already have run for this frame.
@@ -247,15 +255,19 @@ namespace SfMorph
         void Apply()
         {
             if (_broken) return;
+            Perf.Begin(Perf.S.Total);
             try { _body.ApplyAll(); }
             catch (Exception e) { Fail(e); }
+            Perf.End(Perf.S.Total);
         }
 
         void OnGUI()
         {
             if (_broken) return;
+            Perf.Begin(Perf.S.Panel);
             try { _panel.Draw(); }
             catch (Exception e) { Fail(e); }
+            Perf.End(Perf.S.Panel);
         }
 
         void Fail(Exception e)
