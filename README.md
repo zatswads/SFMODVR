@@ -41,6 +41,13 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.4 (DAZ characters through DAZ Studio; the plugin is unchanged):
+- `run.ps1 -Daz <character preset .duf>`: DAZ Studio loads the character at base resolution and exports an FBX with its textures
+  (`tools/sources/daz_export.dsa`), which goes on through `-Source`. run.ps1 first checks that the preset's base figure is
+  installed (a missing Genesis 9 base otherwise leaves DAZ Studio on its missing-files dialog) and stops after 10 minutes
+  without a result. `-Daz` / `-Source` also run without a usable export of her (they make the source folder; the conversion
+  then asks for the export).
+
 0.11.3 (Surprise face built from her face bones):
 - The Surprise face was wrong (should be wide-open eyes and raised brows): her face Animator has no clip named for surprise and none
   that widens the eyes or raises the brows, so the pick by "most eye movement" played blink / sad / angry clips that close or narrow

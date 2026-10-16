@@ -8,6 +8,21 @@ elbow / neck splits) and an identical slider fit. The Genesis 3/8/9, Mixamo, Uni
 tables are written but not yet run on a real file of that kind: the first DAZ Genesis 8/9 FBX the user gives is the next test
 (`blender -b -P humanoid.py -- --in <file> --list` prints its bones and materials first).
 
+**DAZ characters (0.11.3):** `run.ps1 -Daz <character preset .duf>` runs DAZ Studio with `tools/sources/daz_export.dsa`
+(`DAZStudio.exe -scriptArg <duf> -scriptArg <fbx> <script>`: clear the scene, open the preset, base resolution, hide
+everything but the figure, FBX with textures collected, `<fbx>.status.txt`, quit), then `-Source`. Before launching, run.ps1
+checks that the preset's base figure (its first node's .dsf, e.g. `data/Daz 3D/Genesis 9/Base/Genesis9.dsf`) is in one of DAZ
+Studio's content libraries (registry `HKCU\Software\DAZ\Studio6` ContentDirN), because a missing file stops DAZ Studio on a
+modal dialog; it gives up after 10 minutes without a status file. Launch tested on the user's PC (DAZ Studio 6): the script
+gets its arguments and opens the preset; the export itself waits for Genesis 9 Starter Essentials to be installed.
+A character product folder (data / People / Runtime) is installed by copying it into a content library (`My Library`).
+
+Tools looked at and not used: bluemoonfoundry/daz-mcp-server (an MCP server driving DAZ Studio through a C++ plugin with an
+HTTP port on localhost:18811 and tools that run any DazScript and write any path: safe with caveats, but more than the export
+needs; one auditable script does it), the old DazToBlender bridge (Blender 2.80-2.83, does not load in Blender 5.2; the FBX
+path covers it), AutoRiggerPipeline.dsa (a DAZ wizard: OBJ import, rigging onto Genesis 9 by the Transfer Utility, unweighted
+bone clean-up; no network or process calls; installed in `My Library/Scripts/AutoRigger` for clothing / unrigged meshes later).
+
 Community routes worth knowing (VaM Hub, read 2026-10-16):
 - *Daz Generations Converter* (Blender extension, Blender 4.4-5.1, download on Mega, contains executable code): converts a
   female shape between G2, G3, G8, G8.1 and G9 base meshes by barycentric placement, keeping vertex order (eyes and mouth

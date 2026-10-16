@@ -1,0 +1,96 @@
+// DAZ Studio script: load a DAZ character (a character preset .duf, or a scene) and export it as an FBX for the
+// SF Body Morphs pipeline (tools/sources/humanoid.py). Run by run.ps1 -Daz <file.duf>, or by hand:
+//
+//   DAZStudio.exe -scriptArg "<character .duf>" -scriptArg "<out .fbx>" "<this script>"
+//
+// What it does: clears the scene, opens the .duf (a Genesis 8 / 9 character preset carries its own figure node), sets the
+// figure to Base resolution (no SubD: the pipeline reads the base mesh), hides clothing / hair / props, exports the figure
+// to FBX with its textures collected next to it, writes "<out>.status.txt" (OK or the error) and, unless a third argument
+// "keep" is given, quits DAZ Studio. It touches nothing but the scene it loads and the output folder.
+(function () {
+	"use strict";
+
+	var aArgs = App.scriptArgs;
+	var sIn = aArgs.length > 0 ? aArgs[0] : "";
+	var sOut = aArgs.length > 1 ? aArgs[1] : "";
+	var bKeep = aArgs.length > 2 && aArgs[2] === "keep";
+
+	function status(sText) {
+		print("[SfMorph export] " + sText);
+		if (!sOut) return;
+		var oFile = new DzFile(sOut + ".status.txt");
+		if (oFile.open(DzFile.WriteOnly)) { oFile.write(sText + "\n"); oFile.close(); }
+	}
+
+	function finish() {
+		if (!bKeep) {
+			if (typeof App.delayedExit === "function") App.delayedExit();
+			else if (typeof MainWindow !== "undefined" && MainWindow) MainWindow.close();
+		}
+	}
+
+	// the loaded figure that is not fitted to another one (the character itself, not her clothes)
+	function mainFigure() {
+		var aNodes = Scene.getNodeList();
+		for (var i = 0; i < aNodes.length; i++) {
+			var n = aNodes[i];
+			if (n.inherits("DzFigure") && !n.getFollowTarget()) return n;
+		}
+		return null;
+	}
+
+	try {
+		if (!sIn || !sOut) { status("FAIL usage: -scriptArg <character .duf> -scriptArg <out .fbx>"); finish(); return; }
+		if (!new DzFile(sIn).exists()) { status("FAIL no file " + sIn); finish(); return; }
+		Scene.clear();
+		if (!App.getContentMgr().openFile(sIn, false)) { status("FAIL could not open " + sIn); finish(); return; }
+		var oFig = mainFigure();
+		if (!oFig) { status("FAIL no figure in " + sIn + " (is the Genesis base figure installed? e.g. Genesis 9 Starter Essentials)"); finish(); return; }
+
+		// base resolution: the pipeline fits and bakes on the base mesh
+		var oShape = oFig.getObject() ? oFig.getObject().getCurrentShape() : null;
+		var oLod = oShape && oShape.getLODControl ? oShape.getLODControl() : null;
+		if (oLod) oLod.setValue(0);
+
+		// only the figure: hide clothes, hair, props and anything fitted to it
+		var aNodes = Scene.getNodeList();
+		var nHidden = 0;
+		for (var i = 0; i < aNodes.length; i++) {
+			var n = aNodes[i];
+			if (n === oFig || n.inherits("DzBone")) continue;
+			if (n.getSkeleton && n.getSkeleton() === oFig) continue;   // her own bones / geografts
+			if (n.isVisible && n.isVisible()) { n.setVisible(false); nHidden++; }
+		}
+
+		var oExporter = App.getExportMgr().findExporterByClassName("DzFbxExporter");
+		if (!oExporter) { status("FAIL no FBX exporter in this DAZ Studio"); finish(); return; }
+		var oSettings = new DzFileIOSettings();
+		oExporter.getDefaultOptions(oSettings);
+		oSettings.setBoolValue("doSelected", false);
+		oSettings.setBoolValue("doVisible", true);
+		oSettings.setBoolValue("doFigures", true);
+		oSettings.setBoolValue("doProps", false);
+		oSettings.setBoolValue("doLights", false);
+		oSettings.setBoolValue("doCameras", false);
+		oSettings.setBoolValue("doAnims", false);
+		oSettings.setBoolValue("doMorphs", false);             // the shape as dialled in is baked into the mesh
+		oSettings.setBoolValue("doEmbed", false);
+		oSettings.setBoolValue("doCopyTextures", true);        // textures next to the FBX
+		oSettings.setBoolValue("doDiffuseOpacity", false);
+		oSettings.setBoolValue("doMergeClothing", false);
+		oSettings.setBoolValue("doStaticClothing", false);
+		oSettings.setBoolValue("degradedSkinning", false);
+		oSettings.setBoolValue("degradedScaling", false);
+		oSettings.setBoolValue("doSubD", false);
+		oSettings.setBoolValue("doCollapseUVTiles", false);
+		oSettings.setIntValue("RunSilent", 1);
+		var oDir = new DzDir(new DzFileInfo(sOut).path());
+		if (!oDir.exists()) oDir.mkpath(oDir.absolutePath());
+		var nErr = oExporter.writeFile(sOut, oSettings);
+		if (nErr !== 0 && nErr !== undefined && nErr !== true) { status("FAIL FBX export error " + nErr); finish(); return; }
+		status("OK " + oFig.getLabel() + " -> " + sOut + " (" + nHidden + " other nodes hidden, base resolution " + (oLod ? "set" : "unknown") + ")");
+	} catch (e) {
+		status("FAIL " + e);
+	}
+	finish();
+})();

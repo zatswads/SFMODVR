@@ -28,6 +28,10 @@ ignores it and the next -All tries it again.
                                converted to an SfExport folder in %LOCALAPPDATA%\SfMorph\sources\<file name>, then
                                as above (with -Sliders: the slider fit). -Rig <id> forces the bone table, -SourceMesh
                                <object> picks the body mesh; the adapter's report is source.txt in that folder.
+  run.ps1 -Daz <file.duf>      a DAZ character (a Genesis 8 / 9 character preset, or a scene) through DAZ Studio:
+                               tools/sources/daz_export.dsa loads it at base resolution and writes an FBX with its
+                               textures to %LOCALAPPDATA%\SfMorph\daz\<name>, which then goes through -Source.
+                               Needs DAZ Studio and the figure's base (e.g. Genesis 9 Starter Essentials) installed.
   -Brightness hers|vam         albedo brightness (default hers: VaM's skin brought to her body's luminance, VaM's colours
                                kept; vam: VaM's values as they are, usually about twice too bright in the game).
 #>
@@ -48,6 +52,7 @@ param(
     [switch]$Rebake,
     [switch]$Sliders,
     [string]$Source,
+    [string]$Daz,
     [string]$Rig = 'auto',
     [string]$SourceMesh,
     [ValidateSet('hers', 'vam')][string]$Brightness = 'hers'
@@ -96,7 +101,8 @@ if (-not $GameExport) {
     # her full body: the body meshes and at least one face (any face type the game has)
     $full = $usable | Where-Object { $d = $_.FullName; -not ($bodyMeshes | Where-Object { $_ -ne 'reika_face_a.obj' -and -not (Test-Path (Join-Path $d $_)) }) -and
         (Get-ChildItem $d -Filter 'reika_face_*.obj' -ErrorAction SilentlyContinue) } | Select-Object -First 1
-    if (-not $full -and -not ($Check -or $Rebake -or $Sliders)) { throw "no usable export of her in $exportRoot (Presets tab > Export, SfMorph 0.11+)" }
+    # (no usable export: -Daz / -Source still make their source folder; the conversion itself stops below)
+    $noExport = -not $full -and -not ($Check -or $Rebake -or $Sliders)
     $GameExport = if ($full) { $full.FullName } else { $null }
 }
 $texExport = $allExports | Where-Object { Test-OwnTextures $_.FullName } | Select-Object -First 1
@@ -277,6 +283,55 @@ function Update-Textures($charName, $checkOnly) {
 }
 
 # ---- run ---------------------------------------------------------------------------------------------------
+if ($Daz) {
+    # a DAZ character -> FBX through DAZ Studio (tools/sources/daz_export.dsa), then -Source
+    if (-not (Test-Path $Daz)) { throw "-Daz: no file $Daz" }
+    $ds = $null
+    try { $ds = (Get-ItemProperty 'HKCU:\Software\DAZ\Studio6' -ErrorAction Stop).'InstallPath-64' } catch {}
+    if (-not $ds) { try { $ds = (Get-ItemProperty 'HKCU:\Software\DAZ\Studio4' -ErrorAction Stop).'InstallPath-64' } catch {} }
+    $exe = if ($ds) { Join-Path $ds 'DAZStudio.exe' } else { $null }
+    if (-not $exe -or -not (Test-Path $exe)) { throw 'DAZ Studio not found (registry HKCU\Software\DAZ\Studio6 InstallPath-64)' }
+    # the figure the preset needs (its first node's .dsf, e.g. /data/Daz 3D/Genesis 9/Base/Genesis9.dsf) must be in a DAZ
+    # content library, else DAZ Studio stops on its modal missing-files dialog
+    $libs = @()
+    try {
+        $reg = Get-ItemProperty 'HKCU:\Software\DAZ\Studio6' -ErrorAction Stop
+        for ($i = 0; $i -lt [int]$reg.NumContentDirs; $i++) { $libs += $reg."ContentDir$i" }
+    } catch {}
+    try {
+        $fs = [IO.File]::OpenRead($Daz)
+        $gz = New-Object IO.Compression.GZipStream($fs, [IO.Compression.CompressionMode]::Decompress)
+        $json = (New-Object IO.StreamReader($gz)).ReadToEnd(); $fs.Close()
+    } catch { $json = Get-Content $Daz -Raw }
+    $m = [regex]::Match($json, '"url"\s*:\s*"(/data/[^"#]+\.dsf)#')
+    if ($m.Success -and $libs) {
+        $need = [uri]::UnescapeDataString($m.Groups[1].Value).TrimStart('/')
+        $have = $libs | Where-Object { Test-Path (Join-Path $_ $need) }
+        if (-not $have) {
+            Write-Host "FAILED: the character needs $need, which is in none of DAZ Studio's content libraries ($($libs -join '; ')). Install its base figure first (Genesis 9: Genesis 9 Starter Essentials, free, through Daz Install Manager or Daz Connect)."
+            exit 1
+        }
+    }
+    $leaf = [IO.Path]::GetFileNameWithoutExtension($Daz) -replace '[\\/:*?"<>|]', '_'
+    $fbx = Join-Path $store "daz\$leaf\$leaf.fbx"
+    New-Item -ItemType Directory -Force (Split-Path $fbx) | Out-Null
+    Remove-Item "$fbx.status.txt" -ErrorAction SilentlyContinue
+    $dsa = (Resolve-Path (Join-Path $here '..\sources\daz_export.dsa')).Path
+    Write-Host "DAZ Studio : $exe`nCharacter  : $Daz`nFBX        : $fbx  (DAZ Studio opens, exports and closes)"
+    $proc = Start-Process -FilePath $exe -ArgumentList @('-scriptArg', "`"$Daz`"", '-scriptArg', "`"$fbx`"", "`"$dsa`"") -PassThru
+    # a modal dialog (missing files, a login prompt) would keep DAZ Studio open: give up after 10 minutes without a status file
+    $t0 = Get-Date
+    while (-not $proc.HasExited -and -not (Test-Path "$fbx.status.txt") -and ((Get-Date) - $t0).TotalMinutes -lt 10) { Start-Sleep -Seconds 2 }
+    if (-not $proc.HasExited -and -not (Test-Path "$fbx.status.txt")) {
+        Write-Host 'FAILED: DAZ Studio did not finish in 10 minutes (a dialog is probably open in its window: missing files, login). Its log: %APPDATA%\DAZ 3D\Studio6\log.txt'
+        exit 1
+    }
+    if (-not $proc.HasExited) { $proc.WaitForExit(120000) | Out-Null }
+    $st = if (Test-Path "$fbx.status.txt") { (Get-Content "$fbx.status.txt" -Raw).Trim() } else { 'FAIL no status file (the script did not run: check DAZ Studio''s log, Help > Troubleshooting > View Log File)' }
+    Write-Host "DAZ export : $st"
+    if (-not $st.StartsWith('OK') -or -not (Test-Path $fbx)) { exit 1 }
+    $Source = $fbx
+}
 if ($Source) {
     # any rigged humanoid -> an SfExport folder (tools/sources/humanoid.py), then the usual steps on it
     if (-not (Test-Path $Source)) { throw "-Source: no file $Source" }
@@ -310,6 +365,7 @@ if ($Sliders) {
     Write-Host "In the game: F8 > Presets > '$Name (fit)' > Load (it replaces the Body sliders; tune by hand from there)."
     exit 0
 }
+if ($noExport) { throw "no usable export of her in $exportRoot (Presets tab > Export, SfMorph 0.11+)" }
 if ($Check -or $Rebake) {
     if (-not $Name) { throw "-Check / -Rebake need -Name (the converted character's folder name in $morphs)" }
     Update-Textures $Name $Check
