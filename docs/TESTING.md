@@ -97,6 +97,14 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.8.8 (lines' game-path switch)
+
+Install `dist/SfMorph.dll`. Log: `SF Body Morphs 0.8.8`. (1) The first line logs `lines: first use of the game's path: ... at index i of a
+list of n (first segment k); the game's own shuffle (playNum p, ...) restored right after; played: yes`: i < k; (2) over a few minutes of
+lines and the game's own dirty talk: no IndexOutOfRange, the voice guard stays at "watching" (no repairs right after a line), her eyes
+react with the line; (3) Reactions tab, "Through the game's dirty talk" off: lines still play (no face, no subtitle), status "lines (own
+clips: the game's path is off)". Then the 0.8.7 and 0.8.6 lists.
+
 ## 0.8.7 (face clips)
 
 Install `dist/SfMorph.dll` (bundle unchanged). Log: `SF Body Morphs 0.8.7`; with Reactions on, a few seconds in: `Reactions face: bound to

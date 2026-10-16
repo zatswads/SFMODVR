@@ -6,7 +6,7 @@ namespace SfMorph
     // Her reactions to touch (0.7.9): what the Body hands the director each frame. Filled from the config once per frame (no allocation).
     internal class ReactionSettings
     {
-        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips;
+        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath;
         public float Sensitivity, Cooldown, Volume, BlushGain, VoicePitchVar, LimbPush, LineChance, FaceStrength;
         public string FaceMap = "";
         public int VoiceMode, Log;
@@ -20,6 +20,7 @@ namespace SfMorph
             BlushGain = p.ReactBlushGain.Value; VoicePitchVar = p.ReactVoicePitchVar.Value;
             VoiceMode = p.ReactVoiceMode.Value; Log = p.ReactLog.Value;
             Lines = p.ReactLines.Value; LineChance = p.ReactLineChance.Value;
+            LinesGamePath = p.ReactLinesGamePath.Value;
             FaceClips = p.ReactFaceClips.Value; FaceStrength = p.ReactFaceStrength.Value; FaceMap = p.ReactFaceMap.Value ?? "";
             PushByTouch = p.HandsPushByTouch.Value;   // the geometric push of other hands: without it and without physics hands nothing is classified
             LimbPush = p.HandsLimbPush.Value;   // the flinch's swing is a push on her limbs: it needs the slider above 0
@@ -740,7 +741,7 @@ namespace SfMorph
             string b = LineBlock(false, test);
             if (b != null) { Skip("line: " + b); Note("line skipped (" + b + ")"); return false; }
             string how;
-            if (!_g.SpeakLine(cat, lvl, out how)) { Skip("line failed"); Note("line failed (" + how + ")"); return false; }
+            if (!_g.SpeakLine(cat, lvl, _s.LinesGamePath, out how)) { Skip("line failed"); Note("line failed (" + how + ")"); return false; }
             _lastLineT = _now; _lastVoiceT = _now;
             Note("line " + ReactionsGame.LineCats[_g.LineCat] + " Lv" + _g.LineLevel + " '" + (_g.LastLineClip != null ? _g.LastLineClip.name : "?") + "' via " + how);
             return true;
@@ -1038,7 +1039,7 @@ namespace SfMorph
             int key = (_g.Found ? 1 : 0) | (_g.HasMoan ? 2 : 0) | (_g.VoiceOn ? 4 : 0) | (_g.InSexMode ? 8 : 0) | (s.Voice ? 16 : 0) | (s.Face ? 32 : 0) | (s.Flinch ? 64 : 0)
                 | (s.LimbPush > 0f ? 128 : 0) | (s.Sound ? 256 : 0) | (s.Blush ? 512 : 0) | (s.Gaze ? 1024 : 0) | (_slapFail ? 2048 : 0) | (HerBody.Built ? 4096 : 0)
                 | (s.VoiceMode == 1 ? 8192 : 0) | (_g.SfxOn ? 16384 : 0)
-                | (s.Lines ? 1 << 25 : 0) | (_g.HasLines ? 1 << 26 : 0) | (_g.DirtyTalkOn ? 1 << 27 : 0) | (_g.LinePathOk ? 1 << 28 : 0);
+                | (s.Lines ? 1 << 25 : 0) | (_g.HasLines ? 1 << 26 : 0) | (_g.DirtyTalkOn ? 1 << 27 : 0) | (_g.LinePathOk ? 1 << 28 : 0) | (s.LinesGamePath ? 1 << 29 : 0);
             key ^= ((int)(_g.Desire + 0.5f) & 0x1FF) << 15;
             bool noHand = !PhysicsHands.Active && !s.PushByTouch;
             if (noHand) key |= 1 << 24;
@@ -1062,7 +1063,7 @@ namespace SfMorph
                     else if (!_g.Found) { }
                     else if (!_g.HasLines) _sb.Append(", lines off (no line clips found)");
                     else if (!_g.DirtyTalkOn) _sb.Append(", lines idle (dirty talk is off in the game)");
-                    else _sb.Append(_g.LinePathOk ? ", lines" : ", lines (own clips, no face)");
+                    else _sb.Append(!s.LinesGamePath ? ", lines (own clips: the game's path is off)" : _g.LinePathOk ? ", lines" : ", lines (own clips, no face)");
                     if (!s.Sound) _sb.Append(", sound off"); else if (_slapFail) _sb.Append(", sound off (no clips)"); else _sb.Append(", sound");
                     _sb.Append(s.Blush ? ", blush" : ", blush off");
                     _sb.Append(s.Gaze ? "; gaze on" : "; gaze off");
@@ -1139,7 +1140,7 @@ namespace SfMorph
             if (_g.Found) _g.ReadGatesNow(_now);
             string b = LineBlock(false, true), res, how;
             if (b != null) res = "blocked (" + b + ")";
-            else if (_g.SpeakLine(cat, lvl, out how)) { _lastLineT = _now; _lastVoiceT = _now; res = "played " + ReactionsGame.LineCats[_g.LineCat] + " Lv" + _g.LineLevel + " '" + (_g.LastLineClip != null ? _g.LastLineClip.name : "?") + "' via " + how; }
+            else if (_g.SpeakLine(cat, lvl, _s.LinesGamePath, out how)) { _lastLineT = _now; _lastVoiceT = _now; res = "played " + ReactionsGame.LineCats[_g.LineCat] + " Lv" + _g.LineLevel + " '" + (_g.LastLineClip != null ? _g.LastLineClip.name : "?") + "' via " + how; }
             else res = "failed (" + how + ")";
             L("test line on " + ZoneNames[zone] + " (" + ReactionsGame.LineCats[cat] + " Lv" + lvl + ", test): " + res);
             LastLine = "last: test line on " + ZoneNames[zone] + " -> " + res;

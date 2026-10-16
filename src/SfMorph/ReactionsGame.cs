@@ -717,7 +717,8 @@ namespace SfMorph
         // One of her recorded lines for the touched area: category 0 nipple, 1 pussy, 2 anal, 3 public, level 1..3. An empty level falls back to the
         // lower levels of the category, then to the public lines. The game's own path when it is usable (her talking face and subtitle come with
         // it), else the clip on the game's dirty-talk source. The arbiter is Reactions' (never over dialogue, a kiss, dirty talk or a moan).
-        public bool SpeakLine(int cat, int level, out string how)
+        // gamePath: [Reactions] LinesGamePath (off: always the clip on the dirty-talk source).
+        public bool SpeakLine(int cat, int level, bool gamePath, out string how)
         {
             how = "";
             if (!Found || !HasLines || _lv == null || Dead(_lv) || _srcDirty == null || Dead(_srcDirty)) { how = "no lines"; return false; }
@@ -730,8 +731,8 @@ namespace SfMorph
             if (clip == null) { how = "no clip"; return false; }
             string why = null;
             bool ok = false;
-            if (LinePathOk) { ok = LineViaGame(uc, ul, clip, out why); if (ok) how = "game"; }
-            else why = "the game's path is not usable";
+            if (LinePathOk && gamePath) { ok = LineViaGame(uc, ul, clip, out why); if (ok) how = "game"; }
+            else why = !gamePath ? "the game's path is off in the config" : "the game's path is not usable";
             if (!ok)
             {
                 ok = LineOwn(clip);
@@ -750,6 +751,9 @@ namespace SfMorph
         // PlayDirtyTalk(true) play exactly that clip (and DirtyTalkNumber map it to its face and subtitle); then every field the two calls wrote is
         // put back: type, active flag, list, its segment lengths and type/level lists, the shuffle and its counter, the level. The face and subtitle
         // already got their numbers as arguments, so they are not affected. The dirty-talk guard sees only the restored, valid state.
+        // No game code reads the shuffle later (IL, 0.8.8): dirtyTalkVoice / dirtyTalkPlayNum are read only by PlayRandomVoice and
+        // DirtyTalkNumber (whose one caller is PlayDirtyTalk, synchronously, inside this call) and printed by an uncalled debug method; the
+        // DirtyTalkEyeFacialType coroutine gets type / level / num as arguments and reads only the face library.
         bool LineViaGame(int cat, int level, UnityEngine.Object clip, out string why)
         {
             why = null;
@@ -776,6 +780,11 @@ namespace SfMorph
                     _miDtPlay.Invoke(lv, _argBool);
                     ok = ReferenceEquals(_pClip.GetValue(_srcDirty, null), clip) && Playing(_srcDirty);
                     if (!ok) why = "PlayDirtyTalk did not start the clip";
+                    var oSeqArr = oSeq as int[];
+                    LogOnce("linefirst", "lines: first use of the game's path: " + LineTypes[cat] + " Lv" + level + ", clip '" + clip.name + "' at index " + idx
+                        + " of a list of " + list.Length + " (first segment " + Int(_mDtLen1, lv, -1) + "); the game's own shuffle (playNum " + (oNum ?? "?")
+                        + ", " + (oSeqArr != null ? oSeqArr.Length + " entries" : "none") + ", list of " + (oList is Array ? ((Array)oList).Length.ToString() : "-")
+                        + ", type " + (oType ?? "-") + ") restored right after; played: " + (ok ? "yes" : "no"));
                 }
             }
             catch (Exception e)

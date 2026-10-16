@@ -41,6 +41,14 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.8.8:
+- Her lines (0.8.6) can now be kept off the game's dirty-talk path: Reactions tab, "Through the game's dirty talk" ([Reactions]
+  LinesGamePath, on by default). Off, the clip plays on the game's dirty-talk source without her talking face or the subtitle, and the
+  game's dirty-talk state is never touched. On, the first use logs the clip's index, the list sizes and the game's own shuffle that was
+  put back, so a headset log shows the path is safe. Checked in the game's code: nothing reads the dirty-talk shuffle after the call
+  returns (the face and the eye reaction get their numbers as arguments), so the game's later dirty talk and the voice guard see only
+  its own state.
+
 0.8.7:
 - Her face barely reacted to touch: only the game's eye reaction, a blink or a wince, never the expressions her face Animator holds. Now
   a one-time survey (a few seconds after Reactions finds her) samples every clip of her face Animator's controller, measures how much each

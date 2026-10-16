@@ -30,7 +30,7 @@ namespace SfMorph
             bool gaze = _p.ReactGaze.Value, feed = _p.ReactFeedDesire.Value;
             bool auto = _p.ReactAuto.Value, allowClimax = _p.ReactClimax.Value, guard = _p.VoiceGuard.Value;
             int voiceMode = Mathf.Clamp(_p.ReactVoiceMode.Value, 0, 1);
-            bool lines = _p.ReactLines.Value; float lineChanceCfg = _p.ReactLineChance.Value;
+            bool lines = _p.ReactLines.Value; float lineChanceCfg = _p.ReactLineChance.Value; bool linesGame = _p.ReactLinesGamePath.Value;
             bool faceClips = _p.ReactFaceClips.Value; float faceStrCfg = _p.ReactFaceStrength.Value;
             float sensCfg = _p.ReactSensitivity.Value, gapCfg = _p.ReactCooldown.Value, volCfg = _p.ReactVolume.Value;
             string sub = who ?? (reactOn ? null : "reactions are off");
@@ -109,6 +109,10 @@ namespace SfMorph
             string linesOff = sub ?? (!voice ? "Voice is off" : !lines ? "lines are off" : null);
             float lch = Slider("Line chance", lineChanceCfg * 100f, 0f, 100f, "0", 50f, linesOff, " %") / 100f;
             if (linesOff == null && Mathf.Abs(lch - lineChanceCfg) > 0.0001f) _p.ReactLineChance.Value = lch;
+            GUI.enabled = linesOff == null;
+            bool tlg = GUILayout.Toggle(linesGame, " Through the game's dirty talk (her talking face and subtitle; off: the clip only)");
+            GUI.enabled = true;
+            if (linesOff == null && tlg != linesGame) _p.ReactLinesGamePath.Value = tlg;
             GUILayout.Label("The game's own recorded lines: breasts nipple lines, between her legs pussy (front) or anal (back) lines, butt, hips and thighs her general lines; " +
                             "level by excitement (tier 1-2 Lv1, 3 Lv2, 4 Lv3, none at tier 0). A feeling sound when her excitement rises a tier and at the climax. " +
                             "Sex or foreplay mode, the game's dirty talk on; never over dialogue, a kiss, the game's dirty talk or a moan; one line per 8 s at most.", _hint);

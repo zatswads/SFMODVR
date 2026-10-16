@@ -1,6 +1,7 @@
 # SF Body Morphs — handoff
 
-State at **0.8.7** (branch `main`). 0.8.7 (face clips: a survey of her face Animator's clips by SampleAnimation with an exact
+State at **0.8.8** (branch `main`). 0.8.8 ([Reactions] LinesGamePath switch for the lines' game path, first-use index
+log; IL check: no deferred reader of dirtyTalkVoice / dirtyTalkPlayNum) built, not yet run in the game. 0.8.7 (face clips: a survey of her face Animator's clips by SampleAnimation with an exact
 same-frame restore, mood picks, cached face-bone tracks played on a face-only layer before the bone sliders) built, not yet run in the
 game. 0.8.6 (her reactions speak the game's recorded lines for the touched area by excitement level through
 its own dirty-talk path, and its feeling sounds on a tier rise and at the climax) built, not yet run in the game. 0.8.5 (the soft points run after Embody, so the embodied partner's hand capsules dent her where
@@ -152,7 +153,9 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
   Lv2 + inviteSex, Lv3 = Lv3 + inviteSex + requestSex; handJob = public_DT_LvN + handJob_DT_LvN (+ invites). `PlayDirtyTalk(true)` plays
   `list[dirtyTalkVoice[dirtyTalkPlayNum]]` (counter then decremented), `DirtyTalkNumber` maps the index to type/level/num by the segment
   lengths, and the face (`DirtyTalkFacialAnimation`, `DirtyTalkEyeFacialType`) and subtitle get those as arguments; it also stops the
-  voice loop and the sex facial. Feeling one-shots: `SexVoice_Source_Library.Feeling_enter_0..3` (single clips).
+  voice loop and the sex facial. Readers of `dirtyTalkVoice` / `dirtyTalkPlayNum`: only PlayRandomVoice, DirtyTalkNumber (one caller:
+  PlayDirtyTalk, synchronous) and the uncalled `dirtyTalkVoiceListDebug`; the `DirtyTalkEyeFacialType` coroutine takes type/level/num as
+  arguments and reads only `dirtyTalk_Facial_Library`; `RandomSequenceReset` is the only other writer of the counter. Feeling one-shots: `SexVoice_Source_Library.Feeling_enter_0..3` (single clips).
 
 ## Open items
 
