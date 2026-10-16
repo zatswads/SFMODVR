@@ -50,6 +50,8 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 - Shoulder no-data spheres keep off the breasts. `--breast-prealign` (off): an experimental ray warp of her breasts.
 - Still open: on a breast of a quite different shape (Krista: flatter, lower) the fit folds her breast skin under the breasts;
   such a character is not usable as a conversion yet (its slider-fit preset is).
+- `run.ps1 -Daz` now makes the slider-fit preset by default (DAZ characters: her own mesh and skin); `-Convert` runs the parked
+  full conversion.
 
 0.11.5 (first real DAZ Genesis 9 character through the pipeline; the plugin is unchanged):
 - RKS Krista 9 (a Genesis 9 product) went DAZ Studio -> FBX -> adapter -> fit: all 53 joints from the Genesis 9 table, body fit

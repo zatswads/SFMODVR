@@ -30,7 +30,9 @@ ignores it and the next -All tries it again.
                                <object> picks the body mesh; the adapter's report is source.txt in that folder.
   run.ps1 -Daz <file.duf>      a DAZ character (a Genesis 8 / 9 character preset, or a scene) through DAZ Studio:
                                tools/sources/daz_export.dsa loads it at base resolution and writes an FBX with its
-                               textures to %LOCALAPPDATA%\SfMorph\daz\<name>, which then goes through -Source.
+                               textures to %LOCALAPPDATA%\SfMorph\daz\<name>, which then goes through -Source as a
+                               slider fit (preset "<Name> (fit)"); -Convert runs the full conversion instead (parked:
+                               not usable yet on a body of quite another shape).
                                Needs DAZ Studio and the figure's base (e.g. Genesis 9 Starter Essentials) installed.
   -Brightness hers|vam         albedo brightness (default hers: VaM's skin brought to her body's luminance, VaM's colours
                                kept; vam: VaM's values as they are, usually about twice too bright in the game).
@@ -53,6 +55,7 @@ param(
     [switch]$Sliders,
     [string]$Source,
     [string]$Daz,
+    [switch]$Convert,
     [string]$Rig = 'auto',
     [string]$SourceMesh,
     [ValidateSet('hers', 'vam')][string]$Brightness = 'hers'
@@ -336,6 +339,9 @@ if ($Daz) {
     Write-Host "DAZ export : $st"
     if (-not $st.StartsWith('OK') -or -not (Test-Path $fbx)) { exit 1 }
     $Source = $fbx
+    # DAZ characters get the slider-fit preset (her own mesh and skin): the full conversion folds her breast skin on a breast
+    # of quite another shape (Genesis 9 tests) and is parked; -Convert still runs it
+    if (-not $Convert -and -not $Sliders) { $Sliders = $true; Write-Host 'DAZ character: slider-fit preset (the full conversion is parked; -Convert runs it anyway)' }
 }
 if ($Source) {
     # any rigged humanoid -> an SfExport folder (tools/sources/humanoid.py), then the usual steps on it

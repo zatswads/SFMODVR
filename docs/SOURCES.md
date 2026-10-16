@@ -1,5 +1,11 @@
 # Character sources beyond VaM
 
+**Decision (2026-10-16, user):** DAZ characters go in as **slider-fit presets** (`run.ps1 -Daz <preset.duf>` writes
+`presets\<Name> (fit).txt`; her own mesh and skin). The full conversion is **parked** for them (`-Convert` still runs it): on
+RKS Krista 9 (Genesis 9) it fixed the face and neck but folded her breast skin under the breasts, unusable. The direction
+noted for when it is picked up again: register each DAZ base mesh (Genesis 2, 9) onto her once, carefully, and carry each
+character's morph across that fixed correspondence instead of fitting every character's shape from scratch.
+
 **State (0.11.2):** the adapter is built: `tools/sources/humanoid.py`, `run.ps1 -Source <file>` (also with `-Sliders`).
 Verified by a round trip: a VaM export packed as an FBX with its Genesis 2 (DAZ-named) skeleton and materials
 (`tools/sources/selftest_fbx.py`) comes back with all 53 joints within 1.3 mm (the floor), the same vertices, outward normals,
