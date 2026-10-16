@@ -41,7 +41,7 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
-0.11.20 (fixes from a headset run: breast physics, fingers, smooth marks, muscles, pelvis):
+0.11.21 (fixes from a headset run: breast physics, fingers, smooth marks, muscles, pelvis):
 - The default Physics settings deformed her breasts oddly (a fold where her arm pressed one). Two causes. (1) The only soft-zone default
   that changes her shape is Quality: Balanced keeps the unsmoothed body mesh, Fidelity (the setup that looked right) subdivides and
   smooths it. Quality now defaults to Fidelity and Springiness to 0.45 (existing configs keep their values). (2) Each skin vertex hung
@@ -65,6 +65,14 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
   muscle's relief stopped hard at the separate genital / nipple meshes (the game's selectable variants, which carry no relief). The
   relief now fades out over 3.5 cm toward those meshes (all genital variants share one footprint), and the groove is 1.9 mm deep and
   shades at half strength. Maps re-authored, shader bundle rebuilt.
+
+0.11.20 (the pack's voice in the game's climax scenes):
+- With a voice pack and Mute game voice on, the unskippable climax scenes were silent. They (and the creampie, condom, clean and
+  finish scenes) are Timelines: one pre-mixed 10-33 s clip of her lines and moans on a track bound to her voice source, which the
+  mute silences; the stand-ins never answered it because a Timeline sets no clip on the source. Now, while such a scene's director
+  plays (`Camera_system.playableDirector`), the pack fills it: climax = request lines and climax sounds in turn, creampie = request
+  lines and high moans, condom = invite lines, clean / finish = afterglow lines and breaths, each 0.3-0.8 s after the last, with
+  lip sync. `[Voice] PackInScenes` (on) switches it off.
 
 0.11.19 (a natural back; stronger obliques):
 - The back's erectors read as two lone tendons down the spine and the shoulder-blade muscles as rows of rods / tubes. Cause: a

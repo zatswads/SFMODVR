@@ -6,7 +6,7 @@ namespace SfMorph
     // Her reactions to touch (0.7.9): what the Body hands the director each frame. Filled from the config once per frame (no allocation).
     internal class ReactionSettings
     {
-        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley, RubSound, MuteGameVoice, MuteDialogue, LipSync;
+        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley, RubSound, MuteGameVoice, MuteDialogue, PackInScenes, LipSync;
         public float LipStrength, LipLead, LipOverGame, LipMood;
         public float Sensitivity, Cooldown, Volume, SkinVolume, BlushGain, VoicePitchVar, LimbPush, LineChance, FaceStrength, VoicePitch, VoiceFormant;
         public string FaceMap = "", VoicePack = "";
@@ -17,7 +17,7 @@ namespace SfMorph
             On = p.ReactOn.Value; Voice = p.ReactVoice.Value; Face = p.ReactFace.Value; Flinch = p.ReactFlinch.Value; Sound = p.ReactSound.Value;
             Blush = p.ReactBlush.Value; BlushBody = p.ReactBlushBody.Value; Gaze = p.ReactGaze.Value; FeedDesire = p.ReactFeedDesire.Value;
             AutoState = p.ReactAuto.Value; AllowClimax = p.ReactClimax.Value; VoiceGuard = p.VoiceGuard.Value;
-            Sensitivity = p.ReactSensitivity.Value; Cooldown = p.ReactCooldown.Value; Volume = p.ReactVolume.Value; SkinVolume = p.ReactSkinVolume.Value; MuteGameVoice = p.VoiceMuteGame.Value; MuteDialogue = p.VoiceMuteDialogue.Value;
+            Sensitivity = p.ReactSensitivity.Value; Cooldown = p.ReactCooldown.Value; Volume = p.ReactVolume.Value; SkinVolume = p.ReactSkinVolume.Value; MuteGameVoice = p.VoiceMuteGame.Value; MuteDialogue = p.VoiceMuteDialogue.Value; PackInScenes = p.VoicePackInScenes.Value;
             BlushGain = p.ReactBlushGain.Value; VoicePitchVar = p.ReactVoicePitchVar.Value;
             VoiceMode = p.ReactVoiceMode.Value; Log = p.ReactLog.Value;
             Lines = p.ReactLines.Value; LineChance = p.ReactLineChance.Value;
@@ -212,6 +212,7 @@ namespace SfMorph
                 else if (!rub) _rubNoted = false;
                 _g.MuteDialogue = s.MuteDialogue;
                 _g.MuteGameVoice(s.MuteGameVoice && ReactionsGame.Pack.Loaded);
+                _g.SceneFill(s.MuteGameVoice && s.PackInScenes && ReactionsGame.Pack.Loaded);
 
                 if (cut) return;
                 Tick(dt, s);
