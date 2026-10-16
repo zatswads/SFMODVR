@@ -41,6 +41,18 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.9.8 (face wrinkles: no lines under her mouth, no ring around her neck at rest):
+- Two lines ran down from under her mouth like marionette lines. Cause: they were the neck creases. They were placed by casting onto
+  her face from the front, and at the neck's height the front of her face is her chin, so the neck bands landed on the chin. The front of
+  her neck is on the body texture, not the face: the neck lines are now two soft bands there, placed from inside the neck outwards. The
+  Neck toggle now works without Body.
+- The neck line (72 % at rest) and the frown lines stayed on: her idle face animation keeps her neck at about 0.03 compression and between
+  her brows at 0.04-0.06 with no expression. Face and neck regions now measure from their own idle level (a slow minimum: drops at
+  once, rises over 20 s), so expressions show and her resting face stays smooth; a held expression fades after ~20 s. Body creases still
+  measure from her bind pose (a bent elbow keeps its crease). The 10 s log lines print each face region's idle level.
+- The smile lines end beside her mouth corners instead of running below them.
+- Bundle rebuilt (maps), with 0.9.7's shaders.
+
 0.9.7 (skin seams stitched, marks on her neck and face, ripple impact dip):
 - Pressing her stomach opened cut-outs in her skin. Cause: her skin is several meshes (upper body, lower body, neck, face) and each one
   worked out its dent alone; its skirt and smoothing only saw its own side of a seam, so a press across the seam (her stomach is where the

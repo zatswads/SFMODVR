@@ -12,7 +12,6 @@ region 7 undereye_R face 0.025
 region 8 nasolabial_R face 0.030
 region 9 glabella face 0.035
 region 10 nose face 0.030
-region 11 neck neck 0.030
 layout body 2048 1024
 region 1 elbow_in_L body 0.200
 region 2 elbow_back_L body 0.200
@@ -24,4 +23,5 @@ region 7 elbow_back_R body 0.200
 region 8 knee_back_R body 0.200
 region 9 hipfold_R body 0.200
 region 10 armpit_R body 0.250
-region 11 belly body 0.200
+region 11 neck neck 0.030
+region 12 belly body 0.200

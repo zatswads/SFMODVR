@@ -120,6 +120,7 @@ namespace SfMorph
         const float HandBack = 2.4f;             // Morph re-applies the character's textures every 2 s
         const int BlendPass = 0, TestPass = 1, AlbedoPass = 2;
         const float PeakLogEvery = 10f;
+        const float BaseRise = 20f;              // 0.9.8: seconds for a face / neck baseline to rise to a held compression
         static readonly string[] NormalProps = { "_NormalMap", "_BumpMap" };
         // Morph.cs's list (the game's skin is a shader graph: the property is not certain)
         internal static readonly string[] AlbedoProps = { "_ColorMap", "_BaseColorMap", "_BaseMap", "_MainTex", "_AlbedoMap", "_Albedo", "_DiffuseMap", "_Diffuse" };
@@ -187,6 +188,8 @@ namespace SfMorph
             public readonly float[] Act = new float[MaxRegions];      // faded-in activation per region (CPU, attack / release)
             public readonly float[] ActSent = new float[MaxRegions];  // the activations of the last raster
             public readonly float[] Peak = new float[MaxRegions];     // peak compression since the last peak log
+            public readonly float[] Idle = new float[MaxRegions];     // 0.9.8: face / neck idle baseline (slow minimum of the compression)
+            public readonly bool[] IdleSet = new bool[MaxRegions];
             public float LastActAt, NextPeakLog;
             public string LastPeakLine = "";
             public Texture Base;                  // the normal map under ours (the game's, or Morph's baked one)
@@ -559,7 +562,20 @@ namespace SfMorph
             {
                 string cls = L.RegionClass[k];
                 bool on = cls == "face" ? s.Face : cls == "neck" ? s.Neck : s.BodyOn;
-                float x = on ? Mathf.Clamp01((sh.Comp[k] - s.Threshold) / L.Range[k]) : 0f;
+                // 0.9.8: face and neck measure from their idle baseline: her idle face animation keeps the neck at ~0.03 and the brows at
+                // 0.04-0.06, which held those lines on (headset: a ring around her neck at 72 %). The baseline drops at once to a lower
+                // compression and rises over BaseRise s, so an expression shows and a held one fades; the body creases stay absolute
+                // (a bent elbow keeps its crease).
+                float c = sh.Comp[k];
+                if (cls != "body")
+                {
+                    if (!sh.IdleSet[k]) { sh.Idle[k] = c; sh.IdleSet[k] = true; }
+                    float b = sh.Idle[k];
+                    b = c < b ? c : b + (c - b) * Mathf.Min(1f, dt / BaseRise);
+                    sh.Idle[k] = b;
+                    c = Mathf.Max(0f, c - b);
+                }
+                float x = on ? Mathf.Clamp01((c - s.Threshold) / L.Range[k]) : 0f;
                 float target = x * x * (3f - 2f * x);
                 float a = sh.Act[k];
                 a += (target - a) * (target > a ? ka : kr);
@@ -599,7 +615,8 @@ namespace SfMorph
             {
                 int k = idx[i];
                 sb.Append(sb.Length > 0 ? ", " : "").Append(L.RegionName[k]).Append(' ').Append(sh.Peak[k].ToString("0.000"))
-                  .Append(" (").Append((sh.Act[k] * 100f).ToString("0")).Append("%)");
+                  .Append(" (").Append((sh.Act[k] * 100f).ToString("0")).Append("%")
+                  .Append(L.RegionClass[k] != "body" ? ", idle " + sh.Idle[k].ToString("0.000") : "").Append(")");
             }
             return sb.ToString();
         }
@@ -821,9 +838,9 @@ namespace SfMorph
 
         static bool Wanted(int region, WrinkleSettings s)
         {
-            // the face mesh carries the front of her neck too (the face layout's neck region): wanted for either; each region class is
-            // gated on its own in UpdateActs
-            return region == 1 ? s.Face || s.Neck : region == 2 ? s.Neck : region == 3 && s.BodyOn;
+            // 0.9.8: the front of her neck is on the body atlas (the body layout's neck region): her body meshes are wanted for Body or
+            // Neck; each region class is gated on its own in UpdateActs
+            return region == 1 ? s.Face : region == 2 ? s.Neck : region == 3 && (s.BodyOn || s.Neck);
         }
 
         Rend FindRend(SkinnedMeshRenderer r, int sub)
@@ -1212,7 +1229,7 @@ namespace SfMorph
             sh.Orig = (slot != null && !Owns(slot) && slot != nf) ? slot : (OriginalVia(her != null ? her.Morph : null, sh.Mat, sh.Prop) ?? ext);
             if (sh.Sums == null) sh.Sums = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 2 * MaxRegions, 4);
             sh.Inflight = 0;
-            for (int k = 0; k < MaxRegions; k++) { sh.Comp[k] = 0f; sh.Act[k] = 0f; sh.ActSent[k] = 0f; sh.Peak[k] = 0f; }
+            for (int k = 0; k < MaxRegions; k++) { sh.Comp[k] = 0f; sh.Act[k] = 0f; sh.ActSent[k] = 0f; sh.Peak[k] = 0f; sh.Idle[k] = 0f; sh.IdleSet[k] = false; }
             sh.LastActAt = 0f;
             sh.NextPeakLog = now + PeakLogEvery;
             MakeNormalRT(sh, s);

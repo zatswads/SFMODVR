@@ -1,19 +1,18 @@
 export: E:\Bak\New folder\Misc\SF\VR\BepInEx\config\SfMorphs\export\Reika-20261016-023017
-face: 31 creases in 11 regions
+face: 29 creases in 10 regions
 face: 8992 triangles, rasterising 2048x2048
 face: 95.0% of the texels on her skin
   region  1 forehead_L       face range 0.03:  56530 texels, 4945 with creases
   region  2 crowsfeet_L      face range 0.03:  21549 texels, 1388 with creases
-  region  3 undereye_L       face range 0.03:  22181 texels, 1294 with creases
-  region  4 nasolabial_L     face range 0.03:  39085 texels, 2280 with creases
+  region  3 undereye_L       face range 0.03:  21846 texels, 1294 with creases
+  region  4 nasolabial_L     face range 0.03:  33371 texels, 1370 with creases
   region  5 forehead_R       face range 0.03:  56590 texels, 4982 with creases
   region  6 crowsfeet_R      face range 0.03:  21587 texels, 1363 with creases
-  region  7 undereye_R       face range 0.03:  21924 texels, 1281 with creases
-  region  8 nasolabial_R     face range 0.03:  39179 texels, 2155 with creases
+  region  7 undereye_R       face range 0.03:  21588 texels, 1281 with creases
+  region  8 nasolabial_R     face range 0.03:  33384 texels, 1324 with creases
   region  9 glabella         face range 0.04:  32447 texels, 2968 with creases
   region 10 nose             face range 0.03:  32389 texels, 2367 with creases
-  region 11 neck             neck range 0.03: 576018 texels, 41025 with creases
-body: 26 creases in 11 regions
+body: 28 creases in 12 regions
 body: 180112 triangles, rasterising 2048x2048
 body: 59.1% of the texels on her skin
   region  1 elbow_in_L       body range 0.20:  16896 texels, 952 with creases
@@ -26,4 +25,5 @@ body: 59.1% of the texels on her skin
   region  8 knee_back_R      body range 0.20:  15123 texels, 675 with creases
   region  9 hipfold_R        body range 0.20:  25945 texels, 289 with creases
   region 10 armpit_R         body range 0.25:  34718 texels, 1911 with creases
-  region 11 belly            body range 0.20:  98972 texels, 9737 with creases
+  region 11 neck             neck range 0.03:  68847 texels, 3197 with creases
+  region 12 belly            body range 0.20:  98972 texels, 9737 with creases

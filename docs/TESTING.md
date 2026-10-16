@@ -97,6 +97,13 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.9.8 (face wrinkles)
+
+Copy `SfMorph.dll` + `sfmorph_shaders`. Log: `SF Body Morphs 0.9.8`. With Face/Neck on (Body may be off): no lines under her mouth; no
+ring around her neck at rest; Debug = Regions shows the neck patch on the front of her neck (not the chin). Expressions: the brow, smile
+and eye lines come and go; held ~20 s they fade (intended). The `peak compression` lines show `idle 0.0xx` per face region. Start with
+Strength 1 and crease shade 0.3-0.5.
+
 ## 0.9.7 (skin seams, neck / face marks, ripple impact dip)
 
 - [ ] Log: `GPU contact: skin seams stitched: reika_lowerBody_normal -> reika_upperBody_normal N on the seam + M blended, reika_neck -> ...,

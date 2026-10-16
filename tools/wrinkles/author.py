@@ -525,7 +525,7 @@ def face_creases(surf, sk, log):
         rn = reg('nasolabial_' + sn, 'face', 0.03)
         mc = np.array([corner[0] * (1 if sgn > 0 else -1), corner[1], corner[2]])
         nose_wing = (sx * 0.0175, mc[1] + 0.024)
-        end = (mc[0] + sx * 0.008, mc[1] - 0.006)
+        end = (mc[0] + sx * 0.009, mc[1] + 0.002)       # ends beside the mouth corner, not below it
         pts2 = []
         for k in range(10):
             u = k / 9.0
@@ -553,20 +553,8 @@ def face_creases(surf, sk, log):
             line = line_front([(x0 + sgn * 0.0018 * k, y0 + 0.0016 * k) for k in range(6)])
             if len(line) > 3:
                 out.append(Crease(np.array(line), rb, 0.00022, 0.0007, seed=90 + i + 5 * (sgn > 0)))
-    # front of the neck: two horizontal bands when she looks down / tucks her chin
-    rk = reg('neck', 'neck', 0.03)
-    for i, y in enumerate((1.437, 1.452)):
-        pts = []
-        for k in range(15):
-            a = math.radians(-55 + 110 * k / 14.0)
-            d = unit([math.sin(a), 0, math.cos(a)])
-            o = np.array([0, y, -0.03]) + d * 0.15
-            h = surf.ray(o, -d, near=0.2)
-            if h is not None:
-                pts.append(h)
-        if len(pts) > 5:
-            out.append(Crease(wobble(np.array(pts), lambda q: unit_rows(q - np.array([0, y, -0.03])), 0.0007, 70 + i),
-                              rk, 0.0005, 0.0012, seed=70 + i))
+    # (the front of her neck is on the body atlas: see body_creases. 0.9.1-0.9.6 cast its lines from the front here, which put them on
+    # her chin at those heights: two lines running down from under her mouth.)
     for c in out:
         c.depth *= 1.3        # 0.9.2: her skin's subsurface scattering softens the lines (headset: 'barely affects her face')
     log('face: %d creases in %d regions' % (len(out), len(regions)))
@@ -667,6 +655,21 @@ def body_creases(surf, sk, log):
                     pts.append(h)
             if len(pts) > 4:
                 out.append(Crease(np.array(pts), ra, 0.0005, 0.0013, seed=280 + i + (10 if side == 'R' else 0)))
+    # front of the neck: two soft horizontal bands when she looks down / tucks her chin. Cast from inside the neck outwards (from the
+    # front they would hit her chin first).
+    rk = reg('neck', 'neck', 0.03)
+    rr[rk] = 0.02
+    for i, y in enumerate((1.392, 1.409)):
+        ctr = np.array([0, y, -0.045])
+        pts = []
+        for k in range(13):
+            a = math.radians(-45 + 90 * k / 12.0)
+            h = surf.ray(ctr, unit([math.sin(a), 0, math.cos(a)]), near=0.15)
+            if h is not None and np.linalg.norm(h - ctr) < 0.08:
+                pts.append(h)
+        if len(pts) > 5:
+            out.append(Crease(wobble(np.array(pts), lambda q: unit_rows(q - ctr), 0.0006, 70 + i),
+                              rk, 0.0006 - 0.0002 * i, 0.0016, seed=70 + i, ridge=0.45))
     # belly: when she squats or leans forward the belly folds into one soft roll that follows its curve (lowest at the middle, rising
     # to the sides), with a fainter one above; broad and shallow with a raised rounded edge. 0.9.1's two thin straight lines read as a
     # scar (headset, 0.9.1).

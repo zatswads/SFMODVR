@@ -1,6 +1,6 @@
 # SF Body Morphs — handoff
 
-State at **0.9.7** (branch `main`). 0.9.7 (GPU contact: skin meshes stitched at their seams (BuildMaps: SkinRank upper 0 / other body 1 /
+State at **0.9.8** (branch `main`). 0.9.8 (wrinkles: neck lines moved to the body atlas (they had landed on her chin), face / neck regions measured from an idle baseline (slow minimum, 20 s rise), nasolabial shorter; bundle rebuilt) built, not yet run in the game. 0.9.7 (GPU contact: skin meshes stitched at their seams (BuildMaps: SkinRank upper 0 / other body 1 /
 neck 2 / face 3, a later skin mesh maps to an earlier one, `_MapW` = 1 within 1.5 mm fading to 0 by 1 cm, ApplyMap blends own and parent
 Grad; dispatch passes by parent Level); her neck and face skin added as `Extra` v2 renderers (zero mask, no v1 imprint) so marks reach
 them, SkinMarks allows the face class; [Physics] RippleImpact = the wave share at the impact point (`_WaveImpact`); bundle marker kernel
@@ -180,7 +180,7 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
 
 ## Open items
 
-- 0.9.1/0.9.5 to check in the headset (TESTING.md 0.9.5, 0.9.1; 0.9.1 log: face peaks 0.03-0.05, belly 0.29, knee/elbow 0.2-0.25 = full, hipfold 0.05-0.08, armpit 0.010 = never active: check its placement / direction): the regions sit on the right skin (Debug = Regions), which regions actually activate
+- 0.9.1/0.9.5/0.9.8 to check in the headset (TESTING.md 0.9.8, 0.9.5, 0.9.1; 0.9.6 log: face/neck idle compression neck ~0.03, glabella 0.04-0.06 -> 0.9.8 idle baseline; 0.9.1 log: face peaks 0.03-0.05, belly 0.29, knee/elbow 0.2-0.25 = full, hipfold 0.05-0.08, armpit 0.010 = never active: check its placement / direction): the regions sit on the right skin (Debug = Regions), which regions actually activate
   with her expressions and bends (the 10 s peak-compression lines; the per-region ranges in `author.py` are first guesses: face 0.08-0.10,
   body 0.20-0.25 beyond Threshold), the elbow flexion side (both sides are regions; only the compressed one should show), line depth at
   Strength 1. The maps were authored on export Reika-20261016-023017 (face_a only); the 0.8.8 log also showed a face_c sheet: if its UVs
