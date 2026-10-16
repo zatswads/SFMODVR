@@ -6,8 +6,9 @@ namespace SfMorph
     // Her reactions to touch (0.7.9): what the Body hands the director each frame. Filled from the config once per frame (no allocation).
     internal class ReactionSettings
     {
-        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley, RubSound;
-        public float Sensitivity, Cooldown, Volume, BlushGain, VoicePitchVar, LimbPush, LineChance, FaceStrength, VoicePitch, VoiceFormant;
+        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley, RubSound, MuteGameVoice, LipSync;
+        public float LipStrength, LipLead, LipOverGame;
+        public float Sensitivity, Cooldown, Volume, SkinVolume, BlushGain, VoicePitchVar, LimbPush, LineChance, FaceStrength, VoicePitch, VoiceFormant;
         public string FaceMap = "", VoicePack = "";
         public int VoiceMode, Log;
 
@@ -16,13 +17,14 @@ namespace SfMorph
             On = p.ReactOn.Value; Voice = p.ReactVoice.Value; Face = p.ReactFace.Value; Flinch = p.ReactFlinch.Value; Sound = p.ReactSound.Value;
             Blush = p.ReactBlush.Value; BlushBody = p.ReactBlushBody.Value; Gaze = p.ReactGaze.Value; FeedDesire = p.ReactFeedDesire.Value;
             AutoState = p.ReactAuto.Value; AllowClimax = p.ReactClimax.Value; VoiceGuard = p.VoiceGuard.Value;
-            Sensitivity = p.ReactSensitivity.Value; Cooldown = p.ReactCooldown.Value; Volume = p.ReactVolume.Value;
+            Sensitivity = p.ReactSensitivity.Value; Cooldown = p.ReactCooldown.Value; Volume = p.ReactVolume.Value; SkinVolume = p.ReactSkinVolume.Value; MuteGameVoice = p.VoiceMuteGame.Value;
             BlushGain = p.ReactBlushGain.Value; VoicePitchVar = p.ReactVoicePitchVar.Value;
             VoiceMode = p.ReactVoiceMode.Value; Log = p.ReactLog.Value;
             Lines = p.ReactLines.Value; LineChance = p.ReactLineChance.Value;
             LinesGamePath = p.ReactLinesGamePath.Value;
             Foley = p.ReactFoley.Value; RubSound = p.ReactRubSound.Value; VoicePack = p.VoicePackName.Value ?? ""; VoicePitch = p.VoicePitch.Value; VoiceFormant = p.VoiceFormant.Value;
             FaceClips = p.ReactFaceClips.Value; FaceStrength = p.ReactFaceStrength.Value; FaceMap = p.ReactFaceMap.Value ?? "";
+            LipSync = p.LipSyncOn.Value; LipStrength = p.LipStrength.Value; LipLead = p.LipLead.Value; LipOverGame = p.LipOverGame.Value;
             PushByTouch = p.HandsPushByTouch.Value;   // the geometric push of other hands: without it and without physics hands nothing is classified
             LimbPush = p.HandsLimbPush.Value;   // the flinch's swing is a push on her limbs: it needs the slider above 0
         }
@@ -133,7 +135,9 @@ namespace SfMorph
         struct Slide { public Vector3 L, Pt; public float Spd; public int Src; }
         readonly Slide[] _sl = new Slide[HerBody.SegNames.Length];
         float _rubLvl, _lastPatT = -100f, _lastGrabT = -100f;
-        Vector3 _rubPt;
+        Vector3 _rubPt, _testRubAt;
+        float _testRubUntil = -1f;
+        bool _rubNoted;
         // 0.9.0 face: the next pleasure face not before this (a random 2.5-5.5 s after each), and the voice-onset edge
         float _faceLock = -100f;
         bool _voiceWas;
@@ -166,6 +170,7 @@ namespace SfMorph
 
             // the game link, the voice guard (independent of On) and the delayed trigger reset
             if (_now >= _nextRefresh) { _nextRefresh = _now + 1f; _g.Refresh(her, _now); _g.VoiceFx(s.VoicePitch, s.VoiceFormant); _g.UsePack(s.VoicePack); }
+            if (ReactionsGame.LipCurveFor == null) ReactionsGame.LipCurveFor = LipHasCurve;
             if (_g.Found && !_bridgeLogged) { _bridgeLogged = true; if (_g.BridgeLine != null && _g.BridgeLine.Length > 0) L(_g.BridgeLine); }
             else if (!_g.Found) _bridgeLogged = false;       // a re-found bridge is logged again
             _g.Pump(_now);
@@ -198,8 +203,14 @@ namespace SfMorph
                 else if (_bv != -2) { _bv = -2; ClearR(); }
                 // 0.9.0: the skin rub loop follows the fastest sliding touch of this frame
                 // 0.9.4 (user: the rub sounds like carpet): its own switch, and a little quieter under the other skin sounds
-                bool rub = s.Sound && s.Foley && s.RubSound && _rubLvl > 0f && State != RState.Climax;
-                _g.Rub(_rubPt, rub ? _rubLvl * s.Volume * 0.4f : 0f, 0.92f + 0.16f * _rubLvl, dt);
+                // 0.11.7: its own volume (Skin sounds), not the slap volume: at a quiet slap setting (0.12 in the user's config) the rub played
+                // at 0.12 x 0.4 x the slide level, a few percent, and was never heard. The test button (TestResponse 7) holds it for 1.5 s.
+                if (_now < _testRubUntil) { _rubLvl = 0.8f; _rubPt = _testRubAt; }
+                bool rub = s.Sound && s.Foley && (s.RubSound || _now < _testRubUntil) && _rubLvl > 0f && State != RState.Climax;
+                _g.Rub(_rubPt, rub ? _rubLvl * s.SkinVolume * 0.7f : 0f, 0.92f + 0.16f * _rubLvl, dt);
+                if (rub && !_rubNoted) { _rubNoted = true; Note("rub sound"); if (s.Log >= 1) L("rub sound on (level " + _rubLvl.ToString("0.00") + ", volume " + (_rubLvl * s.SkinVolume * 0.7f).ToString("0.00") + ")"); }
+                else if (!rub) _rubNoted = false;
+                _g.MuteGameVoice(s.MuteGameVoice && ReactionsGame.Pack.Loaded);
 
                 if (cut) return;
                 Tick(dt, s);
@@ -218,6 +229,7 @@ namespace SfMorph
         // ---- the Diagnose button (see ReactionsGame.DiagStart) ----
         public bool BridgeFound { get { return _g.Found; } }
         public string VoiceFxStatus { get { return _g.VoiceFxStatus ?? ""; } }
+        public int GameVoiceMuted { get { return _g.MutedNow; } }
         public bool DiagBusy { get { return _g.DiagBusy; } }
         public bool DiagRan { get { return _g.DiagRan; } }
         public void Diagnose()
@@ -251,6 +263,7 @@ namespace SfMorph
             try { _face.Stop(); } catch { }
             try { _g.RestorePitch(); } catch { }                       // the moan source gets its own pitch back
             try { _g.Rub(Vector3.zero, 0f, 1f, 1f); } catch { }
+            try { _g.MuteGameVoice(false); } catch { }
             _blushCur = 0f; _away = 0f;
         }
 
@@ -340,7 +353,7 @@ namespace SfMorph
                     {
                         _lastPatT = _now;
                         float pv = Mathf.Clamp01((v - 0.45f * k) / (0.75f * k));
-                        bool ok = _g.FoleyShot(SkinFoley.Pat, Finite(pt) ? pt : SegCentre(g), s.Volume * Mathf.Lerp(0.3f, 0.8f, pv), Mathf.Lerp(0.95f, 1.08f, Rand()));
+                        bool ok = _g.FoleyShot(SkinFoley.Pat, Finite(pt) ? pt : SegCentre(g), s.SkinVolume * Mathf.Lerp(0.4f, 0.9f, pv), Mathf.Lerp(0.95f, 1.08f, Rand()));
                         if (ok) _sfx++;
                         if (s.Log >= 2) L("pat on " + g.Name + " by " + (by ?? "a hand") + " (" + v.ToString("0.00") + " m/s)" + (ok ? "" : ": no sound"));
                     }
@@ -578,7 +591,7 @@ namespace SfMorph
             if (tier == 2 && s.Sound && s.Foley && !_quiet && _now - _lastGrabT >= 0.5f)
             {
                 _lastGrabT = _now;
-                if (_g.FoleyShot(SkinFoley.Grab, pt, s.Volume * Mathf.Lerp(0.35f, 0.8f, I), Mathf.Lerp(0.92f, 1.08f, Rand()))) { _sfx++; Note("grab sound"); }
+                if (_g.FoleyShot(SkinFoley.Grab, pt, s.SkinVolume * Mathf.Lerp(0.45f, 0.9f, I), Mathf.Lerp(0.92f, 1.08f, Rand()))) { _sfx++; Note("grab sound"); }
             }
             // the game's desire: groping and slaps (every 3 s); a caress only once she is well aroused (excitement tier 3) and every 6 s
             if (s.FeedDesire && (tier >= 2 || (tier == 1 && Tier >= 3)) && _g.InSexMode && _now - _lastDesireT >= (tier == 1 ? 6f : 3f)) { _lastDesireT = _now; _g.FeedDesire(); Note("desire"); }
@@ -673,7 +686,148 @@ namespace SfMorph
                 target = Mathf.Clamp01((db + 24f) / 22f);
             }
             _jawOpen = Mathf.MoveTowards(_jawOpen, target, (target > _jawOpen ? 1f / 0.03f : 1f / 0.09f) * dt);
-            if (_jawOpen > 0.001f) _face.JawStep(_jawOpen * 0.75f);
+            // 0.9.9: a clip with an Audio2Face curve drives the whole mouth instead of the loudness jaw
+            bool lip = LipFrame(dt);
+            if (lip) _jawOpen = 0f;
+            else if (_jawOpen > 0.001f) _face.JawStep(_jawOpen * 0.75f);
+        }
+
+        // ---- 0.9.9: lip sync from baked Audio2Face curves (LipSync.cs) ----
+        readonly float[] _lipW = new float[LipSync.K], _lipPrev = new float[LipSync.K];
+        UnityEngine.Object _lipClip; LipSync.Curve _lipCurve; float _lipT, _lipFade, _lipLead; bool _lipPack;
+        public string LipStatus = "";
+        public int LipPreview = -1; public float LipPreviewW = 1f;   // the mouth pose editor's preview (shape index, weight)
+        int _lipLogged;
+
+        // True while the lip layer writes her mouth this frame (a curve, its 80 ms fade-out, or the editor's preview).
+        bool LipFrame(float dt)
+        {
+            if (!_face.LipReady) { _lipFade = 0f; _lipClip = null; _lipCurve = null; return false; }
+            LipSync.LoadMap(false);
+            // 0.11.7: no arkit-map.txt yet (the user's PC in 0.11.4): seed the poses from her face clips once and save them, so the curves move
+            // her lips out of the box instead of nothing but the loudness jaw; the editor refines them
+            if (!_autoSeeded && _s.LipSync && LipSync.PosedShapes == 0 && !System.IO.File.Exists(LipSync.MapPath))
+            {
+                _autoSeeded = true;
+                string r;
+                int n = _face.Seed(true, -1, out r);
+                if (n > 0) LipSync.SaveMap();
+                L("lip sync: no mouth poses yet: " + (n > 0 ? "seeded " + n + " shapes from her face clips and saved them to " + LipSync.MapPath + " (refine them in the Reactions tab's editor)" : "could not seed them") + (r.Length > 0 ? "; " + r : ""));
+            }
+            if (LipPreview >= 0 && LipPreview < LipSync.K)
+            {
+                System.Array.Clear(_lipW, 0, LipSync.K); _lipW[LipPreview] = Mathf.Clamp01(LipPreviewW);
+                LipStatus = "previewing " + LipSync.Shapes[LipPreview];
+                return _face.LipStep(_lipW, 1f, _s.LipOverGame);
+            }
+            bool active = false;
+            if (_s.LipSync)
+            {
+                UnityEngine.Object clip; float time, pitch; bool pack;
+                if (_g.VoiceNow(out clip, out time, out pitch, out pack))
+                {
+                    if (!ReferenceEquals(clip, _lipClip))
+                    {
+                        _lipClip = clip; _lipPack = pack; _lipT = time; _lipLead = 0f;
+                        _lipCurve = null;
+                        string key;
+                        if (pack)
+                        {
+                            string path; float lead;
+                            if (ReactionsGame.Pack.Source(clip, out path, out lead)) { _lipCurve = LipSync.ForPack(ReactionsGame.Pack.Name, path); _lipLead = lead; }
+                            key = ReactionsGame.Pack.Name + "\\" + clip.name;
+                        }
+                        else
+                        {
+                            int n = _g.ClipSamples(clip);
+                            _lipCurve = LipSync.ForGame(clip.name, n);
+                            key = LipSync.DumpName(clip.name, n);
+                        }
+                        LipStatus = (_lipCurve != null ? "curve for " : "no curve for ") + key + (_lipCurve != null ? " (" + _lipCurve.Seconds.ToString("0.0") + " s, peak jawOpen " + _lipCurve.PeakJaw.ToString("0.00") + ")" : "");
+                        if (_s.Log >= 2 || _lipLogged < 30) { _lipLogged++; Plugin.Log.LogInfo("Lip sync: " + LipStatus); }
+                    }
+                    else
+                    {
+                        // AudioSource.time moves in audio-buffer steps: a smooth clock pulled toward it
+                        _lipT += dt * pitch;
+                        float err = time - _lipT;
+                        if (Mathf.Abs(err) > 0.12f) _lipT = time; else _lipT += err * Mathf.Min(1f, 8f * dt);
+                    }
+                    if (_lipCurve != null)
+                    {
+                        // the pitch / formant filter (VoiceShift) delays her voice by about 45 ms while it is on: the mouth waits for it
+                        float fx = Mathf.Abs(_s.VoicePitch - 1f) > 1e-3f || Mathf.Abs(_s.VoiceFormant - 1f) > 1e-3f ? 0.045f : 0f;
+                        _lipCurve.Sample(_lipT + _lipLead + _s.LipLead - fx, _lipW);
+                        float k = Mathf.Max(0f, _s.LipStrength);
+                        for (int i = 0; i < LipSync.K; i++) { _lipW[i] = Mathf.Clamp01(_lipW[i] * k); _lipPrev[i] = _lipW[i]; }
+                        active = true;
+                        if (_now < _lipProbeUntil && _now >= _lipProbeNext) { _lipProbeNext = _now + 0.25f; _lipProbeW = true; }
+                    }
+                }
+                else { _lipClip = null; _lipCurve = null; }
+            }
+            _lipFade = Mathf.MoveTowards(_lipFade, active ? 1f : 0f, dt / 0.08f);
+            if (_lipFade <= 0f)
+            {
+                if (_now < _lipProbeUntil && _now >= _lipProbeNext) { _lipProbeNext = _now + 0.5f; L("lip probe t " + (_lipProbeUntil - _now).ToString("0.0") + " s left: no curve playing (" + LipStatus + ")"); }
+                return false;
+            }
+            // fading out: the last weights held. An empty map writes nothing: the loudness jaw stays.
+            bool wrote = _face.LipStep(active ? _lipW : _lipPrev, _lipFade, _s.LipOverGame);
+            if (_lipProbeW)
+            {
+                _lipProbeW = false;
+                var sb = new System.Text.StringBuilder("lip probe at ").Append(_lipT.ToString("0.00")).Append(" s: ");
+                for (int pick = 0, shown = 0; pick < 5; pick++)
+                {
+                    int best = -1; float bw = 0.02f;
+                    for (int i = 0; i < LipSync.K; i++) if (_lipW[i] > bw && (_probeUsed & (1L << i)) == 0) { bw = _lipW[i]; best = i; }
+                    if (best < 0) break;
+                    _probeUsed |= 1L << best;
+                    sb.Append(shown++ > 0 ? ", " : "").Append(LipSync.Shapes[best]).Append(' ').Append(bw.ToString("0.00"));
+                }
+                _probeUsed = 0;
+                sb.Append(wrote ? " -> bones: " + _face.LipDeltaReport() : " -> nothing written (no mapped pose)");
+                L(sb.ToString());
+            }
+            return wrote;
+        }
+        float _lipProbeUntil = -1f, _lipProbeNext;
+        bool _autoSeeded;
+        bool _lipProbeW;
+        long _probeUsed;
+
+        // the voice pack's PlayPack asks this before the game's "moan" mouth trigger
+        bool LipHasCurve(UnityEngine.Object clip)
+        {
+            if (_s == null || !_s.LipSync || !_face.LipReady || LipSync.PosedShapes == 0) return false;
+            string path; float lead;
+            return ReactionsGame.Pack.Source(clip, out path, out lead) && LipSync.ForPack(ReactionsGame.Pack.Name, path) != null;
+        }
+
+        // the Reactions tab's dump of the game's voice clips (works without Reactions on: only the game link is needed)
+        public bool Dumping { get { return _g.Dumping; } }
+        public string DumpStatus { get { return _g.DumpStatus; } }
+        public void DumpVoice() { _g.StartDump(); }
+
+        // Test: a voice pack moan (or line) with lip sync; the log says whether its curve was found.
+        public void TestLip()
+        {
+            if (_s == null || !_s.On) { L("test lip sync: reactions are off"); return; }
+            if (!ReactionsGame.Pack.Loaded) { L("test lip sync: no voice pack is on"); return; }
+            // 0.11.7: a check of every link first (the user's 0.11.4 run had only the loudness jaw: the lip sync was never in that build)
+            string pack = ReactionsGame.Pack.Name;
+            string dir = System.IO.Path.Combine(LipSync.Dir, pack);
+            int csv = 0;
+            try { if (System.IO.Directory.Exists(dir)) csv = System.IO.Directory.GetFiles(dir, "*.csv", System.IO.SearchOption.AllDirectories).Length; } catch { }
+            LipSync.LoadMap(false);
+            L("test lip sync: switch " + (_s.LipSync ? "on" : "OFF") + ", face survey " + (_face.LipReady ? "done" : "NOT done (no lip sync until it is)")
+              + ", curves for '" + pack + "': " + csv + " in " + dir + (csv == 0 ? " (NONE: bake them with tools/a2f and copy them here)" : "")
+              + ", mouth poses " + LipSync.PosedShapes + " of " + LipSync.K + " shapes in " + LipSync.MapPath + (LipSync.PosedShapes == 0 ? " (EMPTY: Seed or sculpt them in the editor, else only the loudness jaw moves)" : ""));
+            string what;
+            bool ok = (ReactionsGame.Pack.HasLines && _g.PackLine(3, 2, out what)) || _g.PackVoice(VoicePack.MoanMid, 1f, true, false);
+            _lipProbeUntil = _now + 3f; _lipProbeNext = _now;
+            L("test lip sync: " + (ok ? "played, logging the weights and bone moves for 3 s" : "failed"));
         }
 
         // The face clip for a touch: pain on hard slaps, surprise on soft ones; caress / grope: pleasure by her excitement on erogenous zones,
@@ -1346,7 +1500,8 @@ namespace SfMorph
                 case 5:
                     {
                         bool ok = TryFeeling(Mathf.Max(1, Tier), true);
-                        res = (ok ? "played: " : "not played: ") + _resp.ToString();
+                        res = (ok ? "played: " : "not played: ") + (_resp.Length > 0 ? _resp.ToString()
+                            : ReactionsGame.Pack.Loaded ? "a voice pack is on (the game's feeling sounds stay off with a pack)" : "no feeling clip found");
                         break;
                     }
                 case 3:
@@ -1354,6 +1509,22 @@ namespace SfMorph
                         var g = FindSeg(ZButt, 0); Vector3 at = g != null ? SegCentre(g) : _root.position;
                         bool ok = _g.Found && ((_s.Foley && _g.FoleyShot(SkinFoley.SlapHard, at, _s.Volume, 1f)) || _g.Slap(at, _s.Volume * 1.6f, 1f, true, true));
                         res = ok ? "played" : "failed";
+                        break;
+                    }
+                case 6:
+                case 8:
+                    {
+                        // 0.11.7: the skin sounds alone, at the butt (6 pat, 8 grab), with the Skin sounds volume
+                        var g = FindSeg(ZButt, 0); Vector3 at = g != null ? SegCentre(g) : _root.position;
+                        bool ok = _g.Found && _g.FoleyShot(which == 6 ? SkinFoley.Pat : SkinFoley.Grab, at, _s.SkinVolume * 0.8f, 1f);
+                        res = (ok ? "played" : "failed") + " (" + (which == 6 ? "pat" : "grab") + ", volume " + (_s.SkinVolume * 0.8f).ToString("0.00") + (_s.Sound ? "" : "; Sound is off") + ")";
+                        break;
+                    }
+                case 7:
+                    {
+                        var g = FindSeg(ZButt, 0);
+                        _testRubAt = g != null ? SegCentre(g) : _root.position; _testRubUntil = _now + 1.5f;
+                        res = _s.Foley && _s.Sound ? "rub for 1.5 s (volume " + (0.8f * _s.SkinVolume * 0.7f).ToString("0.00") + ")" : "off: Sound or Skin sounds is off";
                         break;
                     }
                 default:

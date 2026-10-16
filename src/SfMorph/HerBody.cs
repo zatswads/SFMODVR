@@ -467,7 +467,13 @@ namespace SfMorph
             Vector3[] dv = null;
             foreach (var r in her.Renderers)
             {
-                if (r == null || r.sharedMesh == null || !r.sharedMesh.name.ToLowerInvariant().Contains("body")) continue;
+                if (r == null || r.sharedMesh == null) continue;
+                // 0.11.7: her face and neck meshes too (the shown ones: the game keeps every face variant under her). Without them the head
+                // was a 9.5 cm default sphere about Head_M and the neck a thin capsule, so hands stopped centimetres off her face and throat.
+                string mn = r.sharedMesh.name.ToLowerInvariant();
+                bool bodyMesh = mn.Contains("body");
+                bool faceMesh = !bodyMesh && (mn.Contains("face") || mn.Contains("neck")) && r.enabled && r.gameObject.activeInHierarchy;
+                if (!bodyMesh && !faceMesh) continue;
                 string err;
                 var d = MeshData.Read(r.sharedMesh, out err);
                 if (d == null || d.Weights == null || d.Pos == null) { Plugin.Log.LogWarning("Her body: skin '" + r.sharedMesh.name + "' unreadable (" + (err ?? "no weights") + ")"); continue; }

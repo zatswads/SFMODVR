@@ -98,6 +98,28 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.7 (0.11.4 headset fixes, lip sync)
+
+Install `dist/SfMorph.dll`. Log: `SF Body Morphs 0.11.7`; `GPU contact: renderer reika_face_c space rootBone taken from ...` (and
+reika_neck, reika_face_a) instead of "cannot be calibrated"; `Her body: segments from N body meshes` with `head (...): <n> verts`
+(not "0 verts ... (default)") and a neck hull; `GPU contact: baked ...: edge X mm (skin Y mm)`; `Embody: neutral finger pose
+straightened from the animation's hand` (when no bind pose); `Lip sync: map: ...` or `Lip sync: no mouth poses yet: seeded N
+shapes ...`. Headset:
+1. Panel: drag an edge / corner to resize (also smaller); the title bar moves it; ticking options or the 10 s timing update no
+   longer makes it jump; tabs in the left column; Skin tab = wrinkles, muscles, marks.
+2. Press / slap her cheek, jaw and neck: a small dent and marks (lighter than the body). Hands stop on her face / throat, not a few
+   cm before it.
+3. Fidelity on, press her back / breast with a palm: the dent edge is round and soft, no capsule outline (compare Balanced).
+4. Reactions tab: skin volume slider; Test pat / grab / rub are audible; a hand sliding on her plays the rub (`rub sound on`).
+5. Embody: on after a game restart it starts off; on, hands Both: controller models hidden, his fingers rest open (not the
+   animation's grip), the grab button closes them and the thumb closes across the palm without bending backwards; View
+   forward / up / right move the view.
+6. Lip sync: Reactions tab, voice pack Anime or Rebecca, "Test: a pack clip with lip sync": the log line lists switch on, face
+   survey done, curves N > 0, mouth poses > 0; then `lip probe at ...: jawOpen 0.xx, mouthFunnel ... -> bones: Lip_... x mm, y deg`.
+   Her lips move with the words, not just the jaw. If the lips look wrong, refine the poses in "Mouth poses for the lip sync".
+7. Sex scene with Physics -> partner's body on: ripples on her glutes / thighs at each stroke (`Ripple: impact #... by Player`).
+8. Voice pack on + Mute the game's own voice: the game's moans / dirty talk are silent, the pack still speaks.
+
 ## 0.11.3 (built Surprise face)
 
 - [ ] Log `surprise: built from 16 face bones ...` and the `moods:` line shows `Surprise = built: wide eyes, raised brows`; no

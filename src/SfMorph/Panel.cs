@@ -24,7 +24,7 @@ namespace SfMorph
         GUIStyle _hint, _bold, _off;
         const int MaxRows = 80; // IMGUI gets slow with hundreds of sliders; the filter narrows it
 
-        static readonly string[] Tabs = { "Body", "Bones", "Presets", "Characters", "Physics", "VR", "Reactions" };   // appended: the saved Tab indices 0-3 stay valid
+        static readonly string[] Tabs = { "Body", "Bones", "Presets", "Characters", "Physics", "VR", "Reactions", "Skin" };   // appended: the saved Tab indices stay valid
 
         public Panel(Plugin p, Body body)
         {
@@ -47,19 +47,76 @@ namespace SfMorph
                 _bold = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold };
                 _off = new GUIStyle(_hint);
                 _off.normal.textColor = new Color(1f, 0.75f, 0.4f);
+                _fold = new GUIStyle(_hint) { wordWrap = false };
             }
             float scale = Mathf.Clamp(_p.UiScale.Value, 0.75f, 2.5f);
             var old = GUI.matrix;
-            GUI.matrix = Matrix4x4.Scale(new Vector3(scale, scale, 1f));
             var before = _rect;
-            _rect = GUILayout.Window(0x5F4D4F, _rect, Window, "SF Body Morphs " + Plugin.Version, GUILayout.Width(_rect.width), GUILayout.Height(_rect.height));
+            Resize(scale);   // before the window: a press on its border is taken here, never by the window's own controls
+            GUI.matrix = Matrix4x4.Scale(new Vector3(scale, scale, 1f));
+            // 0.11.7: GUI.Window, not GUILayout.Window. The layout window grew and shrank with its content (a status line wrapping to one
+            // more line, a greyed reason showing up), so the panel jumped whenever an option changed or a debug line updated, and the size
+            // given to it was only a minimum (no way to make it smaller). This one keeps exactly its size; the content scrolls inside.
+            _rect = GUI.Window(0x5F4D4F, _rect, Window, "SF Body Morphs " + Plugin.Version);
             float sw = Screen.width / scale, sh = Screen.height / scale;
+            _rect.width = Mathf.Clamp(_rect.width, MinW, Mathf.Max(MinW, sw));
+            _rect.height = Mathf.Clamp(_rect.height, MinH, Mathf.Max(MinH, sh));
             _rect.x = Mathf.Clamp(_rect.x, 0f, Mathf.Max(0f, sw - _rect.width));
             _rect.y = Mathf.Clamp(_rect.y, 0f, Mathf.Max(0f, sh - _rect.height));
-            if (_rect.x != before.x || _rect.y != before.y)
-                _p.PanelRect.Value = string.Format(CultureInfo.InvariantCulture, "{0:0},{1:0},{2:0},{3:0}", _rect.x, _rect.y, _rect.width, _rect.height);
+            if (_rect != before && _resizing == 0) SaveRect();
             GUI.matrix = old;
         }
+
+        const float MinW = 460f, MinH = 300f, Edge = 7f;
+        int _resizing;            // sides being dragged: 1 left, 2 right, 4 bottom, 8 top
+        Vector2 _resizeFrom;
+        Rect _resizeRect;
+        GUIStyle _fold;
+
+        void SaveRect()
+        {
+            _p.PanelRect.Value = string.Format(CultureInfo.InvariantCulture, "{0:0},{1:0},{2:0},{3:0}", _rect.x, _rect.y, _rect.width, _rect.height);
+        }
+
+        // Any edge or corner resizes (like the SF Neural Rendering panel); the title bar moves it. The mouse is in unscaled screen GUI points
+        // here (GUI.matrix not set yet), so it is divided by the panel scale. Drags are followed outside the window too (rawType).
+        void Resize(float scale)
+        {
+            var e = Event.current;
+            if (e == null) return;
+            var m = e.mousePosition / scale;
+            if (_resizing != 0)
+            {
+                if (e.rawType == EventType.MouseUp) { _resizing = 0; SaveRect(); e.Use(); return; }
+                if (e.rawType == EventType.MouseDrag)
+                {
+                    var d = m - _resizeFrom;
+                    var r = _resizeRect;
+                    if ((_resizing & 2) != 0) r.width = Mathf.Max(MinW, _resizeRect.width + d.x);
+                    if ((_resizing & 4) != 0) r.height = Mathf.Max(MinH, _resizeRect.height + d.y);
+                    if ((_resizing & 1) != 0) { float w = Mathf.Max(MinW, _resizeRect.width - d.x); r.x = _resizeRect.xMax - w; r.width = w; }
+                    if ((_resizing & 8) != 0) { float h = Mathf.Max(MinH, _resizeRect.height - d.y); r.y = _resizeRect.yMax - h; r.height = h; }
+                    _rect = r;
+                    e.Use();
+                }
+                return;
+            }
+            if (e.type != EventType.MouseDown || e.button != 0) return;
+            var outer = new Rect(_rect.x - Edge, _rect.y - Edge, _rect.width + 2f * Edge, _rect.height + 2f * Edge);
+            if (!outer.Contains(m)) return;
+            int mask = 0;
+            if (m.x <= _rect.x + Edge) mask |= 1;
+            if (m.x >= _rect.xMax - Edge) mask |= 2;
+            if (m.y >= _rect.yMax - Edge) mask |= 4;
+            if (m.y <= _rect.y + 3f) mask |= 8;   // only the outermost pixels of the top: the title bar below moves the window
+            if (mask == 0) return;
+            _resizing = mask; _resizeFrom = m; _resizeRect = _rect;
+            e.Use();
+        }
+
+        // Tabs in screen order; the numbers are the saved [Interface] Tab values (an appended tab keeps the old values valid).
+        static readonly int[] TabOrder = { 0, 1, 2, 3, 7, 4, 5, 6 };
+        bool _timing;
 
         void Window(int id)
         {
@@ -76,30 +133,39 @@ namespace SfMorph
             foreach (var c in _body.Found) if (c.Female && !c.IsPlayer) people.Add(c);
             if (people.Count == 0) foreach (var c in _body.Found) if (!c.IsPlayer && c.BoneList.Count > 0) people.Add(c);
             GUILayout.Label(_body.Status, _hint);
-            if (_p.PerfLog.Value && Perf.Summary.Length > 0) GUILayout.Label(Perf.Summary, _hint);   // 0.9.9: the last 10 s timing line, readable in the headset
+            // 0.11.7: the timing line folds away (closed by default): it changes length every 10 s and moved everything below it
+            bool timing = _timing && _p.PerfLog.Value && Perf.Summary.Length > 0;
+            if (_p.PerfLog.Value && Perf.Summary.Length > 0 && GUILayout.Button((_timing ? "- " : "+ ") + "Timing (last 10 s)", _fold)) _timing = !_timing;
+            if (timing) GUILayout.Label(Perf.Summary, _hint);
             if (_sel != null && !people.Contains(_sel)) _sel = null;
             if (_sel == null && people.Count > 0) _sel = people[0];
             GUILayout.BeginHorizontal();
             Character pick = null;
             foreach (var c in people)
                 if (GUILayout.Toggle(_sel == c, c.Key + (c.Look.Empty ? "" : " *"), GUI.skin.button) && _sel != c) pick = c;
-            if (pick != null) _sel = pick;
+            if (_sel != null)
+            {
+                GUI.enabled = !_sel.Look.Empty;
+                if (GUILayout.Button("Reset " + _sel.Key, GUILayout.Width(130))) { _sel.Look.Clear(); _body.Touch(_sel); }
+                GUI.enabled = true;
+            }
             GUILayout.EndHorizontal();
+            if (pick != null) _sel = pick;
             if (_sel == null)
             {
                 GUILayout.Label("Load a scene with a woman in it. Characters are rescanned every 2 seconds.", _hint);
-                GUI.DragWindow();
+                GUI.DragWindow(new Rect(0, 0, 10000, 20));
                 return;
             }
 
+            // 0.11.7: the tabs in a column on the left (eight no longer fit in one row)
+            int tab = Mathf.Clamp(_p.Tab.Value, 0, Tabs.Length - 1);
             GUILayout.BeginHorizontal();
-            int tab = GUILayout.Toolbar(Mathf.Clamp(_p.Tab.Value, 0, Tabs.Length - 1), Tabs);
-            if (tab != _p.Tab.Value) { _p.Tab.Value = tab; _scroll = Vector2.zero; }
-            GUI.enabled = !_sel.Look.Empty;
-            if (GUILayout.Button("Reset " + _sel.Key, GUILayout.Width(150))) { _sel.Look.Clear(); _body.Touch(_sel); }
-            GUI.enabled = true;
-            GUILayout.EndHorizontal();
-
+            GUILayout.BeginVertical(GUILayout.Width(96));
+            int pickTab = -1;
+            foreach (int t in TabOrder)
+                if (GUILayout.Toggle(tab == t, Tabs[t], GUI.skin.button) && tab != t) pickTab = t;
+            GUILayout.EndVertical();
             _scroll = GUILayout.BeginScrollView(_scroll);
             switch (tab)
             {
@@ -109,10 +175,13 @@ namespace SfMorph
                 case 3: CharacterTab(_sel); break;
                 case 4: PhysicsTab(_sel); break;
                 case 5: VrTab(_sel); break;
+                case 7: SkinTab(_sel); break;
                 default: ReactionsTab(_sel); break;
             }
             GUILayout.EndScrollView();
-            GUI.DragWindow();
+            GUILayout.EndHorizontal();
+            if (pickTab >= 0) { _p.Tab.Value = pickTab; _scroll = Vector2.zero; }   // after the pass: the same controls in the Layout and click passes
+            GUI.DragWindow(new Rect(0, 0, 10000, 20));   // the title bar moves it; the edges resize it (Resize)
         }
 
         // ---- tabs ----
@@ -286,9 +355,16 @@ namespace SfMorph
             MotionSection(c);
             GUILayout.Space(10);
             PushesSection(c);
-            GUILayout.Space(10);
+        }
+
+        // 0.11.7 (user: wrinkles and muscles are not physics): how her skin looks; the dents stay with the contacts in Physics
+        void SkinTab(Character c)
+        {
             WrinklesSection(c);
+            GUILayout.Space(10);
             MusclesSection(c);
+            GUILayout.Space(10);
+            MarksSection(c);
         }
 
         void VrTab(Character c)
@@ -351,10 +427,18 @@ namespace SfMorph
             if (viewOff == null && Mathf.Abs(vp - _p.EmbodyViewPitch.Value) > 0.01f) _p.EmbodyViewPitch.Value = vp;
             float vr = Slider("View roll", _p.EmbodyViewRoll.Value, -45f, 45f, "0", 0f, viewOff, " deg");
             if (viewOff == null && Mathf.Abs(vr - _p.EmbodyViewRoll.Value) > 0.01f) _p.EmbodyViewRoll.Value = vr;
+            // 0.11.7 (user): the view's position, not only its orientation
+            float vf = Slider("View forward", _p.EmbodyViewForward.Value * 100f, -20f, 20f, "+0.0;-0.0;0", 0f, viewOff, " cm") / 100f;
+            if (viewOff == null && Mathf.Abs(vf - _p.EmbodyViewForward.Value) > 0.0001f) _p.EmbodyViewForward.Value = vf;
+            float vu = Slider("View up", _p.EmbodyViewUp.Value * 100f, -20f, 20f, "+0.0;-0.0;0", 0f, viewOff, " cm") / 100f;
+            if (viewOff == null && Mathf.Abs(vu - _p.EmbodyViewUp.Value) > 0.0001f) _p.EmbodyViewUp.Value = vu;
+            float vrt = Slider("View right", _p.EmbodyViewRight.Value * 100f, -20f, 20f, "+0.0;-0.0;0", 0f, viewOff, " cm") / 100f;
+            if (viewOff == null && Mathf.Abs(vrt - _p.EmbodyViewRight.Value) > 0.0001f) _p.EmbodyViewRight.Value = vrt;
             if (embOn && _body.Embody.Status.Length > 0) GUILayout.Label(_body.Embody.Status, _body.Embody.Status.StartsWith("off") ? _off : _hint);
             GUILayout.Label("The game's own POV camera can end up elsewhere; 'Follow his eyes' keeps your view at his eyes (position only, " +
                             "you turn your own head). A snap faces you the way his chest (or head) faces; turn/tilt/roll correct what is left " +
-                            "(+ turn = right, + tilt = nose up; tilting the world can feel odd, keep it small). Hand offsets per controller: [Embody] in sfmodvr.sfmorph.cfg.", _hint);
+                            "(+ turn = right, + tilt = nose up; tilting the world can feel odd, keep it small); forward / up / right move the view from his eyes in his head's axes. " +
+                            "Embody is off at every game start ([Embody] OnAtStart), and his hands hide the controller models while they follow them. Hand offsets per controller: [Embody] in sfmodvr.sfmorph.cfg.", _hint);
         }
 
         void MorphControls(Character c)
@@ -608,9 +692,11 @@ namespace SfMorph
             bool gpu = GUILayout.Toggle(_p.GpuContactOn.Value, " Per-vertex contact on the GPU");
             if (sliderOff == null && gpu != _p.GpuContactOn.Value) _p.GpuContactOn.Value = gpu;
             GUI.enabled = sliderOff == null && _p.GpuContactOn.Value && _body.Gpu != null;
-            if (GUILayout.Button("Smoke test (3 s)", GUILayout.Width(140))) _body.Gpu.Smoke(3f, 0.01f);
+            if (GUILayout.Button("GPU check (3 s)", GUILayout.Width(140))) _body.Gpu.Smoke(3f, 0.01f);
             GUI.enabled = sliderOff == null;
             GUILayout.EndHorizontal();
+            // 0.11.7 (user: a test button deforms her mesh): it is meant to, so the label says what it does
+            GUILayout.Label("GPU check: sinks all of her skin 1 cm for 3 s, to see that the per-vertex dents run (a deformation is the expected result).", _hint);
             if (sliderOff == null && _p.GpuContactOn.Value && _body.GpuStatus.Length > 0) GUILayout.Label(_body.GpuStatus, _body.GpuStatus.Contains("off:") ? _off : _hint);
             GUI.enabled = true;
             ContactVisualRows(sliderOff);
@@ -652,6 +738,11 @@ namespace SfMorph
             if (en && nrm != _p.ContactNormals.Value) _p.ContactNormals.Value = nrm;
             if (en && self != _p.SelfContact.Value) _p.SelfContact.Value = self;
             if (en && pb != _p.PartnerBody.Value) _p.PartnerBody.Value = pb;
+            // 0.11.7: ripples from his strokes
+            GUI.enabled = en && _p.PartnerBody.Value;
+            bool rt = GUILayout.Toggle(_p.RippleThrust.Value, "    ...and each stroke of his hips sends a ripple through her");
+            GUI.enabled = true;
+            if (en && _p.PartnerBody.Value && rt != _p.RippleThrust.Value) _p.RippleThrust.Value = rt;
             v = Slider("  Bend bulges", _p.BendBulge.Value * 100f, 0f, 100f, "0", 60f, so, " %") / 100f;
             if (Mathf.Abs(v - _p.BendBulge.Value) > 0.0001f) _p.BendBulge.Value = v;
             v = Slider("  Ripple on impact", _p.RippleAmount.Value * 100f, 0f, 200f, "0", 100f, so, " %") / 100f;
@@ -667,6 +758,28 @@ namespace SfMorph
             // 0.9.7 (user: the first hit is too spiky, the spreading rings are a good height)
             v = Slider("    impact dip", _p.RippleImpact.Value * 100f, 0f, 100f, "0", 35f, ro, " %") / 100f;
             if (Mathf.Abs(v - _p.RippleImpact.Value) > 0.0001f) _p.RippleImpact.Value = v;
+            if (en)
+            {
+                if (BendPose.Status.Length > 0) GUILayout.Label(BendPose.Status, _hint);
+                if (Ripple.Status.Length > 0) GUILayout.Label(Ripple.Status, _hint);
+            }
+            GUILayout.Label("Dent edge: how far around a hand the skin follows the dent (5 mm = the old hard edge). Rim bulge: the pressed flesh rises " +
+                            "around it. Bend bulges: biceps, thighs and calves thicken as the joints bend, her belly rounds forward when she sits or squats. " +
+                            "Ripple: a slap or a thrust sends a wave through her glutes, thighs and breasts (speed: how fast it travels; wavelength: crest " +
+                            "to crest, a longer one reaches farther; duration: seconds to fade to a third; impact dip: how deep the first dip under the hand is next to the rings). " +
+                            "Skin marks: Skin tab.", _hint);
+        }
+
+        // Skin marks (hand prints, slap redness): drawn from the GPU contact, so they need it on (Physics tab)
+        void MarksSection(Character c)
+        {
+            GUILayout.Label("Skin marks", _bold);
+            string off = !_p.Apply.Value ? "'Apply changes' is off" : !c.Female || c.IsPlayer ? "only for the game's woman"
+                       : !_p.Physics.Value ? "soft zones are off (Physics tab)" : null;
+            string gpuOff = off ?? (!_p.GpuContactOn.Value ? "GPU contact is off (Physics tab)" : _body.Gpu == null ? "shader bundle not loaded" : null);
+            string so = gpuOff == null ? null : "off: " + gpuOff;
+            bool en = gpuOff == null;
+            float v;
             GUI.enabled = en;
             bool mk = GUILayout.Toggle(_p.SkinMarksOn.Value, " Marks: hand prints and slap redness");
             GUI.enabled = true;
@@ -678,17 +791,9 @@ namespace SfMorph
             if (Mathf.Abs(v - _p.MarksRedness.Value) > 0.0001f) _p.MarksRedness.Value = v;
             v = Slider("    boost", _p.MarksBoost.Value, 1f, 4f, "0.0", 1f, mo, " x");
             if (Mathf.Abs(v - _p.MarksBoost.Value) > 0.001f) _p.MarksBoost.Value = v;
-            if (en)
-            {
-                if (_body.Marks.Status.Length > 0) GUILayout.Label(_body.Marks.Status, _body.Marks.Status.Contains("off:") ? _off : _hint);
-                if (BendPose.Status.Length > 0) GUILayout.Label(BendPose.Status, _hint);
-                if (Ripple.Status.Length > 0) GUILayout.Label(Ripple.Status, _hint);
-            }
-            GUILayout.Label("Dent edge: how far around a hand the skin follows the dent (5 mm = the old hard edge). Rim bulge: the pressed flesh rises " +
-                            "around it. Bend bulges: biceps, thighs and calves thicken as the joints bend, her belly rounds forward when she sits or squats. " +
-                            "Ripple: a slap or a thrust sends a wave through her glutes, thighs and breasts (speed: how fast it travels; wavelength: crest " +
-                            "to crest, a longer one reaches farther; duration: seconds to fade to a third; impact dip: how deep the first dip under the hand is next to the rings). Marks come from hands, the partner and slaps; " +
-                            "her own limbs dent her skin but never redden it.", _hint);
+            if (!en) GUILayout.Label("    " + so, _off);
+            else if (_body.Marks.Status.Length > 0) GUILayout.Label(_body.Marks.Status, _body.Marks.Status.Contains("off:") ? _off : _hint);
+            GUILayout.Label("Marks come from hands, the partner and slaps (her face and neck too, lighter); her own limbs dent her skin but never redden it.", _hint);
         }
 
         static readonly string[] WrinkleDebugs = { "Off", "Activation", "Regions" };

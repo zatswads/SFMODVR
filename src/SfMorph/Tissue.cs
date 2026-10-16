@@ -19,8 +19,9 @@ namespace SfMorph
         // bone classes (design 1.3): 0 none, 1 pelvis, 2 spine, 3 chest, 4 neck, 5 head, 6/7 thigh, 8/9 calf, 10/11 foot, 12/13 upper arm,
         // 14/15 forearm, 16/17 hand, 18/19 butt, 20/21 breast, 22 belly, 23 genital, 24 scapula (even = left for paired classes)
         public const int Classes = 25;
-        public static readonly float[] HardMm =  { 2f, 3f, 3f, 2f, 2f, 1f, 4f, 4f, 3f, 3f, 1f, 1f, 3f, 3f, 2f, 2f, 1f, 1f, 5f, 5f, 4f, 4f, 4f, 3f, 2f };
-        public static readonly float[] SoftMm =  { 0f, 6f, 4f, 2f, 2f, 1f, 12f, 12f, 6f, 6f, 1f, 1f, 7f, 7f, 3f, 3f, 1f, 1f, 18f, 18f, 20f, 20f, 14f, 6f, 2f };
+        // 0.11.7: head 1+1 -> 1.5+3 mm and neck soft 2 -> 3 mm (cheeks and the side of the neck give a little; the face dents at all now)
+        public static readonly float[] HardMm =  { 2f, 3f, 3f, 2f, 2f, 1.5f, 4f, 4f, 3f, 3f, 1f, 1f, 3f, 3f, 2f, 2f, 1f, 1f, 5f, 5f, 4f, 4f, 4f, 3f, 2f };
+        public static readonly float[] SoftMm =  { 0f, 6f, 4f, 2f, 3f, 3f, 12f, 12f, 6f, 6f, 1f, 1f, 7f, 7f, 3f, 3f, 1f, 1f, 18f, 18f, 20f, 20f, 14f, 6f, 2f };
         public static readonly float[] Floor =   { 0f, .4f, .5f, .5f, .5f, .5f, .5f, .5f, .6f, .6f, .3f, .3f, .6f, .6f, .5f, .5f, .5f, .5f, .7f, .7f, .8f, .8f, .7f, .6f, .4f };
         // shin and front of the upper arm: a calf/upper-arm vertex facing forward (bind pose) sits over the tibia / the thin biceps layer
         public const float ShinFloor = 0.1f, BicepsFloor = 0.45f;

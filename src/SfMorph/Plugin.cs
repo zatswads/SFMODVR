@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.11.6";
+        public const string Version = "0.11.7";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -27,7 +27,8 @@ namespace SfMorph
         internal ConfigEntry<bool> KeysUnfocused, Apply, Physics, ShowSoftPoints, EmbodyOn, EmbodyHideHead, HandsOn, HandsCollide, GpuContactOn;
         // 0.7.8 hands: convex-hull body colliders, pushes from hands that aren't physics hands, friction, jointed fingers
         internal ConfigEntry<bool> HandsHull, HandsPushByTouch, HandsPushByPartner, HandsJointed, HandsDrawnFade, HandsFingerConform, EmbodyNeutralFingers, EmbodyElbowAvoid;
-        internal ConfigEntry<float> HandsRestCurl, EmbodyViewYaw, EmbodyViewPitch, EmbodyViewRoll, OverlapStrength;
+        internal ConfigEntry<float> HandsRestCurl, EmbodyViewYaw, EmbodyViewPitch, EmbodyViewRoll, OverlapStrength, EmbodyViewForward, EmbodyViewUp, EmbodyViewRight;
+        internal ConfigEntry<bool> EmbodyAtStart;
         internal ConfigEntry<int> HandsGrabButton, EmbodyViewAlign;
         internal ConfigEntry<float> HandsFriction;
         internal ConfigEntry<float> UiScale, Softness, Springiness, Gravity, OverlapAmount, OverlapArms, OverlapLegs, OverlapHead, OverlapSpine;
@@ -42,11 +43,13 @@ namespace SfMorph
         internal ConfigEntry<int> MuscleDebug;
         // 0.7.9 reactions
         internal ConfigEntry<bool> ReactOn, ReactVoice, ReactFace, ReactFlinch, ReactSound, ReactBlush, ReactBlushBody, ReactGaze, ReactFeedDesire, ReactAuto, ReactClimax, VoiceGuard, ReactLines, ReactFaceClips, ReactLinesGamePath, ReactFoley;
-        internal ConfigEntry<float> ReactSensitivity, ReactCooldown, ReactVolume, ReactBlushGain, ReactVoicePitchVar, ReactLineChance, ReactFaceStrength, VoicePitch, VoiceFormant;
+        internal ConfigEntry<float> ReactSensitivity, ReactCooldown, ReactVolume, ReactSkinVolume, ReactBlushGain, ReactVoicePitchVar, ReactLineChance, ReactFaceStrength, VoicePitch, VoiceFormant;
         internal ConfigEntry<string> ReactFaceMap, VoicePackName;
+        internal ConfigEntry<bool> LipSyncOn;
+        internal ConfigEntry<float> LipStrength, LipLead, LipOverGame;
         internal ConfigEntry<int> ReactVoiceMode, ReactLog, ReactConfigRev;
         // 0.8.0 contact visuals v2 (GPU contact: dent edge, rim bulge, bent normals, self-contact, partner body, bend bulges, ripple, skin marks)
-        internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn, ReactRubSound;
+        internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn, ReactRubSound, VoiceMuteGame, RippleThrust;
         internal ConfigEntry<float> ContactSkirt, ContactBulge, ContactDepth, BendBulge, BendBicepsMm, BendKneeMm, BendCalfMm, BendHipMm, BendBellyFoldMm,
             RippleAmount, RippleSpeed, RippleWavelength, RippleDamping, RippleImpact, MarksRedness, MarksFade, MarksAo, MarksBoost;
         internal ConfigEntry<Vector3> LeftHandPos, LeftHandRot, RightHandPos, RightHandRot;
@@ -81,6 +84,7 @@ namespace SfMorph
             ContactNormals = Config.Bind("Physics", "ContactNormals", true, "GPU contact: the skin's shading follows the dent (bent normals), so a press reads as pressed flesh.");
             ContactDepth = Config.Bind("Physics", "ContactDepth", 1f, new ConfigDescription("GPU contact: depth scale of the per-vertex dent on soft parts (1 = 1-2.5 cm by Softness; bony parts stay at 2-8 mm).", new AcceptableValueRange<float>(0.3f, 2f)));
             SelfContact = Config.Bind("Physics", "SelfContact", true, "Her own limbs press her skin: thighs together, calf on thigh when kneeling, arm on breast and side.");
+            RippleThrust = Config.Bind("Physics", "RippleThrust", true, "Every stroke of the partner's hips against her (0.35 m/s or faster) sends a ripple, not only a first touch (needs PartnerBody).");
             PartnerBody = Config.Bind("Physics", "PartnerBody", true, "The partner's pelvis and thighs press her skin too (not only his hands).");
             BendBulge = Config.Bind("Physics", "BendBulge", 0.6f, new ConfigDescription("Muscles and flesh bulge when joints bend: biceps with the elbow, thigh and calf with the knee, thigh tops and a belly fold when sitting (0 off).", new AcceptableValueRange<float>(0f, 1f)));
             BendBicepsMm = Config.Bind("Physics", "BendBicepsMm", 8f, new ConfigDescription("Biceps bulge at a fully bent elbow (mm, before BendBulge).", new AcceptableValueRange<float>(0f, 20f)));
@@ -149,6 +153,12 @@ namespace SfMorph
             EmbodyViewYaw = Config.Bind("Embody", "ViewYaw", 0f, new ConfigDescription("Turn correction of the view on a snap (degrees, + = turn right).", new AcceptableValueRange<float>(-90f, 90f)));
             EmbodyViewPitch = Config.Bind("Embody", "ViewPitch", 0f, new ConfigDescription("Tilt correction of the world on a snap (degrees, + = nose up). Tilting the world can be uncomfortable: small values.", new AcceptableValueRange<float>(-45f, 45f)));
             EmbodyViewRoll = Config.Bind("Embody", "ViewRoll", 0f, new ConfigDescription("Roll correction of the world on a snap (degrees).", new AcceptableValueRange<float>(-45f, 45f)));
+            EmbodyViewForward = Config.Bind("Embody", "ViewForward", 0f, new ConfigDescription("View position: forward (+) or back from his eyes (m, his head's axes).", new AcceptableValueRange<float>(-0.2f, 0.2f)));
+            EmbodyViewUp = Config.Bind("Embody", "ViewUp", 0f, new ConfigDescription("View position: up (+) or down from his eyes (m).", new AcceptableValueRange<float>(-0.2f, 0.2f)));
+            EmbodyViewRight = Config.Bind("Embody", "ViewRight", 0f, new ConfigDescription("View position: right (+) or left of his eyes (m).", new AcceptableValueRange<float>(-0.2f, 0.2f)));
+            // 0.11.7 (user): Embody starts off with every game start; the toggle is for this session only unless asked otherwise
+            EmbodyAtStart = Config.Bind("Embody", "OnAtStart", false, "Keep Embody's on/off from the last session (off: Embody is always off when the game starts).");
+            if (!EmbodyAtStart.Value && EmbodyOn.Value) EmbodyOn.Value = false;
             EmbodyNeutralFingers = Config.Bind("Embody", "NeutralFingers", true, "His fingers rest in a neutral pose instead of the animation's; the grab button (VR -> Grab with, the trigger by default) closes the whole hand and it stops on her skin.");
             EmbodyElbowAvoid = Config.Bind("Embody", "ElbowAvoid", true, "His elbow swings around her instead of his arm passing through her.");
             EmbodyView = Config.Bind("Embody", "View", 2, new ConfigDescription("0 the game's camera, 1 snap to his eyes once, 2 follow his eyes.", new AcceptableValueRange<int>(0, 2)));
@@ -175,12 +185,18 @@ namespace SfMorph
             ReactFace = Config.Bind("Reactions", "Face", true, "Her face reacts to touch: the game's own eye reaction on slaps (and soft ones on caresses and gropes), with a wince or blink alongside when no moan carries the face.");
             ReactFlinch = Config.Bind("Reactions", "Flinch", true, "Her body swings and her soft zones jiggle after a slap (needs the limb push slider above 0).");
             ReactSound = Config.Bind("Reactions", "Sound", true, "A slap sound at the spot of a slap.");
-            ReactVolume = Config.Bind("Reactions", "Volume", 0.6f, new ConfigDescription("Slap and skin sound volume.", new AcceptableValueRange<float>(0f, 1f)));
+            ReactVolume = Config.Bind("Reactions", "Volume", 0.6f, new ConfigDescription("Slap sound volume.", new AcceptableValueRange<float>(0f, 1f)));
+            ReactSkinVolume = Config.Bind("Reactions", "SkinVolume", 0.8f, new ConfigDescription("Volume of the pat, grab and rub sounds (0.11.7: was the slap volume).", new AcceptableValueRange<float>(0f, 1f)));
             ReactFoley = Config.Bind("Reactions", "Foley", true, "Skin sounds: slaps from your own WAV files in BepInEx\\plugins\\SfMorph\\Sounds (slap_soft / slap_medium / slap_hard; none: the game's clips), a pat on light taps, a grab when a hand closes on her, a rub while a hand slides over her skin (your files in pat / grab / rub, else built-in sounds). Off: the game's slap clips only.");
             ReactRubSound = Config.Bind("Reactions", "RubSound", true, "With Skin sounds on: the soft rub while a hand slides over her skin (your files in Sounds\\rub, else a built one). Off mutes just the rub; slaps, pats and grabs keep sounding.");
             VoicePackName = Config.Bind("Voice", "Pack", "", "Her reaction voice from a voice pack: a folder name under BepInEx\\plugins\\SfMorph\\Sounds\\voice (breath_calm, breath_heavy, moan_low, moan_mid, moan_high, climax, exertion with WAV files). Empty: the game's own voice. While a pack is on, the game's lines and feeling sounds are not used (another voice).");
+            VoiceMuteGame = Config.Bind("Voice", "MuteGameVoice", false, "While a voice pack is on: the game's own moans and dirty talk are silent (the pack's clips still play on the same sources; story dialogue is left alone).");
             VoicePitch = Config.Bind("Voice", "Pitch", 1f, new ConfigDescription("Her voice's pitch (moans, lines, dialogue), without changing its speed. 1 = as recorded.", new AcceptableValueRange<float>(0.75f, 1.4f)));
             VoiceFormant = Config.Bind("Voice", "Formant", 1f, new ConfigDescription("Her voice's formants (the size of the voice: below 1 fuller / older, above 1 smaller / younger), without changing pitch or speed. 1 = as recorded.", new AcceptableValueRange<float>(0.8f, 1.25f)));
+            LipSyncOn = Config.Bind("Voice", "LipSync", true, "Her mouth follows Audio2Face lip-sync curves baked for her voice clips (tools/a2f; curves in BepInEx\\config\\SfMorphs\\lipsync\\<pack> mirroring the pack's folders, the game's clips in lipsync\\game), through the mouth poses in arkit-map.txt. A clip without a curve keeps the loudness jaw / the game's mouth. Needs Reactions, Face and Face clips on.");
+            LipStrength = Config.Bind("Voice", "LipStrength", 1f, new ConfigDescription("How strongly the curves move her mouth (1 = as baked).", new AcceptableValueRange<float>(0f, 1.5f)));
+            LipLead = Config.Bind("Voice", "LipLead", 0.04f, new ConfigDescription("Seconds the mouth runs ahead of the sound (a mouth shapes a sound slightly before it is heard).", new AcceptableValueRange<float>(-0.1f, 0.2f)));
+            LipOverGame = Config.Bind("Voice", "LipOverGame", 0.5f, new ConfigDescription("Under the lip-sync poses: 0 = the game's mouth of the moment (the poses add on top), 1 = her neutral mouth (the game's mouth is replaced).", new AcceptableValueRange<float>(0f, 1f)));
             ReactBlush = Config.Bind("Reactions", "Blush", true, "Her face reddens with excitement and after slaps.");
             ReactBlushBody = Config.Bind("Reactions", "BlushBody", false, "Her body skin reddens too, at half strength.");
             ReactBlushGain = Config.Bind("Reactions", "BlushGain", 0.6f, new ConfigDescription("How strong the redness is.", new AcceptableValueRange<float>(0f, 2f)));

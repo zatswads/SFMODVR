@@ -906,7 +906,7 @@ namespace SfMorph
                 if (s.R == null || !s.R.enabled || !s.R.gameObject.activeInHierarchy) continue;
                 if (s.Mesh != s.R.sharedMesh && _z != null) { if (s.Extra) SetupMesh(s, new float[s.R.sharedMesh != null ? s.R.sharedMesh.vertexCount : 0], null); else SetupMesh(s, _z.MaskFor(s.R), _z.ZoneFor(s.R)); }   // the mesh was swapped under us
                 if (!s.Ok) continue;
-                s.NeedCalib = s.Space == 0 && s.CalibState == 0 && s.CalibTries < CalibMaxTries && frame >= s.CalibNextFrame;
+                s.NeedCalib = s.Space == 0 && s.CalibState == 0 && s.CalibTries < CalibMaxTries + 4 && frame >= s.CalibNextFrame;   // +4: an unreadable mesh waits for a sibling's space (RequestCalibration)
                 bool v2 = useV2 && s.V2 && s.Space > 0;
                 s.IsV2 = v2;
                 s.CapOff = capUsed; s.CapN = 0; s.CapN1 = 0;
@@ -1107,14 +1107,23 @@ namespace SfMorph
             }
             if (s.Depth)
             {
-                int iters = Mathf.Clamp(Mathf.CeilToInt(3f * skirt / Mathf.Max(0.001f, s.Bake.AvgEdge)), 2, 10);
-                // 0.8.9: Depth's raw field stays in D (Compose's floor); dilate D -> A, then A/B; wide ends in A; Compose writes B
+                // 0.11.7 (user: the dents look polygonal again): the passes are sized in metres, not in vertex hops. Fidelity's subdivision
+                // halves the edges, so the fixed 2 + 3 smoothing passes (sized for her own mesh, ~7 mm edges) blurred half as far and the
+                // dent kept the capsules' outline; the dilate was sized by the mean edge, which the dense fingers pull down to 2.4 mm (cap 10).
+                float e = Mathf.Max(0.001f, s.Bake.SkinEdge > 0f ? s.Bake.SkinEdge : s.Bake.AvgEdge);
+                int iters = Mathf.Clamp(Mathf.CeilToInt(3f * skirt / e), 2, 16);
+                int narrow = Mathf.Clamp(Mathf.RoundToInt(0.012f / e), 2, 6);    // ~1.2 cm (2 passes at 7 mm)
+                int wide = Mathf.Clamp(Mathf.RoundToInt(0.024f / e), 3, 10);     // ~2.4 cm (3 passes at 7 mm)
+                // 0.8.9: Depth's raw field stays in D (Compose's floor); dilate D -> A, then A/B; narrow ends in C, wide in A; Compose writes B
                 Pass(_kDilate, vb, s, s.FieldD, A, groups); n++;
                 GraphicsBuffer cur = A, oth = B;
                 for (int i = 1; i < iters; i++) { Pass(_kDilate, vb, s, cur, oth, groups); n++; var t = cur; cur = oth; oth = t; }
-                Pass(_kSmooth, vb, s, cur, oth, groups); Pass(_kSmooth, vb, s, oth, s.FieldC, groups);        // narrow -> C
-                Pass(_kSmooth, vb, s, s.FieldC, A, groups); Pass(_kSmooth, vb, s, A, B, groups); Pass(_kSmooth, vb, s, B, A, groups);   // wide -> A
-                n += 5;
+                for (int i = 0; i < narrow - 1; i++) { Pass(_kSmooth, vb, s, cur, oth, groups); n++; var t = cur; cur = oth; oth = t; }
+                Pass(_kSmooth, vb, s, cur, s.FieldC, groups); n++;                                            // narrow -> C
+                // wide from C: an odd count ends in A when it starts C -> A
+                cur = s.FieldC; oth = A;
+                for (int i = 0; i < wide; i++) { Pass(_kSmooth, vb, s, cur, oth, groups); n++; cur = oth; oth = ReferenceEquals(cur, A) ? B : A; }
+                if (!ReferenceEquals(cur, A)) { Pass(_kSmooth, vb, s, cur, A, groups); n++; }                 // wide -> A
             }
             for (int d = 0; d < 4; d++)
             {
@@ -1231,7 +1240,23 @@ namespace SfMorph
             var m = r.sharedMesh;
             var bones = r.bones;
             var bind = m.bindposes;
-            if (!m.isReadable) { CalibFail(s, "mesh is not readable"); return; }
+            if (!m.isReadable)
+            {
+                // 0.11.7: her face and neck are GPU-only meshes (no CPU vertices to skin), so they never calibrated and had no dents or
+                // marks since 0.9.7. Unity skins every renderer of one rig into the same convention: take the space a readable renderer
+                // of hers found (rootBone in every log so far), waiting a few tries for one to finish.
+                RendState from = null;
+                foreach (var o in _rs)
+                    if (o != s && o.Space > 0 && o.R != null && (from == null || (o.Space == 1 && from.Space != 1))) from = o;
+                if (from != null)
+                {
+                    s.Space = from.Space;
+                    Plugin.Log.LogInfo("GPU contact: renderer " + s.Name + " space " + SpaceNames[s.Space] + " taken from " + from.Name + " (its mesh is not readable for a CPU check)");
+                    UpdateStatus();
+                }
+                else if (s.CalibTries >= CalibMaxTries + 3) CalibFail(s, "mesh is not readable and no other renderer of hers calibrated");
+                return;
+            }
             var bw = m.boneWeights;
             var verts = m.vertices;
             if (bw.Length != verts.Length || bones.Length != bind.Length || bones.Length == 0) { CalibFail(s, "no usable bone weights/bindposes (bones " + bones.Length + ", bindposes " + bind.Length + ")"); return; }

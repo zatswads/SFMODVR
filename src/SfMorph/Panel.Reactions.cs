@@ -71,6 +71,18 @@ namespace SfMorph
             bool trub = GUILayout.Toggle(rubCfg, "    Rub sound while a hand slides over her skin");
             GUI.enabled = true;
             if (sub == null && sound && foley && trub != rubCfg) _p.ReactRubSound.Value = trub;
+            // 0.11.7: the pat / grab / rub have their own volume (they were scaled by the slap volume and inaudible at a quiet one)
+            string skinOff = sub ?? (!sound ? "Sound is off" : !foley ? "skin sounds are off" : null);
+            float skinCfg = _p.ReactSkinVolume.Value;
+            float sv = Slider("    skin volume", skinCfg * 100f, 0f, 100f, "0", 80f, skinOff == null ? null : "off: " + skinOff, " %") / 100f;
+            if (skinOff == null && Mathf.Abs(sv - skinCfg) > 0.0001f) _p.ReactSkinVolume.Value = sv;
+            GUI.enabled = skinOff == null;
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Test pat")) react.TestResponse(6);
+            if (GUILayout.Button("Test grab")) react.TestResponse(8);
+            if (GUILayout.Button("Test rub (1.5 s)")) react.TestResponse(7);
+            GUILayout.EndHorizontal();
+            GUI.enabled = true;
             if (!sound) GUILayout.Label("    off: Sound is off", _off);
             else if (foley)
             {
@@ -111,6 +123,7 @@ namespace SfMorph
                             "Feed: touch also raises the game's own desire gauge.", _hint);
 
             FaceClipsBlock(react, sub, face, faceClips, faceStrCfg);
+            LipSyncBlock(react, sub, face, faceClips);
 
             GUI.enabled = sub == null && voice;
             GUILayout.Label("Voice", _hint);
@@ -274,6 +287,113 @@ namespace SfMorph
                             "surprise on soft slaps, pain on hard ones. Her mouth stays the game's while she speaks or moans.", _hint);
         }
 
+        // 0.9.9: lip sync from Audio2Face curves, and the mouth pose editor (one pose per ARKit shape, saved to arkit-map.txt)
+        bool _lipOpen, _lipTongue, _lipPrev;
+        int _lipShape, _lipBone;
+        float _lipPrevW = 1f;
+        string _lipMsg = "";
+
+        void LipSyncBlock(Reactions react, string sub, bool face, bool faceClips)
+        {
+            var fc = react.Face;
+            bool on = _p.LipSyncOn.Value;
+            float strCfg = _p.LipStrength.Value, leadCfg = _p.LipLead.Value, overCfg = _p.LipOverGame.Value;
+            string off = sub ?? (!face ? "Face is off" : !faceClips ? "face clips are off (the lip sync uses their survey of her face)" : null);
+            bool ready = off == null && fc.LipReady;
+            bool open = _lipOpen, prev = _lipPrev;
+            GUILayout.Label("Lip sync (Audio2Face curves)", _hint);
+            GUI.enabled = off == null;
+            bool t = GUILayout.Toggle(on, " Her mouth follows baked lip-sync curves for her voice clips");
+            GUI.enabled = true;
+            if (off == null && t != on) _p.LipSyncOn.Value = t;
+            string soff = off ?? (!on ? "lip sync is off" : null);
+            float st = Slider("Lip strength", strCfg * 100f, 0f, 150f, "0", 100f, soff, " %") / 100f;
+            if (soff == null && Mathf.Abs(st - strCfg) > 0.0001f) _p.LipStrength.Value = st;
+            float ld = Slider("Lip lead", leadCfg * 1000f, -100f, 200f, "0", 40f, soff, " ms") / 1000f;
+            if (soff == null && Mathf.Abs(ld - leadCfg) > 0.00001f) _p.LipLead.Value = ld;
+            float ov = Slider("Replace the game's mouth", overCfg * 100f, 0f, 100f, "0", 50f, off, " %") / 100f;
+            if (off == null && Mathf.Abs(ov - overCfg) > 0.0001f) _p.LipOverGame.Value = ov;
+            if (off != null) GUILayout.Label("    off: " + off, _off);
+            else if (!fc.LipReady) GUILayout.Label("    waiting for her face survey (" + fc.Status + ")", _hint);
+            else
+            {
+                string pk = ReactionsGame.Pack.Loaded ? ReactionsGame.Pack.Name : "";
+                int nc = pk.Length > 0 ? LipSync.PackCurves(pk) : -1;
+                GUILayout.Label((pk.Length > 0 ? "Pack '" + pk + "': " + (nc < 0 ? "no curves (" + System.IO.Path.Combine(LipSync.Dir, pk) + ")" : nc + " curves") : "No voice pack on")
+                                + ". Map: " + LipSync.PosedShapes + " of " + LipSync.K + " shapes posed" + (LipSync.Dirty ? " (unsaved)" : "")
+                                + (react.LipStatus.Length > 0 ? ". Last: " + react.LipStatus : ""), _hint);
+            }
+            GUI.enabled = ready && on;
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Test: a pack clip with lip sync")) react.TestLip();
+            GUI.enabled = true;
+            if (GUILayout.Button("Rescan curves", GUILayout.Width(120))) { LipSync.Rescan(); _lipMsg = "curves are read again on next use"; }
+            GUILayout.EndHorizontal();
+
+            if (GUILayout.Button((open ? "- " : "+ ") + "Mouth poses for the lip sync", _bold)) { _lipOpen = !open; if (open) _lipPrev = false; }
+            if (!open || !ready) react.LipPreview = -1;
+            if (!open) return;
+            if (!ready) { GUILayout.Label("    off: " + (off ?? "her face survey is not done yet"), _off); return; }
+            LipSync.LoadMap(false);
+            int K = LipSync.K;
+            int shape = Mathf.Clamp(_lipShape, 0, K - 1);
+            var names = new string[K];
+            for (int i = 0; i < K; i++) names[i] = (LipSync.Map[i].Count > 0 ? "* " : "") + LipSync.Shapes[i];
+            int ns = GUILayout.SelectionGrid(shape, names, 4);
+            if (ns != shape) { _lipShape = ns; _lipBone = 0; }
+            bool pv = GUILayout.Toggle(prev, " Preview this shape on her face");
+            if (pv != prev) _lipPrev = pv;
+            float pw = Slider("Preview weight", _lipPrevW * 100f, 0f, 100f, "0", 100f, prev ? null : "off: preview is off", " %") / 100f;
+            if (prev) _lipPrevW = pw;
+            react.LipPreview = prev ? shape : -1; react.LipPreviewW = _lipPrevW;
+
+            // the bone being posed (jaw, lips, cheeks; tongue and teeth on request)
+            var bones = new System.Collections.Generic.List<int>();
+            for (int i = 0; i < fc.LipCount; i++) if (_lipTongue || !fc.LipIsTongue(i)) bones.Add(i);
+            if (bones.Count == 0) { GUILayout.Label("    off: no mouth bones", _off); return; }
+            int bi = Mathf.Clamp(_lipBone, 0, bones.Count - 1);
+            int b = bones[bi];
+            string bn = fc.LipName(b);
+            var pose = LipSync.Find(shape, bn, false);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Bone", GUILayout.Width(170));
+            if (GUILayout.Button("<", GUILayout.Width(32))) _lipBone = (bi - 1 + bones.Count) % bones.Count;
+            GUILayout.Label(bn + (pose != null ? " *" : ""), GUILayout.Width(200));
+            if (GUILayout.Button(">", GUILayout.Width(32))) _lipBone = (bi + 1) % bones.Count;
+            bool tt = GUILayout.Toggle(_lipTongue, " tongue / teeth");
+            GUILayout.EndHorizontal();
+            if (tt != _lipTongue) { _lipTongue = tt; _lipBone = 0; }
+            float mm = fc.LipMm(b);
+            Vector3 P = pose != null ? pose.P * mm : Vector3.zero, R = pose != null ? pose.R : Vector3.zero;
+            Vector3 nP = P, nR = R;
+            nP.x = Slider("Move X", P.x, -10f, 10f, "+0.0;-0.0;0", 0f, null, " mm");
+            nP.y = Slider("Move Y", P.y, -10f, 10f, "+0.0;-0.0;0", 0f, null, " mm");
+            nP.z = Slider("Move Z", P.z, -10f, 10f, "+0.0;-0.0;0", 0f, null, " mm");
+            nR.x = Slider("Turn X", R.x, -40f, 40f, "+0;-0;0", 0f, null, " deg");
+            nR.y = Slider("Turn Y", R.y, -40f, 40f, "+0;-0;0", 0f, null, " deg");
+            nR.z = Slider("Turn Z", R.z, -40f, 40f, "+0;-0;0", 0f, null, " deg");
+            if ((nP - P).sqrMagnitude > 1e-8f || (nR - R).sqrMagnitude > 1e-6f)
+            {
+                pose = LipSync.Find(shape, bn, true);
+                pose.P = nP / Mathf.Max(1e-6f, mm); pose.R = nR;
+                LipSync.Changed();
+            }
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Seed empty shapes from her face clips")) { string r; fc.Seed(true, -1, out r); _lipMsg = r; }
+            if (GUILayout.Button("Reseed this shape")) { string r; fc.Seed(false, shape, out r); _lipMsg = r; }
+            if (GUILayout.Button("Clear this shape")) { LipSync.Map[shape].Clear(); LipSync.Changed(); _lipMsg = LipSync.Shapes[shape] + " cleared"; }
+            GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button(LipSync.Dirty ? "Save *" : "Save")) { LipSync.SaveMap(); _lipMsg = LipSync.MapStatus; }
+            if (GUILayout.Button("Reload from file")) { LipSync.LoadMap(true); _lipMsg = LipSync.MapStatus; }
+            GUILayout.EndHorizontal();
+            if (_lipMsg.Length > 0) GUILayout.Label(_lipMsg, _hint);
+            else if (LipSync.MapStatus.Length > 0) GUILayout.Label(LipSync.MapStatus, _hint);
+            GUILayout.Label("One pose per ARKit shape at full weight: pick a shape (* = posed), turn on the preview, then move and turn each mouth bone until her mouth shows it. " +
+                            "Seeding takes, per shape, the face clip frame of the survey (" + fc.LipSampleCount + " mouth samples) that shows it most, as a start. " +
+                            "The lip sync plays the curves through these poses (weighted sum, on top of the game's mouth by 'Replace the game's mouth'). Saved to " + LipSync.MapPath + ".", _hint);
+        }
+
         // The game's dirty-talk voice error repair: independent of the reactions toggle, only needs her.
         void GameVoiceBlock(string whoOff, bool guard, string guardStatus, Reactions react, bool bridge, bool diagBusy, bool diagRan)
         {
@@ -295,6 +415,14 @@ namespace SfMorph
             GUI.enabled = true;
             GUILayout.EndHorizontal();
             var vp = ReactionsGame.Pack;
+            // 0.11.7: the game's own moans and dirty talk silent while a pack is on
+            bool mute = _p.VoiceMuteGame.Value;
+            GUI.enabled = whoOff == null && pk.Length > 0;
+            bool tm = GUILayout.Toggle(mute, " Mute the game's own voice while the pack is on (moans, dirty talk; not story dialogue)");
+            GUI.enabled = true;
+            if (whoOff == null && pk.Length > 0 && tm != mute) _p.VoiceMuteGame.Value = tm;
+            if (pk.Length == 0) GUILayout.Label("    off: no voice pack chosen", _off);
+            else if (mute) GUILayout.Label("    " + (react.GameVoiceMuted > 0 ? "muting " + react.GameVoiceMuted + " of the game's voice sources now" : "nothing of the game's playing now (needs Reactions on)"), _hint);
             if (pk.Length > 0) GUILayout.Label(vp.Name == pk && vp.Summary.Length > 0 ? (vp.Loaded ? "" : "off: ") + vp.Summary : "loads within a second (in the game scene)", vp.Name == pk && !vp.Loaded && vp.Summary.Length > 0 ? _off : _hint);
             GUILayout.Label("A voice pack replaces her reaction moans, breaths, slap exertions and climax; a pack with lines also speaks for the touched area (with Lines on, no sex mode needed), guards, asks for more and talks in the afterglow. Her jaw follows the pack's audio (needs Face clips). The game's own lines and feeling sounds stay off while a pack is on.", _hint);
             string vfs = react.VoiceFxStatus;
@@ -315,6 +443,15 @@ namespace SfMorph
             else if (diagBusy) GUILayout.Label("Listen for two short beeps and a slap; she may wince once.", _hint);
             else if (diagRan) GUILayout.Label("Diagnose ran: see LogOutput.log, 'Reactions diagnose'", _hint);
             else GUILayout.Label("Plays a test tone and one slap clip, sets the moan trigger once, and logs what the audio and face chain looks like.", _hint);
+
+            // 0.9.9: the game's voice clips to WAV, for baking lip-sync curves (tools/a2f)
+            bool dumping = react.Dumping;
+            GUI.enabled = bridge && !dumping;
+            if (GUILayout.Button(dumping ? "Dumping voice clips..." : "Dump her voice clips to WAV (for lip sync)")) react.DumpVoice();
+            GUI.enabled = true;
+            string ds = react.DumpStatus;
+            GUILayout.Label(ds.Length > 0 ? ds : "Writes the current voice language's moans, breaths, feeling sounds and dirty-talk lines to " + LipSync.DumpDir +
+                            " as <clip>_<samples>.wav. Bake them with tools\\a2f\\bake.bat into " + System.IO.Path.Combine(LipSync.Dir, "game") + ".", ds.StartsWith("off") ? _off : _hint);
         }
 
         // The next voice pack folder ("" = the game's voice comes first).

@@ -86,6 +86,12 @@ namespace SfMorph
         bool _sOn, _sRel; float _sT, _sW, _sHold;
         public bool HasBuiltSurprise { get { return _face != null && _sBones != null && _sBones.Length > 0; } }
 
+        // 0.9.9 lip sync: the mouth bones (jaw, lips, cheeks, then tongue / teeth), their neutral local pose (from the bind poses), their
+        // parent's frame in the head's frame, and the mouth poses the survey saw (seeds for the ARKit map)
+        int[] _lip; Vector3[] _nP; Quaternion[] _nQ; bool[] _hasN; Matrix4x4[] _parH; float[] _mmUnit;
+        sealed class LipSample { public string Clip; public Vector3[] P; public Quaternion[] R; public bool[] HasP, HasR; }
+        readonly List<LipSample> _lipSamples = new List<LipSample>();
+        int _mapVer = -1; int[][] _mapB; Vector3[][] _mapP, _mapR; int[] _mapped; Vector3[] _accP, _accR;
         public bool HasJaw { get { return _phase == 3 && _jaw >= 0 && _jawDeg >= 2f && _face != null && _face[_jaw] != null; } }
         readonly Dictionary<string, string> _hooked = new Dictionary<string, string>();
         string _map = null;
@@ -173,6 +179,7 @@ namespace SfMorph
             for (int b = 0; b < nf; b++) { _snapP[b] = _head.InverseTransformPoint(_face[b].position); _snapR[b] = Quaternion.Inverse(_head.rotation) * _face[b].rotation; }
             _jaw = -1; _jawDeg = 0f; _jawD = Quaternion.identity; _jawFrom = "";
             for (int b = 0; b < nf; b++) { string jn = _face[b].name.ToLowerInvariant(); if (jn == "jaw_m") { _jaw = b; break; } if (_jaw < 0 && jn.Contains("jaw")) _jaw = b; }
+            BindLip(bp, H, headBind);
             L("bound to '" + _root.name + "' (" + n + " transforms, " + _rends.Length + " renderers), " + nf + " face bones under Head_M (" + nb + " with a bind pose; eyeballs and hair left out)");
             BindSurprise(bp);
             return nf > 0;
@@ -340,7 +347,7 @@ namespace SfMorph
 
         void Reset(string why)
         {
-            _phase = 0; _next = 0; _clips.Clear(); _ranked.Clear(); _tracks.Clear(); _build.Clear(); _hooked.Clear();
+            _phase = 0; _next = 0; _clips.Clear(); _ranked.Clear(); _tracks.Clear(); _build.Clear(); _hooked.Clear(); _lipSamples.Clear(); _lip = null; _mapVer = -1;
             for (int i = 0; i < NM; i++) { _pick[i] = null; _pickWhy[i] = null; if (_pool[i] != null) _pool[i].Clear(); }
             _anim = null; _go = null; _root = null; _head = null; _ctrl = null; _all = null; _rends = null; _face = null;
             _cur = null; _curMood = -1; _pendMood = -1; _sampleBroken = false; _map = null; _watchTag = null;
@@ -383,6 +390,7 @@ namespace SfMorph
                     if (s > top[b]) top[b] = s;
                 }
                 for (int g = 0; g < NG; g++) if (gs[g] > ci.G[g]) ci.G[g] = gs[g];
+                KeepLipSample(ci);
             }
             RestoreFace();
             ci.Score = 0f; ci.Bound = 0;
@@ -822,6 +830,295 @@ namespace SfMorph
             if (!HasJaw || !(open > 0.001f) || _anim == null || !_anim.isActiveAndEnabled) return;
             var t = _face[_jaw];
             t.localRotation = t.localRotation * Quaternion.SlerpUnclamped(Quaternion.identity, _jawD, Mathf.Clamp01(open));
+        }
+
+        // ---------------- 0.9.9: lip sync (LipSync.cs) ----------------
+
+        public bool LipReady { get { return _phase == 3 && !_sampleBroken && _lip != null && _lip.Length > 0 && _anim != null; } }
+        public int LipCount { get { return _lip != null ? _lip.Length : 0; } }
+        public string LipName(int i) { return _lip != null && i >= 0 && i < _lip.Length && _face[_lip[i]] != null ? _face[_lip[i]].name : ""; }
+        public bool LipIsTongue(int i) { string n = LipName(i).ToLowerInvariant(); return n.Contains("tongue") || n.Contains("teeth") || n.Contains("tooth"); }
+        // mm per local position unit of the bone (its parent's scale), for the editor's sliders
+        public float LipMm(int i) { return _mmUnit != null && i >= 0 && i < _mmUnit.Length ? _mmUnit[i] : 1000f; }
+        public int LipSampleCount { get { return _lipSamples.Count; } }
+
+        static int Order(string n)
+        {
+            string s = n.ToLowerInvariant();
+            if (s.Contains("jaw")) return 0;
+            if (s.StartsWith("lip_") || s.Contains("lip")) return 1;
+            if (s.Contains("cheek")) return 2;
+            if (s.Contains("nose") || s.Contains("nasolabial") || s.Contains("chin") || s.Contains("mouth")) return 3;
+            return 4;   // tongue, teeth
+        }
+
+        // The mouth bones and their neutral local pose: the bone's bind pose in the head's frame seen from its parent (the parent's bind pose
+        // if it is a face bone with one, else its current frame: 'Facial' and similar holders are not animated).
+        void BindLip(Dictionary<Transform, Matrix4x4> bp, Matrix4x4 H, bool headBind)
+        {
+            int nf = _face.Length;
+            var lip = new List<int>();
+            for (int b = 0; b < nf; b++) if (_grp[b] == GMouth || _grp[b] == GCheeks) lip.Add(b);
+            lip.Sort((a, c) => { int d = Order(_face[a].name).CompareTo(Order(_face[c].name)); return d != 0 ? d : string.CompareOrdinal(_face[a].name, _face[c].name); });
+            _lip = lip.ToArray();
+            int nl = _lip.Length;
+            _nP = new Vector3[nl]; _nQ = new Quaternion[nl]; _hasN = new bool[nl]; _parH = new Matrix4x4[nl]; _mmUnit = new float[nl];
+            var faceOf = new Dictionary<Transform, int>();
+            for (int b = 0; b < nf; b++) faceOf[_face[b]] = b;
+            Matrix4x4 headW2L = _head.worldToLocalMatrix;
+            int neutral = 0;
+            for (int i = 0; i < nl; i++)
+            {
+                var t = _face[_lip[i]];
+                var par = t.parent;
+                int pi;
+                Matrix4x4 PH;
+                Matrix4x4 PB;
+                if (par == _head) PH = Matrix4x4.identity;
+                else if (par != null && faceOf.TryGetValue(par, out pi) && headBind && bp.TryGetValue(par, out PB)) PH = H * PB.inverse;
+                else PH = par != null ? headW2L * par.localToWorldMatrix : Matrix4x4.identity;
+                _parH[i] = PH;
+                _mmUnit[i] = par != null ? par.TransformVector(Vector3.right).magnitude * 1000f : 1000f;
+                Matrix4x4 B;
+                if (headBind && bp.TryGetValue(t, out B))
+                {
+                    var loc = PH.inverse * (H * B.inverse);
+                    _nP[i] = loc.GetColumn(3); _nQ[i] = loc.rotation; _hasN[i] = true; neutral++;
+                }
+                else { t.GetLocalPositionAndRotation(out _nP[i], out _nQ[i]); }
+            }
+            _lipSamples.Clear(); _mapVer = -1;
+            L("lip sync: " + nl + " mouth bones (" + neutral + " with a neutral pose from the bind poses)");
+        }
+
+        // the survey's sample of this clip at one time: the mouth bones it writes, as local poses
+        void KeepLipSample(ClipInfo ci)
+        {
+            if (_lip == null || _lipSamples.Count >= 4000) return;
+            LipSample s = null;
+            for (int i = 0; i < _lip.Length; i++)
+            {
+                int b = _lip[i];
+                if (!ci.PosB[b] && !ci.RotB[b]) continue;
+                if (s == null) s = new LipSample { Clip = ci.Name, P = new Vector3[_lip.Length], R = new Quaternion[_lip.Length], HasP = new bool[_lip.Length], HasR = new bool[_lip.Length] };
+                Vector3 p; Quaternion q; _face[b].GetLocalPositionAndRotation(out p, out q);
+                s.P[i] = p; s.R[i] = q; s.HasP[i] = ci.PosB[b]; s.HasR[i] = ci.RotB[b];
+            }
+            if (s != null) _lipSamples.Add(s);
+        }
+
+        void ResolveMap()
+        {
+            if (_mapVer == LipSync.MapVersion && _mapB != null) return;
+            _mapVer = LipSync.MapVersion;
+            int K = LipSync.K, nl = _lip.Length;
+            _mapB = new int[K][]; _mapP = new Vector3[K][]; _mapR = new Vector3[K][];
+            var mapped = new bool[nl];
+            for (int s = 0; s < K; s++)
+            {
+                var l = LipSync.Map[s];
+                var bi = new List<int>(); var ps = new List<Vector3>(); var rs = new List<Vector3>();
+                foreach (var e in l)
+                {
+                    int i = -1;
+                    for (int k = 0; k < nl; k++) if (_face[_lip[k]].name == e.Bone) { i = k; break; }
+                    if (i < 0) continue;
+                    bi.Add(i); ps.Add(e.P); rs.Add(e.R); mapped[i] = true;
+                }
+                _mapB[s] = bi.ToArray(); _mapP[s] = ps.ToArray(); _mapR[s] = rs.ToArray();
+            }
+            var ml = new List<int>();
+            for (int i = 0; i < nl; i++) if (mapped[i]) ml.Add(i);
+            _mapped = ml.ToArray();
+            _accP = new Vector3[nl]; _accR = new Vector3[nl];
+        }
+
+        // Body.ApplyAll for her, after Step: the mouth from the ARKit weights w (LipSync.K) through the map. fade 0..1 blends from the
+        // Animator's mouth of this frame; over 0..1 is how much of the game's mouth is replaced by her neutral mouth under the deltas
+        // (0 = the deltas add on the game's mouth). Only bones the map poses are written. False = nothing written (no posed bone).
+        public bool LipStep(float[] w, float fade, float over)
+        {
+            if (!LipReady || !(fade > 0.001f) || !_anim.isActiveAndEnabled) return false;
+            ResolveMap();
+            if (_mapped.Length == 0) return false;
+            foreach (int i in _mapped) { _accP[i] = Vector3.zero; _accR[i] = Vector3.zero; }
+            for (int s = 0; s < LipSync.K; s++)
+            {
+                float ws = w[s];
+                if (ws < 1e-4f) continue;
+                var bi = _mapB[s]; var ps = _mapP[s]; var rs = _mapR[s];
+                for (int k = 0; k < bi.Length; k++) { _accP[bi[k]] += ps[k] * ws; _accR[bi[k]] += rs[k] * ws; }
+            }
+            fade = Mathf.Clamp01(fade); over = Mathf.Clamp01(over);
+            foreach (int i in _mapped)
+            {
+                var t = _face[_lip[i]];
+                if (t == null) continue;
+                Vector3 p; Quaternion q; t.GetLocalPositionAndRotation(out p, out q);
+                float o = _hasN[i] ? over : 0f;
+                Vector3 bp = Vector3.LerpUnclamped(p, _nP[i], o);
+                Quaternion bq = Quaternion.Slerp(q, _nQ[i], o);
+                Vector3 tp = bp + _accP[i];
+                Quaternion tq = bq * LipSync.Exp(_accR[i]);
+                t.SetLocalPositionAndRotation(Vector3.LerpUnclamped(p, tp, fade), Quaternion.Slerp(q, tq, fade));
+            }
+            return true;
+        }
+
+        // 0.11.7 lip sync probe: the mouth bones the last LipStep moved most (mm / deg added by the map's poses), for the log
+        public string LipDeltaReport()
+        {
+            if (!LipReady || _mapped == null || _mapped.Length == 0) return "no mapped bones";
+            var sb = new System.Text.StringBuilder();
+            int shown = 0;
+            var used = new bool[_lip.Length];
+            for (int pick = 0; pick < 4; pick++)
+            {
+                int best = -1; float bm = 0f;
+                foreach (int i in _mapped)
+                {
+                    if (used[i]) continue;
+                    float m = _accP[i].magnitude * LipMm(i) + _accR[i].magnitude * Mathf.Rad2Deg;   // mm + deg
+                    if (m > bm) { bm = m; best = i; }
+                }
+                if (best < 0 || bm < 0.05f) break;
+                used[best] = true;
+                var t = _face[_lip[best]];
+                sb.Append(shown++ > 0 ? ", " : "").Append(t != null ? t.name : "?").Append(' ')
+                  .Append((_accP[best].magnitude * LipMm(best)).ToString("0.0")).Append(" mm, ")
+                  .Append((_accR[best].magnitude * Mathf.Rad2Deg).ToString("0.0")).Append(" deg");
+            }
+            return shown == 0 ? "no bone moved (the poses of the shapes in use are empty)" : sb.ToString();
+        }
+
+        // Seeds the map's shapes from the survey's mouth samples: per shape the sample that shows it most (open = the widest jaw, smile =
+        // corners up and out, pucker = lips forward and narrow, ...), its deltas vs her neutral mouth on the bones of that side. onlyEmpty:
+        // shapes already posed are kept; shape >= 0: just that one. Returns the number of shapes seeded. A starting point to refine by eye.
+        public int Seed(bool onlyEmpty, int shape, out string report)
+        {
+            report = "";
+            if (!LipReady) { report = "her face survey is not done"; return 0; }
+            if (_lipSamples.Count == 0) { report = "the survey saw no clip that moves her mouth"; return 0; }
+            int nl = _lip.Length;
+            // bone roles by name
+            int jaw = -1, upC = -1, loC = -1, cL = -1, cR = -1, upL = -1, upR = -1, loL = -1, loR = -1, chL = -1, chR = -1;
+            var side = new int[nl];  // -1 right, 0 centre, 1 left
+            var role = new int[nl];  // 0 jaw, 1 lip, 2 cheek, 3 other (tongue, teeth)
+            for (int i = 0; i < nl; i++)
+            {
+                string n = _face[_lip[i]].name.ToLowerInvariant();
+                side[i] = n.Contains("left") || n.EndsWith("_l") ? 1 : n.Contains("right") || n.EndsWith("_r") ? -1 : 0;
+                bool up = n.Contains("upper"), lo = n.Contains("lower");
+                role[i] = n.Contains("jaw") ? 0 : n.Contains("tongue") || n.Contains("teeth") || n.Contains("tooth") ? 3 : n.Contains("lip") ? 1 : n.Contains("cheek") ? 2 : 3;
+                if (role[i] == 0 && (jaw < 0 || n == "jaw_m")) jaw = i;
+                if (role[i] == 1)
+                {
+                    if (up && side[i] == 0) upC = i; else if (lo && side[i] == 0) loC = i;
+                    else if (up && side[i] == 1) upL = i; else if (up && side[i] == -1) upR = i;
+                    else if (lo && side[i] == 1) loL = i; else if (lo && side[i] == -1) loR = i;
+                    else if (side[i] == 1) cL = i; else if (side[i] == -1) cR = i;
+                }
+                if (role[i] == 2) { bool raiser = n.Contains("raiser"); if (side[i] == 1 && (chL < 0 || raiser)) chL = i; if (side[i] == -1 && (chR < 0 || raiser)) chR = i; }
+            }
+            if (cL < 0 || cR < 0 || upC < 0 || loC < 0) { report = "her lip bones were not recognised by name (corners, upper / lower centre)"; return 0; }
+            // the mouth's axes in the head's frame, from the neutral pose
+            Func<int, Vector3> N = i => _parH[i].MultiplyPoint3x4(_nP[i]);
+            Vector3 left = (N(cL) - N(cR)).normalized;
+            Vector3 up0 = N(upC) - N(loC);
+            Vector3 upv = (up0 - Vector3.Dot(up0, left) * left).normalized;
+            Vector3 fwd = Vector3.Cross(left, upv).normalized;
+            Vector3 mid = 0.25f * (N(cL) + N(cR) + N(upC) + N(loC));
+            if (Vector3.Dot(fwd, mid) < 0f) fwd = -fwd;   // the mouth is in front of the head bone's origin
+            float mmH = _head.TransformVector(Vector3.right).magnitude * 1000f;
+            if (left.sqrMagnitude < 0.5f || upv.sqrMagnitude < 0.5f) { report = "her neutral lip corners / lips coincide"; return 0; }
+
+            int ns = _lipSamples.Count;
+            var F = new float[ns, 10];   // jawDeg, cornerUpL, cornerUpR, widthL, widthR, fwd, upperUpL, upperUpR, lowerDownL, lowerDownR, (cheeks below)
+            var chk = new float[ns, 2];
+            for (int k = 0; k < ns; k++)
+            {
+                var sm = _lipSamples[k];
+                Func<int, Vector3> D = i => i >= 0 && sm.HasP[i] ? _parH[i].MultiplyVector(sm.P[i] - _nP[i]) * mmH : Vector3.zero;
+                F[k, 0] = jaw >= 0 && sm.HasR[jaw] ? Quaternion.Angle(_nQ[jaw], sm.R[jaw]) : 0f;
+                F[k, 1] = Vector3.Dot(D(cL), upv); F[k, 2] = Vector3.Dot(D(cR), upv);
+                F[k, 3] = Vector3.Dot(D(cL), left); F[k, 4] = -Vector3.Dot(D(cR), left);
+                float fw = 0f; int nfw = 0;
+                foreach (int i in new[] { upC, loC, cL, cR, upL, upR, loL, loR }) if (i >= 0) { fw += Vector3.Dot(D(i), fwd); nfw++; }
+                F[k, 5] = nfw > 0 ? fw / nfw : 0f;
+                F[k, 6] = 0.5f * (Vector3.Dot(D(upC), upv) + Vector3.Dot(D(upL >= 0 ? upL : upC), upv));
+                F[k, 7] = 0.5f * (Vector3.Dot(D(upC), upv) + Vector3.Dot(D(upR >= 0 ? upR : upC), upv));
+                F[k, 8] = -0.5f * (Vector3.Dot(D(loC), upv) + Vector3.Dot(D(loL >= 0 ? loL : loC), upv));
+                F[k, 9] = -0.5f * (Vector3.Dot(D(loC), upv) + Vector3.Dot(D(loR >= 0 ? loR : loC), upv));
+                chk[k, 0] = Vector3.Dot(D(chL), upv); chk[k, 1] = Vector3.Dot(D(chR), upv);
+            }
+
+            int done = 0;
+            var sb = new StringBuilder();
+            for (int s = 0; s < LipSync.K; s++)
+            {
+                if (shape >= 0 && s != shape) continue;
+                if (onlyEmpty && LipSync.Map[s].Count > 0) continue;
+                string nm = LipSync.Shapes[s];
+                bool isL = nm.EndsWith("Left"), isR = nm.EndsWith("Right");
+                int sd = isL ? 1 : isR ? -1 : 0;
+                int L_ = isL ? 0 : 1;   // feature column offset: left 0, right 1
+                Func<int, float> score = null; Func<int, float> mask = null;
+                switch (nm)
+                {
+                    case "jawOpen": score = k => F[k, 0] < 35f ? F[k, 0] : -1f; mask = i => role[i] <= 1 ? 1f : 0f; break;
+                    case "mouthFunnel": score = k => F[k, 0] < 8f ? F[k, 5] + 0.3f * (F[k, 6] + F[k, 7] + F[k, 8] + F[k, 9]) * 0.5f - 0.5f * (Mathf.Abs(F[k, 3]) + Mathf.Abs(F[k, 4])) : -1f; mask = i => role[i] == 1 ? 1f : 0f; break;
+                    case "mouthPucker": score = k => F[k, 0] < 5f ? F[k, 5] - (F[k, 3] + F[k, 4]) : -1f; mask = i => role[i] == 1 ? 1f : 0f; break;
+                    case "mouthSmileLeft": case "mouthSmileRight":
+                        score = k => F[k, 1 + L_] + 0.5f * F[k, 3 + L_] - 0.03f * F[k, 0]; mask = i => (role[i] == 1 || role[i] == 2) ? (side[i] == sd ? 1f : side[i] == 0 ? 0.5f : 0f) : 0f; break;
+                    case "mouthFrownLeft": case "mouthFrownRight":
+                        score = k => F[k, 0] < 8f ? -F[k, 1 + L_] : -1f; mask = i => role[i] == 1 ? (side[i] == sd ? 1f : side[i] == 0 ? 0.5f : 0f) : 0f; break;
+                    case "mouthStretchLeft": case "mouthStretchRight":
+                        score = k => F[k, 0] < 12f ? F[k, 3 + L_] - 2f * Mathf.Max(0f, F[k, 1 + L_]) : -1f; mask = i => role[i] == 1 ? (side[i] == sd ? 1f : side[i] == 0 ? 0.3f : 0f) : 0f; break;
+                    case "mouthUpperUpLeft": case "mouthUpperUpRight":
+                        score = k => F[k, 0] < 10f ? F[k, 6 + L_] : -1f; mask = i => role[i] == 1 && _face[_lip[i]].name.ToLowerInvariant().Contains("upper") ? (side[i] == sd ? 1f : side[i] == 0 ? 0.5f : 0f) : 0f; break;
+                    case "mouthLowerDownLeft": case "mouthLowerDownRight":
+                        score = k => F[k, 0] < 3f ? F[k, 8 + L_] : -1f; mask = i => role[i] == 1 && _face[_lip[i]].name.ToLowerInvariant().Contains("lower") ? (side[i] == sd ? 1f : side[i] == 0 ? 0.5f : 0f) : 0f; break;
+                    case "cheekSquintLeft": case "cheekSquintRight":
+                        score = k => chk[k, L_]; mask = i => role[i] == 2 && side[i] == sd ? 1f : 0f; break;
+                }
+                if (nm == "mouthClose")
+                {
+                    // the lips back together while the jaw is open: minus the open jaw's lower-lip deltas (needs jawOpen)
+                    var open = LipSync.Map[LipSync.JawOpen];
+                    if (open.Count == 0) continue;
+                    LipSync.Map[s].Clear();
+                    foreach (var e in open)
+                    {
+                        string bn = e.Bone.ToLowerInvariant();
+                        if (!bn.Contains("lip") || bn.Contains("upper")) continue;
+                        var ne = LipSync.Find(s, e.Bone, true); ne.P = -e.P; ne.R = -e.R;
+                    }
+                    done++; sb.Append(sb.Length > 0 ? ", " : "").Append(nm).Append(" (minus the open jaw's lower lip)");
+                    continue;
+                }
+                if (score == null) continue;   // not seedable: sculpt it
+                int best = -1; float bv = 0.5f;
+                for (int k = 0; k < ns; k++) { float v = score(k); if (v > bv) { bv = v; best = k; } }
+                if (best < 0) continue;
+                var bs = _lipSamples[best];
+                LipSync.Map[s].Clear();
+                for (int i = 0; i < nl; i++)
+                {
+                    float m = mask(i);
+                    if (m <= 0f) continue;
+                    Vector3 dp = bs.HasP[i] ? (bs.P[i] - _nP[i]) * m : Vector3.zero;
+                    Vector3 dr = bs.HasR[i] ? LipSync.Log(Quaternion.Inverse(_nQ[i]) * bs.R[i]) * m : Vector3.zero;
+                    if (dp.sqrMagnitude * _mmUnit[i] * _mmUnit[i] < 0.01f && dr.sqrMagnitude < 0.25f) continue;   // < 0.1 mm and < 0.5 deg
+                    var e = LipSync.Find(s, _face[_lip[i]].name, true); e.P = dp; e.R = dr;
+                }
+                if (LipSync.Map[s].Count == 0) continue;
+                done++;
+                sb.Append(sb.Length > 0 ? ", " : "").Append(nm).Append(" ('").Append(bs.Clip).Append("' ").Append(bv.ToString("0.0")).Append(')');
+            }
+            if (done > 0) LipSync.Changed();
+            report = done == 0 ? "nothing to seed" : "seeded " + done + ": " + sb;
+            L("lip map " + report + " (from " + ns + " mouth samples)");
+            return done;
         }
 
         // ---------------- the game's hooks ----------------

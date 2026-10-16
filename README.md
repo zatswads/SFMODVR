@@ -41,6 +41,39 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.7 (fixes from the 0.11.4 headset run; the lip sync arrives):
+- Panel jumped when an option changed or a debug line updated, and could not be resized: it was a layout window that grew and
+  shrank with its content. Now a fixed-size window: any edge or corner resizes it, the title bar moves it, the content scrolls,
+  the timing line folds away (closed by default). Tabs moved to a column on the left; a new **Skin** tab holds wrinkles, muscles
+  and skin marks (out of Physics).
+- No dents or marks on her face and neck: both meshes are GPU-only, so their skinning space could never be checked on the CPU and
+  the dent stayed off for them ("cannot be calibrated (mesh is not readable)"). They now take the space her body found (rootBone).
+  Her face and neck give a little more (head 1.5 + 3 mm, neck 3 mm soft), so they dent at a lighter press.
+- Hands stopped centimetres off her face and throat: her head collider was a 9.5 cm default sphere about Head_M (her face mesh was
+  never read for her body's shape). Her shown face and neck meshes now shape the head and neck colliders.
+- Dents looked polygonal: the dent smoothing was a fixed number of vertex hops, sized for her own mesh (about 7 mm edges). With
+  Fidelity's subdivision (edges halved) it blurred half as far and the dent kept the hand capsules' outline. The passes are now
+  sized in metres (about 1.2 cm narrow, 2.4 cm wide) from the skin's own edge length (not the dense fingers').
+- Skin sounds inaudible: pat, grab and rub were scaled by the slap volume (0.12 in the user's config; the rub also by 0.4). They
+  have their own **skin volume** (default 80 %) and test buttons (pat, grab, rub); the rub's start is logged.
+- Embody: his fingers kept the animation's pose: no skinned renderer carries his finger bones, so there was no bind pose to
+  take the neutral hand from. The neutral hand is now the animation's hand straightened (each joint's curl taken out), so rest
+  curl, grab and the clasp stop work again. The thumb curls across the palm toward the fingers (it curled toward the palm normal
+  like a finger) and has its own joint limits (base 50, middle and tip 80 deg; the physics hand's thumb allowed 100-110, the
+  embodied one up to 120). His hands hide the controller models while they follow them. Embody is off at every game start
+  (`[Embody] OnAtStart`). View forward / up / right sliders move the view from his eyes (his head's axes, +-20 cm).
+- Lip sync (the 0.9.9 Audio2Face player, never merged into 0.10-0.11.6, so 0.11.4 had only the loudness jaw): baked ARKit curves
+  played in step with her voice clips through a mouth-bone map (`arkit-map.txt`, editor in the Reactions tab). With no map yet,
+  the poses are seeded from her face clips on first use and saved. "Test: a pack clip with lip sync" logs every link (switch,
+  face survey, curves found for the pack, posed shapes) and then 3 s of the top weights and the mouth bones moved. `tools/a2f`
+  bakes the curves. Curves for the Rebecca and Anime packs were baked on the user's PC.
+- The Physics tab's "Smoke test" (it sinks all of her skin 1 cm for 3 s on purpose, to check the GPU dents) is now "GPU check" with a line saying so.
+- Ripple from his hips: his pelvis and thighs stay on her during sex, so the "fresh contact" rule only fired on the first touch.
+  Every stroke (0.35 m/s or faster, at most one per 0.35 s) now sends a ripple (`[Physics] RippleThrust`, Physics tab).
+- Voice packs: **Mute the game's own voice** while a pack is on (its moans and dirty talk at volume 0; the pack's clips on the same
+  sources keep theirs; story dialogue untouched). The pack's lines are hooked into her states (guard, afterglow, ouch, request,
+  invite lines played in the 0.11.4 log).
+
 0.11.6 (fit fixes found on the Genesis 9 character; the plugin is unchanged):
 - Jaw and chin: the rigid VaM head was blended into the body warp up to her Head_M (mouth height), so a large body warp sheared
   the lower face (Krista: jutting jaw, parted lips; chin 21 mm off). The blend now ends under her chin and the warp carries

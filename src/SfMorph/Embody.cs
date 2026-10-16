@@ -26,6 +26,8 @@ namespace SfMorph
         // (degrees: yaw about the rig's up, + turns the view right; pitch about the headset's right, + nose up; roll about its forward)
         public int ViewAlign = 1;
         public float ViewYaw, ViewPitch, ViewRoll;
+        // 0.11.7 (user): where the view sits relative to his eye point, in his head's axes (m: x right, y up, z forward)
+        public Vector3 ViewOffset;
         // Controller -> his wrist (m, degrees), in the controller's axes. The position is where the wrist sits relative to the
         // tracked pose (Quest Touch, from Embody for VaM); the right hand is the left mirrored. The rotation is added to an
         // automatic hand alignment (fingers along the controller's forward, thumb along its up, palm toward the body's midline;
@@ -113,6 +115,8 @@ namespace SfMorph
             public float Curl = -1f;        // the grip as his fingers follow it (smoothed)
             // 0.8.0 neutral fingers: the palm normal and each finger root in the wrist's frame (metres), per-finger commands as eased
             public Vector3 PalmNL;
+            public Vector3 AcrossL;          // 0.11.7: pinky -> index across the knuckles in the wrist's frame (the thumb's opposition axis)
+            public int LiveNeutralN;         // 0.11.7: fingers whose neutral pose was straightened from the animation's pose (no bind pose)
             public readonly Vector3[] RootW = new Vector3[5];
             public readonly float[] FCurl = new float[5];
             public bool FInit;
@@ -603,17 +607,93 @@ namespace SfMorph
                 var d = fin[f].B[1].position - fin[f].B[0].position;
                 if (d.sqrMagnitude < 1e-10f) d = fwd;
                 d.Normalize();
-                var ax = Vector3.Cross(d, normal);
+                var ax = Vector3.Cross(d, f == 0 ? ThumbToward(normal, across) : normal);
                 if (ax.sqrMagnitude < 1e-8f) ax = Vector3.Cross(fwd, normal);
                 ax.Normalize();
                 for (int j = 0; j < 3; j++) fin[f].AxisL[j] = Quaternion.Inverse(fin[f].B[j].rotation) * ax;
             }
             var wi = Quaternion.Inverse(a.Wrist.rotation);
             a.PalmNL = wi * normal;
+            a.AcrossL = wi * across;
             for (int f = 0; f < 5; f++) if (fin[f] != null) a.RootW[f] = wi * (fin[f].B[0].position - a.Wrist.position);
             a.Fingers = fin;
             a.FingerInfo = got + "/5 (palm normal by " + how + "; " + names + ")";
             BuildNeutral(a, root);
+            NeutralFromPose(a);
+        }
+
+        // 0.11.7 (user: on a grab the thumb bends unrealistically): the thumb does not curl like a finger, toward the palm normal, but
+        // across the palm toward the fingers (opposition): its curl moves the tip halfway between the palm normal and the pinky side.
+        static Vector3 ThumbToward(Vector3 normal, Vector3 across)
+        {
+            var t = normal.normalized - across.normalized;
+            return t.sqrMagnitude > 1e-6f ? t.normalized : normal;
+        }
+
+        // 0.11.7 (user: the hand no longer rests neutral, it keeps the animation's pose; the 0.11.4 log: "no skinned renderer carries his
+        // finger bones"): without a bind pose, the neutral hand is the animation's hand with every joint's curl taken out, measured
+        // geometrically: each bone is turned about its own curl axis until it lines up with the bone above it (the first joint with the
+        // palm's direction, the thumb's first joint left as it is). The same data as BuildNeutral, so the rest curl, the grab button
+        // and the clasp stop on her skin all work on it. Taken once, when his fingers are found.
+        static void NeutralFromPose(Arm a)
+        {
+            a.LiveNeutralN = 0;
+            if (a.Fingers == null || a.Wrist == null) return;
+            var wq = a.Wrist.rotation; var wi = Quaternion.Inverse(wq); var wp = a.Wrist.position;
+            if (!Finite(wq)) return;
+            // the palm's direction: wrist -> the mean of the four finger roots
+            Vector3 mean = Vector3.zero; int nk = 0;
+            for (int f = 1; f < 5; f++) if (a.Fingers[f] != null) { mean += a.Fingers[f].B[0].position; nk++; }
+            if (nk == 0) return;
+            var palmFwd = mean / nk - wp;
+            if (palmFwd.sqrMagnitude < 1e-8f) return;
+            palmFwd.Normalize();
+            for (int f = 0; f < 5; f++)
+            {
+                var fg = a.Fingers[f];
+                if (fg == null || fg.Neutral != null) continue;
+                var pos = new Vector3[4];
+                for (int j = 0; j < 3; j++) pos[j] = fg.B[j].position;
+                var b2 = fg.B[2];
+                pos[3] = b2.childCount > 0 && (b2.GetChild(0).position - pos[2]).sqrMagnitude > 1e-8f ? b2.GetChild(0).position : pos[2] + (pos[2] - pos[1]) * 0.8f;
+                var acc = Quaternion.identity;      // the correction applied so far down the chain (world)
+                var q = new Quaternion[3]; var p = new Vector3[4];
+                var at = pos[0];
+                var prevDir = f == 0 ? Vector3.zero : palmFwd;
+                bool ok = true;
+                for (int j = 0; j < 3 && ok; j++)
+                {
+                    var qj = acc * fg.B[j].rotation;
+                    var seg = acc * (pos[j + 1] - pos[j]);
+                    if (prevDir.sqrMagnitude > 0f)
+                    {
+                        var ax = qj * fg.AxisL[j];
+                        var a1 = Vector3.ProjectOnPlane(prevDir, ax); var a2 = Vector3.ProjectOnPlane(seg, ax);
+                        if (a1.sqrMagnitude > 1e-10f && a2.sqrMagnitude > 1e-10f)
+                        {
+                            float ang = Vector3.SignedAngle(a1, a2, ax);   // + = curled toward the palm (the curl axis' convention)
+                            var fix = Quaternion.AngleAxis(-ang, ax);
+                            acc = fix * acc; qj = fix * qj; seg = fix * seg;
+                        }
+                    }
+                    q[j] = qj; p[j] = at;
+                    at += seg; prevDir = seg;
+                    ok = Finite(qj) && Finite(at);
+                }
+                if (!ok) continue;
+                p[3] = at;
+                var np = new Vector3[4]; var nq = new Quaternion[3];
+                for (int j = 0; j < 4; j++) np[j] = wi * (p[j] - wp);
+                for (int j = 0; j < 3; j++) nq[j] = wi * q[j];
+                var rel = new Quaternion[3];
+                rel[0] = nq[0];
+                rel[1] = Quaternion.Inverse(nq[0]) * nq[1];
+                rel[2] = Quaternion.Inverse(nq[1]) * nq[2];
+                fg.NP = np; fg.NQ = nq; fg.Neutral = rel;
+                fg.Fan = new FingerFan();
+                fg.Fan.Build(3, np, nq, fg.AxisL, f == 0 ? ThumbMax : FingerMax, FanR);
+                a.LiveNeutralN++;
+            }
         }
 
         // The neutral hand from the bind pose (design 6.1): the bone-to-wrist matrix of each finger bone is Bwrist * Bj^-1 (Bj = the
@@ -686,7 +766,7 @@ namespace SfMorph
                 rootDev = Mathf.Max(rootDev, dev);
                 // the curl axis again, in the neutral pose: across the finger and the palm normal (the hand's own: it does not curl)
                 var dn = np[1] - np[0];
-                var axw = dn.sqrMagnitude > 1e-10f ? Vector3.Cross(dn.normalized, a.PalmNL) : Vector3.zero;
+                var axw = dn.sqrMagnitude > 1e-10f ? Vector3.Cross(dn.normalized, f == 0 ? ThumbToward(a.PalmNL, a.AcrossL) : a.PalmNL) : Vector3.zero;
                 if (axw.sqrMagnitude > 1e-4f)
                 {
                     axw.Normalize();
@@ -731,7 +811,10 @@ namespace SfMorph
                 Plugin.Log.LogInfo("Embody: neutral finger pose from the bind pose of '" + rend + "' (left " + r.L.NeutralN + "/5, right " + r.R.NeutralN + "/5 fingers); rest curl "
                     + (_cur != null ? _cur.RestCurl : 0.25f).ToString("0.00") + "; left: " + r.L.NeutralDiag + "; right: " + r.R.NeutralDiag);
             }
-            else Plugin.Log.LogInfo("Embody: no skinned renderer carries his finger bones: fingers rest in the animation's pose (no clasp stop either)");
+            if (r.L.LiveNeutralN + r.R.LiveNeutralN > 0)
+                Plugin.Log.LogInfo("Embody: neutral finger pose straightened from the animation's hand (no bind pose for: left "
+                    + r.L.LiveNeutralN + "/5, right " + r.R.LiveNeutralN + "/5 fingers)");
+            else if (r.L.NeutralN + r.R.NeutralN == 0) Plugin.Log.LogInfo("Embody: no skinned renderer carries his finger bones: fingers rest in the animation's pose (no clasp stop either)");
         }
 
         // The first transform below root (breadth first, so Finger1 before Finger2) whose name contains the word.
@@ -853,6 +936,7 @@ namespace SfMorph
                 _eyeFrom = "head + offset";
             }
             _eyeRel = Quaternion.Inverse(h.rotation) * (eye - h.position);
+            eye = EyeWorld();   // 0.11.7: plus the view offset (ViewForward / Up / Right)
 
             // The target the headset is put on: his eye smoothed once per frame (snapped on a new start, a snap request or a far jump).
             bool snap = !_eyeInit || _snapPending || (eye - _eyeSmooth).sqrMagnitude > 2.25f;
@@ -860,7 +944,20 @@ namespace SfMorph
             _eyeInit = true;
         }
 
-        Vector3 EyeWorld() { var h = _rig.Head; return h.position + h.rotation * _eyeRel; }
+        Vector3 EyeWorld()
+        {
+            var h = _rig.Head;
+            var p = h.position + h.rotation * _eyeRel;
+            if (_viewOff.sqrMagnitude > 1e-8f)
+            {
+                // his head's forward / up (TransformDirection ignores the hidden head's 0.001 scale)
+                var f = h.TransformDirection(_rig.FwdL); var u = h.TransformDirection(_rig.UpL);
+                var r = Vector3.Cross(u, f);
+                if (r.sqrMagnitude > 1e-8f) p += r.normalized * _viewOff.x + u.normalized * _viewOff.y + f.normalized * _viewOff.z;
+            }
+            return p;
+        }
+        Vector3 _viewOff, _snapOff;
 
         // The rig root of a camera: the topmost ancestor below the scene root, or vr_Camera_Mov when the camera is under it (and it
         // is not tied to the partner). Never the camera itself when it has a parent: XR tracking rewrites the camera, so its parent is moved.
@@ -903,7 +1000,8 @@ namespace SfMorph
         {
             // a changed alignment or correction re-snaps (the sliders act at once)
             if (_viewRig != null && (s.ViewAlign != _snapAlign || Mathf.Abs(Clean(s.ViewYaw) - _snapCorr.x) > 0.5f || Mathf.Abs(Clean(s.ViewPitch) - _snapCorr.y) > 0.5f
-                                     || Mathf.Abs(Clean(s.ViewRoll) - _snapCorr.z) > 0.5f)) _snapPending = true;
+                                     || Mathf.Abs(Clean(s.ViewRoll) - _snapCorr.z) > 0.5f || (s.ViewOffset - _snapOff).sqrMagnitude > 1e-6f)) _snapPending = true;
+            _viewOff = Finite(s.ViewOffset) ? Vector3.ClampMagnitude(s.ViewOffset, 0.3f) : Vector3.zero;
             var cam = GameRig.VrCamera();
             if (cam == null) { _viewRig = null; return; }
             Transform rigRoot;
@@ -993,7 +1091,7 @@ namespace SfMorph
                         Turn(Quaternion.AngleAxis(-cp, right) * Quaternion.AngleAxis(cr, cfw), cam.transform.position);
                     }
                 }
-                _snapCorr = new Vector3(cy, cp, cr); _snapAlign = s.ViewAlign;
+                _snapCorr = new Vector3(cy, cp, cr); _snapAlign = s.ViewAlign; _snapOff = s.ViewOffset;
                 _eyeSmooth = EyeWorld(); _eyeInit = true;   // a new start: no smoothing from the old position
                 Translate();
                 if (!_snapLogged)
@@ -1416,7 +1514,8 @@ namespace SfMorph
                     if (useSim)
                     {
                         float sa = curl[f * 3 + j];   // signed twist about the curl axis: a sideways swing or a backward bend is not a curl
-                        if (!float.IsNaN(sa) && !float.IsInfinity(sa)) ang = Mathf.Clamp(sa, -15f, 120f);
+                        // 0.11.7: per joint limits (the thumb went to 120 deg): -10 deg back, 1.25 x the full-grip curl forward
+                        if (!float.IsNaN(sa) && !float.IsInfinity(sa)) ang = Mathf.Clamp(sa, f == 0 ? -5f : -10f, 1.25f * (f == 0 ? ThumbMax[j] : FingerMax[j]));
                     }
                     if (float.IsNaN(ang) || float.IsInfinity(ang)) ang = 0f;
                     var cur = b.localRotation;

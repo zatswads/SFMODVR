@@ -37,6 +37,7 @@ namespace SfMorph
         public Vector2[] Uv;          // V: UV0 (SkinMarks' raster); null when the mesh has none
         public int[][] SubTris;       // per submesh triangle index list
         public float AvgEdge;         // mean rest edge length (m)
+        public float SkinEdge;        // 0.11.7: mean rest edge length away from the hands and feet (m): what the dent smoothing is sized by
         public float MetresPerUv;     // sqrt(sum 3D triangle area / sum UV triangle area); 0 without UVs
         public Vector3[] WorldP;      // V: where each vertex was at bake time (CPU skin with the bones then, no blendshapes; NaN = unskinned). GpuContact
                                       // maps overlay meshes (areola caps, tattoo, vulva rim) onto the body vertex under them with it
@@ -302,6 +303,22 @@ namespace SfMorph
                 cls[v] = cls[c];
                 clsSeen[cls[v]]++;
             }
+            // 0.11.7: the edge length of the skin itself. The upper body's mean (2.4 mm with Fidelity) is set by its very dense fingers
+            // (56k of 75k vertices); her back and chest are about twice that.
+            double skinSum = 0.0; int skinN = 0;
+            for (int v = 0; v < V; v++)
+            {
+                if (canon[v] != (uint)v) continue;
+                uint cv = cls[v];
+                if (cv == 10 || cv == 11 || cv == 16 || cv == 17) continue;   // feet, hands
+                for (uint k = adjOff[v]; k < adjOff[v + 1]; k++)
+                {
+                    uint u = adjV[k];
+                    if (u > (uint)v) { skinSum += (P[v] - P[u]).magnitude; skinN++; }
+                }
+            }
+            float skinEdge = skinN > 0 ? (float)(skinSum / skinN) * mpu : avgEdge;
+            if (!(skinEdge > 1e-5f)) skinEdge = avgEdge;
 
             // 6. bend weights
             var bend = new Vector4[V];
@@ -330,12 +347,12 @@ namespace SfMorph
             var res = new ContactBake
             {
                 R = r, Mesh = m, V = V, CanonCount = groups, Canon = canon, AdjOff = adjOff, AdjV = adjV, Tissue = tissue, Class = cls, Bend = bend,
-                BendCount = bendVerts, Uv = uv, SubTris = subs.ToArray(), AvgEdge = avgEdge, MetresPerUv = mPerUv, WorldP = wp
+                BendCount = bendVerts, Uv = uv, SubTris = subs.ToArray(), AvgEdge = avgEdge, SkinEdge = skinEdge, MetresPerUv = mPerUv, WorldP = wp
             };
             sw.Stop();
             var sb = new StringBuilder();
             sb.Append("V ").Append(V).Append(" welded ").Append(V - groups).Append(", ").Append(totalTris).Append(" tris, adjacency ")
-              .Append(groups > 0 ? ((double)outN / groups).ToString("0.0") : "0").Append("/vertex, edge ").Append((avgEdge * 1000f).ToString("0.0")).Append(" mm, ")
+              .Append(groups > 0 ? ((double)outN / groups).ToString("0.0") : "0").Append("/vertex, edge ").Append((avgEdge * 1000f).ToString("0.0")).Append(" mm (skin ").Append((skinEdge * 1000f).ToString("0.0")).Append(" mm), ")
               .Append(mpu.ToString("0.####")).Append(" m/unit, classes");
             for (int c = 0; c < ClassCount; c++) if (clsSeen[c] > 0) sb.Append(' ').Append(ClassName(c)).Append(':').Append(clsSeen[c]);
             float tmin = float.MaxValue, tmax = 0f;
