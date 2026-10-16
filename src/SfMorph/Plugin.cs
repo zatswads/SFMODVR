@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.11.12";
+        public const string Version = "0.11.13";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -153,10 +153,10 @@ namespace SfMorph
             MuscleAttack = Config.Bind("Muscles", "Attack", 0.25f, new ConfigDescription("Seconds for a muscle to tense.", new AcceptableValueRange<float>(0.02f, 2f)));
             MuscleRelease = Config.Bind("Muscles", "Release", 0.8f, new ConfigDescription("Seconds for a muscle to relax.", new AcceptableValueRange<float>(0.02f, 3f)));
             MuscleFlexAmt = Config.Bind("Muscles", "Flex", 1f, new ConfigDescription("Tensed muscles bulge as geometry (needs GPU contact): the per-area sizes below x this (0 off).", new AcceptableValueRange<float>(0f, 2f)));
-            MuscleCoreMm = Config.Bind("Muscles", "CoreMm", 3f, new ConfigDescription("Bulge of a fully active abs / obliques / serratus muscle at its belly (mm, before Flex).", new AcceptableValueRange<float>(0f, 12f)));
-            MuscleBackMm = Config.Bind("Muscles", "BackMm", 4f, new ConfigDescription("Bulge of the fully active spinal erectors / lats (mm, before Flex).", new AcceptableValueRange<float>(0f, 12f)));
-            MuscleLegsMm = Config.Bind("Muscles", "LegsMm", 4f, new ConfigDescription("Bulge of the fully active glutes / quads / hamstrings / adductors / calves (mm, before Flex).", new AcceptableValueRange<float>(0f, 12f)));
-            MuscleArmsMm = Config.Bind("Muscles", "ArmsMm", 4f, new ConfigDescription("Bulge of the fully active deltoids / biceps / triceps / forearms (mm, before Flex; the biceps also gets the elbow's bend bulge).", new AcceptableValueRange<float>(0f, 12f)));
+            MuscleCoreMm = Config.Bind("Muscles", "CoreMm", 3f, new ConfigDescription("Bulge of a fully active abs / obliques / serratus muscle at the area's highest sculpted belly (mm, before Flex; the sculpt keeps the other bellies and grooves in proportion).", new AcceptableValueRange<float>(0f, 20f)));
+            MuscleBackMm = Config.Bind("Muscles", "BackMm", 4f, new ConfigDescription("Bulge of the fully active spinal erectors / lats (mm, before Flex).", new AcceptableValueRange<float>(0f, 20f)));
+            MuscleLegsMm = Config.Bind("Muscles", "LegsMm", 4f, new ConfigDescription("Bulge of the fully active glutes / quads / hamstrings / adductors / calves (mm, before Flex).", new AcceptableValueRange<float>(0f, 20f)));
+            MuscleArmsMm = Config.Bind("Muscles", "ArmsMm", 4f, new ConfigDescription("Bulge of the fully active deltoids / biceps / triceps / forearms (mm, before Flex; the biceps also gets the elbow's bend bulge).", new AcceptableValueRange<float>(0f, 20f)));
             MuscleFirmness = Config.Bind("Muscles", "Firmness", 0.5f, new ConfigDescription("A tensed muscle is firmer under a hand: its soft depth x (1 - Firmness x activation), for the dent and the physics hands' resistance (0 off).", new AcceptableValueRange<float>(0f, 0.9f)));
             EmbodyOn = Config.Bind("Embody", "On", false, "See through the partner's eyes (VR), his head hidden, his hands on your controllers.");
             EmbodyHands = Config.Bind("Embody", "Hands", 3, new ConfigDescription("His hands follow the controllers: 0 none, 1 left, 2 right, 3 both.", new AcceptableValueRange<int>(0, 3)));

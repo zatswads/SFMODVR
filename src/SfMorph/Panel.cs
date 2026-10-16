@@ -884,13 +884,13 @@ namespace SfMorph
             float fx = Slider("Flex", _p.MuscleFlexAmt.Value, 0f, 2f, "0.00", 1f, fwhy);
             if (Mathf.Abs(fx - _p.MuscleFlexAmt.Value) > 0.0001f) _p.MuscleFlexAmt.Value = fx;
             string awhy = fwhy ?? (_p.MuscleFlexAmt.Value <= 0f ? "off: Flex is 0" : null);
-            float cm = Slider("Core", _p.MuscleCoreMm.Value, 0f, 12f, "0.0", 3f, awhy ?? (_p.MuscleCore.Value ? null : "off: Core is off"), " mm");
+            float cm = Slider("Core", _p.MuscleCoreMm.Value, 0f, 20f, "0.0", 3f, awhy ?? (_p.MuscleCore.Value ? null : "off: Core is off"), " mm");
             if (Mathf.Abs(cm - _p.MuscleCoreMm.Value) > 0.0001f) _p.MuscleCoreMm.Value = cm;
-            float bm = Slider("Back", _p.MuscleBackMm.Value, 0f, 12f, "0.0", 4f, awhy ?? (_p.MuscleBack.Value ? null : "off: Back is off"), " mm");
+            float bm = Slider("Back", _p.MuscleBackMm.Value, 0f, 20f, "0.0", 4f, awhy ?? (_p.MuscleBack.Value ? null : "off: Back is off"), " mm");
             if (Mathf.Abs(bm - _p.MuscleBackMm.Value) > 0.0001f) _p.MuscleBackMm.Value = bm;
-            float am = Slider("Arms", _p.MuscleArmsMm.Value, 0f, 12f, "0.0", 4f, awhy ?? (_p.MuscleArms.Value ? null : "off: Arms is off"), " mm");
+            float am = Slider("Arms", _p.MuscleArmsMm.Value, 0f, 20f, "0.0", 4f, awhy ?? (_p.MuscleArms.Value ? null : "off: Arms is off"), " mm");
             if (Mathf.Abs(am - _p.MuscleArmsMm.Value) > 0.0001f) _p.MuscleArmsMm.Value = am;
-            float lm = Slider("Legs", _p.MuscleLegsMm.Value, 0f, 12f, "0.0", 4f, awhy ?? (_p.MuscleLegs.Value ? null : "off: Legs is off"), " mm");
+            float lm = Slider("Legs", _p.MuscleLegsMm.Value, 0f, 20f, "0.0", 4f, awhy ?? (_p.MuscleLegs.Value ? null : "off: Legs is off"), " mm");
             if (Mathf.Abs(lm - _p.MuscleLegsMm.Value) > 0.0001f) _p.MuscleLegsMm.Value = lm;
             float fm = Slider("Firmness", _p.MuscleFirmness.Value, 0f, 0.9f, "0.00", 0.5f, why);
             if (Mathf.Abs(fm - _p.MuscleFirmness.Value) > 0.0001f) _p.MuscleFirmness.Value = fm;
@@ -901,11 +901,11 @@ namespace SfMorph
                             "keeps. Tension gain: how much her pose adds: her spine bent forward or held leaning back tenses the abs, an arch or a " +
                             "bend over the back, a squat the glutes and thighs, a bent elbow the biceps, tiptoes the calves, arms overhead the " +
                             "serratus and lats, propping herself up the arms. Groove shade darkens the grooves in her skin colour. Surface detail " +
-                            "only: a converted character's Fitness body slider (Characters tab) is the shape; this sits on top of either. Debug: " +
-                            "Tension tints relaxed muscles green and tensed ones red, Muscles shows each in its own colour. Speed is in the config " +
-                            "file ([Muscles]). Shape: with GPU contact on, each muscle's belly also pushes out (mm at full activation, fading to " +
-                            "nothing at its edges and tendons; Fitness counts, so a high resting tone keeps a little shape); the relief above stays " +
-                            "the fine detail. Firmness: a tensed muscle dents less under a hand and the physics hands meet more resistance there. Flex test: " +
+                            "only: a converted character's Fitness body slider (Characters tab) is the shape; this sits on top of either. Debug views " +
+                            "are in the Debug tab. Speed is in the config file ([Muscles]). Shape: with GPU contact on, the sculpted muscles become " +
+                            "geometry: separate abdominal bellies, serratus, lats, quads, calves, with the grooves between them going in (mm = the " +
+                            "area's highest belly at full activation, the rest in proportion; Fitness counts, so a high resting tone keeps some " +
+                            "shape; 15-20 mm with Flex 1-2 is a bodybuilder); the relief above stays the fine detail. Firmness: a tensed muscle dents less under a hand and the physics hands meet more resistance there. Flex test: " +
                             "each area at full (at least 3 mm) for 2 s over whatever she is doing, whatever her pose's tension; the log says how far " +
                             "and on how many vertices each one went.", _hint);
         }

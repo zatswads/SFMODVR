@@ -98,6 +98,17 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.13 (sculpted muscles)
+
+Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`. Log: `GPU contact: muscle maps read back (... sculpted height 1024x1024)` and per
+body mesh `muscles N verts [...] sculpted, belly -0.xx to 1.xx`.
+
+- Debug tab, Flex test with Core / Back / Arms / Legs at 8 mm, then 16-20 mm: separate abdominal bellies with grooves between them,
+  serratus fingers on her sides, lats and shoulder blades, the quad teardrop above the knee, calf heads; no crinkles or steps where
+  two muscles meet (sides of the waist, hip, armpit).
+- Fitness 0.3 at rest: a little shape stays; a squat / plank / arms overhead brings the matching areas out.
+- With the Skin tab Strength (relief) at 0 the shape alone should still read; tell me which areas need more or less.
+
 ## 0.11.12 (calf seam, smooth dents, stroke ripple, lip timing, voice mute, Debug tab)
 
 Install `dist/SfMorph.dll` and `dist/sfmorph_shaders` (the bundle changed). Log: `SF Body Morphs 0.11.12`.

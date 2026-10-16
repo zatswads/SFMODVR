@@ -25,7 +25,8 @@ namespace SfMorph
     {
         public string Name;
         public Texture2D Detail, Region;
-        public float SlopeMax = 0.6f;
+        public Texture2D Height;           // 0.11.12: the relief's signed height (16 bits over R / G), null in an older bundle
+        public float SlopeMax = 0.6f, HeightMax = 0.016f;
         public readonly List<string> MuscleName = new List<string>();
         public readonly List<string> Area = new List<string>();     // core / back / legs / arms
         public readonly List<string> Side = new List<string>();     // L / R / C
@@ -45,8 +46,10 @@ namespace SfMorph
                     cur = new MuscleLayer { Name = t[1] };
                     float sm;
                     if (t.Length >= 5 && float.TryParse(t[4], NumberStyles.Float, CultureInfo.InvariantCulture, out sm) && sm > 0.01f) cur.SlopeMax = sm;
+                    if (t.Length >= 6 && float.TryParse(t[5], NumberStyles.Float, CultureInfo.InvariantCulture, out sm) && sm > 0.001f) cur.HeightMax = sm;
                     cur.Detail = load("muscle_" + cur.Name + "_detail");
                     cur.Region = load("muscle_" + cur.Name + "_region");
+                    cur.Height = load("muscle_" + cur.Name + "_height");   // optional
                     if (cur.Detail == null || cur.Region == null) { notes.Add(cur.Name + ": textures missing"); cur = null; continue; }
                     res.Add(cur);
                 }
