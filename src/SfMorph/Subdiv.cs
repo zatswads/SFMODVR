@@ -121,6 +121,17 @@ namespace SfMorph
 
                 int seams, frames;
                 Data nw = Build(o, out seams, out frames);                      // pure computation, the mesh is untouched so far
+                // 0.11.17 (user: dents on her lower body are still polygonal): a coarse mesh gets a second level. Her lower body (hips,
+                // glutes, thighs) is ~14 mm between vertices, 7 mm after one level, while a hand's dent is a few cm: the dent and its shading
+                // followed the triangles. Meshes with a mean edge over 10 mm (her upper body is ~5 mm) are split twice (~3.5 mm).
+                float edge = MeanEdge(o);
+                int levels = 1;
+                if (edge > 0.010f)
+                {
+                    int s2, f2;
+                    nw = Build(nw, out s2, out f2);
+                    levels = 2;
+                }
 
                 int n = o.verts.Length, tOld = 0, tNew = 0;
                 for (int s = 0; s < o.tris.Length; s++) { tOld += o.tris[s].Length / 3; tNew += nw.tris[s].Length / 3; }
@@ -136,7 +147,7 @@ namespace SfMorph
                 }
                 Subdivided.Add(m.GetInstanceID());
                 sw.Stop();
-                note = m.name + ": verts " + n + "->" + nw.verts.Length + ", tris " + tOld + "->" + tNew + ", seams welded " + seams +
+                note = m.name + ": " + levels + (levels > 1 ? " levels" : " level") + " (mean edge " + (edge * 1000f).ToString("0.0") + " mm), verts " + n + "->" + nw.verts.Length + ", tris " + tOld + "->" + tNew + ", seams welded " + seams +
                        ", blendshape frames " + frames + ", " + sw.ElapsedMilliseconds + " ms";
                 return undo;
             }
@@ -145,6 +156,23 @@ namespace SfMorph
                 note = (m != null ? m.name : "?") + ": subdivision failed: " + e.Message;
                 return null;
             }
+        }
+
+        // Mean triangle edge of the mesh (its own units: her meshes are in metres).
+        static float MeanEdge(Data d)
+        {
+            double sum = 0; long n = 0;
+            var P = d.verts;
+            for (int s = 0; s < d.tris.Length; s++)
+            {
+                var t = d.tris[s];
+                for (int i = 0; i + 2 < t.Length; i += 3)
+                {
+                    sum += (P[t[i]] - P[t[i + 1]]).magnitude + (P[t[i + 1]] - P[t[i + 2]]).magnitude + (P[t[i + 2]] - P[t[i]]).magnitude;
+                    n += 3;
+                }
+            }
+            return n > 0 ? (float)(sum / n) : 0f;
         }
 
         // ---------------------------------------------------------------------------------------------------------------

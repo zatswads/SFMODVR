@@ -41,6 +41,17 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.17 (irregular abs; a second subdivision level on her lower body):
+- The abs were a symmetrical grid of equal blocks. Real abdominals are uneven: the two sides' tendinous intersections sit at
+  different heights (here her right ~6-8 mm higher), each one curves and slopes its own way, the linea alba wanders a little, the
+  blocks differ in size and height (the middle pair fullest, the top pair narrower and tilted up towards the ribs), and each block
+  is a domed pillow meeting the linea alba, not a brick beside a flat strip. The lower abdomen stays one smooth mass with a faint
+  fourth line on one side. `author.py --preview` also writes `muscle_body_geo_abs.png` (the abdomen up close, two lights).
+- Dents on her lower body were still polygonal: her lower-body mesh (hips, glutes, thighs) has ~14 mm between vertices, 7 mm after
+  Fidelity's one subdivision, while a hand's dent spans a few cm. Fidelity now splits a mesh twice when its mean edge is over 10 mm
+  (her lower body: ~3.5 mm, about 70 000 vertices; the upper body, ~5 mm, keeps one level). Log: `Soft zones: Fidelity subdivided
+  reika_lowerBody_normal ...: 2 levels (mean edge 14.x mm), verts 4533->...`. The GPU dent smoothing is sized in mm, so it follows.
+
 0.11.16 (a naturalistic muscle sculpt; pecs and traps):
 - The sculpt still read as cartoonish: every muscle was a few Gaussian dots and the definition was drawn lines, so a flexed
   abdomen became a chocolate bar of small sharp bumps, the back two thin rods beside the spine, and there were no pecs or traps.

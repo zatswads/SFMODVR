@@ -98,6 +98,15 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.17 (irregular abs, lower body subdivided twice)
+
+Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`. Physics quality Fidelity. Log: `Fidelity subdivided reika_lowerBody_normal ...: 2 levels`
+and `GPU contact: baked reika_lowerBody_normal: V ~70000 ... edge ~3.5 mm`.
+
+- Flex test, Core 10-16 mm: the abs are uneven (rows staggered left / right, blocks of different sizes, domed), no grid.
+- A hand on her glute / thigh: a round dent with smooth shading, no triangle facets. Watch the Timing line (Debug tab) for the GPU
+  contact cost with the bigger lower body; tell me if the frame rate drops.
+
 ## 0.11.16 (naturalistic sculpt, pecs and traps)
 
 Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`. Log: `Muscles: layouts body (30 muscles, ...)`.

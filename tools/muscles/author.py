@@ -211,18 +211,35 @@ def muscles(sk, navel_s, log):
     # lower edge into the Achilles, the soleus flaring below them; rounded three-head deltoids, triceps horseshoe, forearm masses.
     # ---- core: abs (one region, both sides), obliques, serratus, ribcage
     r_abs = reg('abs', 'core', 'C')
-    prims[r_abs].append(Groove(T, [(nv + 0.012, 0), (0.27, 0)], 0.7, 6.0))                       # linea alba
-    prims[r_abs].append(Groove(T, [(nv - 0.075, 0), (nv - 0.012, 0)], 0.3, 6.0))                 # its faint lower part
+    # 0.11.17 (user: the abs were too uniform and symmetrical): real abdominals are not a grid. The two sides' tendinous intersections
+    # sit at different heights (here the right ~6-8 mm higher), each one curves and slopes its own way, the linea alba wanders a little,
+    # and the blocks differ in size and height: the middle pair the fullest, the top pair narrower and tilted up towards the ribs, each
+    # block a pillow (narrower at its ends) rather than a rectangle. The lower abdomen is one smooth mass with a faint fourth line on one
+    # side only.
+    prims[r_abs].append(Groove(T, [(nv + 0.012, 0), (nv + 0.05, 0.8), (nv + 0.09, -0.6), (nv + 0.13, 1.0), (0.272, 0.3)], 0.65, 7.0))   # linea alba
+    prims[r_abs].append(Groove(T, [(nv - 0.075, 0.4), (nv - 0.04, -0.3), (nv - 0.012, 0.2)], 0.25, 7.0))                                  # its faint lower part
+    # per side: intersections (s inner, s middle, s outer above the navel, depth mm, middle phi offset deg), blocks (half-width mm, height mm)
+    sides = {
+        1: dict(cuts=((0.002, 0.004, 0.009, 0.22, 0.0), (0.055, 0.060, 0.069, 0.45, 0.5), (0.109, 0.116, 0.127, 0.5, -0.5)),
+                top=0.150, blocks=((28, 2.5), (29, 2.8), (25, 2.1))),
+        -1: dict(cuts=((0.009, 0.011, 0.013, 0.18, -0.6), (0.064, 0.067, 0.076, 0.42, 0.0), (0.117, 0.122, 0.135, 0.52, 0.8)),
+                 top=0.157, blocks=((27, 2.3), (28, 2.6), (24, 2.3))),
+    }
     for sgn in (1, -1):
-        # tendinous intersections: soft, slightly rising outwards, the one at the navel faint
-        for ds, dep in ((0.004, 0.25), (0.060, 0.45), (0.115, 0.5)):
-            s0 = nv + ds
-            prims[r_abs].append(Groove(T, [(s0, 3 * sgn), (s0 + 0.004, 15 * sgn), (s0 + 0.010, 27 * sgn)], dep, 7.0, taper=(0, 1)))
-        # the blocks between them: rounded, wide, the upper pairs smaller
-        for s0, s1, w, hgt in ((0.010, 0.052, 22, 2.4), (0.066, 0.108, 22, 2.6), (0.121, 0.150, 20, 2.2)):
-            prims[r_abs].append(Belly(T, [(nv + s0, 13.5 * sgn, w), (nv + s1, 14.5 * sgn, w - 1)], hgt, flat=2.6, end=0.6))
-        prims[r_abs].append(Belly(T, [(nv - 0.075, 8 * sgn, 15), (nv - 0.035, 11 * sgn, 21), (nv - 0.004, 13 * sgn, 22)], 1.6, flat=2.2, end=0.5))  # lower abdomen
+        cfg = sides[sgn]
+        cuts = cfg['cuts']
+        for si_, sm_, so_, dep, dphi in cuts:
+            prims[r_abs].append(Groove(T, [(nv + si_, 3 * sgn), (nv + sm_, (14 + dphi) * sgn), (nv + so_, 26 * sgn)], dep, 7.5, taper=(0, 1)))
+        # the blocks between consecutive intersections (the last one up to the costal margin), pillow-shaped, the upper ones tilting outwards
+        edges = [c[1] for c in cuts] + [cfg['top']]
+        for k, (w, hgt) in enumerate(cfg['blocks']):
+            lo, hi = nv + edges[k] + 0.004, nv + edges[k + 1] - 0.004
+            tilt = 0.4 * k
+            prims[r_abs].append(Belly(T, [(lo, (11.6 - 0.2 * k) * sgn, w - 7), ((lo + hi) / 2, (12.4 + tilt) * sgn, w), (hi, (12.6 + 2 * tilt) * sgn, w - 7 - k)],
+                                      hgt, flat=2.5, end=0.7))
+        prims[r_abs].append(Belly(T, [(nv - 0.075, 7 * sgn, 19), (nv - 0.035, 10 * sgn, 26), (nv - 0.006, 11.5 * sgn, 27)], 1.6 if sgn > 0 else 1.45, flat=2.6, end=0.6))  # lower abdomen
         prims[r_abs].append(Groove(T, [(nv - 0.07, 29 * sgn), (nv, 34 * sgn), (nv + 0.08, 36 * sgn), (0.265, 32 * sgn)], 0.45, 9.0))  # semilunaris
+    prims[r_abs].append(Groove(T, [(nv - 0.036, 3), (nv - 0.033, 12), (nv - 0.028, 22)], 0.15, 7.0, taper=(0, 1)))   # a faint fourth line, her left only
     for sd, sgn in (('L', 1), ('R', -1)):
         r = reg('obliques_' + sd, 'core', sd)
         prims[r].append(Belly(T, [(0.015, 66 * sgn, 34), (0.07, 72 * sgn, 46), (0.15, 74 * sgn, 38), (0.21, 72 * sgn, 26)], 3.0, flat=1.7, end=0.45,
@@ -636,6 +653,13 @@ def previews(name, n, idx, X, N, ev, regions, colour, d, log):
              splat_win(Xg, shade(views[1][1], views[1][2]), views[1][1], views[1][2], (-0.25, 0.25), (0.02, 0.95), 1100),
              splat_win(Xg, shade(views[0][1], views[0][2]), views[0][1], views[0][2], (-0.25, 0.25), (0.02, 0.95), 1100)]
     wr.write_png(os.path.join(d, 'muscle_%s_geo_close.png' % name), np.clip(np.concatenate(close, 1) * 255, 0, 255).astype(np.uint8))
+    # the abdomen up close under a light from above and one from the side
+    fa, fz = views[0][1], views[0][2]
+    abs_ = []
+    for Lx in (np.array([0.25, 0.6, 0.75]), np.array([0.8, 0.25, 0.55])):
+        cl = clay[None] * (0.18 + 0.85 * lambert(Ng, Lx)[:, None])
+        abs_.append(splat_win(Xg, cl, fa, fz, (-0.12, 0.12), (0.92, 1.24), 1000, fat=3))
+    wr.write_png(os.path.join(d, 'muscle_%s_geo_abs.png' % name), np.clip(np.concatenate(abs_, 1) * 255, 0, 255).astype(np.uint8))
     log('preview: %s' % d)
 
 
@@ -645,8 +669,9 @@ def lambert(Nn, L):
     return np.clip(nn @ L, 0, 1) * 0.8 + 0.05
 
 
-def splat_win(X, c, ax, az, xr, yr, H):
-    """splat into a window: xr / yr = the view's x and y range (metres), H pixels high."""
+def splat_win(X, c, ax, az, xr, yr, H, fat=0):
+    """splat into a window: xr / yr = the view's x and y range (metres), H pixels high; fat = each point also covers its neighbours
+    out to this many pixels (close-ups, where the texels are sparser than the pixels)."""
     ay = np.array([0, 1.0, 0])
     px, py, pz = X @ ax, X @ ay, X @ az
     s = H / (yr[1] - yr[0])
@@ -655,10 +680,17 @@ def splat_win(X, c, ax, az, xr, yr, H):
     ix = ((px[m] - xr[0]) * s).astype(np.int64)
     iy = ((yr[1] - py[m]) * s).astype(np.int64)
     img = np.full((H, W, 3), 0.12)
-    lin = iy * W + ix
-    o = np.argsort(pz[m])
     f = img.reshape(-1, 3)
-    f[lin[o]] = c[m][o]
+    cm, zm = c[m], pz[m]
+    lins, zs, idx = [], [], []
+    for dy in range(-fat, fat + 1):
+        for dx in range(-fat, fat + 1):
+            lins.append(np.clip(iy + dy, 0, H - 1) * W + np.clip(ix + dx, 0, W - 1))
+            zs.append(zm - 0.002 * (abs(dx) + abs(dy)))   # a point's own pixel wins over a neighbour's spill at the same depth
+            idx.append(np.arange(len(zm)))
+    lin, z, k = np.concatenate(lins), np.concatenate(zs), np.concatenate(idx)
+    o = np.argsort(z)
+    f[lin[o]] = cm[k[o]]
     return img
 
 
