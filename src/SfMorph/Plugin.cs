@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.9.3";
+        public const string Version = "0.9.4";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -42,7 +42,7 @@ namespace SfMorph
         internal ConfigEntry<string> ReactFaceMap, VoicePackName;
         internal ConfigEntry<int> ReactVoiceMode, ReactLog, ReactConfigRev;
         // 0.8.0 contact visuals v2 (GPU contact: dent edge, rim bulge, bent normals, self-contact, partner body, bend bulges, ripple, skin marks)
-        internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn;
+        internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn, ReactRubSound;
         internal ConfigEntry<float> ContactSkirt, ContactBulge, ContactDepth, BendBulge, BendBicepsMm, BendKneeMm, BendCalfMm, BendHipMm, BendBellyFoldMm,
             RippleAmount, RippleSpeed, RippleWavelength, RippleDamping, MarksRedness, MarksFade, MarksAo, MarksBoost;
         internal ConfigEntry<Vector3> LeftHandPos, LeftHandRot, RightHandPos, RightHandRot;
@@ -81,11 +81,11 @@ namespace SfMorph
             BendKneeMm = Config.Bind("Physics", "BendKneeMm", 8f, new ConfigDescription("Back-of-thigh bulge at a fully bent knee (mm).", new AcceptableValueRange<float>(0f, 20f)));
             BendCalfMm = Config.Bind("Physics", "BendCalfMm", 6f, new ConfigDescription("Calf bulge at a fully bent knee (mm).", new AcceptableValueRange<float>(0f, 20f)));
             BendHipMm = Config.Bind("Physics", "BendHipMm", 5f, new ConfigDescription("Thigh-top bulge when the hip flexes (sitting, mm).", new AcceptableValueRange<float>(0f, 20f)));
-            BendBellyFoldMm = Config.Bind("Physics", "BendBellyFoldMm", 5f, new ConfigDescription("Lower-belly fold when both hips flex (mm).", new AcceptableValueRange<float>(0f, 20f)));
-            RippleAmount = Config.Bind("Physics", "Ripple", 0.6f, new ConfigDescription("An impact (a slap, a thrust against her glutes or thighs) sends a ripple through her flesh (0 off).", new AcceptableValueRange<float>(0f, 1f)));
-            RippleSpeed = Config.Bind("Physics", "RippleSpeed", 1f, new ConfigDescription("How fast the ripple travels (m/s).", new AcceptableValueRange<float>(0.3f, 3f)));
-            RippleWavelength = Config.Bind("Physics", "RippleWavelength", 0.07f, new ConfigDescription("Distance between ripple crests (m).", new AcceptableValueRange<float>(0.03f, 0.15f)));
-            RippleDamping = Config.Bind("Physics", "RippleDamping", 0.3f, new ConfigDescription("Seconds for a ripple to fade to a third.", new AcceptableValueRange<float>(0.1f, 1f)));
+            BendBellyFoldMm = Config.Bind("Physics", "BendBellyFoldMm", 3f, new ConfigDescription("Her belly rounds forward in a soft roll when both hips flex (sitting, squatting; mm before BendBulge).", new AcceptableValueRange<float>(0f, 20f)));
+            RippleAmount = Config.Bind("Physics", "Ripple", 1f, new ConfigDescription("An impact (a slap, a thrust against her glutes or thighs) sends a ripple through her flesh (0 off, 1 = 14 mm per m/s above 0.3 m/s up to 35 mm, 2 = twice that).", new AcceptableValueRange<float>(0f, 2f)));
+            RippleSpeed = Config.Bind("Physics", "RippleSpeed", 0.5f, new ConfigDescription("How fast the ripple travels over her skin (m/s).", new AcceptableValueRange<float>(0.2f, 3f)));
+            RippleWavelength = Config.Bind("Physics", "RippleWavelength", 0.1f, new ConfigDescription("Distance between ripple crests (m); a longer wave also reaches farther.", new AcceptableValueRange<float>(0.03f, 0.2f)));
+            RippleDamping = Config.Bind("Physics", "RippleDamping", 0.6f, new ConfigDescription("How long a ripple lasts: seconds for it to fade to a third.", new AcceptableValueRange<float>(0.1f, 2f)));
             SkinMarksOn = Config.Bind("Physics", "SkinMarks", true, "A hand pressed on her glutes, thighs, belly or breasts leaves a fading print; slaps leave redness.");
             MarksRedness = Config.Bind("Physics", "MarksRedness", 0.5f, new ConfigDescription("How red marks get (0 only the pressed shading).", new AcceptableValueRange<float>(0f, 1f)));
             MarksFade = Config.Bind("Physics", "MarksFade", 15f, new ConfigDescription("Seconds for redness to fade to a third.", new AcceptableValueRange<float>(3f, 60f)));
@@ -158,6 +158,7 @@ namespace SfMorph
             ReactSound = Config.Bind("Reactions", "Sound", true, "A slap sound at the spot of a slap.");
             ReactVolume = Config.Bind("Reactions", "Volume", 0.6f, new ConfigDescription("Slap and skin sound volume.", new AcceptableValueRange<float>(0f, 1f)));
             ReactFoley = Config.Bind("Reactions", "Foley", true, "Skin sounds: slaps from your own WAV files in BepInEx\\plugins\\SfMorph\\Sounds (slap_soft / slap_medium / slap_hard; none: the game's clips), a pat on light taps, a grab when a hand closes on her, a rub while a hand slides over her skin (your files in pat / grab / rub, else built-in sounds). Off: the game's slap clips only.");
+            ReactRubSound = Config.Bind("Reactions", "RubSound", true, "With Skin sounds on: the soft rub while a hand slides over her skin (your files in Sounds\\rub, else a built one). Off mutes just the rub; slaps, pats and grabs keep sounding.");
             VoicePackName = Config.Bind("Voice", "Pack", "", "Her reaction voice from a voice pack: a folder name under BepInEx\\plugins\\SfMorph\\Sounds\\voice (breath_calm, breath_heavy, moan_low, moan_mid, moan_high, climax, exertion with WAV files). Empty: the game's own voice. While a pack is on, the game's lines and feeling sounds are not used (another voice).");
             VoicePitch = Config.Bind("Voice", "Pitch", 1f, new ConfigDescription("Her voice's pitch (moans, lines, dialogue), without changing its speed. 1 = as recorded.", new AcceptableValueRange<float>(0.75f, 1.4f)));
             VoiceFormant = Config.Bind("Voice", "Formant", 1f, new ConfigDescription("Her voice's formants (the size of the voice: below 1 fuller / older, above 1 smaller / younger), without changing pitch or speed. 1 = as recorded.", new AcceptableValueRange<float>(0.8f, 1.25f)));
@@ -177,6 +178,16 @@ namespace SfMorph
                 bool wasOff = !ReactFeedDesire.Value;
                 ReactFeedDesire.Value = true; ReactConfigRev.Value = 1;
                 if (wasOff) Logger.LogInfo("Config migration: [Reactions] FeedDesire turned on (revision 1)");
+            }
+            // one-time migration (0.9.4): the ripple was too small and too quick, and the belly fold read as a scar; values still at the old
+            // defaults move to the new ones (a value the user chose is kept)
+            if (ReactConfigRev.Value < 2)
+            {
+                var moved = new List<string>();
+                Action<ConfigEntry<float>, float, float> mv = (e, was, now) => { if (Mathf.Abs(e.Value - was) < 1e-4f) { e.Value = now; moved.Add(e.Definition.Key + " " + now); } };
+                mv(RippleAmount, 0.6f, 1f); mv(RippleSpeed, 1f, 0.5f); mv(RippleWavelength, 0.07f, 0.1f); mv(RippleDamping, 0.3f, 0.6f); mv(BendBellyFoldMm, 5f, 3f);
+                ReactConfigRev.Value = 2;
+                if (moved.Count > 0) Logger.LogInfo("Config migration: [Physics] " + string.Join(", ", moved.ToArray()) + " (revision 2)");
             }
             Logger.LogInfo("SF Body Morphs " + Version + ": panel on " + PanelKey.Value + ", looks in " + Store.Dir);
             // The game destroys plugin components; a hidden object of our own keeps running.

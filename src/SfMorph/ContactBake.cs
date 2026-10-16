@@ -12,8 +12,8 @@ namespace SfMorph
         public float Softness = 0.5f;
         public float Skirt = 0.015f, Bulge = 0.6f, Depth = 1f;
         public bool Normals = true, SelfContact = true, PartnerBody = true;
-        public float BendAmount = 0.6f, BicepsMm = 8f, KneeMm = 8f, CalfMm = 6f, HipMm = 5f, BellyFoldMm = 5f;
-        public float Ripple = 0.6f, RippleSpeed = 1f, RippleWavelength = 0.07f, RippleDamping = 0.3f;
+        public float BendAmount = 0.6f, BicepsMm = 8f, KneeMm = 8f, CalfMm = 6f, HipMm = 5f, BellyFoldMm = 3f;
+        public float Ripple = 1f, RippleSpeed = 0.5f, RippleWavelength = 0.1f, RippleDamping = 0.6f;
         public bool Marks = true;
         public float Redness = 0.5f, MarkFade = 15f, MarkGain = 0.6f, Ao = 0.5f, MarkBoost = 1f;
     }
@@ -505,8 +505,11 @@ namespace SfMorph
                 }
                 else if ((c == ClsPelvis || c == ClsBelly) && Vector3.Dot(n, fwd) > 0.3f)
                 {
+                    // 0.9.4 (user: a line across her lower belly in a squat, like a scar): 0.8.1 pulled a narrow band 4 cm above the hips in
+                    // (sigma 3.5 cm) and the bent normals drew it as a groove. A flexed hip pushes the lower belly forward into a soft roll instead:
+                    // a broad outward bulge centred 7 cm above the hips (sigma 5 cm), no groove; the hip crease itself is the thigh-top slot's edge.
                     float y = Vector3.Dot(p - rootP, up) * mpu;
-                    if (y >= 0f && y <= 0.12f) Push(ref b, 8, -G(y, 0.04f, 0.035f) * sF);
+                    if (y >= -0.02f && y <= 0.17f) Push(ref b, 8, G(y, 0.07f, 0.05f) * sF);
                 }
                 bend[v] = b;
                 if (b.x >= 0f && canon[v] == (uint)v) { count++; perSlot[(int)b.x]++; if (b.z >= 0f) perSlot[(int)b.z]++; }

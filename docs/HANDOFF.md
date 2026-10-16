@@ -1,6 +1,9 @@
 # SF Body Morphs — handoff
 
-State at **0.9.3** (branch `main`). 0.9.3 (VoiceShift rewritten as streaming TD-PSOLA: YIN pitch on a 4x decimated copy, pulse-snapped
+State at **0.9.4** (branch `main`). 0.9.4 (ripple slower / longer / bigger with Physics-tab sliders; marks only from foreign capsules: Depth writes
+`_Foreign` (weighted press, foreign depth) from capsule mark weights in `Capsule.c.y` (0 = her own limbs, foreign 0.4-1.5 by speed vs Root_M),
+Compose reddens past a 0.25 knee; BendPose slot 8 now an outward belly roll; softer built rub + [Reactions] RubSound; bundle rebuilt with a
+ForeignMarks marker kernel) built, not yet run in the game. 0.9.3 (VoiceShift rewritten as streaming TD-PSOLA: YIN pitch on a 4x decimated copy, pulse-snapped
 analysis marks, one-pulse grains windowed in the input and resampled by the formant; checked offline on real lines, not in the game).
 0.9.2 (voice-pack lines + state lines guard / afterglow / ouch / request / invite, audio-driven jaw from
 the face survey's widest jaw opening, lazy pack loading; vamx-lines-to-game-banks.md in the session notes) built, not yet run in the game.

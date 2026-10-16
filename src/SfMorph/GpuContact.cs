@@ -66,7 +66,7 @@ namespace SfMorph
             public bool Ok { get { return Layout >= 0 && Mask != null && R != null; } }
             // 0.8.0 v2 (design 1.5): the bake and its GPU buffers (null/false = this renderer stays on the v1 imprint)
             public ContactBake Bake;
-            public GraphicsBuffer CanonBuf, AdjOffBuf, AdjVBuf, TissueBuf, ClassBuf, BendBuf, FieldA, FieldB, FieldC, FieldD, MarksBuf, GradBuf;
+            public GraphicsBuffer CanonBuf, AdjOffBuf, AdjVBuf, TissueBuf, ClassBuf, BendBuf, FieldA, FieldB, FieldC, FieldD, MarksBuf, GradBuf, Foreign;
             public bool V2;
             public int TanOff = -1;               // byte offset of the tangent (Float32x4) in the skinned buffer, -1 = none
             public float MarkUntil;               // marks keep fading until then (4 x MarkFade after the last pressure or slap)
@@ -93,7 +93,7 @@ namespace SfMorph
             PCapOff = Shader.PropertyToID("_CapOff"), PTanOff = Shader.PropertyToID("_TanOff"),
             PCanon = Shader.PropertyToID("_Canon"), PAdjOff = Shader.PropertyToID("_AdjOff"), PAdjV = Shader.PropertyToID("_AdjV"), PTissue = Shader.PropertyToID("_Tissue"),
             PClass = Shader.PropertyToID("_Class"), PBend = Shader.PropertyToID("_Bend"), PFieldIn = Shader.PropertyToID("_FieldIn"), PFieldOut = Shader.PropertyToID("_FieldOut"),
-            PFieldN = Shader.PropertyToID("_FieldN"), PFieldW = Shader.PropertyToID("_FieldW"), PFieldR = Shader.PropertyToID("_FieldR"), PMarks = Shader.PropertyToID("_Marks"), PGrad = Shader.PropertyToID("_Grad"),
+            PFieldN = Shader.PropertyToID("_FieldN"), PFieldW = Shader.PropertyToID("_FieldW"), PFieldR = Shader.PropertyToID("_FieldR"), PForeign = Shader.PropertyToID("_Foreign"), PForeignR = Shader.PropertyToID("_ForeignR"), PMarks = Shader.PropertyToID("_Marks"), PGrad = Shader.PropertyToID("_Grad"),
             PWaves = Shader.PropertyToID("_Waves"), PWaveCount = Shader.PropertyToID("_WaveCount"), PNoField = Shader.PropertyToID("_NoField"), PMarkOn = Shader.PropertyToID("_MarkOn"),
             PSoftScale = Shader.PropertyToID("_SoftScale"), PDepth = Shader.PropertyToID("_Depth"), PSkirt = Shader.PropertyToID("_SkirtLen"), PBulge = Shader.PropertyToID("_Bulge"),
             PBulgeCap = Shader.PropertyToID("_BulgeCap"), PNormalBend = Shader.PropertyToID("_NormalBend"), PDt = Shader.PropertyToID("_Dt"), PMarkGain = Shader.PropertyToID("_MarkGain"),
@@ -112,6 +112,7 @@ namespace SfMorph
         int _kSmoke, _kImprint;
         int _kDepth, _kDilate, _kSmooth, _kCompose, _kGrad, _kApply, _kDisc, _kDecay, _kApplyMap;   // 0.8.0 v2 kernels
         bool _v2Kernels, _v2Failed, _loggedFirstV2;
+        bool _foreignMarks;                   // 0.9.4 bundle: Depth writes the foreign-only press (_Foreign) that Compose takes marks from
         ComputeBuffer _capBuf, _waveBuf;
         readonly CapData[] _capArr = new CapData[CapBufCount];
         // the frame's world-space capsules (PrepareCaps) before they are copied per renderer
@@ -119,6 +120,13 @@ namespace SfMorph
         readonly float[] _wcR = new float[MaxCaps];
         readonly uint[] _wcMask = new uint[MaxCaps];
         readonly bool[] _wcV2Only = new bool[MaxCaps];
+        readonly float[] _wcW = new float[MaxCaps];   // 0.9.4 mark weight (0 = her own limb)
+        // 0.9.4: per foreign capsule its centre last frame and its smoothed speed relative to her pelvis (the mark weight)
+        struct CapVel { public Vector3 P; public float Spd; public int Frame; }
+        readonly Dictionary<long, CapVel> _capVel = new Dictionary<long, CapVel>();
+        Vector3 _refP;
+        int _refFrame = -10;
+        [StructLayout(LayoutKind.Explicit)] struct FloatBits { [FieldOffset(0)] public float F; [FieldOffset(0)] public uint U; }
         int _selfN, _pbN;
         readonly Vector4[] _waveArr = new Vector4[2 * Ripple.MaxWaves], _discArr = new Vector4[4];
         readonly float[] _discAmt = new float[4];
@@ -167,8 +175,10 @@ namespace SfMorph
                 g._kCompose = Kernel(g._cs, "Compose", ref miss); g._kGrad = Kernel(g._cs, "Grad", ref miss); g._kApply = Kernel(g._cs, "Apply", ref miss);
                 g._kDisc = Kernel(g._cs, "MarkDisc", ref miss); g._kDecay = Kernel(g._cs, "MarksDecay", ref miss); g._kApplyMap = Kernel(g._cs, "ApplyMap", ref miss);
                 g._v2Kernels = miss.Length == 0;
+                g._foreignMarks = g._cs.HasKernel("ForeignMarks");
                 Plugin.Log.LogInfo("GPU contact: bundle loaded, kernels Smoke=" + g._kSmoke + " Imprint=" + g._kImprint + (g._v2Kernels ? ", v2: Depth Dilate Smooth Compose Grad Apply MarkDisc MarksDecay ApplyMap" : ""));
                 if (!g._v2Kernels) Plugin.Log.LogWarning("GPU contact: bundle has no v2 kernels (old sfmorph_shaders?): v1 imprint (missing:" + miss + ")");
+                else if (!g._foreignMarks) Plugin.Log.LogWarning("GPU contact: old sfmorph_shaders (no ForeignMarks): marks still come from every contact, her own limbs too; install the bundle that came with this DLL");
                 g._capBuf = new ComputeBuffer(CapBufCount, 48, ComputeBufferType.Structured);
                 g._waveBuf = new ComputeBuffer(2 * Ripple.MaxWaves, 16, ComputeBufferType.Structured);
                 RenderPipelineManager.beginContextRendering += g.OnBeginContext;
@@ -404,6 +414,7 @@ namespace SfMorph
                 s.BendBuf = Upload(b.Bend, V, 16);
                 var zeroF = new float[V];
                 s.FieldA = Upload(zeroF, V, 4); s.FieldB = Upload(zeroF, V, 4); s.FieldC = Upload(zeroF, V, 4); s.FieldD = Upload(zeroF, V, 4);
+                s.Foreign = Upload(new Vector2[V], V, 8);
                 s.MarksBuf = Upload(new Vector4[V], V, 16);
                 s.GradBuf = Upload(new Vector4[2 * V], 2 * V, 16);
                 s.HitsBuf = Upload(ZeroHits, 1, 4);
@@ -440,7 +451,7 @@ namespace SfMorph
         {
             bool had = s.Bake != null;
             Rel(ref s.CanonBuf); Rel(ref s.AdjOffBuf); Rel(ref s.AdjVBuf); Rel(ref s.TissueBuf); Rel(ref s.ClassBuf); Rel(ref s.BendBuf);
-            Rel(ref s.FieldA); Rel(ref s.FieldB); Rel(ref s.FieldC); Rel(ref s.FieldD); Rel(ref s.MarksBuf); Rel(ref s.GradBuf);
+            Rel(ref s.FieldA); Rel(ref s.FieldB); Rel(ref s.FieldC); Rel(ref s.FieldD); Rel(ref s.Foreign); Rel(ref s.MarksBuf); Rel(ref s.GradBuf);
             Rel(ref s.HitsBuf); Rel(ref s.MapBuf);
             s.Parent = null; s.Mapped = 0;
             for (int i = 0; i < _rs.Count; i++) if (_rs[i].Parent == s) { _rs[i].Parent = null; Rel(ref _rs[i].MapBuf); _rs[i].Mapped = 0; }
@@ -522,6 +533,19 @@ namespace SfMorph
         {
             int n = 0, self = 0, pb = 0;
             var caps = _capList;
+            // 0.9.4 marks: a foreign capsule's mark weight grows with its speed relative to her pelvis (a hand resting on her moves with her)
+            int fr = Time.frameCount;
+            float dt = Mathf.Max(1e-3f, Time.deltaTime);
+            Transform root = null;
+            if (_her != null) _her.Bones.TryGetValue("Root_M", out root);
+            Vector3 refV = Vector3.zero;
+            if (root != null)
+            {
+                Vector3 rp = root.position;
+                if (fr - _refFrame == 1) { refV = (rp - _refP) / dt; if (refV.sqrMagnitude > 36f) refV = Vector3.zero; }   // a teleport is not motion
+                _refP = rp; _refFrame = fr;
+            }
+            if (_capVel.Count > 600) _capVel.Clear();
             if (caps != null)
                 for (int i = 0; i < caps.Count && n < MaxCaps; i++)
                 {
@@ -547,9 +571,26 @@ namespace SfMorph
                         self++;
                     }
                     else if (isBody) pb++;
+                    float w = 0f;
+                    if (!isSelf)
+                    {
+                        long key = ((long)c.T.GetInstanceID() << 32) | (uint)c.LocalA.GetHashCode();
+                        Vector3 mid = (a + b) * 0.5f;
+                        CapVel cv;
+                        float spd = 0f;
+                        if (_capVel.TryGetValue(key, out cv) && fr - cv.Frame == 1)
+                        {
+                            float sp = ((mid - cv.P) / dt - refV).magnitude;
+                            if (sp > 6f) sp = cv.Spd;   // a jump (the rig moved), not a hand
+                            spd = cv.Spd + (sp - cv.Spd) * Mathf.Clamp01(dt / 0.08f);
+                        }
+                        else if (cv.Frame == fr) spd = cv.Spd;
+                        _capVel[key] = new CapVel { P = mid, Spd = spd, Frame = fr };
+                        w = Mathf.Clamp(0.4f + 1.5f * spd, 0.4f, 1.5f);   // resting 0.4 (only a firm squeeze marks, slowly), 0.4 m/s 1.0, from 0.73 m/s 1.5
+                    }
                     // her own hand: the capsule (22 mm) is about twice a palm's half-thickness; a hand hanging at her side would dimple the thigh by a cm
                     float rad = kind == "hand" ? c.Radius * 0.6f : c.Radius;
-                    _wcA[n] = a; _wcB[n] = b; _wcR[n] = rad; _wcMask[n] = mask; _wcV2Only[n] = isSelf || isBody;
+                    _wcA[n] = a; _wcB[n] = b; _wcR[n] = rad; _wcMask[n] = mask; _wcV2Only[n] = isSelf || isBody; _wcW[n] = w;
                     float ext = rad + _margin;
                     _wcMin[n] = new Vector3(Mathf.Min(a.x, b.x) - ext, Mathf.Min(a.y, b.y) - ext, Mathf.Min(a.z, b.z) - ext);
                     _wcMax[n] = new Vector3(Mathf.Max(a.x, b.x) + ext, Mathf.Max(a.y, b.y) + ext, Mathf.Max(a.z, b.z) + ext);
@@ -593,7 +634,7 @@ namespace SfMorph
                     int o = at + n;
                     _capArr[o].A = new Vector4(_wcA[k].x, _wcA[k].y, _wcA[k].z, _wcR[k]);
                     _capArr[o].B = new Vector4(_wcB[k].x, _wcB[k].y, _wcB[k].z, 0f);
-                    _capArr[o].C0 = _wcMask[k]; _capArr[o].C1 = 0u; _capArr[o].C2 = 0u; _capArr[o].C3 = 0u;
+                    _capArr[o].C0 = _wcMask[k]; _capArr[o].C1 = new FloatBits { F = _wcW[k] }.U; _capArr[o].C2 = 0u; _capArr[o].C3 = 0u;
                     n++;
                 }
                 if (pass == 0) n1 = n;
@@ -874,7 +915,7 @@ namespace SfMorph
             for (int i = 0; i < n; i++)
             {
                 Vector4 o = _waveArr[2 * i], p = _waveArr[2 * i + 1];
-                float reach = Mathf.Min(p.y * o.w + 3f * p.z, 0.6f);   // the ring (c x age) and its width; beyond ~0.6 m the 0.12 m falloff has killed it
+                float reach = Mathf.Min(p.y * o.w + 3f * p.z, 1f);   // the ring (c x age) and its width; beyond ~1 m the falloff (max(12 cm, 2 wavelengths)) has killed it
                 if (b.SqrDistance(new Vector3(o.x, o.y, o.z)) <= reach * reach) return true;
             }
             return false;
@@ -923,6 +964,7 @@ namespace SfMorph
                 cs.SetBuffer(_kDepth, PVerts, vb); cs.SetBuffer(_kDepth, PCanon, s.CanonBuf); cs.SetBuffer(_kDepth, PTissue, s.TissueBuf);
                 cs.SetBuffer(_kDepth, PClass, s.ClassBuf); cs.SetBuffer(_kDepth, PCaps, _capBuf); cs.SetBuffer(_kDepth, PFieldOut, s.FieldD);   // raw kept in D for Compose
                 cs.SetBuffer(_kDepth, PHits, s.HitsBuf);
+                if (_foreignMarks) cs.SetBuffer(_kDepth, PForeign, s.Foreign);
                 cs.SetInt(PCapCount, s.CapN); cs.SetInt(PCapOff, s.CapOff);
                 cs.Dispatch(_kDepth, groups, 1, 1); n++;
                 if (count && !s.HitInflight) { s.HitInflight = true; AsyncGPUReadback.Request(s.HitsBuf, s.OnHits); }
@@ -953,6 +995,7 @@ namespace SfMorph
             cs.SetBuffer(_kCompose, PVerts, vb); cs.SetBuffer(_kCompose, PCanon, s.CanonBuf); cs.SetBuffer(_kCompose, PTissue, s.TissueBuf);
             cs.SetBuffer(_kCompose, PBend, s.BendBuf); cs.SetBuffer(_kCompose, PFieldN, s.FieldC); cs.SetBuffer(_kCompose, PFieldW, A);
             cs.SetBuffer(_kCompose, PFieldR, s.FieldD); cs.SetBuffer(_kCompose, PFieldOut, B); cs.SetBuffer(_kCompose, PMarks, s.MarksBuf); cs.SetBuffer(_kCompose, PWaves, _waveBuf);
+            if (_foreignMarks) cs.SetBuffer(_kCompose, PForeignR, s.Foreign);
             cs.SetInt(PNoField, s.Depth ? 0 : 1); cs.SetInt(PWaveCount, s.Wave ? nWaves : 0); cs.SetFloat(PWaveAmt, 1f);
             var amt = BendPose.Amt;
             cs.SetVector(PBendAmt0, new Vector4(amt[0], amt[1], amt[2], amt[3])); cs.SetVector(PBendAmt1, new Vector4(amt[4], amt[5], amt[6], amt[7]));

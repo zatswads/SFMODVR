@@ -41,6 +41,29 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.9.4 (ripple, marks only from hands, belly roll, rub sound):
+- The ripple was better but still too subtle and gone too fast. Cause: a 1.5 m/s slap started an 8 mm wave that ran out at 1 m/s
+  through a fixed 12 cm falloff, so it was over in about 0.15 s. Now it starts bigger (14 mm per m/s above 0.3 m/s, up to 35 mm;
+  Ripple 0-200 %, default 100 %, never deeper than 1.5x her flesh there), travels at 0.5 m/s, is 10 cm crest to crest, reaches two
+  wavelengths and fades to a third in 0.6 s. Physics tab: new sliders under "Ripple on impact" for speed, wavelength and duration
+  (the [Physics] RippleSpeed / RippleWavelength / RippleDamping keys were config-only). Values still at the old defaults move to
+  the new ones once (log: `Config migration: [Physics] ...`).
+- Her thighs pressing her belly in a squat (and her arms on her sides) left an orange-red patch. Cause: the marks took their pressure
+  from every contact, her own limbs included, and any resting press reddened over time. Now redness, the print a hand leaves and the
+  pressed-flesh shade come only from hands and the partner: each of their capsules carries a mark weight from its speed relative to
+  her pelvis (resting 0.4, a moving or slapping hand up to 1.5), and only a press past a knee reddens (a light resting hand: nothing; a
+  firm squeeze: slowly; a moving press: fast). The build-up gain is lower (0.35 per second, was 0.6). Her own limbs still dent her and
+  add a faint contact shade; they never redden or leave a print. Slaps still leave their mark.
+- The line across her lower belly in a squat (like a scar) was partly ours: the 0.8.1 belly bend fold pulled a narrow band 4 cm above
+  her hips inward and the bent normals shaded it as a groove, with the red self-contact patch under it. The belly now rounds forward
+  in a broad soft roll centred 7 cm above her hips (BendBellyFoldMm default 3 mm, was 5). The authored belly wrinkle lines and the face
+  wrinkles' sensitivity (her face's real compression is about a third of the face ranges) are with the wrinkles work, next release.
+- The skin rub sounded like rubbing carpet. Cause: the built rub loop was 0.5-4 kHz noise with a random level jump every 10 ms, a rough
+  crackle. Now a soft, breathy swish (180 Hz - 1.2 kHz with a faint airy sheen, a slow stroke-like swell, no grain), a little quieter.
+  Reactions tab: "Rub sound" turns just the rub off ([Reactions] RubSound); slaps, pats and grabs keep sounding. Your own WAVs in
+  Soundsub still come first.
+- Needs the new `sfmorph_shaders` (rebuilt); with the old bundle the log warns and marks still come from every contact.
+
 0.9.3 (voice pitch / formant redone):
 - Voice pitch / formant sounded robotic and the formant slider barely did what it says: 0.9.0 shifted the linear-prediction residual
   with a fixed 25 ms delay-line window, which smeared her glottal pulses at every crossfade and blurred the envelope. Now TD-PSOLA:

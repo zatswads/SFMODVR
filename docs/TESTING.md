@@ -97,6 +97,21 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.9.4 (ripple, marks only from hands, belly roll, rub sound)
+
+- [ ] Log: no `old sfmorph_shaders (no ForeignMarks)` warning; `Config migration: [Physics] Ripple 1, RippleSpeed 0.5, ...` once.
+- [ ] Slap her glute or thigh (about 1.5 m/s): a ring clearly runs out from the hand and is visible for about half a second. Physics tab
+      sliders speed / wavelength / duration change it live; Ripple 200 % is bigger still. Log `Ripple: impact ... wave A ~17 mm`.
+- [ ] Squat / sit with her thighs against her belly, arms resting on her sides for a minute: dents, no red or orange patch, no pale print
+      when she stands up.
+- [ ] A hand resting lightly: no redness. A firm squeeze held: slow reddening. Rubbing or groping firmly: reddens within seconds. Slaps:
+      the slap mark as before.
+- [ ] Squatting: her lower belly rounds forward softly, no groove line (the wrinkle lines there are the wrinkles work's).
+- [ ] Rub: a soft swish while a hand slides, not a crackle. Reactions tab: "Rub sound" off silences only the rub (slap, pat, grab
+      still sound).
+- [ ] Neck / shoulder grain: compare with Wrinkles off and Marks off (both hand her original textures back). If the grain stays, it is
+      not from our copies (report a screenshot of both).
+
 ## 0.9.3 (voice pitch / formant redone)
 
 - [ ] Voice pitch 1.2: higher, same speed, natural (no buzz or metallic ring); 0.85: lower, still natural. Long moans: no warble.

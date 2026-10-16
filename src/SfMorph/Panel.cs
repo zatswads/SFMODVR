@@ -652,8 +652,16 @@ namespace SfMorph
             if (en && pb != _p.PartnerBody.Value) _p.PartnerBody.Value = pb;
             v = Slider("  Bend bulges", _p.BendBulge.Value * 100f, 0f, 100f, "0", 60f, so, " %") / 100f;
             if (Mathf.Abs(v - _p.BendBulge.Value) > 0.0001f) _p.BendBulge.Value = v;
-            v = Slider("  Ripple on impact", _p.RippleAmount.Value * 100f, 0f, 100f, "0", 60f, so, " %") / 100f;
+            v = Slider("  Ripple on impact", _p.RippleAmount.Value * 100f, 0f, 200f, "0", 100f, so, " %") / 100f;
             if (Mathf.Abs(v - _p.RippleAmount.Value) > 0.0001f) _p.RippleAmount.Value = v;
+            // 0.9.4: the wave's speed, wavelength and life were config-only
+            string ro = so ?? (_p.RippleAmount.Value > 0f ? null : "off: ripple is 0");
+            v = Slider("    speed", _p.RippleSpeed.Value, 0.2f, 3f, "0.00", 0.5f, ro, " m/s");
+            if (Mathf.Abs(v - _p.RippleSpeed.Value) > 0.0001f) _p.RippleSpeed.Value = v;
+            v = Slider("    wavelength", _p.RippleWavelength.Value * 100f, 3f, 20f, "0.0", 10f, ro, " cm") / 100f;
+            if (Mathf.Abs(v - _p.RippleWavelength.Value) > 0.00001f) _p.RippleWavelength.Value = v;
+            v = Slider("    duration", _p.RippleDamping.Value, 0.1f, 2f, "0.00", 0.6f, ro, " s");
+            if (Mathf.Abs(v - _p.RippleDamping.Value) > 0.0001f) _p.RippleDamping.Value = v;
             GUI.enabled = en;
             bool mk = GUILayout.Toggle(_p.SkinMarksOn.Value, " Marks: hand prints and slap redness");
             GUI.enabled = true;
@@ -672,8 +680,10 @@ namespace SfMorph
                 if (Ripple.Status.Length > 0) GUILayout.Label(Ripple.Status, _hint);
             }
             GUILayout.Label("Dent edge: how far around a hand the skin follows the dent (5 mm = the old hard edge). Rim bulge: the pressed flesh rises " +
-                            "around it. Bend bulges: biceps, thighs and calves thicken as the joints bend, a fold in the lower belly when she sits. " +
-                            "Ripple: a slap or a thrust sends a wave through her glutes, thighs and breasts.", _hint);
+                            "around it. Bend bulges: biceps, thighs and calves thicken as the joints bend, her belly rounds forward when she sits or squats. " +
+                            "Ripple: a slap or a thrust sends a wave through her glutes, thighs and breasts (speed: how fast it travels; wavelength: crest " +
+                            "to crest, a longer one reaches farther; duration: seconds to fade to a third). Marks come from hands, the partner and slaps; " +
+                            "her own limbs dent her skin but never redden it.", _hint);
         }
 
         static readonly string[] WrinkleDebugs = { "Off", "Activation", "Regions" };

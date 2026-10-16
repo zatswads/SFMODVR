@@ -167,7 +167,10 @@ namespace SfMorph
             }
             // 0.8.9 (user: the ripple never shows): 4 mm/(m/s) gave 2-5 mm waves that the 12 cm falloff and the Gaussian ring cut to ~1 mm within
             // 0.1 s, invisible in the headset. 12 mm/(m/s) from 0.4 m/s, capped at 25 mm: a 1.5 m/s slap at the default 60 % starts at ~8 mm.
-            float a = Mathf.Clamp(0.012f * (speed - 0.4f), 0f, 0.025f) * s.Ripple;
+            // 0.9.4 (user: better, still too subtle and too quick): 14 mm/(m/s) from 0.3 m/s, capped at 35 mm, x Ripple (0..2, default 1): a 1.5 m/s
+            // slap starts at ~17 mm; with the slower (0.5 m/s), longer (10 cm, reach 2 wavelengths) and longer-lived (0.6 s) default wave it stays
+            // visible for about half a second. Compose clamps the wave to 1.5 x the tissue cap, so thin skin never sinks absurdly.
+            float a = Mathf.Clamp(0.014f * (speed - 0.3f), 0f, 0.035f) * s.Ripple;
             // breast impact: the game's breast physics gets a short kick along the impact
             string pulseNote = "";
             if (IsBreast(bone, zoneId))

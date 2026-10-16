@@ -7,7 +7,7 @@ namespace SfMorph
 {
     // 0.8.0 bend correctives (design 2.2): her elbow, knee and hip angles vs the bind pose -> 9 bulge amplitudes (metres) that GpuContact's
     // Compose kernel adds per vertex by ContactBake.Bend weights. 9 slots (uniforms _BendAmt0..2): 0/1 biceps L/R (elbow), 2/3 thigh back L/R
-    // (knee), 4/5 thigh top L/R (hip flexion), 6/7 calf L/R (knee), 8 lower-belly fold (both hips flexed; its vertices carry a negative weight).
+    // (knee), 4/5 thigh top L/R (hip flexion), 6/7 calf L/R (knee), 8 lower-belly roll (both hips flexed; 0.9.4: an outward roll, was an inward fold).
     // Amplitudes are >= 0 metres, already x BendAmount; the per-vertex weight's sign says bulge out (+) or fold in (-).
     // A joint's angle = how far the child segment (C -> E) has turned from its bind-pose direction, both in the parent bone's (P) frame:
     // elbow P Shoulder C Elbow E Wrist, knee P Hip C Knee E Ankle, hip P Root_M C Hip E Knee.
@@ -27,7 +27,7 @@ namespace SfMorph
         static readonly bool[] _ok = new bool[NJ];
         static readonly float[] _theta = new float[NJ];
         static readonly bool[] _logged = new bool[Slots];
-        static readonly string[] SlotNames = { "biceps L", "biceps R", "thigh back L", "thigh back R", "thigh top L", "thigh top R", "calf L", "calf R", "belly fold" };
+        static readonly string[] SlotNames = { "biceps L", "biceps R", "thigh back L", "thigh back R", "thigh top L", "thigh top R", "calf L", "calf R", "belly roll" };
         static readonly string[] JointNames = { "elbow L", "elbow R", "knee L", "knee R", "hip L", "hip R" };
         static float _nextStatus;
         static int _statSig = -1;

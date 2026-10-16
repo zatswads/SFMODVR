@@ -65,6 +65,12 @@ namespace SfMorph
             bool tfo = GUILayout.Toggle(foley, " Skin sounds: slaps from your sound files, pat, grab, rub");
             GUI.enabled = true;
             if (sub == null && sound && tfo != foley) _p.ReactFoley.Value = tfo;
+            // 0.9.4: the rub loop alone can be switched off (slaps, pats and grabs keep sounding)
+            bool rubCfg = _p.ReactRubSound.Value;
+            GUI.enabled = sub == null && sound && foley;
+            bool trub = GUILayout.Toggle(rubCfg, "    Rub sound while a hand slides over her skin");
+            GUI.enabled = true;
+            if (sub == null && sound && foley && trub != rubCfg) _p.ReactRubSound.Value = trub;
             if (!sound) GUILayout.Label("    off: Sound is off", _off);
             else if (foley)
             {

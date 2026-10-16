@@ -273,25 +273,34 @@ namespace SfMorph
             return low;
         }
 
-        // A skin rub loop (2 s): band-limited friction noise (500 Hz - 4 kHz) with a slow irregular grain, made seamless by a 100 ms crossfade.
+        // A skin rub loop (2 s). 0.9.4 (user: it sounded like rubbing carpet): 0.9.0 was 500 Hz - 4 kHz noise with a new random level every
+        // 10 ms, a rough crackle like fibres. Skin on skin is a soft, breathy swish: a warm band (180 Hz - 1.2 kHz, two poles each side) with
+        // a faint airy sheen (2.5 - 6 kHz at a fifth), its level swelling slowly like a stroke (2.5 / 3.5 / 5 Hz, all periodic in the 2 s loop),
+        // no grain. Seamless by a 100 ms equal-power crossfade. Your own recordings in Sounds\rub still come first.
         static float[] BuildRub()
         {
             int n = 44100 * 2, x = 4410;
             var s = Noise(n + x, 91);
-            HighPass(s, 500f); HighPass(s, 500f); LowPass(s, 4000f);
-            var r = new System.Random(97);
-            var mod = new float[n + x];
-            float m = 0.6f, target = 0.6f;
-            for (int i = 0; i < mod.Length; i++)
-            {
-                if (i % 441 == 0) target = 0.35f + (float)r.NextDouble() * 0.65f;   // a new grain level every 10 ms, eased
-                m += (target - m) * 0.004f;
-                mod[i] = m;
-            }
+            HighPass(s, 180f); HighPass(s, 180f); LowPass(s, 1200f); LowPass(s, 1200f);
+            Normalize(s, 1f);
+            var air = Noise(n + x, 93);
+            HighPass(air, 2500f); HighPass(air, 2500f); LowPass(air, 6000f);
+            Normalize(air, 1f);
             var o = new float[n];
-            for (int i = 0; i < n; i++) o[i] = s[i] * mod[i];
-            for (int i = 0; i < x; i++) { float f = i / (float)x; o[i] = o[i] * f + s[n + i] * mod[n + i] * (1f - f); }   // the tail flows into the head
-            Normalize(o, 0.35f);
+            Func<int, float> sample = i =>
+            {
+                float t = (i % n) / 44100f;
+                float mod = 0.75f + 0.12f * Mathf.Sin(2f * Mathf.PI * 2.5f * t + 0.4f) + 0.08f * Mathf.Sin(2f * Mathf.PI * 3.5f * t + 1.9f)
+                    + 0.05f * Mathf.Sin(2f * Mathf.PI * 5f * t + 4.1f);
+                return (s[i] + 0.2f * air[i]) * mod;
+            };
+            for (int i = 0; i < n; i++) o[i] = sample(i);
+            for (int i = 0; i < x; i++)
+            {
+                float f = i / (float)x;
+                o[i] = o[i] * Mathf.Sin(0.5f * Mathf.PI * f) + sample(n + i) * Mathf.Cos(0.5f * Mathf.PI * f);   // the tail flows into the head
+            }
+            Normalize(o, 0.3f);
             return o;
         }
     }

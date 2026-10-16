@@ -6,7 +6,7 @@ namespace SfMorph
     // Her reactions to touch (0.7.9): what the Body hands the director each frame. Filled from the config once per frame (no allocation).
     internal class ReactionSettings
     {
-        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley;
+        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley, RubSound;
         public float Sensitivity, Cooldown, Volume, BlushGain, VoicePitchVar, LimbPush, LineChance, FaceStrength, VoicePitch, VoiceFormant;
         public string FaceMap = "", VoicePack = "";
         public int VoiceMode, Log;
@@ -21,7 +21,7 @@ namespace SfMorph
             VoiceMode = p.ReactVoiceMode.Value; Log = p.ReactLog.Value;
             Lines = p.ReactLines.Value; LineChance = p.ReactLineChance.Value;
             LinesGamePath = p.ReactLinesGamePath.Value;
-            Foley = p.ReactFoley.Value; VoicePack = p.VoicePackName.Value ?? ""; VoicePitch = p.VoicePitch.Value; VoiceFormant = p.VoiceFormant.Value;
+            Foley = p.ReactFoley.Value; RubSound = p.ReactRubSound.Value; VoicePack = p.VoicePackName.Value ?? ""; VoicePitch = p.VoicePitch.Value; VoiceFormant = p.VoiceFormant.Value;
             FaceClips = p.ReactFaceClips.Value; FaceStrength = p.ReactFaceStrength.Value; FaceMap = p.ReactFaceMap.Value ?? "";
             PushByTouch = p.HandsPushByTouch.Value;   // the geometric push of other hands: without it and without physics hands nothing is classified
             LimbPush = p.HandsLimbPush.Value;   // the flinch's swing is a push on her limbs: it needs the slider above 0
@@ -197,8 +197,9 @@ namespace SfMorph
                 }
                 else if (_bv != -2) { _bv = -2; ClearR(); }
                 // 0.9.0: the skin rub loop follows the fastest sliding touch of this frame
-                bool rub = s.Sound && s.Foley && _rubLvl > 0f && State != RState.Climax;
-                _g.Rub(_rubPt, rub ? _rubLvl * s.Volume * 0.55f : 0f, 0.92f + 0.2f * _rubLvl, dt);
+                // 0.9.4 (user: the rub sounds like carpet): its own switch, and a little quieter under the other skin sounds
+                bool rub = s.Sound && s.Foley && s.RubSound && _rubLvl > 0f && State != RState.Climax;
+                _g.Rub(_rubPt, rub ? _rubLvl * s.Volume * 0.4f : 0f, 0.92f + 0.16f * _rubLvl, dt);
 
                 if (cut) return;
                 Tick(dt, s);

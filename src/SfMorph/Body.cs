@@ -714,7 +714,7 @@ namespace SfMorph
             // 0.8.9 (user: marks too subtle): the boost multiplies the build-up, the redness (saturates sooner) and the pressed darkening (capped so
             // the shade never passes 0.3 of the albedo)
             float boost = Mathf.Clamp(_p.MarksBoost.Value, 1f, 4f);
-            s.MarkBoost = boost; s.MarkGain = 0.6f * boost; s.Redness = _p.MarksRedness.Value * boost; s.Ao = Mathf.Min(2f, _p.MarksAo.Value * boost);
+            s.MarkBoost = boost; s.MarkGain = 0.35f * boost;   // 0.9.4: was 0.6; the GPU now feeds it only a firm or moving foreign press s.Redness = _p.MarksRedness.Value * boost; s.Ao = Mathf.Min(2f, _p.MarksAo.Value * boost);
         }
 
         // 0.8.0: impacts of this frame's Simulate -> ripple waves (GpuContact draws them) and the breast pulse.

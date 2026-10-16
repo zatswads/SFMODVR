@@ -23,6 +23,7 @@
 #pragma kernel MarkDisc
 #pragma kernel MarksDecay
 #pragma kernel ApplyMap
+#pragma kernel ForeignMarks
 
 RWByteAddressBuffer _Verts;          // skinned output: per vertex _Stride bytes, position at _PosOff, normal at _NrmOff
 uint _Stride, _PosOff, _NrmOff, _Count;
@@ -32,7 +33,9 @@ struct Capsule
 {
     float4 a;                        // xyz endpoint a (world), w radius (m)
     float4 b;                        // xyz endpoint b (world)
-    uint4 c;                         // 0.8.0: x = skip mask (bit k set: a vertex of class k is NOT pressed by this capsule); yzw 0
+    uint4 c;                         // 0.8.0: x = skip mask (bit k set: a vertex of class k is NOT pressed by this capsule)
+                                     // 0.9.4: y = asuint(mark weight): 0 = her own limb (dents, never marks); a hand / the partner: 0.4 at rest
+                                     // up to 1.5 moving (approach / slide speed vs her pelvis, CPU); zw 0
 };
 StructuredBuffer<Capsule> _Caps;
 uint _CapCount;
@@ -173,6 +176,9 @@ StructuredBuffer<float> _FieldR;     // Compose: Depth's raw field (0.8.9: the f
 RWStructuredBuffer<float4> _Marks;   // per canonical vertex: x redness 0..1, y live pressure 0..1, z lingering dent (m)
 RWStructuredBuffer<float4> _Grad;    // 2 per vertex: [2v] = (tangential gradient of the field, world; field value), [2v+1] = (inward direction, world; 1)
 StructuredBuffer<float4> _Waves;     // 2 per wave: (origin xyz world, age s), (A m, c m/s, lambda m, tau s)
+RWStructuredBuffer<float2> _Foreign;// 0.9.4 Depth: per canonical vertex x = the strongest foreign press (shown depth / tissue cap x the capsule's mark weight),
+                                     // y = the deepest foreign shown depth (m); her own limbs are left out (they dent but never mark)
+StructuredBuffer<float2> _ForeignR;  // the same buffer, read by Compose
 RWStructuredBuffer<uint> _Hits;      // [0]: canonical vertices Depth found pressed (read back: her own limbs run the full chain only while they touch)
 StructuredBuffer<int> _Map;          // ApplyMap: per vertex of an overlay mesh (areola, tattoo...) the body canonical vertex under it, -1 = its own field
 StructuredBuffer<float4> _ParentGrad;// ApplyMap: the body renderer's _Grad of this frame
@@ -221,7 +227,7 @@ void Depth(uint3 id : SV_DispatchThreadID)
     if (v >= _Count) return;
     if (_Canon[v] != v) return;
     float3 nOut = WorldNormal(v);
-    if (dot(nOut, nOut) < 0.5) { _FieldOut[v] = 0; return; }
+    if (dot(nOut, nOut) < 0.5) { _FieldOut[v] = 0; _Foreign[v] = float2(0, 0); return; }
     float3 nIn = -nOut;
     float3 p = WorldPos(v);
     float2 t = _Tissue[v];
@@ -229,6 +235,7 @@ void Depth(uint3 id : SV_DispatchThreadID)
     bool bony = t.y < 0.0035;
     uint cls = _Class[v];
     float depth = 0;
+    float2 fo = float2(0, 0);
     for (uint c = 0; c < _CapCount; c++)
     {
         Capsule cp = _Caps[_CapOff + c];
@@ -249,8 +256,15 @@ void Depth(uint3 id : SV_DispatchThreadID)
         if (RayExit(p, nIn, ca, ab, len2, r, te)) s = min(te + 1e-4, 4.0 * rad + 1e-4);
         else s = rad;
         depth = max(depth, s);
+        float mw = asfloat(cp.c.y);
+        if (mw > 0.0 && cap > 1e-6)
+        {
+            float sh = Press(s, cap);
+            fo = max(fo, float2(saturate(sh / cap) * mw, sh));
+        }
     }
     _FieldOut[v] = depth > 0.0 && cap > 1e-6 ? Press(depth, cap) : 0.0;
+    _Foreign[v] = fo;
     if (_CountHits != 0u && depth > 0.0) InterlockedAdd(_Hits[0], 1u);   // only when the count is read back (one address: keep atomics rare)
 }
 
@@ -305,7 +319,13 @@ float BendAmt(float slot)
 
 // Compose: the final signed field (positive = inward, metres) = narrow contact field - rim bulge (the wide field exceeding the narrow one
 // around the dent, capped) - bend bulges - waves. Marks: redness accumulates with pressure and fades, the live pressure and a lingering dent.
+// 0.9.4 (user: her thighs pressing her belly in a squat left a red patch): marks come only from foreign contact (_ForeignR: hands, the partner),
+// and redness only from a firm or moving press (the capsule's mark weight x depth past a knee); her own limbs keep their dent, add a faint
+// contact shade and never redden or leave a print.
 // _NoField = 1: no contact on this renderer this frame (bend / wave / marks only): the contact fields are not read.
+static const float MarkKnee = 0.25;      // foreign press (depth share x mark weight) below this never reddens
+static const float SelfShade = 0.35;     // her own limbs' contact shade, a share of the pressed-flesh darkening
+
 [numthreads(64, 1, 1)]
 void Compose(uint3 id : SV_DispatchThreadID)
 {
@@ -317,7 +337,8 @@ void Compose(uint3 id : SV_DispatchThreadID)
     // 0.8.9 (user: a hard pixelated seam around a finger's dent): the two Smooth passes lower the narrow field under a small contact (a
     // fingertip) below the real penetration, so the skin stayed a few mm inside the finger and the depth intersection drew an aliased line.
     // The raw depth (already pressed against the tissue cap) is its floor: never less dent than the hand is deep; the skirt stays smooth.
-    if (_NoField == 0u) { n = max(_FieldN[v], _FieldR[v]); w = max(_FieldW[v], n); }
+    float2 fo = float2(0, 0);
+    if (_NoField == 0u) { n = max(_FieldN[v], _FieldR[v]); w = max(_FieldW[v], n); fo = _ForeignR[v]; }
     float bulge = min(_Bulge * max(0.0, w - n), _BulgeCap);
     float4 bd = _Bend[v];
     float bend = bd.y * BendAmt(bd.x) + bd.w * BendAmt(bd.z);
@@ -331,19 +352,23 @@ void Compose(uint3 id : SV_DispatchThreadID)
             float4 p = _Waves[2 * i + 1];
             float r = length(pw - o.xyz);
             float x = r - p.y * o.w;
-            wave += p.x * exp(-o.w / p.w) * exp(-r / 0.12) * exp(-2.0 * x * x / (p.z * p.z)) * -cos(6.2831853 * x / p.z);   // the impact point dips (a trough at x = 0), the ring rises around it
+            // 0.9.4: the reach grows with the wavelength (12 cm at most 6 cm long waves, 2 wavelengths beyond)
+            wave += p.x * exp(-o.w / p.w) * exp(-r / max(0.12, 2.0 * p.z)) * exp(-2.0 * x * x / (p.z * p.z)) * -cos(6.2831853 * x / p.z);   // the impact point dips (a trough at x = 0), the ring rises around it
         }
         wave *= _WaveAmt * saturate(t.y / 0.016);   // fleshy skin ripples (breast, glute), bony skin does not
+        float wcap = 1.5 * TissueCap(t);
+        wave = clamp(wave, -wcap, wcap);            // 0.9.4: bigger waves, but never deeper than the flesh is
     }
     _FieldOut[v] = n - bulge - bend - wave;
     if (_MarkOn != 0u)
     {
         float cap = TissueCap(t);
         float pressure = cap > 1e-6 ? saturate(n / cap) : 0.0;
+        float drive = saturate((fo.x - MarkKnee) / (1.0 - MarkKnee));   // a hand resting lightly: nothing; a firm squeeze slowly; a moving press fast
         float4 m = _Marks[v];
-        m.x = min(1.0, m.x * exp(-_Dt / _MarkFade) + _Dt * _MarkGain * pressure);
-        m.y = pressure;
-        m.z = max(m.z * exp(-_Dt / _DentFade), max(n, 0.0));
+        m.x = min(1.0, m.x * exp(-_Dt / _MarkFade) + _Dt * _MarkGain * drive);
+        m.y = max(cap > 1e-6 ? saturate(fo.y / cap) : 0.0, SelfShade * pressure);
+        m.z = max(m.z * exp(-_Dt / _DentFade), fo.y);
         _Marks[v] = m;
     }
 }
@@ -484,4 +509,10 @@ void MarksDecay(uint3 id : SV_DispatchThreadID)
     m.y = 0.0;
     m.z *= exp(-_Dt / _DentFade);
     _Marks[v] = m;
+}
+
+// ForeignMarks: never dispatched; its presence tells the plugin this bundle has the 0.9.4 foreign-only marks (Depth writes _Foreign).
+[numthreads(1, 1, 1)]
+void ForeignMarks(uint3 id : SV_DispatchThreadID)
+{
 }
