@@ -41,6 +41,16 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.6 (fit fixes found on the Genesis 9 character; the plugin is unchanged):
+- Jaw and chin: the rigid VaM head was blended into the body warp up to her Head_M (mouth height), so a large body warp sheared
+  the lower face (Krista: jutting jaw, parted lips; chin 21 mm off). The blend now ends under her chin and the warp carries
+  rigid head anchors (skull extremes, chin, eyes), so the neck takes the change smoothly (Krista chin 1.5 mm; Lexi 1.5 mm).
+- Mouth: her mouth opening is landmarked by its corners too (onto the ends of the character's Lips), so a mouth of another
+  width no longer folds her lips. The adapter's geometric Lips are no wider than the mouth opening.
+- Shoulder no-data spheres keep off the breasts. `--breast-prealign` (off): an experimental ray warp of her breasts.
+- Still open: on a breast of a quite different shape (Krista: flatter, lower) the fit folds her breast skin under the breasts;
+  such a character is not usable as a conversion yet (its slider-fit preset is).
+
 0.11.5 (first real DAZ Genesis 9 character through the pipeline; the plugin is unchanged):
 - RKS Krista 9 (a Genesis 9 product) went DAZ Studio -> FBX -> adapter -> fit: all 53 joints from the Genesis 9 table, body fit
   residual 0.03 mm, eyes open and fitted, textures 9 of 9, both material checks PASS (albedo gain 0.70). Not good enough yet:

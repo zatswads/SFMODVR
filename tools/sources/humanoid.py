@@ -424,7 +424,10 @@ def main():
         ring = ring[ring[:, 1] < eye_y - 0.03] if len(ring) else ring   # the mouth, not the eye sockets
         if len(ring) >= 8:
             t_r = kd(ring)
-            near = np.array([t_r.find(cen[f_])[2] < 0.009 and cen[f_][2] > ring[:, 2].min() - 0.004 for f_ in face_f])
+            # no wider than the mouth itself (the opening's corners): the fit takes the mouth corners and lip label size from the Lips
+            cx_, hw_ = 0.5 * (ring[:, 0].min() + ring[:, 0].max()), 0.5 * np.ptp(ring[:, 0])
+            near = np.array([t_r.find(cen[f_])[2] < 0.009 and cen[f_][2] > ring[:, 2].min() - 0.004 and abs(cen[f_][0] - cx_) <= hw_
+                             for f_ in face_f])
             role[face_f[near]] = 'Lips'
             log('lips from the mouth opening: %d triangles (%d ring vertices)' % (int(near.sum()), len(ring)))
     if not (role == 'Ears').any():

@@ -780,6 +780,9 @@ def main():
     ap.add_argument('--proportions', choices=('hers', 'vam'), default='hers',
                     help="hers: the VaM character's surface and face on her own skeleton (limb, finger and shoulder "
                          "proportions stay hers, so her rig and animations fit); vam: also take VaM's proportions")
+    ap.add_argument('--breast-prealign', action='store_true',
+                    help='warp her breasts onto the character\'s along rays before the fit (experimental: fewer flipped '
+                         'triangles on a much flatter breast, but a visible arc where it fades out)')
     ap.add_argument('--sliders', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sliders.txt'),
                     help='slider definitions (default: sliders.txt next to this script); used when the VaM export has morphs/')
     a = ap.parse_args()
@@ -1026,20 +1029,41 @@ def run(a, chk):
                     bsrc.append(vam_u[j]); bdst.append(hm[np.argmax(hm[:, 2])]); bl.append('nipple')
         hm_b = face.vc[bv].mean(0); hm_b[2] = face.vc[bv][:, 2].max() - 0.004
         vm_b = rig.apply(np.linalg.inv(M['Head_M'])[None], vam_mouth[None])[0]
-        bsrc = np.array(bsrc); bdst = np.array(bdst)
-        dd = np.linalg.norm(bdst - bsrc, axis=1)
-        log('her proportions: VaM unposed into her bind pose; %d landmarks (no head, eyes or mouth: the face stays VaM-like), '
-            'mean %.1f mm, max %.1f mm (%s) before the warp' % (len(bl), 1000 * dd.mean(), 1000 * dd.max(), bl[int(np.argmax(dd))]))
-        vam_b = fit.tps_warp(vam_u, bsrc, bdst, smoothing=1e-4)
         # Head decoupling: the head is not part of the proportion warp. VaM's head goes on her skeleton rigidly (eye
-        # midpoints coincide), blended over the neck from the warped body (weight 0 at her Neck_M, 1 at her Head_M).
+        # midpoints coincide), blended over the neck from the warped body (weight 0 at her Neck_M, 1 under her chin).
         eye_v = {}
         for e, v in (('Eye_L', 'lEye'), ('Eye_R', 'rEye')):
             eye_v[e] = rig.apply(np.linalg.inv(M[e])[None], vj[v][None])[0]
         eye_mid_b = 0.5 * (bind_pos['Eye_L'] + bind_pos['Eye_R'])
         t_eye = eye_mid_b - 0.5 * (eye_v['Eye_L'] + eye_v['Eye_R'])
         yN, yH = bind_pos['Neck_M'][1], bind_pos['Head_M'][1]
+        # the blend ends under her chin, not at Head_M (her Head_M sits at mouth height): jaw and chin belong to the rigid
+        # head, else a large body warp shears the lower face away from the upper one (seen on a Genesis 9 character: a
+        # jutting jaw and parted lips in the target)
+        fz = face.vc[(np.abs(face.vc[:, 0]) < 0.02) & (face.vc[:, 2] > bind_pos['Head_M'][2])]
+        y_chin = float(fz[:, 1].min()) if len(fz) else yH
+        if yN + 0.02 < y_chin < yH:
+            log('head blend ends under her chin at y %.3f (Head_M %.3f)' % (y_chin, yH))
+            yH = y_chin
         head_names = [names.index(x) for x in ('torso', 'lipU', 'lipL')]
+        # head anchors in the warp: the skull's extremes (top, back, sides at eye height, chin, eyes) pinned to where the rigid
+        # head puts them (a pure translation, so the face is not scaled): the warp then meets the rigid head and the neck
+        # takes the change smoothly (without them the warp is free at the head and the blend shows as a ledge on the neck)
+        hp_i = np.flatnonzero(np.isin(vlab_v, head_names) & (vam_u[:, 1] + t_eye[1] > yH))
+        if len(hp_i) > 50:
+            hp = vam_u[hp_i]
+            ey = 0.5 * (eye_v['Eye_L'][1] + eye_v['Eye_R'][1])
+            band = hp[np.abs(hp[:, 1] - ey) < 0.01]
+            anchors = [hp[np.argmax(hp[:, 1])], hp[np.argmin(hp[:, 1])], eye_v['Eye_L'], eye_v['Eye_R']]
+            if len(band) > 10:
+                anchors += [band[np.argmin(band[:, 2])], band[np.argmin(band[:, 0])], band[np.argmax(band[:, 0])]]
+            for p in anchors:
+                bsrc.append(np.array(p)); bdst.append(np.array(p) + t_eye); bl.append('head anchor')
+        bsrc = np.array(bsrc); bdst = np.array(bdst)
+        dd = np.linalg.norm(bdst - bsrc, axis=1)
+        log('her proportions: VaM unposed into her bind pose; %d landmarks (the head only as rigid anchors: the face stays VaM-like), '
+            'mean %.1f mm, max %.1f mm (%s) before the warp' % (len(bl), 1000 * dd.mean(), 1000 * dd.max(), bl[int(np.argmax(dd))]))
+        vam_b = fit.tps_warp(vam_u, bsrc, bdst, smoothing=1e-4)
         w_head = np.where(np.isin(vlab_v, head_names), np.clip((vam_u[:, 1] + t_eye[1] - yN) / (yH - yN), 0, 1), 0.0)
         vam_b = vam_b * (1 - w_head)[:, None] + (vam_u + t_eye) * w_head[:, None]
         # the same chain, frozen, for the morph deltas (shape files): Av, the TPS (bsrc, bdst), w_head, t_eye, s and the offset
@@ -1152,10 +1176,19 @@ def run(a, chk):
         # the arms: her own clavicle/shoulder shape is kept (no data within 12 cm of the shoulder and scapula bind
         # positions), with a stiffness ramp (10 at 12 cm down to 1 at 18 cm) so VaM's shape takes over smoothly around it
         n_sh = np.zeros(nw, bool)
+        # the breasts are not shoulder: the shoulder spheres reach the upper-outer breast (her shoulder joint is 8-10 cm from
+        # it), which then kept her round upper pole while the rest followed a flatter VaM breast (folds at the border)
+        breast = np.zeros(nw, bool)
+        if nip is not None:
+            for sgn in (-1, 1):
+                hm = nip.vc[np.sign(nip.vc[:, 0]) == sgn]
+                if len(hm):
+                    c_ = hm.mean(0)
+                    breast |= (np.linalg.norm(wc - c_, axis=1) < 0.10) & (wc[:, 2] > c_[2] - 0.06)
         for sdn in ('Shoulder_L', 'Shoulder_R', 'Scapula_L', 'Scapula_R'):
             r = np.linalg.norm(wc - bind_pos[sdn], axis=1)
-            n_sh |= r < 0.12
-            stiff_b = np.maximum(stiff_b, np.clip(10.0 * (1 - (r - 0.12) / 0.06), 1, 10))
+            n_sh |= (r < 0.12) & ~breast
+            stiff_b = np.maximum(stiff_b, np.where(breast, 1.0, np.clip(10.0 * (1 - (r - 0.12) / 0.06), 1, 10)))
         nodata |= n_sh
         # her separate nipple overlay replaces VaM's nipple: no data only on the rim of its hole (within 4 mm of any overlay
         # vertex); the Torso faces stay the ICP target right up to it (the Nipples faces are dropped, so the rim cannot climb
@@ -1218,8 +1251,23 @@ def run(a, chk):
                 else:
                     warn('VaM Ears have no vertices at eye height on both sides: ear landmarks use the head width instead')
             lm_vam = face_landmarks(fm_vam, vam_b[vhead], ears=ears_dst)
-            lsrc = np.array([lm_her[k] for k in FACE_LM]); ldst = np.array([lm_vam[k] for k in FACE_LM])
-            log('face pre-alignment landmarks, her -> VaM (mm): ' + ', '.join('%s %.1f' % (k, 1000 * np.linalg.norm(lm_vam[k] - lm_her[k])) for k in FACE_LM))
+            lsrc = [lm_her[k] for k in FACE_LM]; ldst = [lm_vam[k] for k in FACE_LM]
+            lnames = list(FACE_LM)
+            # mouth corners: the ends of her mouth opening onto the ends of VaM's, so her lips start at the character's mouth
+            # width (with the centre alone a wider mouth left her opening narrow and the lips folded between it and the target)
+            hr = wc[mouth_w]; hr = hr[np.abs(hr[:, 1] - np.median(hr[:, 1])) < 0.012]
+            if len(ring) >= 10 and len(hr) >= 10:
+                # VaM's corners: the ends of its Lips at the opening's height (Genesis 2's lips touch the inner mouth over
+                # only part of their width, so the ring's own ends sit 6 mm inside the corners)
+                lv_ = vam_b[group_verts(vam, ['Lips'])]
+                lv_ = lv_[np.abs(lv_[:, 1] - vam_b[ring][:, 1].mean()) < 0.006]
+                vr = lv_ if len(lv_) >= 10 else vam_b[ring]
+                for fn_, nm_ in ((np.argmin, 'cornerL'), (np.argmax, 'cornerR')):
+                    lsrc.append(hr[fn_(hr[:, 0])]); ldst.append(vr[fn_(vr[:, 0])]); lnames.append(nm_)
+            lsrc = np.array(lsrc); ldst = np.array(ldst)
+            log('face pre-alignment landmarks, her -> VaM (mm): ' + ', '.join('%s %.1f' % (k, 1000 * np.linalg.norm(b_ - a_)) for k, a_, b_ in zip(lnames, lsrc, ldst)))
+            if 'cornerL' in lnames:
+                log('mouth width: hers %.1f mm, VaM %.1f mm' % (1000 * np.ptp(hr[:, 0]), 1000 * np.ptp(vr[:, 0])))
             pre = fit.tps_warp(wc, lsrc, ldst, smoothing=1e-4)
             w_her = np.where(np.isin(hlab, head_names), np.clip((wc[:, 1] - yN) / (yH - yN), 0, 1), 0.0)
             x_start = wc + (pre - wc) * w_her[:, None]
@@ -1240,6 +1288,54 @@ def run(a, chk):
         S = lambda p: eye_mid_b + s_mouth * (np.asarray(p) - eye_mid_b) + S_tr
         x_start[mouth_in] = S(wc[mouth_in])
         x_start = x_start + nip_shift
+        # Breast pre-alignment (--breast-prealign, off by default): a VaM breast of another shape than hers (rounder / flatter, other size) made the closest-point
+        # fit bunch her breast skin into folds (seen on a Genesis 9 character). Like the face, each breast is warped first,
+        # smoothly: rays from a centre inside the chest (9 cm behind her nipple) in 5 x 5 directions round the forward axis,
+        # her first hit -> VaM's first hit along the same ray, plus a ring 14 cm out held in place; a thin-plate warp of those
+        # pairs moves her breast skin (full within 8 cm of the nipple in x, y, none beyond 13 cm), then the ICP refines.
+        n_bw = 0
+
+        def first_hit(P, Fc, O, d):
+            """The nearest intersection of the ray O + t d (t > 0) with triangles Fc of points P (Moller-Trumbore), or None."""
+            a = P[Fc[:, 0]]; e1 = P[Fc[:, 1]] - a; e2 = P[Fc[:, 2]] - a
+            h = np.cross(d, e2); det = np.einsum('ij,ij->i', e1, h)
+            ok = np.abs(det) > 1e-12
+            inv = np.where(ok, 1.0 / np.where(ok, det, 1.0), 0.0)
+            s_ = O - a; u = np.einsum('ij,ij->i', s_, h) * inv
+            q = np.cross(s_, e1); v = (q @ d) * inv; t = np.einsum('ij,ij->i', e2, q) * inv
+            hit = ok & (u >= 0) & (v >= 0) & (u + v <= 1) & (t > 1e-4)
+            return O + d * t[hit].min() if hit.any() else None
+        for sgn, c_n in (nip_c.items() if a.breast_prealign else ()):
+            O = c_n + np.array([0.0, 0.0, -0.09])
+            rxy = np.linalg.norm((wc - c_n)[:, :2], axis=1)
+            hsel = np.flatnonzero((np.sign(wc[:, 0]) == sgn) & (rxy < 0.15) & (x_start[:, 2] > O[2]) & ~mouth_in)
+            reg_h = np.zeros(nw, bool); reg_h[hsel] = True
+            hF = wf[reg_h[wf].all(1)]
+            tc = vam_b[vf].mean(1)
+            tF = vf[(np.sign(tc[:, 0]) == sgn) & (np.linalg.norm((tc - c_n)[:, :2], axis=1) < 0.16) & (tc[:, 2] > O[2])]
+            if len(hF) < 100 or len(tF) < 100:
+                continue
+            src_, dst_ = [], []
+            for el in np.radians([-45, -22, 0, 22, 45]):
+                for az in np.radians([-50, -25, 0, 25, 50]):
+                    d = np.array([np.sin(az) * np.cos(el), np.sin(el), np.cos(az) * np.cos(el)])
+                    a_, b_ = first_hit(x_start, hF, O, d), first_hit(vam_b, tF, O, d)
+                    if a_ is not None and b_ is not None and np.linalg.norm(b_ - a_) < 0.05:
+                        src_.append(a_); dst_.append(b_)
+            ring = hsel[(rxy[hsel] > 0.13) & (rxy[hsel] < 0.15)]
+            for i_ in ring[::max(1, len(ring) // 24)]:
+                src_.append(x_start[i_]); dst_.append(x_start[i_])
+            if len(src_) < 20:
+                continue
+            src_ = np.array(src_); dst_ = np.array(dst_)
+            moved = fit.tps_warp(x_start[hsel], src_, dst_, smoothing=1e-3)
+            t_ = np.clip((0.13 - rxy[hsel]) / 0.05, 0, 1); w_ = t_ * t_ * (3 - 2 * t_)
+            x_start[hsel] += (moved - x_start[hsel]) * w_[:, None]
+            n_bw += int((w_ > 0).sum())
+            log('breast pre-alignment %s: %d ray pairs (her first hit -> VaM\'s, mean %.1f mm, max %.1f mm), %d skin vertices' % (
+                'LR'[sgn > 0], len(src_) - len(ring[::max(1, len(ring) // 24)]),
+                1000 * np.linalg.norm(dst_ - src_, axis=1)[np.linalg.norm(dst_ - src_, axis=1) > 0].mean() if (np.linalg.norm(dst_ - src_, axis=1) > 0).any() else 0.0,
+                1000 * np.linalg.norm(dst_ - src_, axis=1).max(), int((w_ > 0).sum())))
         log('mouth similarity S: scale %.4f about her eye midpoint (eye spacing %.4f, eye-chin %.4f), her lip ring centroid moves %.1f mm to the pre-aligned ring (%d lip-ring vertices of %d, %d interior vertices)' % (
             s_mouth, fm_vam['spacing'] / fm_her['spacing'] if fm_her is not None and fm_vam is not None else 1.0,
             np.linalg.norm(fm_vam['chin'] - fm_vam['em']) / np.linalg.norm(fm_her['chin'] - fm_her['em']) if fm_her is not None and fm_vam is not None else 1.0,
