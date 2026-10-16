@@ -29,7 +29,7 @@ namespace SfMorph
             "cheekPuff", "cheekSquintLeft", "cheekSquintRight", "tongueOut",
         };
         public static readonly int K = Shapes.Length;
-        public const int JawOpen = 0;
+        public const int JawOpen = 0, MouthClose = 4;
 
         public static string Dir { get { return Path.Combine(Store.Dir, "lipsync"); } }
         public static string MapPath { get { return Path.Combine(Store.Dir, "arkit-map.txt"); } }
@@ -214,6 +214,7 @@ namespace SfMorph
         public static int MapVersion;     // bumped on every change (ReactionsFace re-resolves)
         public static bool MapLoaded, Dirty;
         public static string MapStatus = "";
+        public static string MapFileVersion = "";   // the plugin version in the file's header ("" = none / no file)
 
         static List<Pose>[] NewMap() { var m = new List<Pose>[Shapes.Length]; for (int i = 0; i < m.Length; i++) m[i] = new List<Pose>(); return m; }
 
@@ -238,13 +239,15 @@ namespace SfMorph
             foreach (var l in Map) l.Clear();
             MapVersion++; Dirty = false;
             string path = MapPath;
-            if (!File.Exists(path)) { MapStatus = "no " + path + " yet: seed or sculpt the shapes, then Save"; return; }
+            MapFileVersion = "";
+            if (!File.Exists(path)) { MapStatus = "no " + path + " yet: build or sculpt the shapes, then Save"; return; }
             int n = 0, bad = 0;
             try
             {
                 foreach (var raw in File.ReadAllLines(path))
                 {
                     string line = raw.Trim();
+                    if (MapFileVersion.Length == 0 && line.StartsWith("# SF Body Morphs ")) { int c = line.IndexOf(':'); if (c > 17) MapFileVersion = line.Substring(17, c - 17).Trim(); }
                     if (line.Length == 0 || line[0] == '#') continue;
                     var f = line.Split('\t');
                     int s = f.Length >= 4 ? ShapeIndex(f[0].Trim()) : -1;
@@ -283,6 +286,38 @@ namespace SfMorph
                 return true;
             }
             catch (Exception e) { MapStatus = "could not save: " + e.Message; Plugin.Log.LogWarning("Lip sync: " + MapStatus); return false; }
+        }
+
+        // a.b.c < d.e.f (missing or unreadable parts count as 0)
+        public static bool VersionBefore(string a, string b)
+        {
+            var x = (a ?? "").Split('.'); var y = (b ?? "").Split('.');
+            for (int i = 0; i < Math.Max(x.Length, y.Length); i++)
+            {
+                int p = 0, q = 0;
+                if (i < x.Length) int.TryParse(x[i], out p);
+                if (i < y.Length) int.TryParse(y[i], out q);
+                if (p != q) return p < q;
+            }
+            return false;
+        }
+
+        // 0.11.11: the clip-sampled poses of 0.9.9-0.11.10 (curled, pouting lower lip) are set aside as arkit-map-<version>.txt; the caller
+        // builds new ones. True = moved.
+        public static bool RetireOldMap(out string backup)
+        {
+            backup = "";
+            try
+            {
+                if (!File.Exists(MapPath) || MapFileVersion.Length == 0 || !VersionBefore(MapFileVersion, "0.11.11")) return false;
+                backup = Path.Combine(Store.Dir, "arkit-map-" + MapFileVersion + ".txt");
+                if (File.Exists(backup)) File.Delete(backup);
+                File.Move(MapPath, backup);
+                foreach (var l in Map) l.Clear();
+                MapVersion++; Dirty = false; MapFileVersion = "";
+                return true;
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Lip sync: could not set the old map aside: " + e.Message); return false; }
         }
 
         static bool V3(string s, out Vector3 v)

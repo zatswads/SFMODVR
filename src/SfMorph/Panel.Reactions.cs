@@ -297,7 +297,7 @@ namespace SfMorph
         {
             var fc = react.Face;
             bool on = _p.LipSyncOn.Value;
-            float strCfg = _p.LipStrength.Value, leadCfg = _p.LipLead.Value, overCfg = _p.LipOverGame.Value;
+            float strCfg = _p.LipStrength.Value, leadCfg = _p.LipLead.Value, overCfg = _p.LipOverGame.Value, moodCfg = _p.LipMood.Value;
             string off = sub ?? (!face ? "Face is off" : !faceClips ? "face clips are off (the lip sync uses their survey of her face)" : null);
             bool ready = off == null && fc.LipReady;
             bool open = _lipOpen, prev = _lipPrev;
@@ -313,6 +313,9 @@ namespace SfMorph
             if (soff == null && Mathf.Abs(ld - leadCfg) > 0.00001f) _p.LipLead.Value = ld;
             float ov = Slider("Replace the game's mouth", overCfg * 100f, 0f, 100f, "0", 50f, off, " %") / 100f;
             if (off == null && Mathf.Abs(ov - overCfg) > 0.0001f) _p.LipOverGame.Value = ov;
+            // 0.11.11: her mood's mouth (smile, grimace) under the visemes; eyes and brows always stay the mood's
+            float md = Slider("Keep her expression's mouth", moodCfg * 100f, 0f, 100f, "0", 70f, soff, " %") / 100f;
+            if (soff == null && Mathf.Abs(md - moodCfg) > 0.0001f) _p.LipMood.Value = md;
             if (off != null) GUILayout.Label("    off: " + off, _off);
             else if (!fc.LipReady) GUILayout.Label("    waiting for her face survey (" + fc.Status + ")", _hint);
             else
@@ -379,8 +382,9 @@ namespace SfMorph
                 LipSync.Changed();
             }
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Seed empty shapes from her face clips")) { string r; fc.Seed(true, -1, out r); _lipMsg = r; }
-            if (GUILayout.Button("Reseed this shape")) { string r; fc.Seed(false, shape, out r); _lipMsg = r; }
+            if (GUILayout.Button("Build empty shapes")) { string r; fc.Seed(true, -1, out r); _lipMsg = r; }
+            if (GUILayout.Button("Rebuild all")) { string r; fc.Seed(false, -1, out r); _lipMsg = r; }
+            if (GUILayout.Button("Rebuild this shape")) { string r; fc.Seed(false, shape, out r); _lipMsg = r; }
             if (GUILayout.Button("Clear this shape")) { LipSync.Map[shape].Clear(); LipSync.Changed(); _lipMsg = LipSync.Shapes[shape] + " cleared"; }
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
@@ -390,7 +394,7 @@ namespace SfMorph
             if (_lipMsg.Length > 0) GUILayout.Label(_lipMsg, _hint);
             else if (LipSync.MapStatus.Length > 0) GUILayout.Label(LipSync.MapStatus, _hint);
             GUILayout.Label("One pose per ARKit shape at full weight: pick a shape (* = posed), turn on the preview, then move and turn each mouth bone until her mouth shows it. " +
-                            "Seeding takes, per shape, the face clip frame of the survey (" + fc.LipSampleCount + " mouth samples) that shows it most, as a start. " +
+                            "Build makes each shape from millimetre moves of her lips, corners and cheeks in her mouth's own frame (sized by her mouth width; only the jaw turns), as a start. " +
                             "The lip sync plays the curves through these poses (weighted sum, on top of the game's mouth by 'Replace the game's mouth'). Saved to " + LipSync.MapPath + ".", _hint);
         }
 
