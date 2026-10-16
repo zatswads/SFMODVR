@@ -98,6 +98,22 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.12 (calf seam, smooth dents, stroke ripple, lip timing, voice mute, Debug tab)
+
+Install `dist/SfMorph.dll` and `dist/sfmorph_shaders` (the bundle changed). Log: `SF Body Morphs 0.11.12`.
+
+- Calves: log `GPU contact: baked reika_foot ... muscles N verts` and a seam line `reika_foot -> reika_lowerBody_normal`. Debug tab,
+  Flex test (Legs mm up): the calf bulge runs down to the ankle with no step ~12 cm above it; no grooves along the sides of the legs.
+- Dents: press her glute / thigh with a hand: round pressed-flesh shading, no triangle pattern. Physics tab **shading smoothness**
+  0 vs 8 vs 16 mm to compare; tell me which looks right.
+- Stroke ripple: doggy / missionary with Partner body on: `Ripple: stroke #n by Player on ...` lines at the stroke rate, a visible
+  wave on her glutes / thighs each stroke. **stroke ripple** 0 % turns them off, 300 % is big.
+- Lip sync (Southern Domme or Pixie, Lip timing 0): the jaw and lips open together; the log line `Lip sync: audio output ...`.
+  If the mouth is early or late against the voice in the headset, move **Lip timing** and tell me the value.
+- Mute on: in a sex scene no game moans, feeling sounds or dialogue voice; pack moans instead (`voice: pack stand-in` lines,
+  the panel shows the last one). Off **...and its dialogue voice**: story dialogue is audible again.
+- Debug tab: every test button works from there; the other tabs have none left.
+
 ## 0.11.11 (expression under lip sync, new voice packs)
 
 Install `dist/SfMorph.dll`. Log: `SF Body Morphs 0.11.11`. Reactions, Face, Face clips and Lip sync on. Voice packs installed under

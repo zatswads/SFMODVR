@@ -737,7 +737,7 @@ namespace SfMorph
         {
             var s = Contact;
             s.Softness = _p.Softness.Value;
-            s.Skirt = _p.ContactSkirt.Value; s.Bulge = _p.ContactBulge.Value; s.Normals = _p.ContactNormals.Value; s.Depth = _p.ContactDepth.Value;
+            s.Skirt = _p.ContactSkirt.Value; s.Bulge = _p.ContactBulge.Value; s.Normals = _p.ContactNormals.Value; s.RippleThrustAmt = _p.RippleThrustAmt.Value; s.NormalSmooth = _p.ContactNormalSmooth.Value / 1000f; s.Depth = _p.ContactDepth.Value;
             s.SelfContact = _p.SelfContact.Value; s.PartnerBody = _p.PartnerBody.Value;
             s.BendAmount = _p.BendBulge.Value; s.BicepsMm = _p.BendBicepsMm.Value; s.KneeMm = _p.BendKneeMm.Value; s.CalfMm = _p.BendCalfMm.Value;
             s.HipMm = _p.BendHipMm.Value; s.BellyFoldMm = _p.BendBellyFoldMm.Value;

@@ -36,6 +36,7 @@ namespace SfMorph
         public Transform Bone;
         public int Zone, SrcId;
         public string By;
+        public bool Thrust;   // 0.11.12: a stroke of his hips (Speed = the stroke's peak closing speed), sized by [Physics] RippleThrustAmt
     }
 
     internal partial class SoftZones

@@ -66,13 +66,13 @@ namespace SfMorph
                 for (int i = 0; i < n; i++)
                 {
                     var im = z.Impacts[i];
-                    AddImpact(im.P, im.Dir, im.Speed, im.Bone, im.By, SoftZones.ZoneId(im.Zone), now);
+                    AddImpact(im.P, im.Dir, im.Speed, im.Bone, im.By, SoftZones.ZoneId(im.Zone), now, im.Thrust);
                 }
             }
             for (int i = 0; i < _pendN; i++)
             {
                 var p = _pend[i];
-                AddImpact(p.P, p.Dir, p.Speed, p.Bone, p.By, "", now);
+                AddImpact(p.P, p.Dir, p.Speed, p.Bone, p.By, "", now, false);
             }
             _pendN = 0;
             Age(now);
@@ -151,7 +151,7 @@ namespace SfMorph
             _count = n;
         }
 
-        static void AddImpact(Vector3 p, Vector3 dir, float speed, Transform bone, string by, string zoneId, float now)
+        static void AddImpact(Vector3 p, Vector3 dir, float speed, Transform bone, string by, string zoneId, float now, bool thrust)
         {
             var s = _s;
             if (s == null || !Finite(p) || !(speed > 0f)) return;
@@ -160,9 +160,10 @@ namespace SfMorph
             string bn = bone != null ? bone.name : zoneId;
             _lastSpeed = speed; _lastAt = now; _lastBy = string.IsNullOrEmpty(by) ? "a hand" : by; _lastWhere = bn ?? "";
             bool logIt = _impacts <= 10 || _impacts % 10 == 0;
-            if (s.Ripple <= 0f)
+            float strength = thrust ? s.RippleThrustAmt : s.Ripple;
+            if (strength <= 0f)
             {
-                if (logIt) Plugin.Log.LogInfo("Ripple: impact #" + _impacts + " by " + _lastBy + " on " + _lastWhere + " " + speed.ToString("0.0") + " m/s (ripple strength 0: no wave)");
+                if (logIt) Plugin.Log.LogInfo("Ripple: " + (thrust ? "stroke" : "impact") + " #" + _impacts + " by " + _lastBy + " on " + _lastWhere + " " + speed.ToString("0.0") + " m/s (ripple strength 0: no wave)");
                 return;
             }
             // 0.8.9 (user: the ripple never shows): 4 mm/(m/s) gave 2-5 mm waves that the 12 cm falloff and the Gaussian ring cut to ~1 mm within
@@ -171,6 +172,9 @@ namespace SfMorph
             // slap starts at ~17 mm; with the slower (0.5 m/s), longer (10 cm, reach 2 wavelengths) and longer-lived (0.6 s) default wave it stays
             // visible for about half a second. Compose clamps the wave to 1.5 x the tissue cap, so thin skin never sinks absurdly.
             float a = Mathf.Clamp(0.014f * (speed - 0.3f), 0f, 0.035f) * s.Ripple;
+            // 0.11.12 (user: his strokes make no ripple): a stroke is slow (0.4-1 m/s in the game's loops) but heavy: 8 mm at 0.35 m/s, 20 mm by
+            // 1.1 m/s, x [Physics] RippleThrustAmt (its own slider; the hand / slap ripple keeps Ripple)
+            if (thrust) a = Mathf.Clamp(0.008f + 0.016f * (speed - 0.35f), 0.008f, 0.025f) * s.RippleThrustAmt;
             // breast impact: the game's breast physics gets a short kick along the impact
             string pulseNote = "";
             if (IsBreast(bone, zoneId))
@@ -206,7 +210,7 @@ namespace SfMorph
             }
             Age(now);
             if (logIt)
-                Plugin.Log.LogInfo("Ripple: impact #" + _impacts + " by " + _lastBy + " on " + _lastWhere + " " + speed.ToString("0.0") + " m/s -> "
+                Plugin.Log.LogInfo("Ripple: " + (thrust ? "stroke" : "impact") + " #" + _impacts + " by " + _lastBy + " on " + _lastWhere + " " + speed.ToString("0.0") + " m/s -> "
                     + (a <= 0f ? "too slow for a wave" : merged ? "merged into a live wave" : "wave A " + (a * 1000f).ToString("0.0") + " mm") + (pulseNote.Length > 0 ? ", " + pulseNote : "") + ", " + _count + " live");
         }
 

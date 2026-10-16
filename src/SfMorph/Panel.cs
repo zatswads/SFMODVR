@@ -24,7 +24,7 @@ namespace SfMorph
         GUIStyle _hint, _bold, _off;
         const int MaxRows = 80; // IMGUI gets slow with hundreds of sliders; the filter narrows it
 
-        static readonly string[] Tabs = { "Body", "Bones", "Presets", "Characters", "Physics", "VR", "Reactions", "Skin" };   // appended: the saved Tab indices stay valid
+        static readonly string[] Tabs = { "Body", "Bones", "Presets", "Characters", "Physics", "VR", "Reactions", "Skin", "Debug" };   // appended: the saved Tab indices stay valid
 
         public Panel(Plugin p, Body body)
         {
@@ -115,8 +115,7 @@ namespace SfMorph
         }
 
         // Tabs in screen order; the numbers are the saved [Interface] Tab values (an appended tab keeps the old values valid).
-        static readonly int[] TabOrder = { 0, 1, 2, 3, 7, 4, 5, 6 };
-        bool _timing;
+        static readonly int[] TabOrder = { 0, 1, 2, 3, 7, 4, 5, 6, 8 };
 
         void Window(int id)
         {
@@ -133,10 +132,6 @@ namespace SfMorph
             foreach (var c in _body.Found) if (c.Female && !c.IsPlayer) people.Add(c);
             if (people.Count == 0) foreach (var c in _body.Found) if (!c.IsPlayer && c.BoneList.Count > 0) people.Add(c);
             GUILayout.Label(_body.Status, _hint);
-            // 0.11.7: the timing line folds away (closed by default): it changes length every 10 s and moved everything below it
-            bool timing = _timing && _p.PerfLog.Value && Perf.Summary.Length > 0;
-            if (_p.PerfLog.Value && Perf.Summary.Length > 0 && GUILayout.Button((_timing ? "- " : "+ ") + "Timing (last 10 s)", _fold)) _timing = !_timing;
-            if (timing) GUILayout.Label(Perf.Summary, _hint);
             if (_sel != null && !people.Contains(_sel)) _sel = null;
             if (_sel == null && people.Count > 0) _sel = people[0];
             GUILayout.BeginHorizontal();
@@ -176,6 +171,7 @@ namespace SfMorph
                 case 4: PhysicsTab(_sel); break;
                 case 5: VrTab(_sel); break;
                 case 7: SkinTab(_sel); break;
+                case 8: DebugTab(_sel); break;
                 default: ReactionsTab(_sel); break;
             }
             GUILayout.EndScrollView();
@@ -688,15 +684,8 @@ namespace SfMorph
             GUILayout.Label("Quality", _hint);
             int q = GUILayout.Toolbar(Mathf.Clamp(_p.Quality.Value, 0, 2), Qualities);
             if (sliderOff == null && q != _p.Quality.Value) _p.Quality.Value = q;
-            GUILayout.BeginHorizontal();
             bool gpu = GUILayout.Toggle(_p.GpuContactOn.Value, " Per-vertex contact on the GPU");
             if (sliderOff == null && gpu != _p.GpuContactOn.Value) _p.GpuContactOn.Value = gpu;
-            GUI.enabled = sliderOff == null && _p.GpuContactOn.Value && _body.Gpu != null;
-            if (GUILayout.Button("GPU check (3 s)", GUILayout.Width(140))) _body.Gpu.Smoke(3f, 0.01f);
-            GUI.enabled = sliderOff == null;
-            GUILayout.EndHorizontal();
-            // 0.11.7 (user: a test button deforms her mesh): it is meant to, so the label says what it does
-            GUILayout.Label("GPU check: sinks all of her skin 1 cm for 3 s, to see that the per-vertex dents run (a deformation is the expected result).", _hint);
             if (sliderOff == null && _p.GpuContactOn.Value && _body.GpuStatus.Length > 0) GUILayout.Label(_body.GpuStatus, _body.GpuStatus.Contains("off:") ? _off : _hint);
             GUI.enabled = true;
             ContactVisualRows(sliderOff);
@@ -704,8 +693,6 @@ namespace SfMorph
             GUILayout.Label("Breast physics colliders (hands push the game's own breast physics)", _hint);
             int bc = GUILayout.Toolbar(Mathf.Clamp(_p.BreastColliders.Value, 0, 2), BreastModes);
             if (sliderOff == null && bc != _p.BreastColliders.Value) _p.BreastColliders.Value = bc;
-            bool show = GUILayout.Toggle(_p.ShowSoftPoints.Value, " Show soft points and contact capsules (debug)");
-            if (sliderOff == null && show != _p.ShowSoftPoints.Value) _p.ShowSoftPoints.Value = show;
             GUI.enabled = true;
             if (off != null) GUILayout.Label("off: " + off, _off);
             else
@@ -736,6 +723,8 @@ namespace SfMorph
             bool pb = GUILayout.Toggle(_p.PartnerBody.Value, " The partner's body presses her too (pelvis, thighs)");
             GUI.enabled = true;
             if (en && nrm != _p.ContactNormals.Value) _p.ContactNormals.Value = nrm;
+            v = Slider("    shading smoothness", _p.ContactNormalSmooth.Value, 0f, 20f, "0", 8f, so ?? (_p.ContactNormals.Value ? null : "off: shading does not follow the dent"), " mm");
+            if (Mathf.Abs(v - _p.ContactNormalSmooth.Value) > 0.001f) _p.ContactNormalSmooth.Value = v;
             if (en && self != _p.SelfContact.Value) _p.SelfContact.Value = self;
             if (en && pb != _p.PartnerBody.Value) _p.PartnerBody.Value = pb;
             // 0.11.7: ripples from his strokes
@@ -743,6 +732,8 @@ namespace SfMorph
             bool rt = GUILayout.Toggle(_p.RippleThrust.Value, "    ...and each stroke of his hips sends a ripple through her");
             GUI.enabled = true;
             if (en && _p.PartnerBody.Value && rt != _p.RippleThrust.Value) _p.RippleThrust.Value = rt;
+            v = Slider("    stroke ripple", _p.RippleThrustAmt.Value * 100f, 0f, 300f, "0", 100f, so ?? (!_p.PartnerBody.Value ? "off: the partner's body is off" : !_p.RippleThrust.Value ? "off: strokes are off" : null), " %") / 100f;
+            if (Mathf.Abs(v - _p.RippleThrustAmt.Value) > 0.0001f) _p.RippleThrustAmt.Value = v;
             v = Slider("  Bend bulges", _p.BendBulge.Value * 100f, 0f, 100f, "0", 60f, so, " %") / 100f;
             if (Mathf.Abs(v - _p.BendBulge.Value) > 0.0001f) _p.BendBulge.Value = v;
             v = Slider("  Ripple on impact", _p.RippleAmount.Value * 100f, 0f, 200f, "0", 100f, so, " %") / 100f;
@@ -828,9 +819,6 @@ namespace SfMorph
                 if (neck != _p.WrinkNeck.Value) _p.WrinkNeck.Value = neck;
                 if (body != _p.WrinkBody.Value) _p.WrinkBody.Value = body;
             }
-            GUILayout.Label("Debug view", _hint);
-            int dbg = GUILayout.Toolbar(Mathf.Clamp(_p.WrinkDebug.Value, 0, 2), WrinkleDebugs);
-            if (sliderOff == null && dbg != _p.WrinkDebug.Value) _p.WrinkDebug.Value = dbg;
             GUI.enabled = sliderOff == null && _body.Wrink != null;
             GUILayout.BeginHorizontal();
             if (GUILayout.Button("Recapture", GUILayout.Width(110))) _body.RequestWrinkleRecapture();
@@ -884,9 +872,6 @@ namespace SfMorph
                 if (legs != _p.MuscleLegs.Value) _p.MuscleLegs.Value = legs;
                 if (arms != _p.MuscleArms.Value) _p.MuscleArms.Value = arms;
             }
-            GUILayout.Label("Debug view", _hint);
-            int dbg = GUILayout.Toolbar(Mathf.Clamp(_p.MuscleDebug.Value, 0, 2), MuscleDebugs);
-            if (sliderOff == null && dbg != _p.MuscleDebug.Value) _p.MuscleDebug.Value = dbg;
             GUI.enabled = true;
             // 0.11.8 tensed muscles as geometry (GPU contact v2) and their firmness under a hand
             GUILayout.Label("Shape: tensed muscles bulge", _hint);
@@ -898,19 +883,6 @@ namespace SfMorph
             string fwhy = flexOff == null ? null : "off: " + flexOff;
             float fx = Slider("Flex", _p.MuscleFlexAmt.Value, 0f, 2f, "0.00", 1f, fwhy);
             if (Mathf.Abs(fx - _p.MuscleFlexAmt.Value) > 0.0001f) _p.MuscleFlexAmt.Value = fx;
-            // 0.11.8 Flex test: arms, back, core, legs in turn at full over her current animation (needs GPU contact, not the relief)
-            string testing = MuscleFlex.TestArea();
-            GUILayout.BeginHorizontal();
-            GUI.enabled = gpuOff == null;
-            if (testing == null)
-            {
-                if (GUILayout.Button("Flex test (arms, back, core, legs: 2 s each)")) MuscleFlex.StartTest();
-            }
-            else if (GUILayout.Button("Stop test", GUILayout.Width(90))) MuscleFlex.StopTest();
-            GUI.enabled = true;
-            if (testing != null) GUILayout.Label("now: " + testing + " at full (" + MuscleFlex.TestLeft(testing).ToString("0.0") + " s)", _hint);
-            GUILayout.EndHorizontal();
-            if (gpuOff != null) GUILayout.Label("Flex test off: " + gpuOff, _off);
             string awhy = fwhy ?? (_p.MuscleFlexAmt.Value <= 0f ? "off: Flex is 0" : null);
             float cm = Slider("Core", _p.MuscleCoreMm.Value, 0f, 12f, "0.0", 3f, awhy ?? (_p.MuscleCore.Value ? null : "off: Core is off"), " mm");
             if (Mathf.Abs(cm - _p.MuscleCoreMm.Value) > 0.0001f) _p.MuscleCoreMm.Value = cm;

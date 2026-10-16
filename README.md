@@ -65,6 +65,41 @@ Pipeline, after 0.11.10 (skin bake fixes found on the Genesis 9 character's face
   0.85 clamp). The neck girth is the narrowest neck outline between the eyes and the nipples, not a band between each rig's
   own neck and head joints (other heights per rig: Krista's neck came out 15 % thicker instead of 4 % thinner).
 
+0.11.12 (fixes from the 0.11.11 headset run; a Debug tab):
+- A seam / cut-off around her calves with the leg muscles up. Her lower calves and feet are their own mesh (`reika_foot`: a
+  body-skin part and the foot material) and the GPU contact chain never took it in, so the calf bulge (and any dent) ended at the
+  lower body's border about 12 cm above the ankle, at full height on one side and flat on the other. It now joins the chain as a
+  body skin mesh, stitched to the lower body like the neck and face, with its own muscle bake. Also: a vertex sitting on a UV seam
+  often read only the authored map's dilated rim (coverage 0) and was dropped as "no muscle", which drew a groove down every UV
+  seam of the bulge; every welded copy's UV is now tried, the rim counts, and a lone vertex without a muscle inside one takes its
+  neighbours'.
+- Dents looked faceted and blotchy (her hand on her glute). Since 0.8.9 the dent field keeps the raw capsule depth as its floor
+  (so the skin never stays inside a finger), and that floor steps from 0 to full within one edge; the bent normals came from that
+  field, and on her lower body (7 mm edges even after Fidelity) the shading drew the triangles. The normals now come from a
+  smoothed copy of the final field (positions keep the exact one), about 8 mm wide (Physics tab, **shading smoothness**,
+  `[Physics] ContactNormalSmooth`, 0 = the old look). The muscle bulge and the ripples go through the same field and get the same
+  smoothing. Shader bundle rebuilt.
+- His strokes made no ripple. The log had 30 impacts in the whole run, his at 0.4 m/s giving 1 mm waves: his hips are fastest
+  mid-stroke and nearly still when they reach her, so the speed measured at the touch was low and often under the 0.35 m/s gate.
+  A stroke is now his pelvis / thigh closing on her (relative to her own motion) and backing off again: the first touch of each
+  forward stroke fires once with that stroke's peak speed, 8 mm for a slow stroke up to 20 mm for a fast one, with its own
+  slider (Physics tab, **stroke ripple**, `[Physics] RippleThrustAmt`). Log: `Ripple: stroke #n by Player ...`.
+- Lip sync: the jaw ran ahead of the lips and they were out of step. With **Keep her expression's mouth** up, the mood clip (a
+  moan / feeling loop) kept playing its own jaw and lips under the visemes at its own rhythm. The jaw is now the curve's alone and
+  the other mouth / cheek bones take the mood clip's mean pose (the smile stays, its motion does not). `[Voice] LipLead` is replaced
+  by **Lip timing** (`[Voice] LipTiming`, -300 to +300 ms, + = earlier, default 0): the old range could not move the mouth later
+  and a maxed value put it about 0.3 s early; the game's audio output buffer delay is now added by the plugin (log
+  `Lip sync: audio output ... the mouth waits N ms`). mouthClose is held to at most half of jawOpen (equal amounts shut her lips
+  completely while the chin dropped).
+- Mute the game's own voice: its sex-facial moans (Feeling_enter, on a source of their own) and its dialogue voice (it talks
+  through it in scenes too; `[Voice] MuteGameDialogue`, on) were never muted. A muted game clip also kept counting as "she is
+  speaking", which blocked the pack's moans and lines for most of a sex scene, so the new packs seemed to have no moans. Now each
+  game moan / sex voice / feeling clip that starts while muted is answered by a pack clip of the same kind (breath, moan by her
+  desire, feeling, climax; at most one per 1.5 s, never over her own pack voice). Log `voice: pack stand-in #n for the game's ...`.
+  The pack folders were complete (all seven categories in each of the four new packs).
+- Debug tab: timing, GPU check, soft-point markers, wrinkle / muscle debug views, Flex test and every Reactions test (reactions,
+  skin sounds, eyes / blink, face moods, lip sync, diagnose, voice dump) moved there from their tabs.
+
 0.11.11 (lip sync rebuilt: mouth poses, lower lip, expression under it; grab sound):
 - Lip sync looked poor and pushed her lower lip out. The mouth poses that turn the Audio2Face weights into bone moves were
   "seeded" by copying whole frames of her face clips: jawOpen came from a fellatio clip, mouthLowerDown carried a -50 deg turn of

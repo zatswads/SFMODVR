@@ -171,6 +171,8 @@ StructuredBuffer<float2> _Tissue;    // x = hard depth (m) of the vertex's bone 
 StructuredBuffer<uint> _Class;       // bone class id (0 = none)
 StructuredBuffer<float4> _Bend;      // (slot, weight, slot, weight); slot < 0 = none, weight < 0 folds inward
 StructuredBuffer<float> _FieldIn;    // the dilate / smooth source, Grad's final field
+StructuredBuffer<float> _FieldS;     // 0.11.12: Grad's smoothed copy of the final field (the bent normals' source) when _GradSmooth != 0
+uint _GradSmooth;
 RWStructuredBuffer<float> _FieldOut;
 StructuredBuffer<float> _FieldN;     // Compose: narrow (contact) field
 StructuredBuffer<float> _FieldW;     // Compose: wide field (the rim bulge is wide - narrow)
@@ -427,9 +429,14 @@ void Grad(uint3 id : SV_DispatchThreadID)
     if (v >= _Count) return;
     if (_Canon[v] != v) return;
     float D = _FieldIn[v];
+    // 0.11.12 (user: the dents are polygonal and blotchy): the final field keeps the raw capsule depth as its floor (0.8.9), which steps from 0
+    // to the full depth within one edge; its gradient followed the triangles on her coarser lower body (7 mm edges) and the bent normals drew
+    // them. With _GradSmooth the slope comes from a smoothed copy (a few mm wider than the dent): the position keeps the exact field.
+    bool sm = _GradSmooth != 0u;
+    float S = sm ? _FieldS[v] : D;
     uint o0 = _AdjOff[v], o1 = _AdjOff[v + 1];
-    float mx = abs(D);
-    for (uint i = o0; i < o1; i++) mx = max(mx, abs(_FieldIn[_AdjV[i]]));
+    float mx = max(abs(D), abs(S));
+    for (uint i = o0; i < o1; i++) { uint u0 = _AdjV[i]; mx = max(mx, max(abs(_FieldIn[u0]), sm ? abs(_FieldS[u0]) : 0.0)); }
     if (mx < 1e-6)
     {
         _Grad[2 * v] = float4(0, 0, 0, 0);
@@ -447,7 +454,7 @@ void Grad(uint3 id : SV_DispatchThreadID)
             float3 e = WorldPos(u) - pc;
             float dd = dot(e, e);
             if (dd < 1e-10) continue;
-            g += (_FieldIn[u] - D) * e / dd;
+            g += ((sm ? _FieldS[u] : _FieldIn[u]) - S) * e / dd;
         }
         g *= 2.0 / (float)(o1 - o0);
         g -= nOut * dot(g, nOut);

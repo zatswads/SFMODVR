@@ -48,6 +48,7 @@ namespace SfMorph
         {
             public ClipInfo Ci; public int N, Next; public float Dt; public int[] Bones; public bool[] PosB, RotB;
             public Vector3[] P; public Quaternion[] R; public bool Ready, Failed;
+            public Vector3[] MeanP; public Quaternion[] MeanR;   // 0.11.12: per bone, the clip's mean pose (KeepMood), built on first use
         }
 
         public string Status = "off";
@@ -846,9 +847,31 @@ namespace SfMorph
             int nf = _face.Length;
             if (_moodP == null || _moodP.Length != nf)
             { _moodP = new Vector3[nf]; _moodQ = new Quaternion[nf]; _moodW = new float[nf]; _moodHasP = new bool[nf]; _moodHasR = new bool[nf]; _moodFrame = new int[nf]; }
+            // 0.11.12 (user: the jaw runs ahead of the lips and they are out of step): the mood clips are moan / feeling loops whose jaw and lips
+            // open and close on their own rhythm, and this kept them playing under the visemes. The jaw is now the curve's alone, and the other
+            // mouth / cheek bones take the clip's mean pose (a smile or a grimace stays, its motion does not).
+            if (b == _jaw) return;
+            if (tr.MeanP == null || tr.MeanP.Length != nb)
+            {
+                tr.MeanP = new Vector3[nb]; tr.MeanR = new Quaternion[nb];
+                for (int kk = 0; kk < nb; kk++)
+                {
+                    Vector3 sp = Vector3.zero; Vector4 sq = Vector4.zero; Quaternion q0 = tr.R[kk];
+                    for (int fr = 0; fr < tr.N; fr++)
+                    {
+                        sp += tr.P[fr * nb + kk];
+                        var q = tr.R[fr * nb + kk];
+                        if (Quaternion.Dot(q, q0) < 0f) q = new Quaternion(-q.x, -q.y, -q.z, -q.w);
+                        sq += new Vector4(q.x, q.y, q.z, q.w);
+                    }
+                    tr.MeanP[kk] = tr.N > 0 ? sp / tr.N : Vector3.zero;
+                    float l = sq.magnitude;
+                    tr.MeanR[kk] = l > 1e-6f ? new Quaternion(sq.x / l, sq.y / l, sq.z / l, sq.w / l) : q0;
+                }
+            }
             _moodHasP[b] = tr.PosB[k]; _moodHasR[b] = tr.RotB[k];
-            if (tr.PosB[k]) _moodP[b] = Vector3.LerpUnclamped(tr.P[i0 * nb + k], tr.P[i1 * nb + k], f);
-            if (tr.RotB[k]) _moodQ[b] = Quaternion.SlerpUnclamped(tr.R[i0 * nb + k], tr.R[i1 * nb + k], f);
+            if (tr.PosB[k]) _moodP[b] = tr.MeanP[k];
+            if (tr.RotB[k]) _moodQ[b] = tr.MeanR[k];
             _moodW[b] = w; _moodFrame[b] = Time.frameCount;
         }
 

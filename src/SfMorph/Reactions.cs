@@ -6,7 +6,7 @@ namespace SfMorph
     // Her reactions to touch (0.7.9): what the Body hands the director each frame. Filled from the config once per frame (no allocation).
     internal class ReactionSettings
     {
-        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley, RubSound, MuteGameVoice, LipSync;
+        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley, RubSound, MuteGameVoice, MuteDialogue, LipSync;
         public float LipStrength, LipLead, LipOverGame, LipMood;
         public float Sensitivity, Cooldown, Volume, SkinVolume, BlushGain, VoicePitchVar, LimbPush, LineChance, FaceStrength, VoicePitch, VoiceFormant;
         public string FaceMap = "", VoicePack = "";
@@ -17,7 +17,7 @@ namespace SfMorph
             On = p.ReactOn.Value; Voice = p.ReactVoice.Value; Face = p.ReactFace.Value; Flinch = p.ReactFlinch.Value; Sound = p.ReactSound.Value;
             Blush = p.ReactBlush.Value; BlushBody = p.ReactBlushBody.Value; Gaze = p.ReactGaze.Value; FeedDesire = p.ReactFeedDesire.Value;
             AutoState = p.ReactAuto.Value; AllowClimax = p.ReactClimax.Value; VoiceGuard = p.VoiceGuard.Value;
-            Sensitivity = p.ReactSensitivity.Value; Cooldown = p.ReactCooldown.Value; Volume = p.ReactVolume.Value; SkinVolume = p.ReactSkinVolume.Value; MuteGameVoice = p.VoiceMuteGame.Value;
+            Sensitivity = p.ReactSensitivity.Value; Cooldown = p.ReactCooldown.Value; Volume = p.ReactVolume.Value; SkinVolume = p.ReactSkinVolume.Value; MuteGameVoice = p.VoiceMuteGame.Value; MuteDialogue = p.VoiceMuteDialogue.Value;
             BlushGain = p.ReactBlushGain.Value; VoicePitchVar = p.ReactVoicePitchVar.Value;
             VoiceMode = p.ReactVoiceMode.Value; Log = p.ReactLog.Value;
             Lines = p.ReactLines.Value; LineChance = p.ReactLineChance.Value;
@@ -210,6 +210,7 @@ namespace SfMorph
                 _g.Rub(_rubPt, rub ? _rubLvl * s.SkinVolume * 0.7f : 0f, 0.92f + 0.16f * _rubLvl, dt);
                 if (rub && !_rubNoted) { _rubNoted = true; Note("rub sound"); if (s.Log >= 1) L("rub sound on (level " + _rubLvl.ToString("0.00") + ", volume " + (_rubLvl * s.SkinVolume * 0.7f).ToString("0.00") + ")"); }
                 else if (!rub) _rubNoted = false;
+                _g.MuteDialogue = s.MuteDialogue;
                 _g.MuteGameVoice(s.MuteGameVoice && ReactionsGame.Pack.Loaded);
 
                 if (cut) return;
@@ -230,6 +231,7 @@ namespace SfMorph
         public bool BridgeFound { get { return _g.Found; } }
         public string VoiceFxStatus { get { return _g.VoiceFxStatus ?? ""; } }
         public int GameVoiceMuted { get { return _g.MutedNow; } }
+        public string StandInNote { get { return _g.StandInNote; } }
         public bool DiagBusy { get { return _g.DiagBusy; } }
         public bool DiagRan { get { return _g.DiagRan; } }
         public void Diagnose()
@@ -761,11 +763,13 @@ namespace SfMorph
                     {
                         // the pitch / formant filter (VoiceShift) delays her voice by about 45 ms while it is on: the mouth waits for it
                         float fx = Mathf.Abs(_s.VoicePitch - 1f) > 1e-3f || Mathf.Abs(_s.VoiceFormant - 1f) > 1e-3f ? 0.045f : 0f;
-                        _lipCurve.Sample(_lipT + _lipLead + _s.LipLead - fx, _lipW);
+                        // 0.11.12: AudioSource.time is where the mixer reads, ahead of what reaches her ears by the output buffers
+                        _lipCurve.Sample(_lipT + _lipLead + _s.LipLead - fx - _g.OutputLatency, _lipW);
                         float k = Mathf.Max(0f, _s.LipStrength);
                         // ARKit's mouthClose only means "lips together while the jaw is open": Audio2Face often gives more of it than of
                         // jawOpen (0.49 vs 0.16), which pushed her lower lip up past her neutral mouth into a pout
-                        _lipW[LipSync.MouthClose] = Mathf.Min(_lipW[LipSync.MouthClose], _lipW[LipSync.JawOpen]);
+                        // 0.11.12: at most half of it (equal amounts closed the lips completely while the chin dropped: a jaw with no lips)
+                        _lipW[LipSync.MouthClose] = Mathf.Min(_lipW[LipSync.MouthClose], 0.5f * _lipW[LipSync.JawOpen]);
                         for (int i = 0; i < LipSync.K; i++) { _lipW[i] = Mathf.Clamp01(_lipW[i] * k); _lipPrev[i] = _lipW[i]; }
                         active = true;
                         if (_now < _lipProbeUntil && _now >= _lipProbeNext) { _lipProbeNext = _now + 0.25f; _lipProbeW = true; }

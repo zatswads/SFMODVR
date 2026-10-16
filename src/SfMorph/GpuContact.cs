@@ -81,6 +81,7 @@ namespace SfMorph
             public GraphicsBuffer MapBuf, MapWBuf;   // 0.9.7 MapWBuf: per vertex the parent's share (overlays 1; skin seams 1 at the seam, 0 a cm in)
             public int Mapped;
             public bool Extra;                       // 0.9.7: her neck / face skin, not a soft-zone mesh (marks and small bony dents, no v1 imprint)
+            public bool Limb;                        // 0.11.12: an Extra on the body sheet (her lower calves + feet, reika_foot): stitched as a body mesh, muscles baked
             public int Level;                        // dispatch pass: 0 no parent, then one more than its parent (a parent's Grad is ready first)
             // this frame's plan
             public bool Run, NeedCalib, IsV2, Imprint1, Depth, Bend, Wave, MarkOn, Decay, Work, Probe, SelfOnly, ChainRan, MapOnly;
@@ -99,7 +100,7 @@ namespace SfMorph
             PCapOff = Shader.PropertyToID("_CapOff"), PTanOff = Shader.PropertyToID("_TanOff"),
             PCanon = Shader.PropertyToID("_Canon"), PAdjOff = Shader.PropertyToID("_AdjOff"), PAdjV = Shader.PropertyToID("_AdjV"), PTissue = Shader.PropertyToID("_Tissue"),
             PClass = Shader.PropertyToID("_Class"), PBend = Shader.PropertyToID("_Bend"), PFieldIn = Shader.PropertyToID("_FieldIn"), PFieldOut = Shader.PropertyToID("_FieldOut"),
-            PFieldN = Shader.PropertyToID("_FieldN"), PFieldW = Shader.PropertyToID("_FieldW"), PFieldR = Shader.PropertyToID("_FieldR"), PForeign = Shader.PropertyToID("_Foreign"), PForeignR = Shader.PropertyToID("_ForeignR"), PMapW = Shader.PropertyToID("_MapW"), PWaveImpact = Shader.PropertyToID("_WaveImpact"), PMarks = Shader.PropertyToID("_Marks"), PGrad = Shader.PropertyToID("_Grad"),
+            PFieldN = Shader.PropertyToID("_FieldN"), PFieldW = Shader.PropertyToID("_FieldW"), PFieldR = Shader.PropertyToID("_FieldR"), PFieldS = Shader.PropertyToID("_FieldS"), PGradSmooth = Shader.PropertyToID("_GradSmooth"), PForeign = Shader.PropertyToID("_Foreign"), PForeignR = Shader.PropertyToID("_ForeignR"), PMapW = Shader.PropertyToID("_MapW"), PWaveImpact = Shader.PropertyToID("_WaveImpact"), PMarks = Shader.PropertyToID("_Marks"), PGrad = Shader.PropertyToID("_Grad"),
             PWaves = Shader.PropertyToID("_Waves"), PWaveCount = Shader.PropertyToID("_WaveCount"), PNoField = Shader.PropertyToID("_NoField"), PMarkOn = Shader.PropertyToID("_MarkOn"),
             PSoftScale = Shader.PropertyToID("_SoftScale"), PDepth = Shader.PropertyToID("_Depth"), PSkirt = Shader.PropertyToID("_SkirtLen"), PBulge = Shader.PropertyToID("_Bulge"),
             PBulgeCap = Shader.PropertyToID("_BulgeCap"), PNormalBend = Shader.PropertyToID("_NormalBend"), PDt = Shader.PropertyToID("_Dt"), PMarkGain = Shader.PropertyToID("_MarkGain"),
@@ -273,6 +274,7 @@ namespace SfMorph
                         var s = Find(r);
                         if (s == null) { s = new RendState { R = r, Name = r.name }; _rs.Add(s); EnableRaw(s); }
                         s.Extra = true;
+                        s.Limb = SkinLimb(r);
                         SetupMesh(s, new float[r.sharedMesh.vertexCount], null);
                         if (s.V2) keep.Add(r);
                     }
@@ -307,13 +309,25 @@ namespace SfMorph
             var mats = r.sharedMaterials;
             if (mats == null || mats.Length == 0 || mats[0] == null) return false;
             int c = Wrinkles.Classify(mats[0], r);
-            return c == 1 || c == 2;
+            return c == 1 || c == 2 || SkinLimb(r);
+        }
+
+        // 0.11.12 (user: a seam / cut-off around the calves with the leg muscles up): her lower calves and feet are their own mesh (reika_foot:
+        // a body-sheet submesh + the foot material) that was never in the chain, so the calf bulge (and any dent) stopped dead at the lower
+        // body's border ~12 cm above the ankle. A body-sheet mesh named foot joins as a body skin mesh, stitched to the lower body.
+        static bool SkinLimb(SkinnedMeshRenderer r)
+        {
+            var mats = r.sharedMaterials;
+            if (mats == null || mats.Length == 0 || mats[0] == null) return false;
+            string n = (r.name ?? "").ToLowerInvariant();
+            return n.Contains("foot") && Wrinkles.Classify(mats[0], r) == 3;
         }
 
         // Skin meshes in parent order (0.9.7): the upper body first, the other body meshes, the neck, the face. A skin mesh stitches its seam to
         // an earlier one; -1 = not a skin mesh (an overlay).
         static int SkinRank(RendState s)
         {
+            if (s.Limb) return 1;
             if (s.Extra) return (s.Name ?? "").IndexOf("face", StringComparison.OrdinalIgnoreCase) >= 0 ? 3 : 2;
             if (!IsBodyMesh(s)) return -1;
             return (s.Name ?? "").IndexOf("upper", StringComparison.OrdinalIgnoreCase) >= 0 ? 0 : 1;
@@ -533,7 +547,7 @@ namespace SfMorph
         void MakeBake(RendState s, float[] zone)
         {
             string err;
-            ContactBake b = ContactBake.Build(s.R, zone, _her, s.Extra ? null : MuscleMapFor(), out err);
+            ContactBake b = ContactBake.Build(s.R, zone, _her, s.Extra && !s.Limb ? null : MuscleMapFor(), out err);
             if (b == null || b.V != s.Count)
             {
                 Plugin.Log.LogWarning("GPU contact: renderer " + s.Name + ": v2 bake failed (" + (b == null ? err : "vertex count " + b.V + " != " + s.Count) + "): v1 imprint for it");
@@ -1305,7 +1319,18 @@ namespace SfMorph
             cs.SetVector(PBendAmt2, new Vector4(amt[8], 0f, 0f, 0f));
             cs.Dispatch(_kCompose, groups, 1, 1); n++;
             cs.SetBuffer(_kGrad, PVerts, vb); cs.SetBuffer(_kGrad, PCanon, s.CanonBuf); cs.SetBuffer(_kGrad, PAdjOff, s.AdjOffBuf); cs.SetBuffer(_kGrad, PAdjV, s.AdjVBuf);
-            cs.SetBuffer(_kGrad, PFieldIn, B); cs.SetBuffer(_kGrad, PGrad, s.GradBuf);
+            // 0.11.12: the bent normals from a smoothed copy of the final field (C and D are free once Compose has run), ~NormalSmooth wide:
+            // a pass of Smooth spreads ~e / sqrt(2), so (r / e)^2 x 2 passes; at most 12 (her 2.4 mm upper body at 8 mm)
+            GraphicsBuffer S = B;
+            if (_set.Normals && _set.NormalSmooth > 0.0005f)
+            {
+                float e = Mathf.Max(0.001f, s.Bake.SkinEdge > 0f ? s.Bake.SkinEdge : s.Bake.AvgEdge);
+                float q = _set.NormalSmooth / e;
+                int ns = Mathf.Clamp(Mathf.RoundToInt(2f * q * q), 1, 12);
+                for (int i = 0; i < ns; i++) { var dst = ReferenceEquals(S, s.FieldC) ? s.FieldD : s.FieldC; Pass(_kSmooth, vb, s, S, dst, groups); n++; S = dst; }
+            }
+            cs.SetBuffer(_kGrad, PFieldIn, B); cs.SetBuffer(_kGrad, PFieldS, S); cs.SetInt(PGradSmooth, ReferenceEquals(S, B) ? 0 : 1);
+            cs.SetBuffer(_kGrad, PGrad, s.GradBuf);
             cs.Dispatch(_kGrad, groups, 1, 1); n++;
             n += ApplyFinal(s, vb, groups, true);
             s.ChainRan = true;

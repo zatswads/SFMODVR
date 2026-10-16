@@ -64,6 +64,14 @@ namespace SfMorph
         // per 0.35 s per zone and source (a thrust every 0.4-1 s in the game's loops).
         const float ThrustMinSpeed = 0.35f, ThrustGap = 0.35f;
         public static bool ThrustRipple = true;   // Body sets it from [Physics] RippleThrust
+        // 0.11.12 (user: the thrust ripple does not react; log: 30 impacts in the whole run, his at 0.4 m/s -> 1 mm waves): his hips are fastest
+        // mid-stroke and nearly still when they reach her, so the approach measured at the touch was small and often under the 0.35 m/s gate.
+        // A stroke is now: his pelvis / thigh capsule closing on her (relative to her own motion: the centroid of her soft points) and backing off
+        // again; the first touch of each forward stroke fires once, with the stroke's peak closing speed.
+        float[] _cPeak = new float[0];   // per capsule: decaying peak closing speed toward her (m/s)
+        bool[] _cAway = new bool[0];     // per capsule: it backed off since its last stroke
+        Vector3 _herC, _herCPrev; bool _herCOk;
+        const float StrokeBack = 0.08f, StrokeTau = 0.35f;   // m/s of backing off that re-arms a stroke; s the peak decays over
         bool[] _cBody = new bool[0];     // m/s approach along the skin's inward normal; s between impacts of one source / zone
         // 0.8.0 Tissue.Zone: per zone stiffness / depth / damping multipliers (set at build) and this frame's values
         float[] _zKMul, _zLimMul, _zDampMul, _zK, _zLim, _zDamp;
@@ -287,6 +295,21 @@ namespace SfMorph
             bool reset = VrHands.Version != _capVersion || nc != _cN;
             _capVersion = VrHands.Version; _cN = nc;
             float invDt = 1f / dt;
+            if (_cPeak.Length < nc) { Array.Resize(ref _cPeak, nc); Array.Resize(ref _cAway, nc); }
+            // her soft points' centroid (rest places, last frame's bones are fine for a velocity): the frame her motion is measured against
+            Vector3 herV = Vector3.zero;
+            {
+                Vector3 c = Vector3.zero; int cn = 0;
+                for (int i = 0; i < _helpers.Count; i++) { var hh = _helpers[i]; if (_bOk[hh.BoneIdx]) { c += hh.R; cn++; } }
+                if (cn > 0)
+                {
+                    c /= cn;
+                    if (_herCOk && !reset) herV = (c - _herCPrev) * invDt;
+                    if (herV.sqrMagnitude > TeleportSpeed * TeleportSpeed) herV = Vector3.zero;
+                    _herCPrev = c; _herC = c; _herCOk = true;
+                }
+            }
+            float decay = Mathf.Exp(-dt / StrokeTau);
             for (int i = 0; i < nc; i++)
             {
                 var cp = caps[i];
@@ -321,6 +344,15 @@ namespace SfMorph
                 _cA[i] = a; _cB[i] = b; _cVA[i] = va; _cVB[i] = vb;
                 _cR[i] = cp.Radius;
                 _cMid[i] = (a + b) * 0.5f;
+                if (_cBody[i] && _herCOk)
+                {
+                    Vector3 to = _herC - _cMid[i];
+                    float tl = to.magnitude;
+                    float close = tl > 1e-4f ? Vector3.Dot((va + vb) * 0.5f - herV, to / tl) : 0f;
+                    _cPeak[i] = Mathf.Max(_cPeak[i] * decay, close);
+                    if (close < -StrokeBack) _cAway[i] = true;
+                }
+                else { _cPeak[i] = 0f; _cAway[i] = false; }
                 float reach = (b - a).magnitude * 0.5f + cp.Radius + SkinMargin;
                 _cReach2[i] = reach * reach;
                 string kind = cp.Kind;
@@ -437,7 +469,12 @@ namespace SfMorph
                     _cHit[ci] = true;
                     Vector3 capVel = _cVA[ci] + (_cVB[ci] - _cVA[ci]) * t;
                     float approach = Vector3.Dot(capVel, h.N);
-                    if (approach >= (ThrustRipple && _cBody[ci] ? ThrustMinSpeed : ImpactMinSpeed)) NoteImpact(h, i, ci, approach, capVel, np);
+                    if (ThrustRipple && _cBody[ci])
+                    {
+                        if (_cAway[ci] && _cPeak[ci] >= ThrustMinSpeed && NoteImpact(h, i, ci, Mathf.Max(approach, _cPeak[ci]), capVel, np, true))
+                            for (int kb = 0; kb < _cN; kb++) if (_cBody[kb] && _cId[kb] == _cId[ci]) _cAway[kb] = false;   // one stroke: his pelvis and thighs disarm together
+                    }
+                    else if (approach >= ImpactMinSpeed) NoteImpact(h, i, ci, approach, capVel, np, false);
                 }
                 if (h.Touched) h.Push = h.Disp - before;
             }
@@ -551,26 +588,27 @@ namespace SfMorph
         // 0.8.0: a capsule touching a helper at `approach` m/s (along the skin's inward normal) is an impact when it is a fresh contact: its source was
         // not on this helper last frame, or the zone's last impact is 0.3 s old and this one is 1.5x faster; and the source made none in 0.3 s. Her own
         // capsules never. The four fastest of the frame are kept in Impacts (no allocation).
-        void NoteImpact(Helper h, int hi, int ci, float approach, Vector3 capVel, Vector3 at)
+        bool NoteImpact(Helper h, int hi, int ci, float approach, Vector3 capVel, Vector3 at, bool thrust)
         {
             var src = _cSrc[ci];
-            if (src != null && src.Kind == "hers") return;
+            if (src != null && src.Kind == "hers") return false;
             int id = _cId[ci], z = h.ZoneIdx;
             float now = Time.time;
             bool fresh = (_hPrevSrc[hi] & (1UL << id)) == 0UL;
             if (!fresh && now - _zLastImpact[z] >= ImpactGap && approach >= 1.5f * _zLastApproach[z]) fresh = true;
-            if (ThrustRipple && _cBody[ci]) fresh = now - _zLastImpact[z] >= ThrustGap && now - _srcLastImpact[id] >= ThrustGap;   // a stroke of his hips
-            if (!fresh || now - _srcLastImpact[id] < (ThrustRipple && _cBody[ci] ? ThrustGap : ImpactGap)) return;
+            if (thrust) fresh = now - _srcLastImpact[id] >= ThrustGap;   // a stroke of his hips (armed by the caller: he backed off since the last one)
+            if (!fresh || now - _srcLastImpact[id] < (thrust ? ThrustGap : ImpactGap)) return false;
             int slot;
             if (ImpactCount < Impacts.Length) slot = ImpactCount++;
             else
             {
                 slot = 0;
                 for (int k = 1; k < Impacts.Length; k++) if (Impacts[k].Speed < Impacts[slot].Speed) slot = k;
-                if (approach <= Impacts[slot].Speed) return;
+                if (approach <= Impacts[slot].Speed) return false;
             }
-            Impacts[slot] = new SoftImpact { P = at, Dir = capVel.normalized, Speed = approach, Bone = h.Bone, Zone = z, SrcId = id, By = src != null ? src.Name : _cLabel[ci] };
+            Impacts[slot] = new SoftImpact { P = at, Dir = capVel.normalized, Speed = approach, Bone = h.Bone, Zone = z, SrcId = id, By = src != null ? src.Name : _cLabel[ci], Thrust = thrust };
             _zLastImpact[z] = now; _zLastApproach[z] = approach; _srcLastImpact[id] = now;
+            return true;
         }
 
         // sink in (along the inward normal) up to limit, rise up to 0.3 limit, slide up to 0.5 limit. With a sag the same room is left around the

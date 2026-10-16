@@ -35,10 +35,6 @@ namespace SfMorph
             float sensCfg = _p.ReactSensitivity.Value, gapCfg = _p.ReactCooldown.Value, volCfg = _p.ReactVolume.Value;
             string sub = who ?? (reactOn ? null : "reactions are off");
             string guardOff = !c.Female || c.IsPlayer ? "only for the game's woman" : null;   // the guard needs neither the toggle nor touch tracking
-            int zone = Mathf.Clamp(_testZone, 0, Reactions.ZoneNames.Length - 1);
-            int side = Mathf.Clamp(_testSide, 0, 1);
-            bool zoneSides = ZoneHasSide[zone];
-            bool expOpen = _expOpen;
             Reactions react = _body.React;
             string status = react.Status, stateLine = react.StateLine, bars = react.Bars, guardStatus = react.GuardStatus, lastLine = react.LastLine;
             float e = react.E, p = react.P;
@@ -76,13 +72,6 @@ namespace SfMorph
             float skinCfg = _p.ReactSkinVolume.Value;
             float sv = Slider("    skin volume", skinCfg * 100f, 0f, 100f, "0", 80f, skinOff == null ? null : "off: " + skinOff, " %") / 100f;
             if (skinOff == null && Mathf.Abs(sv - skinCfg) > 0.0001f) _p.ReactSkinVolume.Value = sv;
-            GUI.enabled = skinOff == null;
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Test pat")) react.TestResponse(6);
-            if (GUILayout.Button("Test grab")) react.TestResponse(8);
-            if (GUILayout.Button("Test rub (1.5 s)")) react.TestResponse(7);
-            GUILayout.EndHorizontal();
-            GUI.enabled = true;
             if (!sound) GUILayout.Label("    off: Sound is off", _off);
             else if (foley)
             {
@@ -182,58 +171,6 @@ namespace SfMorph
             GUI.enabled = true;
             if (sub == null && !allowClimax) GUILayout.Label("    Climax: off: 'Allow climax' is not ticked", _off);
 
-            // Test
-            GUILayout.Label("Test a reaction", _bold);
-            if (sub != null) GUILayout.Label("    off: " + sub, _off);
-            GUI.enabled = sub == null;
-            int nz = GUILayout.SelectionGrid(zone, Reactions.ZoneNames, 5);
-            GUI.enabled = sub == null && zoneSides;
-            int ns = GUILayout.Toolbar(side, SideNames, GUILayout.Width(120));
-            GUI.enabled = sub == null;
-            if (sub == null)
-            {
-                if (nz != zone) _testZone = nz;
-                if (zoneSides && ns != side) _testSide = ns;
-            }
-            GUILayout.BeginHorizontal();
-            for (int t = 0; t < TierNames.Length; t++)
-                if (GUILayout.Button(TierNames[t])) react.Test(zone, zoneSides ? side : 0, t + 1);
-            GUILayout.EndHorizontal();
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Moan")) react.TestResponse(0);
-            if (GUILayout.Button("Breath")) react.TestResponse(1);
-            if (GUILayout.Button("Wince")) react.TestResponse(2);
-            if (GUILayout.Button("Slap sound")) react.TestResponse(3);
-            if (GUILayout.Button("Flinch butt")) react.TestResponse(4);
-            GUILayout.EndHorizontal();
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Line for the zone")) react.TestLine(zone, zoneSides ? side : 0);
-            if (GUILayout.Button("Feeling sound")) react.TestResponse(5);
-            GUILayout.EndHorizontal();
-            GUI.enabled = true;
-            GUILayout.Label("A test is a real reaction at the zone's live position: same voice rules, cooldowns and excitement.", _hint);
-
-            // Experimental
-            if (GUILayout.Button((expOpen ? "- " : "+ ") + "Experimental", _bold)) _expOpen = !_expOpen;
-            if (expOpen)
-            {
-                GUILayout.Label("The game's own animator numbers, set once per press. What they mean is unknown: try them and watch her.", _hint);
-                GUI.enabled = sub == null;
-                int mood = Stepper("mood_num", _expMood);
-                int rn = Stepper("reaction_num", _expReaction);
-                GUI.enabled = true;
-                if (sub == null && mood != _expMood)
-                {
-                    _expMood = mood;
-                    _body.React.SetAnimFloat("mood_num", mood);
-                }
-                if (sub == null && rn != _expReaction)
-                {
-                    _expReaction = rn;
-                    _body.React.SetAnimFloat("reaction_num", rn);
-                }
-            }
-
             GameVoiceBlock(guardOff, guard, guardStatus, react, bridge, diagBusy, diagRan);
             GUILayout.Label("Caress: a hand resting or stroking (about a quarter second, light). Grope: pressing hard (20 N or 1.5 cm deep). " +
                             "Slaps: by how fast the hand arrives (soft 1.2, hard 2.3, too hard 4.5 m/s at 50 % sensitivity). " +
@@ -255,14 +192,6 @@ namespace SfMorph
             if (off == null && Mathf.Abs(st - strCfg) > 0.0001f) _p.ReactFaceStrength.Value = st;
             if (off != null) GUILayout.Label("    off: " + off, _off);
             else if (fc.Status.Length > 0) GUILayout.Label(fc.Status, fc.Status.StartsWith("off") ? _off : _hint);
-            GUI.enabled = sub == null && face;
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Eye Lv1")) react.TestEye(1);
-            if (GUILayout.Button("Eye Lv2")) react.TestEye(2);
-            if (GUILayout.Button("Eye Lv3")) react.TestEye(3);
-            if (GUILayout.Button("Blink")) react.TestBlink();
-            GUILayout.EndHorizontal();
-            GUI.enabled = true;
             if (off == null && fc.Surveyed)
             {
                 for (int m = 0; m < ReactionsFace.NM; m++)
@@ -275,7 +204,6 @@ namespace SfMorph
                     GUI.enabled = true;
                     string nm = fc.PickName(m);
                     GUILayout.Label(nm.Length > 0 ? nm + "  (" + fc.PickWhy(m) + ")" : "none", _hint, GUILayout.Width(330));
-                    if (GUILayout.Button("Test", GUILayout.Width(50))) react.TestFace(m);
                     GUILayout.EndHorizontal();
                 }
                 GUI.enabled = !string.IsNullOrEmpty(_p.ReactFaceMap.Value);
@@ -283,7 +211,7 @@ namespace SfMorph
                 GUI.enabled = true;
             }
             GUILayout.Label("A one-time survey samples every clip of her face Animator and ranks how much each moves her face (log and BepInEx\\config\\SfMorphs\\face-clips.txt). " +
-                            "< > walk the ranked list for a mood (saved), Test plays it. Pleasure by excitement on breasts, hips, butt, thighs and neck; ticklish or surprised elsewhere; " +
+                            "< > walk the ranked list for a mood (saved); the Debug tab plays one. Pleasure by excitement on breasts, hips, butt, thighs and neck; ticklish or surprised elsewhere; " +
                             "surprise on soft slaps, pain on hard ones. Her mouth stays the game's while she speaks or moans.", _hint);
         }
 
@@ -309,7 +237,7 @@ namespace SfMorph
             string soff = off ?? (!on ? "lip sync is off" : null);
             float st = Slider("Lip strength", strCfg * 100f, 0f, 150f, "0", 100f, soff, " %") / 100f;
             if (soff == null && Mathf.Abs(st - strCfg) > 0.0001f) _p.LipStrength.Value = st;
-            float ld = Slider("Lip lead", leadCfg * 1000f, -100f, 200f, "0", 40f, soff, " ms") / 1000f;
+            float ld = Slider("Lip timing (+ earlier)", leadCfg * 1000f, -300f, 300f, "0", 0f, soff, " ms") / 1000f;
             if (soff == null && Mathf.Abs(ld - leadCfg) > 0.00001f) _p.LipLead.Value = ld;
             float ov = Slider("Replace the game's mouth", overCfg * 100f, 0f, 100f, "0", 50f, off, " %") / 100f;
             if (off == null && Mathf.Abs(ov - overCfg) > 0.0001f) _p.LipOverGame.Value = ov;
@@ -326,12 +254,7 @@ namespace SfMorph
                                 + ". Map: " + LipSync.PosedShapes + " of " + LipSync.K + " shapes posed" + (LipSync.Dirty ? " (unsaved)" : "")
                                 + (react.LipStatus.Length > 0 ? ". Last: " + react.LipStatus : ""), _hint);
             }
-            GUI.enabled = ready && on;
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Test: a pack clip with lip sync")) react.TestLip();
-            GUI.enabled = true;
             if (GUILayout.Button("Rescan curves", GUILayout.Width(120))) { LipSync.Rescan(); _lipMsg = "curves are read again on next use"; }
-            GUILayout.EndHorizontal();
 
             if (GUILayout.Button((open ? "- " : "+ ") + "Mouth poses for the lip sync", _bold)) { _lipOpen = !open; if (open) _lipPrev = false; }
             if (!open || !ready) react.LipPreview = -1;
@@ -422,11 +345,14 @@ namespace SfMorph
             // 0.11.7: the game's own moans and dirty talk silent while a pack is on
             bool mute = _p.VoiceMuteGame.Value;
             GUI.enabled = whoOff == null && pk.Length > 0;
-            bool tm = GUILayout.Toggle(mute, " Mute the game's own voice while the pack is on (moans, dirty talk; not story dialogue)");
+            bool tm = GUILayout.Toggle(mute, " Mute the game's own voice while the pack is on (moans, sex voice, dirty talk; the pack moans in their place)");
+            GUI.enabled = whoOff == null && pk.Length > 0 && mute;
+            bool tdl = GUILayout.Toggle(_p.VoiceMuteDialogue.Value, "    ...and its dialogue voice (off: story dialogue stays audible)");
             GUI.enabled = true;
             if (whoOff == null && pk.Length > 0 && tm != mute) _p.VoiceMuteGame.Value = tm;
+            if (whoOff == null && pk.Length > 0 && mute && tdl != _p.VoiceMuteDialogue.Value) _p.VoiceMuteDialogue.Value = tdl;
             if (pk.Length == 0) GUILayout.Label("    off: no voice pack chosen", _off);
-            else if (mute) GUILayout.Label("    " + (react.GameVoiceMuted > 0 ? "muting " + react.GameVoiceMuted + " of the game's voice sources now" : "nothing of the game's playing now (needs Reactions on)"), _hint);
+            else if (mute) GUILayout.Label("    " + (react.GameVoiceMuted > 0 ? "muting " + react.GameVoiceMuted + " of the game's voice sources now" : "nothing of the game's playing now (needs Reactions on)") + (react.StandInNote.Length > 0 ? "; last " + react.StandInNote : ""), _hint);
             if (pk.Length > 0) GUILayout.Label(vp.Name == pk && vp.Summary.Length > 0 ? (vp.Loaded ? "" : "off: ") + vp.Summary : "loads within a second (in the game scene)", vp.Name == pk && !vp.Loaded && vp.Summary.Length > 0 ? _off : _hint);
             GUILayout.Label("A voice pack replaces her reaction moans, breaths, slap exertions and climax; a pack with lines also speaks for the touched area (with Lines on, no sex mode needed), guards, asks for more and talks in the afterglow. Her jaw follows the pack's audio (needs Face clips). The game's own lines and feeling sounds stay off while a pack is on.", _hint);
             string vfs = react.VoiceFxStatus;
@@ -439,23 +365,6 @@ namespace SfMorph
             if (whoOff != null) { GUILayout.Label("    off: " + whoOff, _off); return; }
             if (guard && guardStatus.Length > 0) GUILayout.Label(guardStatus, guardStatus.StartsWith("off") ? _off : _hint);
 
-            // one-off probe of the sound and face chain (writes a block to LogOutput.log)
-            GUI.enabled = bridge && !diagBusy;
-            if (GUILayout.Button(diagBusy ? "Diagnosing (about 3 s)..." : "Diagnose sound and face")) react.Diagnose();
-            GUI.enabled = true;
-            if (!bridge) GUILayout.Label("    off: her game link is not found yet (turn on Reactions or the repair above and stay in the game scene)", _off);
-            else if (diagBusy) GUILayout.Label("Listen for two short beeps and a slap; she may wince once.", _hint);
-            else if (diagRan) GUILayout.Label("Diagnose ran: see LogOutput.log, 'Reactions diagnose'", _hint);
-            else GUILayout.Label("Plays a test tone and one slap clip, sets the moan trigger once, and logs what the audio and face chain looks like.", _hint);
-
-            // 0.9.9: the game's voice clips to WAV, for baking lip-sync curves (tools/a2f)
-            bool dumping = react.Dumping;
-            GUI.enabled = bridge && !dumping;
-            if (GUILayout.Button(dumping ? "Dumping voice clips..." : "Dump her voice clips to WAV (for lip sync)")) react.DumpVoice();
-            GUI.enabled = true;
-            string ds = react.DumpStatus;
-            GUILayout.Label(ds.Length > 0 ? ds : "Writes the current voice language's moans, breaths, feeling sounds and dirty-talk lines to " + LipSync.DumpDir +
-                            " as <clip>_<samples>.wav. Bake them with tools\\a2f\\bake.bat into " + System.IO.Path.Combine(LipSync.Dir, "game") + ".", ds.StartsWith("off") ? _off : _hint);
         }
 
         // The next voice pack folder ("" = the game's voice comes first).

@@ -26,6 +26,34 @@ namespace SfMorph
     {
         // ---- the 6.3 contract ----
         public bool Found;                 // the game's FacialFunction (and so the voice/face/sound objects) is bridged for this session
+        // 0.11.12: seconds between the mixer's read position (AudioSource.time) and the sound leaving the output: its DSP buffers
+        // (AudioSettings.GetDSPBufferSize length x count / outputSampleRate, capped at 0.1 s), read once by reflection; 0 if unknown
+        float _outLat = -1f;
+        public float OutputLatency
+        {
+            get
+            {
+                if (_outLat >= 0f) return _outLat;
+                if (_tSrc == null) return 0f;
+                _outLat = 0f;
+                try
+                {
+                    var tAs = _tSrc.Assembly.GetType("UnityEngine.AudioSettings");
+                    var m = tAs != null ? tAs.GetMethod("GetDSPBufferSize", BindingFlags.Static | BindingFlags.Public) : null;
+                    var pr = tAs != null ? tAs.GetProperty("outputSampleRate", BindingFlags.Static | BindingFlags.Public) : null;
+                    if (m != null && pr != null)
+                    {
+                        var a = new object[] { 0, 0 };
+                        m.Invoke(null, a);
+                        int len = (int)a[0], num = (int)a[1], rate = (int)pr.GetValue(null, null);
+                        if (len > 0 && num > 0 && rate > 0) _outLat = Mathf.Min(0.1f, (float)len * num / rate);
+                        Plugin.Log.LogInfo("Lip sync: audio output " + len + " x " + num + " samples at " + rate + " Hz -> the mouth waits " + (_outLat * 1000f).ToString("0") + " ms");
+                    }
+                }
+                catch (Exception e) { Plugin.Log.LogWarning("Lip sync: output latency unknown (" + e.Message + ")"); }
+                return _outLat;
+            }
+        }
         public string Missing = "";        // comma separated list of game members that were not found (empty = all found)
 
         // ---- extra read-only state for Reactions.cs ----
@@ -146,14 +174,14 @@ namespace SfMorph
         Animator _anim;
         Transform _herRoot;
         UnityEngine.Object _animCtrl;
-        Behaviour _srcMoan, _srcDirty, _srcDialogue, _srcSfx, _srcVoice;
+        Behaviour _srcMoan, _srcDirty, _srcDialogue, _srcSfx, _srcVoice, _srcSexFacial;   // 0.11.12: + sexFacial_audioSource (Feeling_enter moans in sex)
         Type _tSrc;
         // members
         Mem _mLv, _mSnd, _mBp, _mAnim, _mGs, _mSm, _mFPause, _mLayer, _mBiped;
         Mem _mDtPause, _mDialogue, _mKiss, _mSexFacial, _mDtPlaying, _mLvPause, _mLib, _mSfxLib;
         Mem _mDtActive, _mDtList, _mDtVoice, _mDtNum, _mRandSeq, _mDtSpeed, _mDtType;
         Mem _mSeType, _mSeVoice, _mSeNum, _mCumVoice, _mCumNum, _mFacLib, _mMixer;
-        Mem _mSrcMoan, _mSrcDirty, _mSrcDialogue, _mSrcSfx, _mSrcVoice;
+        Mem _mSrcMoan, _mSrcDirty, _mSrcDialogue, _mSrcSfx, _mSrcVoice, _mSrcSexFacial;
         Mem _mVoiceOn, _mSfxOn, _mBreakOn, _mLang;
         Mem _mSexMode, _mForeplay, _mTouchTime, _mDesire;
         MethodInfo _miMoan, _miBlink, _miDesirePlus, _miEyeIn, _miEyeOut, _miDtStop, _miSubHide;
@@ -473,9 +501,11 @@ namespace SfMorph
             _mSrcDialogue = M(ts, "dialogue_audioSource", "Sound_Function.dialogue_audioSource");
             _mSrcSfx = M(ts, "soundEffect_audioSource", "Sound_Function.soundEffect_audioSource");
             _mSrcVoice = M(ts, "voice_audioSource", "Sound_Function.voice_audioSource");
+            _mSrcSexFacial = Q(ts, "sexFacial_audioSource");   // 0.11.12, optional
             _mMixer = Q(ts, "audioMixer");
             _srcMoan = _mSrcMoan.Get(_snd) as Behaviour; _srcDirty = _mSrcDirty.Get(_snd) as Behaviour;
             _srcDialogue = _mSrcDialogue.Get(_snd) as Behaviour; _srcSfx = _mSrcSfx.Get(_snd) as Behaviour; _srcVoice = _mSrcVoice.Get(_snd) as Behaviour;
+            _srcSexFacial = _mSrcSexFacial.Ok ? _mSrcSexFacial.Get(_snd) as Behaviour : null;
             _tSrc = null;
             foreach (var s in new[] { _srcMoan, _srcSfx, _srcVoice, _srcDirty, _srcDialogue }) if (s != null) { _tSrc = s.GetType(); break; }
             ResolveAudioMembers();
@@ -1189,9 +1219,9 @@ namespace SfMorph
                 DirtyTalkPause = Bool(_mDtPause, _lv);
                 // the game's dirtyTalkPlaying flag is sticky (only PlayDirtyTalk(bool) writes it, the timer path never clears it): only the source counts
                 DirtyTalkFlag = Bool(_mDtPlaying, _lv);
-                DirtyTalkPlaying = Playing(_srcDirty);
-                bool dlg = Bool(_mDialogue, _lv), kiss = Bool(_mKiss, _lv), dsrc = Playing(_srcDialogue);
-                SexFacialPlaying = Bool(_mSexFacial, _lv);
+                DirtyTalkPlaying = Playing(_srcDirty) && !MutedGame(1);
+                bool dlg = Bool(_mDialogue, _lv), kiss = Bool(_mKiss, _lv), dsrc = Playing(_srcDialogue) && !MutedGame(4);
+                SexFacialPlaying = Bool(_mSexFacial, _lv) && !Muting;   // 0.11.12: its moans are muted then (stand-ins come from the pack)
                 DialoguePlaying = dlg || kiss || dsrc;
                 DialogueWhy = dlg ? "dialogue" : kiss ? "kiss" : dsrc ? "dialogue audio" : "";
                 int mask = (dlg ? 1 : 0) | (kiss ? 2 : 0) | (dsrc ? 4 : 0);   // sexFacial flips constantly in sex mode: not a reason to log
@@ -1206,7 +1236,7 @@ namespace SfMorph
                 var layer = _mLayer.Ok ? _mLayer.Get(_facial) as string : null;
                 FacialLayer = layer ?? "";
                 FacialOff = layer != null && layer == "off";
-                MoanPlaying = Playing(_srcMoan);
+                MoanPlaying = Playing(_srcMoan) && !MutedGame(0);
                 MoanTail = MoanPlaying && TailSilent();
                 TouchReactionTime = Flt(_mTouchTime, _bp, 0f);
                 Desire = HasGauge && _gauge != null && !Dead(_gauge) ? Flt(_mDesire, _gauge, -1f) : -1f;
@@ -1535,7 +1565,7 @@ namespace SfMorph
             if (!Found || !Pack.Loaded || _srcMoan == null || Dead(_srcMoan) || _miOneShot == null) return false;
             try
             {
-                if (Playing(_srcMoan)) { if (!TailSilent()) return false; StopMoan(); }
+                if (Playing(_srcMoan)) { if (!TailSilent() && !MutedGame(0)) return false; StopMoan(); }
                 RestorePitch();
                 float len;
                 var clip = Pack.Pick(heavy ? VoicePack.BreathHeavy : VoicePack.BreathCalm, out len);
@@ -1750,23 +1780,68 @@ namespace SfMorph
         // The pack plays on the same moan source as the game's moans, so the source is not stopped: its volume is 0 while it holds a clip
         // that isn't ours (the pack's are named SfVoice_*), and the game's own volume comes back the moment ours plays or the option is off.
         // A tracker per source: a volume the game wrote over our 0 becomes the base we give back.
-        readonly float[] _muteBase = new float[3], _muteLast = new float[3];
-        readonly bool[] _muted = new bool[3];
-        readonly UnityEngine.Object[] _muteClip = new UnityEngine.Object[3];
-        readonly bool[] _muteOurs = new bool[3];
+        // 0.11.12 (user: with the mute on, voice lines that are not the pack's still play; the pack's moans are missing in sex): two more sources
+        // (the sex-facial moans and, with [Voice] MuteGameDialogue, the dialogue source the game also talks through in scenes); a muted game
+        // clip no longer counts as her speaking (MoanPlaying / DirtyTalkPlaying / SexFacialPlaying gated the pack's own voice for most of a
+        // sex scene); and each moan / sex voice / sex-facial clip the game starts is answered by a pack clip of a matching kind (StandIn).
+        const int MuteN = 5;   // moan, dirty talk, voice, sex facial, dialogue
+        readonly float[] _muteBase = new float[MuteN], _muteLast = new float[MuteN];
+        readonly bool[] _muted = new bool[MuteN];
+        readonly UnityEngine.Object[] _muteClip = new UnityEngine.Object[MuteN];
+        readonly bool[] _muteOurs = new bool[MuteN];
         public int MutedNow;
+        public bool Muting;                 // the mute is on this frame (Reactions: busy flags of muted game clips are ignored)
+        public bool MuteDialogue = true;    // [Voice] MuteGameDialogue
+        public string StandInNote = "";
+        float _standInAt = -10f;
+        int _standIns;
 
         public void MuteGameVoice(bool on)
         {
-            if (!on && !_muted[0] && !_muted[1] && !_muted[2]) { MutedNow = 0; return; }
+            bool any = false;
+            for (int i = 0; i < MuteN; i++) any |= _muted[i];
+            Muting = on;
+            if (!on && !any) { MutedNow = 0; return; }
             if (!Found || _pVolume == null || _pClip == null) return;
             MutedNow = 0;
-            MuteOne(0, _srcMoan, on); MuteOne(1, _srcDirty, on); MuteOne(2, _srcVoice, on);
+            int fresh = -1; string freshName = null;
+            for (int i = 0; i < MuteN; i++)
+            {
+                var src = i == 0 ? _srcMoan : i == 1 ? _srcDirty : i == 2 ? _srcVoice : i == 3 ? _srcSexFacial : _srcDialogue;
+                string started = MuteOne(i, src, on && (i != 4 || MuteDialogue));
+                if (started != null && i != 1 && i != 4 && fresh < 0) { fresh = i; freshName = started; }
+            }
+            if (on && fresh >= 0) StandIn(fresh, freshName);
         }
 
-        void MuteOne(int i, Behaviour src, bool on)
+        // A game voice clip just started on a muted source: a pack clip of the same kind on the moan source instead, unless one of ours still
+        // sounds (her own voice wins) or the last stand-in was under 1.5 s ago (the game's sex voice fires every stroke).
+        void StandIn(int src, string name)
         {
-            if (src == null || Dead(src)) { _muted[i] = false; return; }
+            if (!Pack.Loaded || OwnVoicePlaying || _now - _standInAt < 1.5f) return;
+            string n = name.ToLowerInvariant();
+            int cat;
+            bool breath = false;
+            if (n.Contains("exhale") || n.Contains("closemouth") || n.Contains("breath")) { cat = VoicePack.BreathHeavy; breath = true; }
+            else if (n.Contains("feeling_enter_3") || n.Contains("orgasm") || n.Contains("climax") || n.Contains("cum")) cat = VoicePack.Climax;
+            else if (n.Contains("feeling")) cat = VoicePack.MoanHigh;
+            else if (n.StartsWith("sex", StringComparison.Ordinal)) cat = Desire >= 66f ? VoicePack.MoanHigh : Desire >= 33f ? VoicePack.MoanMid : VoicePack.MoanLow;
+            else if (n.Contains("moan")) cat = VoicePack.MoanMid;
+            else return;
+            bool ok = breath ? PackBreath(true) : PackVoice(cat, 1f, false);
+            if (!ok) return;
+            _standInAt = _now; _standIns++;
+            StandInNote = "pack stand-in #" + _standIns + " for the game's " + name;
+            if (_standIns <= 10 || _standIns % 20 == 0) Log("voice: " + StandInNote + " (" + VoicePack.Folders[cat] + ")");
+            MuteOne(0, _srcMoan, true);   // our clip is on the moan source now: its volume back this frame
+        }
+
+        // Returns the clip's name when the game just started a clip of its own on this source (a new clip, or the source started playing).
+        readonly bool[] _mutePlay = new bool[MuteN];
+        string MuteOne(int i, Behaviour src, bool on)
+        {
+            if (src == null || Dead(src)) { _muted[i] = false; _mutePlay[i] = false; return null; }
+            string started = null;
             try
             {
                 float cur = (float)_pVolume.GetValue(src, null);
@@ -1774,13 +1849,19 @@ namespace SfMorph
                 if (on)
                 {
                     var clip = _pClip.GetValue(src, null) as UnityEngine.Object;
-                    if (!ReferenceEquals(clip, _muteClip[i]))
+                    bool newClip = !ReferenceEquals(clip, _muteClip[i]);
+                    if (newClip)
                     {
                         _muteClip[i] = clip;
                         _muteOurs[i] = clip != null && clip.name.StartsWith("SfVoice_", StringComparison.Ordinal);   // once per new clip
                     }
-                    ours = clip != null && _muteOurs[i];
+                    // 0.11.12: a pack breath is a one-shot over whatever clip the moan source still holds: never mute it
+                    ours = clip != null && _muteOurs[i] || (i == 0 && _now < _packBreathEnd);
+                    bool play = Playing(src);
+                    if (play && !ours && clip != null && (newClip || !_mutePlay[i])) started = clip.name;
+                    _mutePlay[i] = play;
                 }
+                else _mutePlay[i] = false;
                 if (on && !ours)
                 {
                     if (!_muted[i] || Mathf.Abs(cur - _muteLast[i]) > 1e-4f) _muteBase[i] = cur;
@@ -1795,7 +1876,11 @@ namespace SfMorph
                 }
             }
             catch (Exception e) { LogOnce("mute:" + e.GetType().Name, "muting the game's voice failed: " + e.Message); }
+            return started;
         }
+
+        // 0.11.12: is this source sounding a game clip the mute silences (then it is not "her speaking" for the pack's gates)
+        bool MutedGame(int i) { return Muting && _muted[i]; }
 
         // ---- 0.9.0: her voice's pitch and formant (VoiceShift.cs) on the game's voice sources ----
         readonly System.Collections.Generic.List<VoiceShift> _shift = new System.Collections.Generic.List<VoiceShift>();
@@ -2660,7 +2745,7 @@ namespace SfMorph
             Found = false; Missing = ""; _missing.Clear();
             _facial = _lv = _snd = _gs = _bp = _sm = _gauge = _solver = null;
             _anim = null; _herRoot = null;
-            _srcMoan = _srcDirty = _srcDialogue = _srcSfx = _srcVoice = null; _tSrc = null;
+            _srcMoan = _srcDirty = _srcDialogue = _srcSfx = _srcVoice = _srcSexFacial = null; _tSrc = null;
             _isPlayingFast = null; _gazeGet = null; _gazeSet = null; _mGazeW = null;
             _miMoan = _miBlink = _miDesirePlus = _miDtStop = _miSubHide = null; _mSubtitle = null;
             for (int i = 0; i < _moanBanks.Length; i++) _moanBanks[i].Clips = null;

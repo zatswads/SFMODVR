@@ -13,6 +13,7 @@ namespace SfMorph
         public float Skirt = 0.015f, Bulge = 0.6f, Depth = 1f;
         public bool Normals = true, SelfContact = true, PartnerBody = true;
         public float BendAmount = 0.6f, BicepsMm = 8f, KneeMm = 8f, CalfMm = 6f, HipMm = 5f, BellyFoldMm = 3f;
+        public float RippleThrustAmt = 1f, NormalSmooth = 0.008f;   // 0.11.12
         public float Ripple = 1f, RippleSpeed = 0.5f, RippleWavelength = 0.1f, RippleDamping = 0.6f, RippleImpact = 0.35f;
         // 0.11.8 tensed muscles as geometry ([Muscles] Flex, the per-area bulge in mm at full activation; Firmness is MuscleFlex.Firm)
         public float Flex = 1f, CoreMm = 3f, BackMm = 4f, LegsMm = 4f, ArmsMm = 4f;
@@ -585,33 +586,61 @@ namespace SfMorph
             // the body-atlas submeshes (Wrinkles' class 3: her body / skin / foot materials)
             var mats = r.sharedMaterials;
             var onSheet = new bool[V];
+            var uvOn = new bool[V];   // this copy's UV is on the body atlas
             int subsOn = 0;
             for (int si = 0; si < subs.Count && si < mats.Length; si++)
             {
                 if (mats[si] == null || Wrinkles.Classify(mats[si], r) != 3) continue;
+                if ((mats[si].name ?? "").IndexOf("foot", StringComparison.OrdinalIgnoreCase) >= 0) continue;   // the foot's own texture, not the body atlas
                 subsOn++;
                 var tr = subs[si];
-                for (int i = 0; i < tr.Length; i++) onSheet[canon[tr[i]]] = true;
+                for (int i = 0; i < tr.Length; i++) { onSheet[canon[tr[i]]] = true; uvOn[tr[i]] = true; }
             }
             if (subsOn == 0) { note = "muscles: not on the body sheet"; return 0; }
             // 1. the dominant muscle per canonical vertex (0 = none), its pair and share
+            // 0.11.12 (user: seams in the bulge): every welded copy's UV is tried and the texel with the most coverage wins, and a texel the
+            // author's dilation filled (an island's edge: coverage 0 but a copied id) counts. Before, a vertex on a UV seam often read only the
+            // dilated rim, was dropped as "no muscle" and every UV seam drew a groove down the bulge (the leg sides, the calves).
             var dom = new int[V];
+            var bestA = new int[V];
+            for (int v = 0; v < V; v++) bestA[v] = -1;
             for (int v = 0; v < V; v++)
             {
-                if (canon[v] != (uint)v || !onSheet[v]) continue;
-                uint c = cls[v];
+                int cv = (int)canon[v];
+                if (!onSheet[cv] || !uvOn[v]) continue;
+                uint c = cls[cv];
                 if (c == ClsHead || c == ClsNeck || c == ClsHand || c == ClsHand + 1 || c == ClsFoot || c == ClsFoot + 1 || c == ClsBreast || c == ClsBreast + 1 || c == ClsGenital) continue;
                 Vector2 t = uv[v];
                 if (!(t.x >= 0f && t.x <= 1f && t.y >= 0f && t.y <= 1f)) continue;
                 int px = Mathf.Clamp((int)(t.x * mm.RW), 0, mm.RW - 1), py = Mathf.Clamp((int)(t.y * mm.RH), 0, mm.RH - 1);
                 var q = mm.Region[py * mm.RW + px];
                 int i1 = q.r, i2 = q.g;
-                if (i1 < 1 || i1 > L.Count || i1 > MuscleFlex.Max || q.a == 0) continue;
+                if (i1 < 1 || i1 > L.Count || i1 > MuscleFlex.Max || q.a <= bestA[cv]) continue;
+                bestA[cv] = q.a;
                 float sh = q.b / 255f;
                 if (i2 < 1 || i2 > L.Count || i2 > MuscleFlex.Max) { i2 = 0; sh = 1f; }
-                dom[v] = sh >= 0.5f || i2 == 0 ? i1 : i2;
-                mus[v] = new Vector4(i1 - 1, sh, i2 > 0 ? i2 - 1 : -1f, i2 > 0 ? 1f - sh : 0f);
+                dom[cv] = sh >= 0.5f || i2 == 0 ? i1 : i2;
+                mus[cv] = new Vector4(i1 - 1, sh, i2 > 0 ? i2 - 1 : -1f, i2 > 0 ? 1f - sh : 0f);
             }
+            // a lone vertex without a muscle inside one (a missed texel): it takes the muscle most of its neighbours have
+            for (int pass = 0; pass < 2; pass++)
+                for (int v = 0; v < V; v++)
+                {
+                    if (dom[v] != 0 || canon[v] != (uint)v || !onSheet[v] || bestA[v] >= 0) continue;
+                    uint c = cls[v];
+                    if (c == ClsHead || c == ClsNeck || c == ClsHand || c == ClsHand + 1 || c == ClsFoot || c == ClsFoot + 1 || c == ClsBreast || c == ClsBreast + 1 || c == ClsGenital) continue;
+                    int n = 0, best = 0, bestN = 0;
+                    for (uint k = adjOff[v]; k < adjOff[v + 1]; k++)
+                    {
+                        int d = dom[adjV[k]];
+                        n++;
+                        if (d == 0) continue;
+                        int cnt = 0;
+                        for (uint k2 = adjOff[v]; k2 < adjOff[v + 1]; k2++) if (dom[adjV[k2]] == d) cnt++;
+                        if (cnt > bestN) { bestN = cnt; best = (int)adjV[k]; }
+                    }
+                    if (n > 0 && bestN * 3 >= n * 2) { dom[v] = dom[best]; mus[v] = mus[best]; bestA[v] = 0; }
+                }
             // 2. geodesic distance to the nearest muscle edge (seeds: a muscle vertex next to another muscle or to none)
             var dist = new float[V];
             var heap = new MinHeap(4096);
