@@ -13,6 +13,7 @@ namespace SfMorph
         public float Gain = 1f;           // how much of the pose's tension adds on top (0 = rest tone only)
         public float Strength = 1f;       // depth of the relief (normal map)
         public float Shade = 0.3f;        // groove shade in the albedo copy (0 = none)
+        public float Obliques = 0.6f;     // 0.11.20: the obliques' relief / shade x this (their activation as the shader sees it)
         public bool Core = true, Back = true, Legs = true, Arms = true;
         public int Debug;                 // 0 off, 1 activation (tint), 2 muscles in their own colours
         public float Attack = 0.25f, Release = 0.8f;
@@ -95,6 +96,45 @@ namespace SfMorph
 
         // the last pose (degrees / 0..1), for the log and the panel
         public static float Flex, Side, Twist, BackLoad, AbsLoad;
+        // 0.11.20: how far she bends toward each side (0..1, [0] her left): the oblique on that side bunches up at full strength whatever
+        // [Muscles] Obliques says (that setting tames them when only the abs work)
+        public static readonly float[] SideBend = new float[2];
+
+        // 0.11.20 (user: no abs while she is pregnant): the game's pregnancy setting swaps her body for reika_pregnantUpperBody_lvN /
+        // pregnantLowerBody_lvN; the worn level (0 none) is read from her drawn renderers once a second. Any level: no abs (relief, shade,
+        // bulge); the obliques half at level 1, none from level 2 (a stretched belly shows neither).
+        public static int Pregnancy { get; private set; }
+        static float _pregAt = -10f;
+        static void CheckPregnancy(Character her)
+        {
+            if (Time.unscaledTime - _pregAt < 1f) return;
+            _pregAt = Time.unscaledTime;
+            int lv = 0;
+            foreach (var r in her.Renderers)
+            {
+                if (r == null || !r.enabled || !r.gameObject.activeInHierarchy) continue;
+                string n = r.name;
+                if (n.IndexOf("pregnant", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                int l = 1, j = n.LastIndexOf("lv", StringComparison.OrdinalIgnoreCase);
+                if (j >= 0 && j + 2 < n.Length && char.IsDigit(n[j + 2])) l = n[j + 2] - '0';
+                if (l > lv) lv = l;
+            }
+            if (lv != Pregnancy) Plugin.Log.LogInfo("Muscles: pregnancy level " + lv + (lv > 0 ? ": no abs" + (lv >= 2 ? " or obliques" : ", obliques at half") : ": abs and obliques back"));
+            Pregnancy = lv;
+        }
+        public static float PregnancyScale(string muscle)
+        {
+            if (Pregnancy <= 0 || muscle == null) return 1f;
+            if (muscle == "abs") return 0f;
+            if (muscle.StartsWith("obliques", StringComparison.Ordinal)) return Pregnancy >= 2 ? 0f : 0.5f;
+            return 1f;
+        }
+        public static float ObliquesFactor(float setting, string side)
+        {
+            float k = Mathf.Max(0f, setting);
+            if (k >= 1f) return k;
+            return k + (1f - k) * SideBend[side == "R" ? 1 : 0];
+        }
         public static readonly float[] HipFlex = new float[2], Abd = new float[2], Knee = new float[2], Plantar = new float[2], Elev = new float[2],
             ArmSwing = new float[2], Elbow = new float[2], Wrist = new float[2], LegLoad = new float[2], ArmLoad = new float[2];
 
@@ -196,12 +236,14 @@ namespace SfMorph
         public static bool Tension(Character her, MuscleLayer L, float[] tension)
         {
             if (her != _bound || her.Bones.Count != _boundBones) Bind(her);
+            CheckPregnancy(her);
             for (int k = 0; k < tension.Length; k++) tension[k] = 0f;
             if (Joints == 0 || L == null) return false;
             Vector3 r;
             // trunk
             Flex = Side = Twist = 0f;
             if (Dir(0, out r)) Swing(0, r, out Flex, out Side);
+            SideBend[0] = Sm(5f, 25f, Side); SideBend[1] = Sm(5f, 25f, -Side);   // side bend + = towards her left
             Vector3 up = Vector3.up;
             Vector3 front = Vector3.forward;
             if (_chest != null) front = _chest.TransformDirection(_chestFront);

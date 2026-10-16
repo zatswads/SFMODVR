@@ -98,6 +98,19 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.20 (headset fixes)
+
+Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`.
+
+- Physics at defaults (Reset the Physics tab; Quality now Fidelity): her arm pressing her breast leaves no sharp fold. Also check Balanced.
+- Physics hands (jointed fingers): push the open hand fingers-first into her breast, belly and thigh: the fingers stop at her skin
+  (they may sink a few mm where she is soft) and the hand stops behind them. No "finger rig" warnings / kinematic fallback in the log.
+- Press with a hand and lift it: the darkening and the print have round, soft edges (no triangles); the print fades in about 2 s.
+  Skin tab: print, print fade, smoothing, press shade change it.
+- Muscles at Strength 2, Flex 2, Core 10+: defined, not lumpy; Obliques 0 leaves the waist smooth while the abs still bulge; a side bend
+  brings the oblique on that side back. Pregnancy setting on: the abs fade out (log "Muscles: pregnancy level N").
+- Pelvis (any genital type in the game's customisation): no dark band or hard edge where the genital mesh meets her body.
+
 ## 0.11.19 (natural back)
 
 Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`. Flex test, Back 10-16 mm: no rods or tubes along the spine or across the shoulder

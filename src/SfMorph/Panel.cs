@@ -796,9 +796,21 @@ namespace SfMorph
             if (Mathf.Abs(v - _p.MarksRedness.Value) > 0.0001f) _p.MarksRedness.Value = v;
             v = Slider("    boost", _p.MarksBoost.Value, 1f, 4f, "0.0", 1f, mo, " x");
             if (Mathf.Abs(v - _p.MarksBoost.Value) > 0.001f) _p.MarksBoost.Value = v;
+            // 0.11.20 (user: the dent shading and the hand print are polygonal, the print lasts too long and has no setting)
+            v = Slider("    press shade", _p.MarksAo.Value * 100f, 0f, 100f, "0", 50f, mo, " %") / 100f;
+            if (Mathf.Abs(v - _p.MarksAo.Value) > 0.0001f) _p.MarksAo.Value = v;
+            v = Slider("    print", _p.MarksPrint.Value * 100f, 0f, 150f, "0", 60f, mo, " %") / 100f;
+            if (Mathf.Abs(v - _p.MarksPrint.Value) > 0.0001f) _p.MarksPrint.Value = v;
+            v = Slider("    print fade", _p.MarksPrintTime.Value, 0.2f, 5f, "0.0", 0.8f, mo, " s");
+            if (Mathf.Abs(v - _p.MarksPrintTime.Value) > 0.001f) _p.MarksPrintTime.Value = v;
+            v = Slider("    smoothing", _p.MarksSmooth.Value, 0f, 15f, "0.0", 6f, mo, " mm");
+            if (Mathf.Abs(v - _p.MarksSmooth.Value) > 0.001f) _p.MarksSmooth.Value = v;
             if (!en) GUILayout.Label("    " + so, _off);
             else if (_body.Marks.Status.Length > 0) GUILayout.Label(_body.Marks.Status, _body.Marks.Status.Contains("off:") ? _off : _hint);
-            GUILayout.Label("Marks come from hands, the partner and slaps (her face and neck too, lighter); her own limbs dent her skin but never redden it.", _hint);
+            GUILayout.Label("Marks come from hands, the partner and slaps (her face and neck too, lighter); her own limbs dent her skin but never redden it. " +
+                            "Fade: seconds for redness to fade to a third. Boost multiplies the build-up, redness and press shade. Press shade: how much a live press darkens " +
+                            "the skin. Print: how deep the print of a lifted hand shows (share of the press); print fade: seconds for it to fade to a third. " +
+                            "Smoothing: how far the marks are rounded off on her skin (0 = they follow the mesh's triangles).", _hint);
         }
 
         static readonly string[] WrinkleDebugs = { "Off", "Activation", "Regions" };
@@ -900,6 +912,9 @@ namespace SfMorph
             string awhy = fwhy ?? (_p.MuscleFlexAmt.Value <= 0f ? "off: Flex is 0" : null);
             float cm = Slider("Core", _p.MuscleCoreMm.Value, 0f, 20f, "0.0", 3f, awhy ?? (_p.MuscleCore.Value ? null : "off: Core is off"), " mm");
             if (Mathf.Abs(cm - _p.MuscleCoreMm.Value) > 0.0001f) _p.MuscleCoreMm.Value = cm;
+            // 0.11.20 (user: the obliques bulge too much when only the abs should): relief, shade and bulge of the obliques against the core
+            float ob = Slider("    obliques", _p.MuscleObliques.Value * 100f, 0f, 150f, "0", 60f, why ?? (_p.MuscleCore.Value ? null : "off: Core is off"), " %") / 100f;
+            if (Mathf.Abs(ob - _p.MuscleObliques.Value) > 0.0001f) _p.MuscleObliques.Value = ob;
             float bm = Slider("Back", _p.MuscleBackMm.Value, 0f, 20f, "0.0", 4f, awhy ?? (_p.MuscleBack.Value ? null : "off: Back is off"), " mm");
             if (Mathf.Abs(bm - _p.MuscleBackMm.Value) > 0.0001f) _p.MuscleBackMm.Value = bm;
             float am = Slider("Arms", _p.MuscleArmsMm.Value, 0f, 20f, "0.0", 4f, awhy ?? (_p.MuscleArms.Value ? null : "off: Arms is off"), " mm");
@@ -919,7 +934,7 @@ namespace SfMorph
                             "are in the Debug tab. Speed is in the config file ([Muscles]). Shape: with GPU contact on, the sculpted muscles become " +
                             "geometry: soft abdominal blocks, oblique pads, serratus, pecs, traps, the erector columns, scapulae and lats, quads, hamstrings, calf heads, with soft valleys between them (mm = the " +
                             "area's highest belly at full activation, the rest in proportion; Fitness counts, so a high resting tone keeps some " +
-                            "shape; 15-20 mm with Flex 1-2 is a bodybuilder); the relief above stays the fine detail. Firmness: a tensed muscle dents less under a hand and the physics hands meet more resistance there. Flex test: " +
+                            "shape; mm x Flex eases toward 10 mm so a high setting stays muscle, not a lump). Obliques: the pads over her hip bones and the waist's sides as a share of Core (relief and bulge), so the abs can be raised alone. The relief above stays the fine detail. Firmness: a tensed muscle dents less under a hand and the physics hands meet more resistance there. Flex test: " +
                             "each area at full (at least 3 mm) for 2 s over whatever she is doing, whatever her pose's tension; the log says how far " +
                             "and on how many vertices each one went.", _hint);
         }

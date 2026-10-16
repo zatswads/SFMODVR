@@ -41,6 +41,31 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.20 (fixes from a headset run: breast physics, fingers, smooth marks, muscles, pelvis):
+- The default Physics settings deformed her breasts oddly (a fold where her arm pressed one). Two causes. (1) The only soft-zone default
+  that changes her shape is Quality: Balanced keeps the unsmoothed body mesh, Fidelity (the setup that looked right) subdivides and
+  smooths it. Quality now defaults to Fidelity and Springiness to 0.45 (existing configs keep their values). (2) Each skin vertex hung
+  on its 3 nearest soft points, and the third one's weight jumped from up to ~0.3 to nothing where the fourth took its place: with one
+  point pushed 2-3 cm (her arm on her breast) the skin folded along that line. The weights are now continuous (the fourth's subtracted).
+- Physics-hand fingers could pass straight through her. The finger joints used PhysX projection, which snaps a stretched joint back
+  onto its anchor and ignores collisions: a finger pressed against her was pushed toward the palm by the contact and teleported
+  forward into her on every step while the palm kept coming. Projection is off, and the joint sees the palm as at most 3x a finger's
+  mass (the 12:1 ratio let it stretch), so the contact stops the finger and the palm behind it.
+- The pressed-skin darkening and the print a hand leaves looked polygonal (a footprint in snow) and the print lasted too long with no
+  setting. The marks are per-vertex values spread linearly over each triangle, so they followed her triangles. They are now blurred
+  on her skin before anything uses them ([Physics] MarksSmooth, 6 mm). New: MarksPrint (how deep the print shows, 60 %) and
+  MarksPrintTime (0.8 s to fade to a third; it was a fixed 1.5 s at full depth). The Skin tab also shows the press shade (MarksAo),
+  which MarksBoost multiplies.
+- At max settings the muscles looked like tumours, and raising the abs also inflated the obliques. The bulge was normalised by each
+  area's highest belly, and the core's was the 6.8 mm oblique pad, so the abs reached only 40 % of Core mm. The obliques are now a group
+  of their own with [Muscles] Obliques (60 % of Core, relief and bulge); a side bend still lets the oblique on that side bunch up at
+  full strength. mm x Flex eases toward 10 mm, and the relief's slope eases toward ~0.9 so Strength 2 deepens definition instead of
+  drawing domes. With her pregnancy setting on (her pregnant body meshes) the abs fade out, and the obliques from level 2.
+- Dark seams around the pelvis. The adonis groove (2.8 mm) saturated the groove shade into a dark band down to the pubis, and every
+  muscle's relief stopped hard at the separate genital / nipple meshes (the game's selectable variants, which carry no relief). The
+  relief now fades out over 3.5 cm toward those meshes (all genital variants share one footprint), and the groove is 1.9 mm deep and
+  shades at half strength. Maps re-authored, shader bundle rebuilt.
+
 0.11.19 (a natural back; stronger obliques):
 - The back's erectors read as two lone tendons down the spine and the shoulder-blade muscles as rows of rods / tubes. Cause: a
   belly's cross-section (1 - x^k)^2 with k under 2 has no flat top - it peaks sharply on its centreline - and several muscles used

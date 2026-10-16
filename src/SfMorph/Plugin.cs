@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.11.19";
+        public const string Version = "0.11.20";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -55,7 +55,8 @@ namespace SfMorph
         internal ConfigEntry<bool> VoiceMuteDialogue;
         internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn, ReactRubSound, VoiceMuteGame, RippleThrust;
         internal ConfigEntry<float> ContactSkirt, ContactBulge, ContactDepth, BendBulge, BendBicepsMm, BendKneeMm, BendCalfMm, BendHipMm, BendBellyFoldMm,
-            RippleAmount, RippleSpeed, RippleWavelength, RippleDamping, RippleImpact, MarksRedness, MarksFade, MarksAo, MarksBoost;
+            RippleAmount, RippleSpeed, RippleWavelength, RippleDamping, RippleImpact, MarksRedness, MarksFade, MarksAo, MarksBoost,
+            MarksPrint, MarksPrintTime, MarksSmooth, MuscleObliques;   // 0.11.20
         internal ConfigEntry<Vector3> LeftHandPos, LeftHandRot, RightHandPos, RightHandRot;
         internal ConfigEntry<string> PanelRect;
         internal ConfigEntry<int> Tab;
@@ -73,8 +74,8 @@ namespace SfMorph
             Apply = Config.Bind("General", "Apply", true, "Apply the body changes (off = the game's own look, for comparing).");
             Physics = Config.Bind("Physics", "SoftZones", true, "Hands and limbs press into her glutes, thighs, belly and breasts (helper bones driven by the game's DynamicBone).");
             Softness = Config.Bind("Physics", "Softness", 0.5f, new ConfigDescription("How much the soft zones give (0 firm, 1 soft).", new AcceptableValueRange<float>(0f, 1f)));
-            Springiness = Config.Bind("Physics", "Springiness", 0.3f, new ConfigDescription("Secondary motion of the soft zones from her own movement (0 none, 1 a lot).", new AcceptableValueRange<float>(0f, 1f)));
-            Quality = Config.Bind("Physics", "Quality", 1, new ConfigDescription("Soft zones: 0 Performance (few points), 1 Balanced (dense points), 2 Fidelity (dense points + smoothed, subdivided body mesh).", new AcceptableValueRange<int>(0, 2)));
+            Springiness = Config.Bind("Physics", "Springiness", 0.45f, new ConfigDescription("Secondary motion of the soft zones from her own movement (0 none, 1 a lot).", new AcceptableValueRange<float>(0f, 1f)));
+            Quality = Config.Bind("Physics", "Quality", 2, new ConfigDescription("Soft zones: 0 Performance (few points), 1 Balanced (dense points), 2 Fidelity (dense points + smoothed, subdivided body mesh).", new AcceptableValueRange<int>(0, 2)));
             OverlapAmount = Config.Bind("Motion", "Overlap", 0.3f, new ConfigDescription("Secondary motion: her limbs, head and spine trail the animation a little (0 off).", new AcceptableValueRange<float>(0f, 1f)));
             OverlapStrength = Config.Bind("Motion", "Strength", 1f, new ConfigDescription("Multiplies the secondary motion on top of Overlap (1 = as designed, up to 4x: bigger trailing and swings; the springs themselves don't change, so it stays stable).", new AcceptableValueRange<float>(1f, 4f)));
             OverlapArms = Config.Bind("Motion", "Arms", 1f, new ConfigDescription("Overlap amount on the arms.", new AcceptableValueRange<float>(0f, 1f)));
@@ -108,6 +109,10 @@ namespace SfMorph
             MarksFade = Config.Bind("Physics", "MarksFade", 15f, new ConfigDescription("Seconds for redness to fade to a third.", new AcceptableValueRange<float>(3f, 60f)));
             MarksBoost = Config.Bind("Physics", "MarksBoost", 1f, new ConfigDescription("Multiplies how fast marks build up, how red they get and how much a press darkens the skin (1 = as designed).", new AcceptableValueRange<float>(1f, 4f)));
             MarksAo = Config.Bind("Physics", "MarksAo", 0.5f, new ConfigDescription("How much a live press darkens the skin (pressed-flesh shading).", new AcceptableValueRange<float>(0f, 1f)));
+            // 0.11.20 (user: the print a hand leaves is polygonal and stays too long, and nothing sets it)
+            MarksPrint = Config.Bind("Physics", "MarksPrint", 0.6f, new ConfigDescription("How deep the print a lifted hand leaves shows (its shading and paleness), as a share of how deep the hand pressed (0 none, 1 the full depth).", new AcceptableValueRange<float>(0f, 1.5f)));
+            MarksPrintTime = Config.Bind("Physics", "MarksPrintTime", 0.8f, new ConfigDescription("Seconds for a hand's print to fade to a third (it was a fixed 1.5 s).", new AcceptableValueRange<float>(0.2f, 5f)));
+            MarksSmooth = Config.Bind("Physics", "MarksSmooth", 6f, new ConfigDescription("How far the marks are smoothed on her skin (mm): rounds off the pressed shading, the print and the redness so they no longer follow the mesh's triangles (0 = off, the 0.11.19 look).", new AcceptableValueRange<float>(0f, 15f)));
             GateHidden = Config.Bind("Physics", "GateHidden", true, "Hands that aren't drawn (a hidden partner, controller models replaced by the physics hands) don't touch her.");
             BreastColliders = Config.Bind("Physics", "BreastColliders", 1, new ConfigDescription("Hands push the game's own breast physics: 0 off, 1 the main breast chains, 2 every breast DynamicBone.", new AcceptableValueRange<int>(0, 2)));
             OverlapRipple = Config.Bind("Motion", "Ripple", 0.5f, new ConfigDescription("Motion travels down the chains: a fast turn of the torso swings the head and arms a little later (0 off).", new AcceptableValueRange<float>(0f, 1f)));
@@ -156,6 +161,7 @@ namespace SfMorph
             MuscleCoreMm = Config.Bind("Muscles", "CoreMm", 3f, new ConfigDescription("Bulge of a fully active abs / obliques / serratus muscle at the area's highest sculpted belly (mm, before Flex; the sculpt keeps the other bellies and grooves in proportion).", new AcceptableValueRange<float>(0f, 20f)));
             MuscleBackMm = Config.Bind("Muscles", "BackMm", 4f, new ConfigDescription("Bulge of the fully active spinal erectors / lats (mm, before Flex).", new AcceptableValueRange<float>(0f, 20f)));
             MuscleLegsMm = Config.Bind("Muscles", "LegsMm", 4f, new ConfigDescription("Bulge of the fully active glutes / quads / hamstrings / adductors / calves (mm, before Flex).", new AcceptableValueRange<float>(0f, 20f)));
+            MuscleObliques = Config.Bind("Muscles", "Obliques", 0.6f, new ConfigDescription("The obliques (the pads over her hip bones and the waist's sides) against the rest of the core: scales their relief, groove shade and bulge (Core mm x this; 0 off, 1 as strong as the abs).", new AcceptableValueRange<float>(0f, 1.5f)));
             MuscleArmsMm = Config.Bind("Muscles", "ArmsMm", 4f, new ConfigDescription("Bulge of the fully active deltoids / biceps / triceps / forearms (mm, before Flex; the biceps also gets the elbow's bend bulge).", new AcceptableValueRange<float>(0f, 20f)));
             MuscleFirmness = Config.Bind("Muscles", "Firmness", 0.5f, new ConfigDescription("A tensed muscle is firmer under a hand: its soft depth x (1 - Firmness x activation), for the dent and the physics hands' resistance (0 off).", new AcceptableValueRange<float>(0f, 0.9f)));
             EmbodyOn = Config.Bind("Embody", "On", false, "See through the partner's eyes (VR), his head hidden, his hands on your controllers.");

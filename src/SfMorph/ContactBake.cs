@@ -17,8 +17,11 @@ namespace SfMorph
         public float Ripple = 1f, RippleSpeed = 0.5f, RippleWavelength = 0.1f, RippleDamping = 0.6f, RippleImpact = 0.35f;
         // 0.11.8 tensed muscles as geometry ([Muscles] Flex, the per-area bulge in mm at full activation; Firmness is MuscleFlex.Firm)
         public float Flex = 1f, CoreMm = 3f, BackMm = 4f, LegsMm = 4f, ArmsMm = 4f;
+        public float Obliques = 0.6f;   // 0.11.20: the obliques' share of CoreMm (and of their relief)
         public bool Marks = true;
         public float Redness = 0.5f, MarkFade = 15f, MarkGain = 0.6f, Ao = 0.5f, MarkBoost = 1f;
+        // 0.11.20: the lingering print's depth share and time constant (s), and the marks' blur on her skin (m, sigma)
+        public float Print = 1f, PrintTime = 0.8f, MarkSmooth = 0.006f;
     }
 
     // 0.8.0: what GpuContact's v2 field chain needs per renderer, baked on the CPU once per soft-zones build (design 1.2): welded vertices,

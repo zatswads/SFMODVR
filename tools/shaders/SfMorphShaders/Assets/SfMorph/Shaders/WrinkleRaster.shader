@@ -190,7 +190,11 @@ Shader "SfMorph/WrinkleRaster"
             float a = MuscleAct(uv);
             if (a <= 0.0) return float4(0, 0, 0, 0);
             float4 d = _MDetail.SampleLevel(sampler_MDetail, uv, 0);
-            return float4((d.rg * 2.0 - 1.0) * _MSlopeMax * a * _MStrength, d.b * a, a);
+            float2 s = (d.rg * 2.0 - 1.0) * _MSlopeMax * a * _MStrength;
+            // 0.11.20 (user: at Strength 2 the muscles look like tumours): the slope eases toward ~0.9 instead of doubling, so a high Strength
+            // deepens the gentle relief (more definition) while the steep belly flanks stop reading as round lumps
+            s *= rsqrt(1.0 + dot(s, s) / 0.81);
+            return float4(s, d.b * a, a);
         }
 
         // the muscle debug view: activation (1, green -> red) or the muscles in their own colours (2), over the authored coverage

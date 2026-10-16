@@ -127,7 +127,7 @@ namespace SfMorph
             public Material Mat;
             public string Name, AlbedoProp, NormalProp;
             public Texture AlbedoBase, AlbedoOrig, NormalBase, NormalOrig;   // the textures under ours (the game's, or Morph's baked ones); Orig = hers
-            public RenderTexture MarksRT, AlbedoRT, NormalRT;
+            public RenderTexture MarksRT, AlbedoRT, NormalRT, BlurRT;   // BlurRT: 0.11.20 the blur's first axis
             public bool Built, Dirty, AlbedoHeld, ViaWrinkles, AlbedoViaWrinkles, LoggedProps;
             public float RetryAt, NextAlbedoTry;
             public float Mpu = 1f;                      // metres per UV (vertex-weighted mean over the renderers)
@@ -135,7 +135,7 @@ namespace SfMorph
             public Texture LastNormalFor;
             public string Note = "";
             public readonly List<Rend> Rends = new List<Rend>();
-            public readonly MaterialPropertyBlock MpbA = new MaterialPropertyBlock(), MpbN = new MaterialPropertyBlock();
+            public readonly MaterialPropertyBlock MpbA = new MaterialPropertyBlock(), MpbN = new MaterialPropertyBlock(), MpbH = new MaterialPropertyBlock(), MpbV = new MaterialPropertyBlock();
         }
 
         static readonly string[] NormalProps = { "_NormalMap", "_BumpMap" };
@@ -152,7 +152,7 @@ namespace SfMorph
             PRedness = Shader.PropertyToID("_Redness"), PAo = Shader.PropertyToID("_Ao"), PMarksScale = Shader.PropertyToID("_MarksScale"),
             PBaseAlbedo = Shader.PropertyToID("_BaseAlbedo"), PBaseNormal = Shader.PropertyToID("_BaseNormal"), PMarksTex = Shader.PropertyToID("_MarksTex"),
             PMarksTexel = Shader.PropertyToID("_MarksTexel"), PTris = Shader.PropertyToID("_Tris"), PUv = Shader.PropertyToID("_Uv"),
-            PCanon = Shader.PropertyToID("_Canon"), PMarkBuf = Shader.PropertyToID("_MarkBuf");
+            PCanon = Shader.PropertyToID("_Canon"), PMarkBuf = Shader.PropertyToID("_MarkBuf"), PBlurDir = Shader.PropertyToID("_BlurDir");
 
         const int MaxRT = 2048;
 
@@ -601,6 +601,7 @@ namespace SfMorph
             if (sizeSrc != null) { mw = sizeSrc.width; mh = sizeSrc.height; }
             Fit(ref mw, ref mh, MaxRT);
             sh.MarksRT = MakeRT("SfMorph marks " + sh.Name, mw, mh, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear, false, null);
+            if (_mat.passCount >= 5) sh.BlurRT = MakeRT("SfMorph marks blur " + sh.Name, mw, mh, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear, false, null);
             if (aSlot != null)
             {
                 int w = aSlot.width, h = aSlot.height;
@@ -789,6 +790,7 @@ namespace SfMorph
             }
             catch (Exception e) { Plugin.Log.LogWarning("Skin marks: restoring '" + sh.Name + "' failed: " + e.Message); }
             DestroyRT(ref sh.MarksRT);
+            DestroyRT(ref sh.BlurRT);
             DestroyRT(ref sh.AlbedoRT);
             DestroyRT(ref sh.NormalRT);
             sh.Built = false;
@@ -873,6 +875,23 @@ namespace SfMorph
             }
             var texel = new Vector4(1f / sh.MarksRT.width, 1f / sh.MarksRT.height, 0f, 0f);
             float scale = sh.Mpu > 1e-4f ? 1f / sh.Mpu : 1f;
+            // 0.11.20 (user: the dent shading and the hand print are polygonal): the per-vertex marks are linear over each triangle; a Gaussian
+            // of [Physics] MarksSmooth (mm on her skin, through the sheet's metres per UV) rounds them off before anything composes them
+            if (sh.BlurRT != null && _set.MarkSmooth > 0.0005f && sh.Mpu > 1e-4f)
+            {
+                if (!sh.BlurRT.IsCreated()) sh.BlurRT.Create();
+                float sigTex = _set.MarkSmooth * sh.MarksRT.width / sh.Mpu;          // sigma in texels (u; the atlases are square)
+                float step = Mathf.Max(1f, Mathf.Ceil(3f * sigTex / 24f));          // at most 24 taps a side: wider blurs take longer steps
+                float taps = Mathf.Min(24f, Mathf.Ceil(3f * sigTex / step));
+                sh.MpbH.SetTexture(PMarksTex, sh.MarksRT);
+                sh.MpbH.SetVector(PBlurDir, new Vector4(step / sh.MarksRT.width, 0f, sigTex / step, taps));
+                cmd.SetRenderTarget(sh.BlurRT);
+                cmd.DrawProcedural(Matrix4x4.identity, _mat, 4, MeshTopology.Triangles, 3, 1, sh.MpbH);
+                sh.MpbV.SetTexture(PMarksTex, sh.BlurRT);
+                sh.MpbV.SetVector(PBlurDir, new Vector4(0f, step / sh.MarksRT.height, sigTex / step, taps));
+                cmd.SetRenderTarget(sh.MarksRT);
+                cmd.DrawProcedural(Matrix4x4.identity, _mat, 4, MeshTopology.Triangles, 3, 1, sh.MpbV);
+            }
             if (sh.AlbedoRT != null)
             {
                 var m = sh.MpbA;

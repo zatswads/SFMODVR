@@ -107,13 +107,14 @@ class Bulge:
 class Groove:
     """The furrow between muscles along a polyline of (s, phi deg): h = -depth x taper x exp(-(d/w)^2), d = the distance in (s, arc)."""
 
-    def __init__(self, seg, pts, depth_mm, width_mm, taper=(1, 1), segs=None):
+    def __init__(self, seg, pts, depth_mm, width_mm, taper=(1, 1), segs=None, shade=1.0):
         self.seg = seg
         self.p = np.array([(s, math.radians(f)) for s, f in pts], np.float64)
         self.d = depth_mm * 0.001
         self.w = width_mm * 0.001 * (1.0 if seg == 'torso' else LIMB_WIDTH)
         self.taper = taper
         self.segs = segs
+        self.shade = shade      # 0.11.20: share of the groove shade this groove darkens (1 = by its depth)
 
 
 class Belly:
@@ -249,8 +250,10 @@ def muscles(sk, navel_s, log):
         prims[r].append(Belly(T, [(0.04, 58 * sgn, 28), (0.075, 67 * sgn, 40), (0.125, 75 * sgn, 40), (0.19, 75 * sgn, 28)], 6.8, flat=2.3, end=0.55,
                               segs=(T, 'thighL', 'thighR')))  # flank pad
         prims[r].append(Belly(T, [(0.06, 42 * sgn, 13), (0.13, 46 * sgn, 17), (0.20, 50 * sgn, 13)], 1.6, flat=2.0))   # front sheet to the semilunaris
-        prims[r].append(Groove(T, [(0.07, 74 * sgn), (0.04, 61 * sgn), (0.005, 46 * sgn), (-0.03, 31 * sgn), (-0.065, 17 * sgn)], 2.8, 12.0,
-                               taper=(1, 1), segs=(T, 'thighL', 'thighR')))      # adonis belt (inguinal line)
+        # 0.11.20 (user: dark seams around the pelvis): 2.8 mm saturated the groove shade (full at 1.5 mm) into a dark band from the hip bone
+        # to the pubis that ended hard at the genital mesh; shallower, and it shades at half its depth
+        prims[r].append(Groove(T, [(0.07, 74 * sgn), (0.04, 61 * sgn), (0.005, 46 * sgn), (-0.03, 31 * sgn), (-0.065, 17 * sgn)], 1.9, 12.0,
+                               taper=(1, 1), segs=(T, 'thighL', 'thighR'), shade=0.45))      # adonis belt (inguinal line)
         r = reg('serratus_' + sd, 'core', sd)
         for k in range(4):
             s0 = 0.205 + 0.026 * k
@@ -384,7 +387,32 @@ def find_navel(surf, segs, log):
 # ---------------------------------------------------------------- evaluation
 
 
-def evaluate(surf, X, N, t, segs, regions, prims, excl, log):
+OVERLAY_FADE = (0.004, 0.035)   # 0.11.20: metres from a genital / nipple overlay mesh: no relief within the first, full beyond the second
+
+
+def overlay_keep(X, overlays, log):
+    """0.11.20 (user: dark seams around the pelvis; the game swaps genital and nipple meshes): the overlay meshes drawn on her body atlas
+    (pussy_type*, *nipple_type*) carry no relief, so the body's relief ended hard at their rim. It fades out towards them instead. All the
+    game's genital variants share one topology and footprint (2089 vertices, the same extent), so the one in the export stands for all."""
+    keep = np.ones(len(X))
+    a, b = OVERLAY_FADE
+    for name, P in overlays:
+        lo, hi = P.min(0) - b, P.max(0) + b
+        ii = np.nonzero(np.all((X >= lo) & (X <= hi), axis=1))[0]
+        if len(ii) == 0:
+            continue
+        Q = P[::max(1, len(P) // 3000)]
+        d = np.empty(len(ii))
+        for c in range(0, len(ii), 2048):
+            j = ii[c:c + 2048]
+            d[c:c + len(j)] = np.sqrt(((X[j, None, :] - Q[None, :, :]) ** 2).sum(2)).min(1)
+        x = np.clip((d - a) / (b - a), 0, 1)
+        keep[ii] *= x * x * (3 - 2 * x)
+        log('overlay %s: relief faded on %d texels (none within %.0f mm, full beyond %.0f mm)' % (name, int((x < 1).sum()), a * 1000, b * 1000))
+    return keep
+
+
+def evaluate(surf, X, N, t, segs, regions, prims, excl, log, overlays=()):
     M = len(X)
     names = [k for k in segs.keys() if not segs[k].frame_only]
     md = np.stack([segs[k].member_dist(X) for k in names], 1)
@@ -396,7 +424,7 @@ def evaluate(surf, X, N, t, segs, regions, prims, excl, log):
             cache[k] = segs[k].coords(X)
         return cache[k]
 
-    keep = np.ones(M)
+    keep = overlay_keep(X, overlays, log)
     for ec, er in excl:
         keep *= np.clip((np.linalg.norm(X - ec, axis=1) - er) / 0.015, 0, 1)
     G = np.zeros((M, 3))
@@ -488,7 +516,7 @@ def evaluate(surf, X, N, t, segs, regions, prims, excl, log):
                 gs, ga = -bvec[:, 0] * inv * dd, -bvec[:, 1] * inv * dd
                 grad = gs[:, None] * sg.axis[None] + ga[:, None] * e[ii]
                 env = g * pr.d / 0.001
-                shade[ii] += -h / SHADE_DEPTH
+                shade[ii] += -h / SHADE_DEPTH * pr.shade
             nn = N[ii]
             grad = grad - (grad * nn).sum(1)[:, None] * nn
             if pooled:
@@ -517,7 +545,7 @@ def evaluate(surf, X, N, t, segs, regions, prims, excl, log):
     return dict(G=G, H=H, sx=sx, sy=sy, shade=np.clip(shade, 0, 1), id1=order[:, 0], id2=order[:, 1], w1=w1, w2=w2, tot=tot, member=member)
 
 
-def build(name, surf, sk, n, nreg, log, preview_dir=None, colour=None):
+def build(name, surf, sk, n, nreg, log, preview_dir=None, colour=None, overlays=()):
     log('%s: %d triangles, rasterising %dx%d' % (name, len(surf.f), n, n))
     tri, bary = surf.raster(n)
     cov = tri >= 0
@@ -539,7 +567,7 @@ def build(name, surf, sk, n, nreg, log, preview_dir=None, colour=None):
     # genitals: a sphere below the pubis, between the thighs
     root = P('Root_M')
     excl.append((root + np.array([0, -0.08, 0.035]), 0.045))
-    ev = evaluate(surf, X, N, t, segs, regions, prims, excl, log)
+    ev = evaluate(surf, X, N, t, segs, regions, prims, excl, log, overlays)
     sx, sy = ev['sx'], ev['sy']
     smax = np.abs(np.concatenate([sx, sy])).max()
     log('%s: slope max %.3f (encoded up to %.2f), groove shade max %.2f' % (name, smax, SLOPE_MAX, ev['shade'].max()))
@@ -762,13 +790,20 @@ def main():
         log('body: none of her body meshes in the export')
         sys.exit(1)
     surf = wr.Surf(parts)
+    # 0.11.20: the overlay meshes on her body atlas (the worn genital and nipple variants): the relief fades out towards them
+    overlays = []
+    for m in meshes:
+        nm = m.name.replace(' (SfSoft)', '')
+        if (nm.startswith('pussy_') or 'nipple_type' in nm) and 'reika_body' in m.groups and m.active:
+            overlays.append((nm, np.asarray(m.v, np.float64)))
+    log('overlays: ' + (', '.join(o[0] for o in overlays) if overlays else 'none in the export'))
     col = None
     if preview:
         for f in os.listdir(d):
             if f.lower() == 'reika_body_colormap.png':
                 col = wr.read_png_rgb(os.path.join(d, f))
     n, nreg = 2048, 1024
-    det, reg, hgt, regions = build('body', surf, sk, n, nreg, log, PREVIEW if preview else None, col)
+    det, reg, hgt, regions = build('body', surf, sk, n, nreg, log, PREVIEW if preview else None, col, overlays)
     os.makedirs(OUT, exist_ok=True)
     wr.write_png(os.path.join(OUT, 'muscle_body_detail.png'), wr.to_u8(det))
     wr.write_png(os.path.join(OUT, 'muscle_body_region.png'), reg)

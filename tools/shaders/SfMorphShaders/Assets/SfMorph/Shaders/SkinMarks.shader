@@ -9,6 +9,7 @@
 //                          the base normal -> the sheet's normal RT (only when SkinMarks owns the normal slot; with Wrinkles owning it,
 //                          WrinkleRaster pass 1 does the same blend).
 //   Pass 3  self-test    : the same _FlipY self-test as WrinkleRaster (the uv -> clip mapping of every pass must agree with texture sampling).
+//   Pass 4  blur         : (0.11.20) one axis of a coverage-weighted Gaussian over the marks RT, run twice after pass 0 (marks -> temp -> marks).
 // Normal encoding: R = x, G = y, B = z (all *0.5+0.5), A = 1 -> HDRP's RGorAG unpack takes x from R when A == 1; decode here accepts
 // R/G or A/G (xy = (R*A, G)*2-1), exactly like WrinkleRaster.
 Shader "SfMorph/SkinMarks"
@@ -198,6 +199,43 @@ Shader "SfMorph/SkinMarks"
             {
                 if (_TestMode < 0.5) return float4(i.uv.x, i.uv.y, 0.0, 1.0);        // mode 0: a UV gradient through the mapping under test
                 return _Test.SampleLevel(sampler_Test, float2(0.5, 0.25), 0);        // mode 1: read it back where v = 0.25
+            }
+            ENDHLSL
+        }
+
+        // ---- pass 4: blur (0.11.20) ----
+        // The marks are per-vertex values interpolated linearly over each triangle, so the pressed darkening and the lingering print followed
+        // the triangles (a print like a footprint in snow; its slope, a central difference, was constant per triangle). One axis of a separable
+        // Gaussian per draw (sized in mm on her skin by SkinMarks), weighted by coverage so the empty gutters between UV islands don't bleed in;
+        // gutter texels stay empty (SampleMarks dilates into them).
+        Pass
+        {
+            Name "Blur"
+            Blend Off
+            HLSLPROGRAM
+            #pragma vertex FullscreenVert
+            #pragma fragment frag
+
+            float4 _BlurDir;   // xy = one tap's step in uv along the blur axis, z = sigma in taps, w = taps on each side (<= 24)
+
+            float4 frag(FsIn i) : SV_Target
+            {
+                float4 c0 = _MarksTex.SampleLevel(sampler_MarksTex, i.uv, 0);
+                if (c0.w < 1e-3) return c0;
+                float s = max(_BlurDir.z, 1e-3);
+                int r = (int)_BlurDir.w;
+                float3 acc = c0.xyz * c0.w;
+                float wsum = c0.w;
+                [loop] for (int k = 1; k <= 24; k++)
+                {
+                    if (k > r) break;
+                    float g = exp(-0.5 * (float)(k * k) / (s * s));
+                    float4 a = _MarksTex.SampleLevel(sampler_MarksTex, i.uv + _BlurDir.xy * k, 0);
+                    float4 b = _MarksTex.SampleLevel(sampler_MarksTex, i.uv - _BlurDir.xy * k, 0);
+                    acc += (a.xyz * a.w + b.xyz * b.w) * g;
+                    wsum += (a.w + b.w) * g;
+                }
+                return float4(acc / max(wsum, 1e-6), c0.w);
             }
             ENDHLSL
         }

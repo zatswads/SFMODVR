@@ -1,28 +1,31 @@
 export: E:/Bak/New folder/Misc/SF/VR/BepInEx/config/SfMorphs/export/Reika-20261016-023017
+overlays: reika_nipple_type_1, pussy_typeC_normal
 body: 180112 triangles, rasterising 2048x2048
 body: 59.1% of the texels on her skin
 navel: s 0.120 m above Root_M (y 0.971), 7.6 mm deep
 muscles: 131 primitives in 30 regions (navel at s 0.120 m above Root_M)
+overlay reika_nipple_type_1: relief faded on 29028 texels (none within 4 mm, full beyond 35 mm)
+overlay pussy_typeC_normal: relief faded on 25733 texels (none within 4 mm, full beyond 35 mm)
 body: slope max 0.362 (encoded up to 0.60), groove shade max 1.00
-body: height -2.80 to 6.80 mm (encoded +-16 mm)
-  muscle  1 abs           core C:  106538 texels, height up to 2.8 mm
-  muscle  2 obliques_L    core L:   55806 texels, height up to 6.8 mm
+body: height -2.60 to 6.80 mm (encoded +-16 mm)
+  muscle  1 abs           core C:  106200 texels, height up to 2.8 mm
+  muscle  2 obliques_L    core L:   54555 texels, height up to 6.8 mm
   muscle  3 serratus_L    core L:    5342 texels, height up to 1.8 mm
-  muscle  4 obliques_R    core R:   54848 texels, height up to 6.8 mm
+  muscle  4 obliques_R    core R:   53638 texels, height up to 6.8 mm
   muscle  5 serratus_R    core R:    5320 texels, height up to 1.8 mm
   muscle  6 ribcage       core C:   28402 texels, height up to 0.4 mm
   muscle  7 back          back C:  112120 texels, height up to 3.4 mm
   muscle  8 lats_L        back L:  166476 texels, height up to 4.4 mm
   muscle  9 lats_R        back R:  166044 texels, height up to 4.4 mm
-  muscle 10 glutes_L      legs L:   23838 texels, height up to 3.3 mm
+  muscle 10 glutes_L      legs L:   23522 texels, height up to 3.3 mm
   muscle 11 quads_L       legs L:   31679 texels, height up to 4.6 mm
   muscle 12 hams_L        legs L:   20429 texels, height up to 3.6 mm
-  muscle 13 adductors_L   legs L:    8107 texels, height up to 2.2 mm
+  muscle 13 adductors_L   legs L:    8106 texels, height up to 2.2 mm
   muscle 14 calves_L      legs L:   34349 texels, height up to 6.0 mm
-  muscle 15 glutes_R      legs R:   22941 texels, height up to 3.3 mm
-  muscle 16 quads_R       legs R:   29663 texels, height up to 4.6 mm
+  muscle 15 glutes_R      legs R:   22637 texels, height up to 3.3 mm
+  muscle 16 quads_R       legs R:   29665 texels, height up to 4.6 mm
   muscle 17 hams_R        legs R:   21017 texels, height up to 3.6 mm
-  muscle 18 adductors_R   legs R:    7606 texels, height up to 2.2 mm
+  muscle 18 adductors_R   legs R:    7603 texels, height up to 2.2 mm
   muscle 19 calves_R      legs R:   34440 texels, height up to 6.0 mm
   muscle 20 deltoids_L    arms L:   29391 texels, height up to 4.2 mm
   muscle 21 biceps_L      arms L:   11587 texels, height up to 4.0 mm
@@ -35,4 +38,4 @@ body: height -2.80 to 6.80 mm (encoded +-16 mm)
   muscle 28 pecs_L        arms L:   31935 texels, height up to 3.2 mm
   muscle 29 pecs_R        arms R:   31780 texels, height up to 3.2 mm
   muscle 30 traps         back C:  123307 texels, height up to 3.6 mm
-preview: C:\Users\rings\Claude\Projects\Modding\SFMODVR\.claude\worktrees\intelligent-chatterjee-957e22\tools\muscles\preview
+preview: C:\Users\rings\Claude\Projects\Modding\SFMODVR\.claude\worktrees\reverent-edison-b49311\tools\muscles\preview

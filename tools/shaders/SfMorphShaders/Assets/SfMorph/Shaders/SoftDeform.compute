@@ -191,6 +191,7 @@ StructuredBuffer<float4> _ParentGrad;// ApplyMap: the body renderer's _Grad of t
 uint _WaveCount, _TanOff, _NoField, _MarkOn, _ParentOn, _OwnOn, _CountHits;
 float _SoftScale, _Depth;            // Tissue.SoftScale(softness), ContactSettings.Depth: cap = (hard + soft x _SoftScale) x _Depth
 float _SkirtLen, _Bulge, _BulgeCap, _NormalBend, _Dt, _MarkGain, _MarkFade, _DentFade, _WaveAmt;
+float _PrintAmt;   // 0.11.20: share of the foreign press depth that stays as the lingering print (m.z)
 float _WaveImpact;                   // 0.9.7: the wave's share at the impact point (1 = full dip there; the rings beyond one wavelength keep A)
 float4 _BendAmt0, _BendAmt1, _BendAmt2;   // 9 slot amplitudes (m): [0..3], [4..7], [8]
 float4 _Disc;                        // MarkDisc: xyz world centre, w radius (m)
@@ -415,7 +416,7 @@ void Compose(uint3 id : SV_DispatchThreadID)
         float4 m = _Marks[v];
         m.x = min(1.0, m.x * exp(-_Dt / _MarkFade) + _Dt * _MarkGain * drive);
         m.y = max(cap > 1e-6 ? saturate(fo.y / cap) : 0.0, SelfShade * pressure);
-        m.z = max(m.z * exp(-_Dt / _DentFade), fo.y);
+        m.z = max(m.z * exp(-_Dt / _DentFade), fo.y * _PrintAmt);   // 0.11.20: [Physics] MarksPrint scales the print, MarksPrintTime sets _DentFade
         _Marks[v] = m;
     }
 }

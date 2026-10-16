@@ -218,7 +218,7 @@ namespace SfMorph
             // 0.10.0 muscles: the layer of this sheet's layout (null: none), tension from her pose, faded activation, what the last raster had
             public MuscleLayer Muscle;
             public readonly float[] MTension = new float[MaxRegions], MAct = new float[MaxRegions], MActSent = new float[MaxRegions], MPeak = new float[MaxRegions];
-            public float MLastAt, MLastDirty, MStrengthApplied = -1f, MShadeApplied = -1f;
+            public float MLastAt, MLastDirty, MStrengthApplied = -1f, MShadeApplied = -1f, MObliquesApplied = -1f;
             public int MDebugApplied = -1;
             public bool MOnApplied;
         }
@@ -706,7 +706,9 @@ namespace SfMorph
             var M = sh.Muscle;
             var ms = _s.Muscles;
             bool mOn = M != null && ms.On;
-            for (int k = 0; k < MaxRegions; k++) sh.MActSent[k] = mOn && !initial && k < M.Count ? sh.MAct[k] : 0f;
+            // 0.11.20: the obliques' relief and shade x [Muscles] Obliques (the shader scales both by the activation it is sent; MAct itself stays
+            // the real activation, which the geometry and the firmness use)
+            for (int k = 0; k < MaxRegions; k++) sh.MActSent[k] = mOn && !initial && k < M.Count ? sh.MAct[k] * (M.MuscleName[k].StartsWith("obliques", StringComparison.Ordinal) ? MusclePose.ObliquesFactor(ms.Obliques, M.Side[k]) : 1f) : 0f;
             sh.Mpb.SetFloat(PMOn, mOn ? 1f : 0f);
             sh.Mpb.SetFloatArray(PMAct, sh.MActSent);
             sh.Mpb.SetTexture(PMDetail, mOn ? (Texture)M.Detail : Texture2D.blackTexture);
@@ -718,7 +720,7 @@ namespace SfMorph
             sh.Mpb.SetFloat(PMDebug, mOn ? ms.Debug : 0f);
             sh.MOnApplied = mOn;
             sh.MStrengthApplied = ms.Strength;
-            sh.MShadeApplied = ms.Shade;
+            sh.MShadeApplied = ms.Shade; sh.MObliquesApplied = ms.Obliques;
             sh.MDebugApplied = ms.Debug;
             cmd.SetRenderTarget(sh.Normal);
             cmd.DrawProcedural(Matrix4x4.identity, _mat, BlendPass, MeshTopology.Triangles, 3, 1, sh.Mpb);
@@ -1272,7 +1274,7 @@ namespace SfMorph
                 if (sh.Albedo != null && sh.DebugApplied != sh.DebugMode) sh.Dirty = true;
                 var ms = s.Muscles;
                 bool mOn = sh.Muscle != null && ms.On;
-                if (mOn != sh.MOnApplied || (mOn && (Mathf.Abs(sh.MStrengthApplied - ms.Strength) > 0.001f || Mathf.Abs(sh.MShadeApplied - ms.Shade) > 0.001f || sh.MDebugApplied != ms.Debug))) sh.Dirty = true;
+                if (mOn != sh.MOnApplied || (mOn && (Mathf.Abs(sh.MStrengthApplied - ms.Strength) > 0.001f || Mathf.Abs(sh.MShadeApplied - ms.Shade) > 0.001f || Mathf.Abs(sh.MObliquesApplied - ms.Obliques) > 0.001f || sh.MDebugApplied != ms.Debug))) sh.Dirty = true;
             }
         }
 
@@ -1297,6 +1299,7 @@ namespace SfMorph
                 float tens = posed ? sh.MTension[k] : 0f;
                 if (tens > sh.MPeak[k]) sh.MPeak[k] = tens;
                 float target = on ? fit + (1f - fit) * Mathf.Clamp01(ms.Gain * tens) : 0f;
+                target *= MusclePose.PregnancyScale(M.MuscleName[k]);   // 0.11.20: no abs on a pregnant belly
                 float a = sh.MAct[k];
                 a = dt == 0f ? target : a + (target - a) * (target > a ? ka : kr);    // first frame: straight to the target
                 sh.MAct[k] = a;

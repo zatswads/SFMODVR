@@ -741,10 +741,11 @@ namespace SfMorph
             s.SelfContact = _p.SelfContact.Value; s.PartnerBody = _p.PartnerBody.Value;
             s.BendAmount = _p.BendBulge.Value; s.BicepsMm = _p.BendBicepsMm.Value; s.KneeMm = _p.BendKneeMm.Value; s.CalfMm = _p.BendCalfMm.Value;
             s.HipMm = _p.BendHipMm.Value; s.BellyFoldMm = _p.BendBellyFoldMm.Value;
-            s.Flex = _p.MuscleFlexAmt.Value; s.CoreMm = _p.MuscleCoreMm.Value; s.BackMm = _p.MuscleBackMm.Value; s.LegsMm = _p.MuscleLegsMm.Value; s.ArmsMm = _p.MuscleArmsMm.Value;
+            s.Flex = _p.MuscleFlexAmt.Value; s.CoreMm = _p.MuscleCoreMm.Value; s.BackMm = _p.MuscleBackMm.Value; s.LegsMm = _p.MuscleLegsMm.Value; s.ArmsMm = _p.MuscleArmsMm.Value; s.Obliques = _p.MuscleObliques.Value;
             MuscleFlex.Firm = _p.MuscleOn.Value ? _p.MuscleFirmness.Value : 0f;   // 0.11.8 (the activations stop being published with the muscles off anyway)
             s.Ripple = _p.RippleAmount.Value; s.RippleSpeed = _p.RippleSpeed.Value; s.RippleImpact = _p.RippleImpact.Value; s.RippleWavelength = _p.RippleWavelength.Value; s.RippleDamping = _p.RippleDamping.Value;
             s.Marks = _p.SkinMarksOn.Value; s.MarkFade = _p.MarksFade.Value;
+            s.Print = _p.MarksPrint.Value; s.PrintTime = _p.MarksPrintTime.Value; s.MarkSmooth = _p.MarksSmooth.Value / 1000f;   // 0.11.20
             // 0.8.9 (user: marks too subtle): the boost multiplies the build-up, the redness (saturates sooner) and the pressed darkening (capped so
             // the shade never passes 0.3 of the albedo)
             float boost = Mathf.Clamp(_p.MarksBoost.Value, 1f, 4f);
@@ -809,7 +810,7 @@ namespace SfMorph
                 var s = _wset;
                 s.On = _p.WrinkOn.Value;
                 var m = s.Muscles;
-                m.On = _p.MuscleOn.Value; m.Fitness = _p.MuscleFitness.Value; m.Gain = _p.MuscleGain.Value; m.Strength = _p.MuscleStrength.Value; m.Shade = _p.MuscleShade.Value;
+                m.On = _p.MuscleOn.Value; m.Fitness = _p.MuscleFitness.Value; m.Gain = _p.MuscleGain.Value; m.Strength = _p.MuscleStrength.Value; m.Shade = _p.MuscleShade.Value; m.Obliques = _p.MuscleObliques.Value;
                 m.Core = _p.MuscleCore.Value; m.Back = _p.MuscleBack.Value; m.Legs = _p.MuscleLegs.Value; m.Arms = _p.MuscleArms.Value;
                 m.Debug = _p.MuscleDebug.Value; m.Attack = _p.MuscleAttack.Value; m.Release = _p.MuscleRelease.Value;
                 s.Face = _p.WrinkFace.Value; s.Neck = _p.WrinkNeck.Value; s.BodyOn = _p.WrinkBody.Value;

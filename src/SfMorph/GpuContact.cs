@@ -104,7 +104,7 @@ namespace SfMorph
             PWaves = Shader.PropertyToID("_Waves"), PWaveCount = Shader.PropertyToID("_WaveCount"), PNoField = Shader.PropertyToID("_NoField"), PMarkOn = Shader.PropertyToID("_MarkOn"),
             PSoftScale = Shader.PropertyToID("_SoftScale"), PDepth = Shader.PropertyToID("_Depth"), PSkirt = Shader.PropertyToID("_SkirtLen"), PBulge = Shader.PropertyToID("_Bulge"),
             PBulgeCap = Shader.PropertyToID("_BulgeCap"), PNormalBend = Shader.PropertyToID("_NormalBend"), PDt = Shader.PropertyToID("_Dt"), PMarkGain = Shader.PropertyToID("_MarkGain"),
-            PMarkFade = Shader.PropertyToID("_MarkFade"), PDentFade = Shader.PropertyToID("_DentFade"), PWaveAmt = Shader.PropertyToID("_WaveAmt"),
+            PMarkFade = Shader.PropertyToID("_MarkFade"), PDentFade = Shader.PropertyToID("_DentFade"), PPrintAmt = Shader.PropertyToID("_PrintAmt"), PWaveAmt = Shader.PropertyToID("_WaveAmt"),
             PBendAmt0 = Shader.PropertyToID("_BendAmt0"), PBendAmt1 = Shader.PropertyToID("_BendAmt1"), PBendAmt2 = Shader.PropertyToID("_BendAmt2"),
             PDisc = Shader.PropertyToID("_Disc"), PDiscAmt = Shader.PropertyToID("_DiscAmt"),
             PHits = Shader.PropertyToID("_Hits"), PMap = Shader.PropertyToID("_Map"), PParentGrad = Shader.PropertyToID("_ParentGrad"),
@@ -631,9 +631,11 @@ namespace SfMorph
                     }
                     // one peak per area (the highest belly of core / back / legs / arms): a muscle's own peak made the weight jump wherever
                     // the owning muscle changed (lats 6.6 mm next to obliques 4.0 and erectors 9.4: crinkles down her sides)
+                    // 0.11.20 (user: raising the abs blew the obliques up): the obliques are a group of their own. Their 6.8 mm flank pad was the
+                    // core's peak, so the abs (2.8 mm) reached only 40 % of Core mm and showing them took a Core mm that tripled the pads
                     var areaPeak = new Dictionary<string, float>();
-                    for (int k = 0; k < L.Count; k++) { float ap; areaPeak.TryGetValue(L.Area[k], out ap); areaPeak[L.Area[k]] = Mathf.Max(ap, m.Peak[k]); }
-                    for (int k = 0; k < L.Count; k++) m.Peak[k] = Mathf.Max(areaPeak[L.Area[k]], 0.0005f);
+                    for (int k = 0; k < L.Count; k++) { string g = FlexGroup(L, k); float ap; areaPeak.TryGetValue(g, out ap); areaPeak[g] = Mathf.Max(ap, m.Peak[k]); }
+                    for (int k = 0; k < L.Count; k++) m.Peak[k] = Mathf.Max(areaPeak[FlexGroup(L, k)], 0.0005f);
                 }
                 else if (hp != null) Plugin.Log.LogWarning("GPU contact: muscle height map " + m.HW + "x" + m.HH + " is not the region map's size: the belly falloff is used");
                 if (m.Region == null) { FlexNote = "muscle map unreadable"; Plugin.Log.LogWarning("GPU contact: " + FlexNote); return null; }
@@ -644,6 +646,14 @@ namespace SfMorph
             }
             catch (Exception e) { FlexNote = "muscle maps failed (" + e.Message + ")"; Plugin.Log.LogWarning("GPU contact: " + FlexNote); return null; }
         }
+
+        // 0.11.20: the group a muscle's bulge is normalised in: its area, the obliques apart
+        static string FlexGroup(MuscleLayer L, int k) { return L.MuscleName[k].StartsWith("obliques", StringComparison.Ordinal) ? "obliques" : L.Area[k]; }
+
+        // 0.11.20 (user: at max settings the muscles look like tumours): mm x Flex eases toward FlexCeil instead of growing without bound
+        // (3 mm -> 2.9, 8 -> 6.6, 20 -> 9.6, 40 -> 10): a belly taller than ~1 cm on a 3-6 cm wide muscle reads as a lump, not as muscle
+        const float FlexCeil = 10f;
+        static float FlexMm(float mm) { return mm <= 0f ? 0f : FlexCeil * (float)Math.Tanh(mm / FlexCeil); }
 
         static Color32[] ReadBack(Texture2D t, out int w, out int h)
         {
@@ -687,9 +697,10 @@ namespace SfMorph
                 string a = L.Area[k];
                 float mm = a == "core" ? _set.CoreMm : a == "back" ? _set.BackMm : a == "legs" ? _set.LegsMm : a == "arms" ? _set.ArmsMm : 0f;
                 if (test != null) mm = Mathf.Max(3f, mm);       // the test always shows something (Flex at least 1, 3 mm at least)
+                if (FlexGroup(L, k) == "obliques") mm *= test != null ? Mathf.Max(0f, _set.Obliques) : MusclePose.ObliquesFactor(_set.Obliques, L.Side[k]);   // 0.11.20
                 if (L.MuscleName[k] == "ribcage") mm = 0f;   // bone showing through, not a muscle belly: relief only, never pushed out
                 float act = test != null ? (a == test ? 1f : 0f) : MuscleFlex.Act[k];
-                float amp = act * Mathf.Max(0f, mm) * 0.001f * flex;
+                float amp = act * FlexMm(Mathf.Max(0f, mm) * flex) * 0.001f;
                 _musAmp[k >> 2][k & 3] = amp;
                 _musAct[k >> 2][k & 3] = act;
                 if (amp > mx) mx = amp;
@@ -729,7 +740,7 @@ namespace SfMorph
             {
                 if (L.Area[k] != area || L.MuscleName[k] == "ribcage") continue;
                 float mm = area == "core" ? _set.CoreMm : area == "back" ? _set.BackMm : area == "legs" ? _set.LegsMm : _set.ArmsMm;
-                mmMax = Mathf.Max(3f, mm) * Mathf.Max(1f, _set.Flex);
+                mmMax = FlexMm(Mathf.Max(3f, mm) * Mathf.Max(1f, _set.Flex));
             }
             Plugin.Log.LogInfo("Muscles: Flex test " + area + " at full for " + MuscleFlex.TestStep.ToString("0") + " s: bulge up to "
                 + (mmMax * maxBelly).ToString("0.0") + " mm (" + mmMax.ToString("0.0") + " mm x belly " + maxBelly.ToString("0.00") + ") on " + verts + " verts"
@@ -1267,7 +1278,7 @@ namespace SfMorph
             var cs = _cs;
             cs.SetInt(PCount, s.Count);
             cs.SetFloat(PDt, dt);
-            cs.SetFloat(PMarkFade, Mathf.Max(0.5f, _set.MarkFade)); cs.SetFloat(PMarkGain, _set.MarkGain); cs.SetFloat(PDentFade, 1.5f);
+            cs.SetFloat(PMarkFade, Mathf.Max(0.5f, _set.MarkFade)); cs.SetFloat(PMarkGain, _set.MarkGain); cs.SetFloat(PDentFade, Mathf.Max(0.1f, _set.PrintTime)); cs.SetFloat(PPrintAmt, Mathf.Max(0f, _set.Print));   // 0.11.20: was a fixed 1.5 s, full depth
             cs.SetInt(PMarkOn, s.MarkOn ? 1 : 0);
             Matrix4x4 toWorld = ToWorld(s);
             cs.SetInt(PStride, s.Stride); cs.SetInt(PPosOff, s.PosOff); cs.SetInt(PNrmOff, s.NrmOff); cs.SetInt(PTanOff, s.TanOff);

@@ -173,9 +173,17 @@ namespace SfMorph
             j.slerpDrive = drive;
             j.targetRotation = Quaternion.identity;
             j.enableCollision = false;
-            j.enablePreprocessing = false;   // projection stays on
-            j.projectionMode = JointProjectionMode.PositionAndRotation;
-            j.projectionDistance = 0.005f; j.projectionAngle = 5f;
+            j.enablePreprocessing = false;
+            // 0.11.20 (user: the fingers still pass straight through her): projection snapped a finger back onto its anchor whenever the joint
+            // stretched > 5 mm / 5 deg, and PhysX projection ignores contacts. A finger pressed against her (tip first, or flat on a curving
+            // surface where it cannot bend back past its limit) was pushed toward the palm by the contact, stretched the joint, and was
+            // teleported forward into her every step while the palm (60 N follow) kept coming. Without projection the contact wins and the
+            // stretch goes through the joint into the palm, which stops. The joint sees the palm (and a fused bone its proximal) as at most
+            // 3x the finger's mass (connectedMassScale, an inverse-mass scale): the 12:1 palm/finger ratio is what let the joint stretch.
+            j.projectionMode = JointProjectionMode.None;
+            float connMass = conn.mass, ownMass = rb.mass;
+            j.massScale = 1f;
+            j.connectedMassScale = connMass > 3f * ownMass ? connMass / (3f * ownMass) : 1f;
 
             g.Probe = tr.gameObject.AddComponent<PhysicsHandProbe>();
             g.Probe.Left = h.Left;

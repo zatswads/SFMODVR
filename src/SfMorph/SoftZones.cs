@@ -639,20 +639,27 @@ namespace SfMorph
                     {
                         if (fz[z] <= 0f) continue;
                         float f = fz[z] * scale;
-                        int n1 = -1, n2 = -1, n3 = -1; float d1 = float.MaxValue, d2 = float.MaxValue, d3 = float.MaxValue;
+                        int n1 = -1, n2 = -1, n3 = -1, n4 = -1; float d1 = float.MaxValue, d2 = float.MaxValue, d3 = float.MaxValue, d4 = float.MaxValue;
                         for (int k = zonePt0[z]; k < zonePt0[z] + zonePtN[z]; k++)
                         {
                             float dk = (s.P[i] - _pts[k].RestRef).magnitude * mpu;
-                            if (dk < d1) { n3 = n2; d3 = d2; n2 = n1; d2 = d1; n1 = k; d1 = dk; }
-                            else if (dk < d2) { n3 = n2; d3 = d2; n2 = k; d2 = dk; }
-                            else if (dk < d3) { n3 = k; d3 = dk; }
+                            if (dk < d1) { n4 = n3; d4 = d3; n3 = n2; d3 = d2; n2 = n1; d2 = d1; n1 = k; d1 = dk; }
+                            else if (dk < d2) { n4 = n3; d4 = d3; n3 = n2; d3 = d2; n2 = k; d2 = dk; }
+                            else if (dk < d3) { n4 = n3; d4 = d3; n3 = k; d3 = dk; }
+                            else if (dk < d4) { n4 = k; d4 = dk; }
                         }
                         if (n1 < 0) continue;
                         if (qual > 0)
                         {
-                            // Balanced/Fidelity: the 3 nearest points with a Gaussian kernel, sigma = the zone's ring spacing (relative to the nearest, so it can't underflow)
+                            // Balanced/Fidelity: the 3 nearest points with a Gaussian kernel, sigma = the zone's ring spacing (relative to the nearest, so it can't underflow).
+                            // 0.11.20 (user: the default physics deform her breasts oddly): the third point's weight jumped from up to ~0.3 to nothing where
+                            // the fourth nearest took its place, so neighbouring vertices hung on different points; with one point pushed far (her arm on her
+                            // breast: 2-3 cm) the skin folded along that line. Each weight now has the fourth's subtracted, so it reaches 0 exactly where the
+                            // two swap: the weights are continuous over the skin.
                             float sp = zoneSpace[z] > 1e-4f ? zoneSpace[z] : 0.03f, inv = 1f / (2f * sp * sp);
                             float g2 = n2 >= 0 ? Mathf.Exp(-(d2 * d2 - d1 * d1) * inv) : 0f, g3 = n3 >= 0 ? Mathf.Exp(-(d3 * d3 - d1 * d1) * inv) : 0f;
+                            float g4 = n4 >= 0 ? Mathf.Exp(-(d4 * d4 - d1 * d1) * inv) : 0f;
+                            if (1f - g4 > 1e-3f) { g2 = Mathf.Max(0f, g2 - g4) / (1f - g4); g3 = Mathf.Max(0f, g3 - g4) / (1f - g4); }
                             float gs = 1f + g2 + g3;
                             plist.Add(n1); wlist.Add(f / gs);
                             if (g2 > 0.002f) { plist.Add(n2); wlist.Add(f * g2 / gs); }
