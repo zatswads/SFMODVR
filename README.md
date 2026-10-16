@@ -41,6 +41,28 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.8 (tensed muscles as shape, firmer under a hand):
+- Muscles were normal-map relief only: a flexed biceps or a back at full fitness looked painted on, the silhouette never changed.
+  Each muscle now also pushes its belly out as geometry through the GPU contact chain (the inverse of a dent): the bake reads the
+  muscle region map at every body vertex (two muscle ids + share) and gives it a belly weight, 0 at the muscle's edges and
+  tendons, rising over 2.5 cm (arms) to 4 cm (legs) of geodesic distance, lower in the authored grooves (linea alba, spinal
+  groove), so the abs and back keep their valley. Per frame the muscles' activations (the same ones the relief uses: Fitness
+  plus the pose's tension) x the area's size in mm x Flex go to the compute shader; Compose adds the bulge under the dent and
+  Grad / Apply bend the normals with it. The relief stays on top as the fine detail. Ribcage (bone showing, not a muscle) stays
+  relief only. Needs GPU contact (Physics tab) and the shader bundle that comes with this DLL.
+- A hand pressed a flexed muscle as deep as a relaxed one. The soft tissue depth under a muscle now shrinks with its activation
+  (x (1 - Firmness x activation), Firmness 0.5): the GPU dent, the physics hands' stop (HerBody.SkinAllowance) and the soft
+  zones' resistance (glutes, outer / inner thigh, belly) all read it. The hands meet the bulged surface, not the relaxed one.
+- Pose -> tension, anatomy pass (the tension now moves geometry, so a stretched muscle must not read as working): hamstrings no
+  longer tense for a straight leg lifted while lying (a passive stretch), they do for hip extension; lats overhead 0.7 -> 0.35
+  (stretched; they work propping her up and pulling the arm back); adductors at a wide straddle only under her weight; abs brace
+  when she lies on her back with her legs lifted.
+- Panel, Skin tab, Muscles: Flex, Core / Back / Arms / Legs (mm), Firmness, each greyed with its reason (muscles off, GPU contact
+  off, old bundle, no muscle on her baked meshes). Config [Muscles] Flex, CoreMm, BackMm, LegsMm, ArmsMm, Firmness.
+- Cost: a frame with only muscle bulges runs Compose + Grad + Apply on her body meshes (3 dispatches each, no dilate / smooth
+  passes), the same path as the bend bulges. With Fitness above 0 that runs every frame; Flex 0 removes it. Not measured in the
+  game: compare the `Perf` line's `gpuRun` stage and GPU ms with Flex 1 and 0.
+
 0.11.7 (fixes from the 0.11.4 headset run; the lip sync arrives):
 - Panel jumped when an option changed or a debug line updated, and could not be resized: it was a layout window that grew and
   shrank with its content. Now a fixed-size window: any edge or corner resizes it, the title bar moves it, the content scrolls,

@@ -1302,6 +1302,7 @@ namespace SfMorph
                 sh.MAct[k] = a;
                 if (Mathf.Abs(a - sh.MActSent[k]) >= MuscleStep || (a == 0f) != (sh.MActSent[k] == 0f)) moved = true;
             }
+            MuscleFlex.Publish(M, sh.MAct);   // 0.11.8: the same activations push her muscles out as geometry (GpuContact) and firm them under a hand
             if (moved && now - sh.MLastDirty >= MuscleMinInterval)
             {
                 sh.MLastDirty = now;

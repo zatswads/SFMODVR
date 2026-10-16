@@ -888,6 +888,26 @@ namespace SfMorph
             int dbg = GUILayout.Toolbar(Mathf.Clamp(_p.MuscleDebug.Value, 0, 2), MuscleDebugs);
             if (sliderOff == null && dbg != _p.MuscleDebug.Value) _p.MuscleDebug.Value = dbg;
             GUI.enabled = true;
+            // 0.11.8 tensed muscles as geometry (GPU contact v2) and their firmness under a hand
+            GUILayout.Label("Shape: tensed muscles bulge", _hint);
+            var gpu = _body.Gpu;
+            string flexOff = sliderOff ?? (!_p.GpuContactOn.Value ? "GPU contact is off (Physics tab)" : gpu == null ? "shader bundle not loaded"
+                           : !gpu.MuscleKernels ? "the shader bundle is older than this DLL (install dist/sfmorph_shaders)"
+                           : gpu.MuscleVerts == 0 ? (gpu.FlexNote.Length > 0 ? gpu.FlexNote : "no muscle on her baked body meshes (yet)") : null);
+            string fwhy = flexOff == null ? null : "off: " + flexOff;
+            float fx = Slider("Flex", _p.MuscleFlexAmt.Value, 0f, 2f, "0.00", 1f, fwhy);
+            if (Mathf.Abs(fx - _p.MuscleFlexAmt.Value) > 0.0001f) _p.MuscleFlexAmt.Value = fx;
+            string awhy = fwhy ?? (_p.MuscleFlexAmt.Value <= 0f ? "off: Flex is 0" : null);
+            float cm = Slider("Core", _p.MuscleCoreMm.Value, 0f, 12f, "0.0", 3f, awhy ?? (_p.MuscleCore.Value ? null : "off: Core is off"), " mm");
+            if (Mathf.Abs(cm - _p.MuscleCoreMm.Value) > 0.0001f) _p.MuscleCoreMm.Value = cm;
+            float bm = Slider("Back", _p.MuscleBackMm.Value, 0f, 12f, "0.0", 4f, awhy ?? (_p.MuscleBack.Value ? null : "off: Back is off"), " mm");
+            if (Mathf.Abs(bm - _p.MuscleBackMm.Value) > 0.0001f) _p.MuscleBackMm.Value = bm;
+            float am = Slider("Arms", _p.MuscleArmsMm.Value, 0f, 12f, "0.0", 4f, awhy ?? (_p.MuscleArms.Value ? null : "off: Arms is off"), " mm");
+            if (Mathf.Abs(am - _p.MuscleArmsMm.Value) > 0.0001f) _p.MuscleArmsMm.Value = am;
+            float lm = Slider("Legs", _p.MuscleLegsMm.Value, 0f, 12f, "0.0", 4f, awhy ?? (_p.MuscleLegs.Value ? null : "off: Legs is off"), " mm");
+            if (Mathf.Abs(lm - _p.MuscleLegsMm.Value) > 0.0001f) _p.MuscleLegsMm.Value = lm;
+            float fm = Slider("Firmness", _p.MuscleFirmness.Value, 0f, 0.9f, "0.00", 0.5f, why);
+            if (Mathf.Abs(fm - _p.MuscleFirmness.Value) > 0.0001f) _p.MuscleFirmness.Value = fm;
             if (off != null) GUILayout.Label("off: " + off, _off);
             else if (_p.MuscleOn.Value && _body.WrinkleStatus.Length > 0) GUILayout.Label(_body.WrinkleStatus, _body.WrinkleStatus.Contains("off:") ? _off : _hint);
             GUILayout.Label("Authored muscle relief (abs, obliques, serratus, ribcage; spine, lats, shoulder blades; glutes, quads, hamstrings, " +
@@ -897,7 +917,9 @@ namespace SfMorph
                             "serratus and lats, propping herself up the arms. Groove shade darkens the grooves in her skin colour. Surface detail " +
                             "only: a converted character's Fitness body slider (Characters tab) is the shape; this sits on top of either. Debug: " +
                             "Tension tints relaxed muscles green and tensed ones red, Muscles shows each in its own colour. Speed is in the config " +
-                            "file ([Muscles]).", _hint);
+                            "file ([Muscles]). Shape: with GPU contact on, each muscle's belly also pushes out (mm at full activation, fading to " +
+                            "nothing at its edges and tendons; Fitness counts, so a high resting tone keeps a little shape); the relief above stays " +
+                            "the fine detail. Firmness: a tensed muscle dents less under a hand and the physics hands meet more resistance there.", _hint);
         }
 
         bool Card(Texture2D thumb, string name, bool on, float size)

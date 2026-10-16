@@ -264,7 +264,8 @@ namespace SfMorph
             // 0.8.0 (Tissue.Zone): each zone has its own stiffness, depth limit and damping: breasts softest and bounciest, outer thighs firm and shallow
             for (int z = 0; z < _zSagV.Length; z++)
             {
-                _zK[z] = k * _zKMul[z]; _zLim[z] = limit * _zLimMul[z];
+                // 0.11.8: a flexed muscle under the zone (glute, quads / adductors, abs) dents less and pushes back sooner (MuscleFlex)
+                _zK[z] = k * _zKMul[z]; _zLim[z] = limit * _zLimMul[z] * MuscleFlex.SoftFactor(Zones[z].Id);
                 _zDamp[z] = 2f * zeta * Mathf.Sqrt(_zK[z]) * _zDampMul[z];
                 _zSagV[z] = gravity > 0f ? Vector3.down * (_zSag[z] * _zLim[z] * gravity) : Vector3.zero;
             }

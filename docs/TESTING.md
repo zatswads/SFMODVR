@@ -98,6 +98,26 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.8 (muscles as shape, firmness)
+
+Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`. Log: `SF Body Morphs 0.11.8`; no `old sfmorph_shaders (no MuscleFlex)`
+warning; `GPU contact: muscle maps read back (27 muscles, region 1024x1024, detail 2048x2048)`; `GPU contact: baked reika_body...:
+..., muscles N verts [core:.. back:.. legs:.. arms:..]` for her body meshes (none for face / neck / overlays); the status line ends
+`muscles N verts`. Skin tab: Muscles on, GPU contact on (Physics tab). Headset:
+1. Flexed elbow: bend her elbow past 90 degrees (a pose or Embody's hands): the biceps belly rises (side view: the upper arm's
+   front outline gets rounder), fading to nothing at the elbow crease and the shoulder; no step at the biceps / triceps border.
+   Arms slider to 0 -> it flattens (the relief and the bend bulge stay).
+2. Back relief: Fitness 1, arms overhead or a back arch: the spinal erectors stand up on both sides of the spine with the groove
+   between them kept, the lats show along her sides. Back slider 0 / Flex 0 -> flat again.
+3. Firmness: Firmness 0.5. Press a relaxed biceps (arm straight) with a palm, then the same arm with the elbow bent past 90: the
+   flexed one dents visibly less and the physics hand stops sooner. Firmness 0 -> both the same.
+4. A squat / kneeling pose: the quads and glutes rise; lying on her back with straight legs raised: the hamstrings do NOT bulge
+   (passive stretch), the abs do a little.
+5. No seam or step at the waist (her upper / lower body meshes) and at the neck; the areolas, tattoo and vulva rim stay on the skin.
+6. Perf line (10 s in the log / panel): `gpuRun` and the GPU ms with Flex 1 vs Flex 0, standing idle: report both numbers.
+7. If a muscle bulges in the wrong place, Muscles debug view "Muscles" shows which region the skin belongs to (the bulge follows
+   those regions); send a screenshot.
+
 ## 0.11.7 (0.11.4 headset fixes, lip sync)
 
 Install `dist/SfMorph.dll`. Log: `SF Body Morphs 0.11.7`; `GPU contact: renderer reika_face_c space rootBone taken from ...` (and

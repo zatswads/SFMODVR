@@ -14,6 +14,8 @@ namespace SfMorph
         public bool Normals = true, SelfContact = true, PartnerBody = true;
         public float BendAmount = 0.6f, BicepsMm = 8f, KneeMm = 8f, CalfMm = 6f, HipMm = 5f, BellyFoldMm = 3f;
         public float Ripple = 1f, RippleSpeed = 0.5f, RippleWavelength = 0.1f, RippleDamping = 0.6f, RippleImpact = 0.35f;
+        // 0.11.8 tensed muscles as geometry ([Muscles] Flex, the per-area bulge in mm at full activation; Firmness is MuscleFlex.Firm)
+        public float Flex = 1f, CoreMm = 3f, BackMm = 4f, LegsMm = 4f, ArmsMm = 4f;
         public bool Marks = true;
         public float Redness = 0.5f, MarkFade = 15f, MarkGain = 0.6f, Ao = 0.5f, MarkBoost = 1f;
     }
@@ -39,6 +41,9 @@ namespace SfMorph
         public float AvgEdge;         // mean rest edge length (m)
         public float SkinEdge;        // 0.11.7: mean rest edge length away from the hands and feet (m): what the dent smoothing is sized by
         public float MetresPerUv;     // sqrt(sum 3D triangle area / sum UV triangle area); 0 without UVs
+        public Vector4[] Muscle;      // 0.11.8 V: (id0, share0, id1, share1) muscle ids of MuscleFlex.Layer (-1 none) at the vertex UV, null = no muscle data
+        public float[] Belly;         // 0.11.8 V: 0 at a muscle's edge / tendon, 1 mid-belly (geodesic falloff, less in its grooves)
+        public int MuscleCount;       // canonical vertices with a muscle
         public Vector3[] WorldP;      // V: where each vertex was at bake time (CPU skin with the bones then, no blendshapes; NaN = unskinned). GpuContact
                                       // maps overlay meshes (areola caps, tattoo, vulva rim) onto the body vertex under them with it
         public string Note = "";
@@ -103,14 +108,14 @@ namespace SfMorph
 
         // ---- the bake ----
 
-        public static ContactBake Build(SkinnedMeshRenderer r, float[] zone, Character her, out string error)
+        public static ContactBake Build(SkinnedMeshRenderer r, float[] zone, Character her, MuscleMap mm, out string error)
         {
             error = null;
-            try { return BuildInner(r, zone, her, out error); }
+            try { return BuildInner(r, zone, her, mm, out error); }
             catch (Exception e) { error = e.GetType().Name + ": " + e.Message; return null; }
         }
 
-        static ContactBake BuildInner(SkinnedMeshRenderer r, float[] zone, Character her, out string error)
+        static ContactBake BuildInner(SkinnedMeshRenderer r, float[] zone, Character her, MuscleMap mm, out string error)
         {
             error = null;
             var sw = Stopwatch.StartNew();
@@ -344,10 +349,18 @@ namespace SfMorph
                 wp[v] = sum > 0.5f ? acc / sum : new Vector3(float.NaN, float.NaN, float.NaN);
             }
 
+            // 8. 0.11.8 muscles (body sheet only): ids + shares at the vertex UV, the belly weight over the mesh
+            Vector4[] mus = null;
+            float[] belly = null;
+            int musN = 0;
+            string musNote = "";
+            if (mm != null && uv != null) musN = BakeMuscles(r, mm, P, uv, subs, canon, adjOff, adjV, cls, mpu, out mus, out belly, out musNote);
+
             var res = new ContactBake
             {
                 R = r, Mesh = m, V = V, CanonCount = groups, Canon = canon, AdjOff = adjOff, AdjV = adjV, Tissue = tissue, Class = cls, Bend = bend,
-                BendCount = bendVerts, Uv = uv, SubTris = subs.ToArray(), AvgEdge = avgEdge, SkinEdge = skinEdge, MetresPerUv = mPerUv, WorldP = wp
+                BendCount = bendVerts, Uv = uv, SubTris = subs.ToArray(), AvgEdge = avgEdge, SkinEdge = skinEdge, MetresPerUv = mPerUv, WorldP = wp,
+                Muscle = musN > 0 ? mus : null, Belly = musN > 0 ? belly : null, MuscleCount = musN
             };
             sw.Stop();
             var sb = new StringBuilder();
@@ -359,6 +372,7 @@ namespace SfMorph
             for (int v = 0; v < V; v++) { float x = tissue[v].x + tissue[v].y; if (x < tmin) tmin = x; if (x > tmax) tmax = x; }
             sb.Append(", tissue ").Append((tmin * 1000f).ToString("0.#")).Append("-").Append((tmax * 1000f).ToString("0.#")).Append(" mm at softness 50 %, ").Append(frame.Note.Length > 0 ? frame.Note + ", " : "").Append(bendNote);
             if (mPerUv > 0f) sb.Append(", ").Append(mPerUv.ToString("0.###")).Append(" m/uv");
+            if (musNote.Length > 0) sb.Append(", ").Append(musNote);
             sb.Append(", ").Append(sw.ElapsedMilliseconds).Append(" ms");
             res.Note = sb.ToString();
             return res;
@@ -535,6 +549,177 @@ namespace SfMorph
             for (int i = 0; i < perSlot.Length; i++) sb.Append(i > 0 ? " " : "").Append(perSlot[i]);
             note = sb.Append(']').ToString();
             return count;
+        }
+
+        // ---- 0.11.8 muscles as geometry ----
+
+        // The muscle maps read back once (GpuContact.MuscleMapFor): the region ids / share / coverage and the detail's groove depth.
+        internal sealed class MuscleMap
+        {
+            public MuscleLayer Layer;
+            public Color32[] Region, Detail;
+            public int RW, RH, DW, DH;
+        }
+
+        // How far a muscle's bulge ramps up from its edge (m) by area: an arm muscle is narrow, a thigh / the back broad.
+        static float RampOf(string area)
+        {
+            return area == "arms" ? 0.025f : area == "legs" ? 0.04f : area == "back" ? 0.035f : 0.03f;
+        }
+
+        // Per canonical vertex of the body-atlas submeshes: the region texel under its UV (two ids, the first one's share), then the
+        // belly weight: geodesic distance (Dijkstra over the welded adjacency, bind positions in metres) to the nearest vertex of another
+        // muscle (or none), smoothstep over the area's ramp, x (1 - 0.7 groove) so the linea alba / spinal groove stay a valley, two
+        // smoothing passes (the region is point-sampled at ~1 cm: ids step from texel to texel). A mesh's open border (the waist cut between
+        // her upper and lower body) is not an edge: the bulge carries across it. Hands, feet, head, neck, breasts and genitals carry none.
+        static int BakeMuscles(SkinnedMeshRenderer r, MuscleMap mm, Vector3[] P, Vector2[] uv, List<int[]> subs, uint[] canon, uint[] adjOff, uint[] adjV,
+                               uint[] cls, float mpu, out Vector4[] mus, out float[] belly, out string note)
+        {
+            int V = P.Length;
+            mus = new Vector4[V];
+            belly = new float[V];
+            note = "";
+            for (int v = 0; v < V; v++) mus[v] = new Vector4(-1f, 0f, -1f, 0f);
+            var L = mm.Layer;
+            if (L == null || mm.Region == null || mm.RW <= 0 || mm.RH <= 0) { note = "muscles: no map"; return 0; }
+            // the body-atlas submeshes (Wrinkles' class 3: her body / skin / foot materials)
+            var mats = r.sharedMaterials;
+            var onSheet = new bool[V];
+            int subsOn = 0;
+            for (int si = 0; si < subs.Count && si < mats.Length; si++)
+            {
+                if (mats[si] == null || Wrinkles.Classify(mats[si], r) != 3) continue;
+                subsOn++;
+                var tr = subs[si];
+                for (int i = 0; i < tr.Length; i++) onSheet[canon[tr[i]]] = true;
+            }
+            if (subsOn == 0) { note = "muscles: not on the body sheet"; return 0; }
+            // 1. the dominant muscle per canonical vertex (0 = none), its pair and share
+            var dom = new int[V];
+            for (int v = 0; v < V; v++)
+            {
+                if (canon[v] != (uint)v || !onSheet[v]) continue;
+                uint c = cls[v];
+                if (c == ClsHead || c == ClsNeck || c == ClsHand || c == ClsHand + 1 || c == ClsFoot || c == ClsFoot + 1 || c == ClsBreast || c == ClsBreast + 1 || c == ClsGenital) continue;
+                Vector2 t = uv[v];
+                if (!(t.x >= 0f && t.x <= 1f && t.y >= 0f && t.y <= 1f)) continue;
+                int px = Mathf.Clamp((int)(t.x * mm.RW), 0, mm.RW - 1), py = Mathf.Clamp((int)(t.y * mm.RH), 0, mm.RH - 1);
+                var q = mm.Region[py * mm.RW + px];
+                int i1 = q.r, i2 = q.g;
+                if (i1 < 1 || i1 > L.Count || i1 > MuscleFlex.Max || q.a == 0) continue;
+                float sh = q.b / 255f;
+                if (i2 < 1 || i2 > L.Count || i2 > MuscleFlex.Max) { i2 = 0; sh = 1f; }
+                dom[v] = sh >= 0.5f || i2 == 0 ? i1 : i2;
+                mus[v] = new Vector4(i1 - 1, sh, i2 > 0 ? i2 - 1 : -1f, i2 > 0 ? 1f - sh : 0f);
+            }
+            // 2. geodesic distance to the nearest muscle edge (seeds: a muscle vertex next to another muscle or to none)
+            var dist = new float[V];
+            var heap = new MinHeap(4096);
+            int musN = 0;
+            for (int v = 0; v < V; v++)
+            {
+                dist[v] = float.MaxValue;
+                if (dom[v] == 0) continue;
+                musN++;
+                bool edge = false;
+                for (uint k = adjOff[v]; k < adjOff[v + 1] && !edge; k++) if (dom[adjV[k]] != dom[v]) edge = true;
+                if (edge) { dist[v] = 0f; heap.Push(0f, v); }
+            }
+            if (musN == 0) { note = "muscles: none under her UVs"; return 0; }
+            float d0;
+            int u0;
+            while (heap.Pop(out d0, out u0))
+            {
+                if (d0 > dist[u0]) continue;
+                for (uint k = adjOff[u0]; k < adjOff[u0 + 1]; k++)
+                {
+                    int w = (int)adjV[k];
+                    if (dom[w] != dom[u0]) continue;   // stays inside the muscle
+                    float nd = d0 + (P[u0] - P[w]).magnitude * mpu;
+                    if (nd < dist[w]) { dist[w] = nd; heap.Push(nd, w); }
+                }
+            }
+            // 3. ramp, grooves, smoothing
+            var b0 = new float[V];
+            for (int v = 0; v < V; v++)
+            {
+                if (dom[v] == 0) continue;
+                float ramp = RampOf(L.Area[dom[v] - 1]);
+                float d = dist[v] == float.MaxValue ? ramp : dist[v];   // a muscle island with no edge on this mesh (cut by its border): full
+                float x = Mathf.Clamp01(d / ramp);
+                float g = 1f;
+                if (mm.Detail != null && mm.DW > 0 && mm.DH > 0)
+                {
+                    Vector2 t = uv[v];
+                    int px = Mathf.Clamp((int)(t.x * mm.DW), 0, mm.DW - 1), py = Mathf.Clamp((int)(t.y * mm.DH), 0, mm.DH - 1);
+                    g = 1f - 0.7f * (mm.Detail[py * mm.DW + px].b / 255f);
+                }
+                b0[v] = x * x * (3f - 2f * x) * g;
+            }
+            var b1 = new float[V];
+            for (int pass = 0; pass < 2; pass++)
+            {
+                for (int v = 0; v < V; v++)
+                {
+                    if (dom[v] == 0) { b1[v] = 0f; continue; }
+                    uint o0 = adjOff[v], o1 = adjOff[v + 1];
+                    float sum = 0f;
+                    for (uint k = o0; k < o1; k++) sum += b0[adjV[k]];
+                    b1[v] = o1 > o0 ? 0.5f * b0[v] + 0.5f * sum / (o1 - o0) : b0[v];
+                }
+                var tmp = b0; b0 = b1; b1 = tmp;
+            }
+            // welded copies take their canonical's values
+            var perArea = new Dictionary<string, int>();
+            for (int v = 0; v < V; v++)
+            {
+                int c = (int)canon[v];
+                belly[v] = dom[c] != 0 ? Mathf.Clamp01(b0[c]) : 0f;
+                mus[v] = dom[c] != 0 ? mus[c] : new Vector4(-1f, 0f, -1f, 0f);
+                if (c == v && dom[v] != 0) { string a = L.Area[dom[v] - 1]; int n; perArea.TryGetValue(a, out n); perArea[a] = n + 1; }
+            }
+            var sb = new StringBuilder("muscles ").Append(musN).Append(" verts [");
+            bool first = true;
+            foreach (var kv in perArea) { sb.Append(first ? "" : " ").Append(kv.Key).Append(':').Append(kv.Value); first = false; }
+            note = sb.Append(']').ToString();
+            return musN;
+        }
+
+        // A binary min-heap of (distance, vertex) for the geodesic belly distance (no PriorityQueue in this runtime).
+        sealed class MinHeap
+        {
+            float[] _k; int[] _v; int _n;
+            public MinHeap(int cap) { _k = new float[cap]; _v = new int[cap]; }
+            public void Push(float k, int v)
+            {
+                if (_n == _k.Length) { Array.Resize(ref _k, _n * 2); Array.Resize(ref _v, _n * 2); }
+                int i = _n++;
+                while (i > 0)
+                {
+                    int p = (i - 1) >> 1;
+                    if (_k[p] <= k) break;
+                    _k[i] = _k[p]; _v[i] = _v[p]; i = p;
+                }
+                _k[i] = k; _v[i] = v;
+            }
+            public bool Pop(out float k, out int v)
+            {
+                k = 0f; v = 0;
+                if (_n == 0) return false;
+                k = _k[0]; v = _v[0];
+                float lk = _k[--_n]; int lv = _v[_n];
+                int i = 0;
+                while (true)
+                {
+                    int c = 2 * i + 1;
+                    if (c >= _n) break;
+                    if (c + 1 < _n && _k[c + 1] < _k[c]) c++;
+                    if (_k[c] >= lk) break;
+                    _k[i] = _k[c]; _v[i] = _v[c]; i = c;
+                }
+                _k[i] = lk; _v[i] = lv;
+                return true;
+            }
         }
 
         // Position of p along a->b as 0..1 (unclamped); false for a degenerate bone.

@@ -371,7 +371,8 @@ namespace SfMorph
         public static float SkinAllowance(int seg)
         {
             if (seg < 0 || seg >= Defs.Length || !SoftZonesOn) return 0.004f;
-            return Mathf.Max(0.004f, InsetShare * Tissue(Defs[seg].Name, Softness));   // 0.8.9: where the dent still follows exactly
+            // 0.11.8: a flexed muscle under the segment is firmer (MuscleFlex: soft depth x (1 - Firmness x activation), as the GPU dent)
+            return Mathf.Max(0.004f, InsetShare * Tissue(Defs[seg].Name, Softness) * MuscleFlex.SoftFactor(Defs[seg].Name));   // 0.8.9: where the dent still follows exactly
         }
 
         static void Build(Character her, HerBodySettings s)

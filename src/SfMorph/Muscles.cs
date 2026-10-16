@@ -239,7 +239,11 @@ namespace SfMorph
             BackLoad = Sm(0.2f, 0.7f, prone) * Sm(30f, 70f, hipAvg);           // bent over / on all fours (lying flat: hips straight)
             AbsLoad = Sm(0.2f, 0.6f, -prone) * Sm(30f, 70f, hipAvg);           // sitting leaning back (lying on her back: hips straight)
             float ext = -Flex;
-            float absT = Mathf.Max(Sm(5f, 35f, Flex), 0.85f * AbsLoad);
+            // 0.11.8 anatomy pass (the tension now also drives geometry, so a muscle that is only stretched must not read as contracted):
+            // lying on her back with the legs lifted off the floor the abs brace the pelvis (hip flexors pull on it)
+            float supine = Sm(0.3f, 0.7f, -prone);
+            float legLift = supine * Sm(30f, 80f, hipAvg) * (1f - 0.5f * (LegLoad[0] + LegLoad[1]));
+            float absT = Mathf.Max(Mathf.Max(Sm(5f, 35f, Flex), 0.85f * AbsLoad), 0.6f * legLift);
             float backT = Mathf.Max(Mathf.Max(Sm(5f, 30f, ext), BackLoad), 0.5f * Sm(10f, 35f, Mathf.Abs(Twist)));
             float elevMax = Mathf.Max(Elev[0], Elev[1]);
             for (int k = 0; k < L.Count && k < tension.Length; k++)
@@ -249,15 +253,20 @@ namespace SfMorph
                 float sgn = s == 0 ? 1f : -1f;          // side bend + = towards her left
                 float t;
                 if (n == "abs") t = absT;
-                else if (n == "ribcage") t = Mathf.Max(Mathf.Max(0.8f * Sm(110f, 165f, elevMax), 0.8f * Sm(5f, 30f, ext)), 0.4f * absT);
+                else if (n == "ribcage") t = Mathf.Max(Mathf.Max(0.8f * Sm(110f, 165f, elevMax), 0.8f * Sm(5f, 30f, ext)), 0.4f * absT);   // ribs showing (no geometry: GpuContact)
                 else if (n == "back") t = backT;
                 else if (n.StartsWith("obliques")) t = Mathf.Max(Mathf.Max(0.7f * absT, Sm(8f, 30f, Mathf.Abs(Twist))), 0.9f * Sm(5f, 25f, Side * sgn) + 0.3f * Sm(5f, 25f, Mathf.Abs(Side)));
                 else if (n.StartsWith("serratus")) t = Mathf.Max(Mathf.Max(0.9f * Sm(100f, 160f, Elev[s]), 0.5f * ArmLoad[s]), 0.4f * absT);
-                else if (n.StartsWith("lats")) t = Mathf.Max(Mathf.Max(0.7f * Sm(100f, 160f, Elev[s]), 0.6f * backT), Mathf.Max(0.8f * ArmLoad[s], 0.6f * Sm(10f, 40f, -ArmSwing[s])));
+                // lats extend / adduct the arm: they work propping her up, pulling the arm back and holding the trunk; overhead they are mostly
+                // stretched (0.7 -> 0.35: the flare that shows), so a raised arm alone no longer reads as a contracted lat
+                else if (n.StartsWith("lats")) t = Mathf.Max(Mathf.Max(0.35f * Sm(100f, 160f, Elev[s]), 0.6f * backT), Mathf.Max(0.8f * ArmLoad[s], 0.7f * Sm(10f, 40f, -ArmSwing[s])));
                 else if (n.StartsWith("glutes")) t = Mathf.Max(Mathf.Max(Sm(30f, 100f, HipFlex[s]) * LegLoad[s], Sm(5f, 25f, -HipFlex[s])), Mathf.Max(0.6f * Sm(15f, 40f, Abd[s]), 0.5f * backT));
                 else if (n.StartsWith("quads")) t = Mathf.Max(Sm(15f, 95f, Knee[s]) * LegLoad[s], 0.7f * Sm(30f, 80f, HipFlex[s]) * (1f - Sm(30f, 70f, Knee[s])) * (1f - LegLoad[s]));
-                else if (n.StartsWith("hams")) t = Mathf.Max(Sm(40f, 110f, HipFlex[s]) * (1f - Sm(20f, 60f, Knee[s])) * (0.5f + 0.5f * LegLoad[s]), Sm(40f, 110f, Knee[s]) * (1f - LegLoad[s]));
-                else if (n.StartsWith("adductors")) t = Mathf.Max(Sm(5f, 20f, -Abd[s]), 0.6f * Sm(30f, 60f, Abd[s]));
+                // hamstrings: hip extension (with the glutes), knee flexion without her weight on the leg, and holding a hip hinge on a straight
+                // loaded leg; a straight leg lifted while she lies (a stretch, 0.10.0 gave it half tension) is passive
+                else if (n.StartsWith("hams")) t = Mathf.Max(Mathf.Max(Sm(40f, 110f, HipFlex[s]) * (1f - Sm(20f, 60f, Knee[s])) * LegLoad[s], Sm(40f, 110f, Knee[s]) * (1f - LegLoad[s])),
+                                                             0.7f * Sm(5f, 25f, -HipFlex[s]));
+                else if (n.StartsWith("adductors")) t = Mathf.Max(Sm(5f, 20f, -Abd[s]), 0.3f * Sm(30f, 60f, Abd[s]) * LegLoad[s]);   // wide: stretched, works only under her weight
                 else if (n.StartsWith("calves")) t = Mathf.Max(Sm(5f, 30f, Plantar[s]) * (0.5f + 0.5f * LegLoad[s]), 0.5f * Sm(20f, 80f, Knee[s]) * LegLoad[s]);
                 else if (n.StartsWith("deltoids")) t = Mathf.Max(Mathf.Max(Sm(60f, 110f, Elev[s]), 0.6f * ArmLoad[s]), 0.5f * Sm(15f, 45f, Mathf.Abs(ArmSwing[s])));
                 else if (n.StartsWith("biceps")) t = Mathf.Max(Sm(30f, 110f, Elbow[s]), 0.3f * ArmLoad[s]);
@@ -289,11 +298,81 @@ namespace SfMorph
 
         public static void Release()
         {
+            MuscleFlex.Clear();
             _bound = null;
             _boundBones = -1;
             Joints = 0;
             for (int j = 0; j < NJ; j++) { _ok[j] = false; _p[j] = _c[j] = _e[j] = null; }
             _chest = _root = _neck = _spine = null;
+        }
+    }
+    // 0.11.8 tensed muscles as geometry: the body sheet's faded activations (Wrinkles.UpdateMuscles publishes them every frame while
+    // [Muscles] On), read by GpuContact (Compose pushes each muscle's belly out along the normal; Depth / Compose shrink its soft depth so a
+    // flexed muscle dents less) and by the hands' resistance (HerBody.SkinAllowance, SoftSim's zone limit: the same firmness on the CPU).
+    internal static class MuscleFlex
+    {
+        public const int Max = 32;                         // = Wrinkles.MaxRegions, the shader's float4 [8] arrays
+        public static MuscleLayer Layer;                   // the layout the activations belong to (null: none published)
+        public static readonly float[] Act = new float[Max];
+        public static float Firm = 0.5f;                   // [Muscles] Firmness, set by Body every frame: soft depth x (1 - Firm x activation)
+        static int _frame = -100;
+        static MuscleLayer _mapFor;
+        static readonly Dictionary<string, int[]> _parts = new Dictionary<string, int[]>();
+
+        public static void Publish(MuscleLayer L, float[] act)
+        {
+            if (L == null || act == null) return;
+            Layer = L;
+            int n = Math.Min(Math.Min(L.Count, act.Length), Max);
+            for (int k = 0; k < Max; k++) Act[k] = k < n ? Mathf.Clamp01(act[k]) : 0f;
+            _frame = Time.frameCount;
+        }
+
+        // the activations are this frame's (or at most a few frames old: the muscles stop publishing when switched off or her sheet goes)
+        public static bool Live { get { return Layer != null && Time.frameCount - _frame <= 3; } }
+
+        public static void Clear()
+        {
+            Layer = null;
+            _frame = -100;
+            for (int k = 0; k < Max; k++) Act[k] = 0f;
+        }
+
+        // The CPU side of the firmness: 1 - Firm x the strongest activation of the muscles under a body part (HerBody segment names
+        // "upperarm_L", "thigh_R", "spine" ... and SoftZones ids "glute_L", "thighOut_R", "belly"); 1 when nothing is live.
+        public static float SoftFactor(string part)
+        {
+            if (part == null || !Live || !(Firm > 0f)) return 1f;
+            if (_mapFor != Layer) { _parts.Clear(); _mapFor = Layer; }
+            int[] ids;
+            if (!_parts.TryGetValue(part, out ids)) { ids = MusclesOf(Layer, part); _parts[part] = ids; }
+            float a = 0f;
+            for (int i = 0; i < ids.Length; i++) if (Act[ids[i]] > a) a = Act[ids[i]];
+            return 1f - Mathf.Clamp01(Firm) * a;
+        }
+
+        static int[] MusclesOf(MuscleLayer L, string part)
+        {
+            string side = part.EndsWith("_L", StringComparison.Ordinal) ? "_L" : part.EndsWith("_R", StringComparison.Ordinal) ? "_R" : "";
+            string b = side.Length > 0 ? part.Substring(0, part.Length - 2) : part;
+            string[] want;
+            switch (b)
+            {
+                case "upperarm": want = new[] { "biceps", "triceps", "deltoids" }; break;
+                case "forearm": want = new[] { "forearms" }; break;
+                case "thigh": want = new[] { "quads", "hams", "adductors" }; break;
+                case "thighOut": want = new[] { "quads" }; break;
+                case "thighIn": want = new[] { "adductors" }; break;
+                case "calf": want = new[] { "calves" }; break;
+                case "butt": case "glute": want = new[] { "glutes" }; break;
+                case "spine": case "belly": want = new[] { "abs", "obliques_L", "obliques_R" }; side = ""; break;
+                default: return new int[0];   // breasts, chest, head, hands, feet: no authored muscle under them
+            }
+            var res = new List<int>();
+            for (int k = 0; k < L.Count && k < Max; k++)
+                for (int i = 0; i < want.Length; i++)
+                    if (L.MuscleName[k] == want[i] + side) res.Add(k);
+            return res.ToArray();
         }
     }
 }
