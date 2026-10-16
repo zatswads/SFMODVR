@@ -41,6 +41,24 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.8.9 (headset test of 0.8.8):
+- A hard, pixelated seam around a finger's dent on her breast: the dent's two smoothing passes lowered it under a small contact (a
+  fingertip) below the real penetration, so her skin stayed a few mm inside his finger and the depth intersection drew an aliased line.
+  The raw contact depth (already pressed against the tissue cap) is now the floor of the smoothed dent; the soft edge around it is
+  unchanged. Needs the new `sfmorph_shaders` (rebuilt).
+- The ripple never showed: impacts made waves (the log has them, 2-5 mm), but the ring's falloff cut them to about 1 mm within 0.1 s.
+  The wave now starts at 12 mm per m/s of impact speed from 0.4 m/s, capped at 25 mm (a 1.5 m/s slap at the default 60 % is ~8 mm).
+- Skin marks too subtle: new "boost" slider under Marks ([Physics] MarksBoost, 1-4x): multiplies how fast marks build up, how red they
+  get (saturates sooner), slap marks and the pressed darkening (capped).
+- Limb yield: new toggle "Lock her hands and feet while a limb yields" ([Hands] YieldLock, off): while a hand pushes her arm or leg, her
+  hand or foot stays where the animation puts it and the elbow / knee bends instead (before, a push on the forearm or calf freed the
+  planted lock on purpose so the hand could move). Works with or without the planted lock.
+- The physics hand still sank into her breasts and glutes: her colliders there were inset by the full tissue depth (2.4 cm inside the
+  skin), but the GPU dent follows a press exactly only to 0.6 of its cap and then saturates, so the last centimetre showed the hand
+  inside her. The collider inset (and Embody's hand stop) is now 0.6 of the tissue depth.
+- Face reactions: Surprise picked the clip 'dance_P' (strongest eye movement, by strength only) and played it 21 times. Strength-only
+  picks now skip clips named for body motions (dance, walk, idle, pose, sex positions).
+
 0.8.8:
 - Her lines (0.8.6) can now be kept off the game's dirty-talk path: Reactions tab, "Through the game's dirty talk" ([Reactions]
   LinesGamePath, on by default). Off, the clip plays on the game's dirty-talk source without her talking face or the subtitle, and the

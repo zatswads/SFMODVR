@@ -17,11 +17,11 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.8.8";
+        public const string Version = "0.8.9";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
-        internal ConfigEntry<bool> GateHidden, OverlapPlanted;
+        internal ConfigEntry<bool> GateHidden, OverlapPlanted, HandsYieldLock;
         internal ConfigEntry<float> OverlapRipple, ArmsBounce, LegsBounce, HeadBounce, SpineBounce, HandsLimbPush;
         internal ConfigEntry<int> BreastColliders;
         internal ConfigEntry<bool> KeysUnfocused, Apply, Physics, ShowSoftPoints, EmbodyOn, EmbodyHideHead, HandsOn, HandsCollide, GpuContactOn;
@@ -44,7 +44,7 @@ namespace SfMorph
         // 0.8.0 contact visuals v2 (GPU contact: dent edge, rim bulge, bent normals, self-contact, partner body, bend bulges, ripple, skin marks)
         internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn;
         internal ConfigEntry<float> ContactSkirt, ContactBulge, ContactDepth, BendBulge, BendBicepsMm, BendKneeMm, BendCalfMm, BendHipMm, BendBellyFoldMm,
-            RippleAmount, RippleSpeed, RippleWavelength, RippleDamping, MarksRedness, MarksFade, MarksAo;
+            RippleAmount, RippleSpeed, RippleWavelength, RippleDamping, MarksRedness, MarksFade, MarksAo, MarksBoost;
         internal ConfigEntry<Vector3> LeftHandPos, LeftHandRot, RightHandPos, RightHandRot;
         internal ConfigEntry<string> PanelRect;
         internal ConfigEntry<int> Tab;
@@ -89,6 +89,7 @@ namespace SfMorph
             SkinMarksOn = Config.Bind("Physics", "SkinMarks", true, "A hand pressed on her glutes, thighs, belly or breasts leaves a fading print; slaps leave redness.");
             MarksRedness = Config.Bind("Physics", "MarksRedness", 0.5f, new ConfigDescription("How red marks get (0 only the pressed shading).", new AcceptableValueRange<float>(0f, 1f)));
             MarksFade = Config.Bind("Physics", "MarksFade", 15f, new ConfigDescription("Seconds for redness to fade to a third.", new AcceptableValueRange<float>(3f, 60f)));
+            MarksBoost = Config.Bind("Physics", "MarksBoost", 1f, new ConfigDescription("Multiplies how fast marks build up, how red they get and how much a press darkens the skin (1 = as designed).", new AcceptableValueRange<float>(1f, 4f)));
             MarksAo = Config.Bind("Physics", "MarksAo", 0.5f, new ConfigDescription("How much a live press darkens the skin (pressed-flesh shading).", new AcceptableValueRange<float>(0f, 1f)));
             GateHidden = Config.Bind("Physics", "GateHidden", true, "Hands that aren't drawn (a hidden partner, controller models replaced by the physics hands) don't touch her.");
             BreastColliders = Config.Bind("Physics", "BreastColliders", 1, new ConfigDescription("Hands push the game's own breast physics: 0 off, 1 the main breast chains, 2 every breast DynamicBone.", new AcceptableValueRange<int>(0, 2)));
@@ -98,6 +99,7 @@ namespace SfMorph
             HeadBounce = Config.Bind("Motion", "HeadBounce", 0.6f, new ConfigDescription("How much the head and neck overshoot and settle.", new AcceptableValueRange<float>(0f, 1f)));
             SpineBounce = Config.Bind("Motion", "SpineBounce", 0.3f, new ConfigDescription("How much the spine overshoots and settles.", new AcceptableValueRange<float>(0f, 1f)));
             OverlapPlanted = Config.Bind("Motion", "PlantedLock", true, "Planted hands and feet stay where the animation puts them while the rest of the limb trails.");
+            HandsYieldLock = Config.Bind("Hands", "YieldLock", false, "While a hand pushes one of her arms or legs, her hand or foot stays where the animation puts it: the elbow or knee bends instead (off: a push on the forearm or calf moves the hand or foot too).");
             HandsLimbPush = Config.Bind("Hands", "LimbPush", 0.5f, new ConfigDescription("Her limbs, head and spine yield to a hand that presses into them and settle back without bouncing (0 off, 0.5 natural, 1 twice as far).", new AcceptableValueRange<float>(0f, 1f)));
             HandsPushByPartner = Config.Bind("Hands", "PushByPartner", false, "The partner's animated hands push her too (not the one you embody: his hands are your controllers; his animations often hold her arms, and a push would move them out of his grip).");
             HandsPushByTouch = Config.Bind("Hands", "PushByTouch", true, "Hands that aren't physics hands (your hand models, the partner's hands) push her limbs by how deep they are in her; physics hands push by contact force.");

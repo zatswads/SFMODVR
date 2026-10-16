@@ -1,6 +1,9 @@
 # SF Body Morphs — handoff
 
-State at **0.8.8** (branch `main`). 0.8.8 ([Reactions] LinesGamePath switch for the lines' game path, first-use index
+State at **0.8.9** (branch `main`). 0.8.9 (fixes from the first headset run of 0.8.1-0.8.8: dent floor = raw contact depth in Compose
+(bundle rebuilt; Depth now writes FieldD, wide ends in A, Compose writes B), ripple amplitude x3, [Physics] MarksBoost, [Hands] YieldLock,
+collider inset / Embody hand stop = 0.6 x tissue depth (HerBody.InsetShare), face mood picks skip body-motion clips; triage in the session
+notes triage-0.8.8-log.md) built, not yet run in the game. 0.8.8 ([Reactions] LinesGamePath switch for the lines' game path, first-use index
 log; IL check: no deferred reader of dirtyTalkVoice / dirtyTalkPlayNum) built, not yet run in the game. 0.8.7 (face clips: a survey of her face Animator's clips by SampleAnimation with an exact
 same-frame restore, mood picks, cached face-bone tracks played on a face-only layer before the bone sliders) built, not yet run in the
 game. 0.8.6 (her reactions speak the game's recorded lines for the touched area by excitement level through
@@ -158,6 +161,18 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
   arguments and reads only `dirtyTalk_Facial_Library`; `RandomSequenceReset` is the only other writer of the counter. Feeling one-shots: `SexVoice_Source_Library.Feeling_enter_0..3` (single clips).
 
 ## Open items
+
+- 0.8.8 headset run (log 2026-10-16): wrinkles look wrong on the body (procedural stripes over breasts/shoulders/torso at rest, the user
+  had lowered Threshold to 0.01 and had crease shade 0.3) and too weak on the face. The strain field is a fine driver, but sine stripes
+  everywhere are not skin: proposed redesign = authored wrinkle normal maps (face from CC4's expression wrinkle maps transferred to her
+  face UVs, body only at joint creases) blended by per-region compression. Her face is bone-driven (no blendshapes), so CC4's runtime
+  driver doesn't port, only its textures/masks.
+- Pose desync at the end of that run (her lying, the partner in cowgirl): nothing in the log; needs a repeat with Apply changes off.
+- ~30 "her renderers changed" rebuilds per session (each re-bakes wrinkles, GPU contact, hulls; 6 frames with capsule fallbacks).
+- Reactions: both climaxes went to the game's own face hook (our Climax clip never played); the second climax had no feeling sound
+  (game face paused); general-area lines resolved as handJob with the restored type anal (check DirtyTalkTypeSelect's type mapping).
+- Slap foley is "too wet" (the game's sex_fast/sex_normal clips): candidates in the user's VaM packages by name only
+  (Sally.SallySoundFX, CheesyFX.BodyLanguage); ask before reading them.
 
 - 0.8.4 to check in the headset (TESTING.md 0.8.4): creases visible on her face, no seam lines, the metres-per-UV value in the albedo-copy
   log line plausible (it sets the crease scale), the Characters tab face/body skin toggle with Wrinkles on, marks through Wrinkles' copy.

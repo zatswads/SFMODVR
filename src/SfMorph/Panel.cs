@@ -526,6 +526,10 @@ namespace SfMorph
             GUI.enabled = true;
             if (byOff == null && touch != _p.HandsPushByTouch.Value) _p.HandsPushByTouch.Value = touch;
             if (partnerOff == null && partner != _p.HandsPushByPartner.Value) _p.HandsPushByPartner.Value = partner;
+            GUI.enabled = byOff == null;
+            bool ylock = GUILayout.Toggle(_p.HandsYieldLock.Value, " Lock her hands and feet while a limb yields (the elbow / knee bends, the hand / foot stays put)");
+            GUI.enabled = true;
+            if (byOff == null && ylock != _p.HandsYieldLock.Value) _p.HandsYieldLock.Value = ylock;
             if (byOff != null) GUILayout.Label("    off: " + byOff, _off);
             if (off == null && HerBody.Status.Length > 0) GUILayout.Label(HerBody.Status, HerBody.Status.StartsWith("off") ? _off : _hint);
             GUILayout.Label("A hand that presses into an arm, leg, her head or torso moves it aside; it settles back without bouncing (never past 35/40 deg " +
@@ -659,6 +663,8 @@ namespace SfMorph
             if (Mathf.Abs(v - _p.MarksFade.Value) > 0.001f) _p.MarksFade.Value = v;
             v = Slider("    redness", _p.MarksRedness.Value * 100f, 0f, 100f, "0", 50f, mo, " %") / 100f;
             if (Mathf.Abs(v - _p.MarksRedness.Value) > 0.0001f) _p.MarksRedness.Value = v;
+            v = Slider("    boost", _p.MarksBoost.Value, 1f, 4f, "0.0", 1f, mo, " x");
+            if (Mathf.Abs(v - _p.MarksBoost.Value) > 0.001f) _p.MarksBoost.Value = v;
             if (en)
             {
                 if (_body.Marks.Status.Length > 0) GUILayout.Label(_body.Marks.Status, _body.Marks.Status.Contains("off:") ? _off : _hint);

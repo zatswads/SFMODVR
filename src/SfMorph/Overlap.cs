@@ -18,6 +18,9 @@ namespace SfMorph
         public float Ripple = 0.5f, LimbPush = 0.5f;
         public readonly float[] Bounce = { 0.5f, 0.4f, 0.6f, 0.3f };
         public bool PlantedLock = true;
+        // 0.8.9 (user): [Hands] YieldLock: while a hand pushes one of her arms/legs, its hand/foot stays where the animation puts it (the
+        // elbow/knee and shoulder/hip take the whole yield), with or without PlantedLock
+        public bool YieldLock;
         public List<SoftCapsule> Caps;
     }
 
@@ -801,7 +804,7 @@ namespace SfMorph
         void Detect(Eff e, OverlapSettings s, float dt, bool reset)
         {
             e.AnimOk = false;
-            e.On = s.PlantedLock && e.A.T != null && e.M.T != null && e.E.T != null;
+            e.On = (s.PlantedLock || s.YieldLock) && e.A.T != null && e.M.T != null && e.E.T != null;
             if (!e.On) { ResetEff(e); return; }
             Vector3 p = e.E.T.position;
             if (!Ok(p)) { ResetEff(e); return; }
@@ -836,7 +839,14 @@ namespace SfMorph
                 distal = HerBody.YieldOn(e.DistalSeg, out yp, out yn, out ypen, out yby, out yh) && ypen > YieldTouchPen;
             }
             if (!distal && e.M.CanYield && e.M.YieldLive && e.M.Yv.magnitude > 0.035f) distal = true;
-            if (distal) { newT = 0f; e.StillT = 0f; e.FreeT = 0f; }
+            if (!s.PlantedLock) newT = 0f;   // on only for YieldLock: no stillness pin
+            if (s.YieldLock)
+            {
+                // the hand / foot stays at the animation's pose while any joint of its chain yields; the IK bends the elbow / knee instead
+                bool chain = distal || (e.A.CanYield && e.A.YieldLive && e.A.Yv.magnitude > 0.035f);
+                if (chain) { newT = 1f; e.StillT = 0f; e.FreeT = 0f; distal = false; }
+            }
+            else if (distal) { newT = 0f; e.StillT = 0f; e.FreeT = 0f; }
             if (newT != e.Target)
             {
                 e.Target = newT;

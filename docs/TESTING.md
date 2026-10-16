@@ -97,6 +97,20 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.8.9 (0.8.8 headset fixes)
+
+Copy both `SfMorph.dll` and `sfmorph_shaders` (the dent floor is in the compute shader).
+- [ ] A fingertip pressed into her breast: no hard jagged line where finger and skin meet (skin follows the finger up to the cap);
+      the soft edge around the dent is as before; `GPU contact: v2 on` (no v1 fallback, no "old bundle" warning).
+- [ ] A slap on her glutes / thigh: a visible ring travels out (log `Ripple: impact ... wave A` now ~5-20 mm). Too much: lower Ripple.
+- [ ] Marks boost 1 -> 4: prints get red faster and deeper; slap marks stronger; pressed shading never goes black.
+- [ ] Hands -> "Lock her hands and feet while a limb yields": push her forearm: the hand stays, the elbow bends; off: the hand moves.
+- [ ] Physics hand on breast / glute: stops ~1 cm earlier (log segment insets now ~0.014 breast/butt at softness 0.5); no hand visibly
+      inside her while the dent still follows.
+- [ ] Face reactions: the `moods:` line no longer picks a dance/idle/pose clip for Surprise.
+- Pose desync (her lying, him in cowgirl): not explained by the log. Repeat with F8 "Apply changes" off: if it still happens it is the
+  game; if not, note the moment (Embody on? a mesh swap / "her renderers changed" just before?).
+
 ## 0.8.8 (lines' game-path switch)
 
 Install `dist/SfMorph.dll`. Log: `SF Body Morphs 0.8.8`. (1) The first line logs `lines: first use of the game's path: ... at index i of a

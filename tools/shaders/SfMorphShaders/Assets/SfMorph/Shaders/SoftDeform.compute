@@ -169,6 +169,7 @@ StructuredBuffer<float> _FieldIn;    // the dilate / smooth source, Grad's final
 RWStructuredBuffer<float> _FieldOut;
 StructuredBuffer<float> _FieldN;     // Compose: narrow (contact) field
 StructuredBuffer<float> _FieldW;     // Compose: wide field (the rim bulge is wide - narrow)
+StructuredBuffer<float> _FieldR;     // Compose: Depth's raw field (0.8.9: the floor of the narrow one, so the smoothing never lifts skin into a hand)
 RWStructuredBuffer<float4> _Marks;   // per canonical vertex: x redness 0..1, y live pressure 0..1, z lingering dent (m)
 RWStructuredBuffer<float4> _Grad;    // 2 per vertex: [2v] = (tangential gradient of the field, world; field value), [2v+1] = (inward direction, world; 1)
 StructuredBuffer<float4> _Waves;     // 2 per wave: (origin xyz world, age s), (A m, c m/s, lambda m, tau s)
@@ -313,7 +314,10 @@ void Compose(uint3 id : SV_DispatchThreadID)
     if (_Canon[v] != v) return;
     float2 t = _Tissue[v];
     float n = 0, w = 0;
-    if (_NoField == 0u) { n = _FieldN[v]; w = _FieldW[v]; }
+    // 0.8.9 (user: a hard pixelated seam around a finger's dent): the two Smooth passes lower the narrow field under a small contact (a
+    // fingertip) below the real penetration, so the skin stayed a few mm inside the finger and the depth intersection drew an aliased line.
+    // The raw depth (already pressed against the tissue cap) is its floor: never less dent than the hand is deep; the skirt stays smooth.
+    if (_NoField == 0u) { n = max(_FieldN[v], _FieldR[v]); w = max(_FieldW[v], n); }
     float bulge = min(_Bulge * max(0.0, w - n), _BulgeCap);
     float4 bd = _Bend[v];
     float bend = bd.y * BendAmt(bd.x) + bd.w * BendAmt(bd.z);

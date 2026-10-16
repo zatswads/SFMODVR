@@ -559,7 +559,7 @@ namespace SfMorph
                 {
                     _ovs.Amount = _p.OverlapAmount.Value; _ovs.Arms = _p.OverlapArms.Value; _ovs.Legs = _p.OverlapLegs.Value;
                     _ovs.Head = _p.OverlapHead.Value; _ovs.Spine = _p.OverlapSpine.Value; _ovs.Embody = Embody;
-                    _ovs.Ripple = _p.OverlapRipple.Value; _ovs.Strength = _p.OverlapStrength.Value; _ovs.PlantedLock = _p.OverlapPlanted.Value; _ovs.LimbPush = _p.HandsLimbPush.Value;
+                    _ovs.Ripple = _p.OverlapRipple.Value; _ovs.Strength = _p.OverlapStrength.Value; _ovs.PlantedLock = _p.OverlapPlanted.Value; _ovs.YieldLock = _p.HandsYieldLock.Value; _ovs.LimbPush = _p.HandsLimbPush.Value;
                     _ovs.Bounce[0] = _p.ArmsBounce.Value; _ovs.Bounce[1] = _p.LegsBounce.Value; _ovs.Bounce[2] = _p.HeadBounce.Value; _ovs.Bounce[3] = _p.SpineBounce.Value;
                     _ovs.Caps = physics || physHands ? Contacts() : null;
                     try { Overlap.Update(c, _ovs, Time.deltaTime); _overlapOn = true; }
@@ -710,7 +710,11 @@ namespace SfMorph
             s.BendAmount = _p.BendBulge.Value; s.BicepsMm = _p.BendBicepsMm.Value; s.KneeMm = _p.BendKneeMm.Value; s.CalfMm = _p.BendCalfMm.Value;
             s.HipMm = _p.BendHipMm.Value; s.BellyFoldMm = _p.BendBellyFoldMm.Value;
             s.Ripple = _p.RippleAmount.Value; s.RippleSpeed = _p.RippleSpeed.Value; s.RippleWavelength = _p.RippleWavelength.Value; s.RippleDamping = _p.RippleDamping.Value;
-            s.Marks = _p.SkinMarksOn.Value; s.Redness = _p.MarksRedness.Value; s.MarkFade = _p.MarksFade.Value; s.Ao = _p.MarksAo.Value;
+            s.Marks = _p.SkinMarksOn.Value; s.MarkFade = _p.MarksFade.Value;
+            // 0.8.9 (user: marks too subtle): the boost multiplies the build-up, the redness (saturates sooner) and the pressed darkening (capped so
+            // the shade never passes 0.3 of the albedo)
+            float boost = Mathf.Clamp(_p.MarksBoost.Value, 1f, 4f);
+            s.MarkBoost = boost; s.MarkGain = 0.6f * boost; s.Redness = _p.MarksRedness.Value * boost; s.Ao = Mathf.Min(2f, _p.MarksAo.Value * boost);
         }
 
         // 0.8.0: impacts of this frame's Simulate -> ripple waves (GpuContact draws them) and the breast pulse.

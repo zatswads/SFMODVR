@@ -93,7 +93,7 @@ namespace SfMorph
             PCapOff = Shader.PropertyToID("_CapOff"), PTanOff = Shader.PropertyToID("_TanOff"),
             PCanon = Shader.PropertyToID("_Canon"), PAdjOff = Shader.PropertyToID("_AdjOff"), PAdjV = Shader.PropertyToID("_AdjV"), PTissue = Shader.PropertyToID("_Tissue"),
             PClass = Shader.PropertyToID("_Class"), PBend = Shader.PropertyToID("_Bend"), PFieldIn = Shader.PropertyToID("_FieldIn"), PFieldOut = Shader.PropertyToID("_FieldOut"),
-            PFieldN = Shader.PropertyToID("_FieldN"), PFieldW = Shader.PropertyToID("_FieldW"), PMarks = Shader.PropertyToID("_Marks"), PGrad = Shader.PropertyToID("_Grad"),
+            PFieldN = Shader.PropertyToID("_FieldN"), PFieldW = Shader.PropertyToID("_FieldW"), PFieldR = Shader.PropertyToID("_FieldR"), PMarks = Shader.PropertyToID("_Marks"), PGrad = Shader.PropertyToID("_Grad"),
             PWaves = Shader.PropertyToID("_Waves"), PWaveCount = Shader.PropertyToID("_WaveCount"), PNoField = Shader.PropertyToID("_NoField"), PMarkOn = Shader.PropertyToID("_MarkOn"),
             PSoftScale = Shader.PropertyToID("_SoftScale"), PDepth = Shader.PropertyToID("_Depth"), PSkirt = Shader.PropertyToID("_SkirtLen"), PBulge = Shader.PropertyToID("_Bulge"),
             PBulgeCap = Shader.PropertyToID("_BulgeCap"), PNormalBend = Shader.PropertyToID("_NormalBend"), PDt = Shader.PropertyToID("_Dt"), PMarkGain = Shader.PropertyToID("_MarkGain"),
@@ -921,7 +921,7 @@ namespace SfMorph
                 if (count && !s.HitInflight) s.HitsBuf.SetData(ZeroHits);
                 cs.SetInt(PCountHits, count ? 1 : 0);
                 cs.SetBuffer(_kDepth, PVerts, vb); cs.SetBuffer(_kDepth, PCanon, s.CanonBuf); cs.SetBuffer(_kDepth, PTissue, s.TissueBuf);
-                cs.SetBuffer(_kDepth, PClass, s.ClassBuf); cs.SetBuffer(_kDepth, PCaps, _capBuf); cs.SetBuffer(_kDepth, PFieldOut, A);
+                cs.SetBuffer(_kDepth, PClass, s.ClassBuf); cs.SetBuffer(_kDepth, PCaps, _capBuf); cs.SetBuffer(_kDepth, PFieldOut, s.FieldD);   // raw kept in D for Compose
                 cs.SetBuffer(_kDepth, PHits, s.HitsBuf);
                 cs.SetInt(PCapCount, s.CapN); cs.SetInt(PCapOff, s.CapOff);
                 cs.Dispatch(_kDepth, groups, 1, 1); n++;
@@ -935,29 +935,31 @@ namespace SfMorph
             if (s.Depth)
             {
                 int iters = Mathf.Clamp(Mathf.CeilToInt(3f * skirt / Mathf.Max(0.001f, s.Bake.AvgEdge)), 2, 10);
+                // 0.8.9: Depth's raw field stays in D (Compose's floor); dilate D -> A, then A/B; wide ends in A; Compose writes B
+                Pass(_kDilate, vb, s, s.FieldD, A, groups); n++;
                 GraphicsBuffer cur = A, oth = B;
-                for (int i = 0; i < iters; i++) { Pass(_kDilate, vb, s, cur, oth, groups); n++; var t = cur; cur = oth; oth = t; }
+                for (int i = 1; i < iters; i++) { Pass(_kDilate, vb, s, cur, oth, groups); n++; var t = cur; cur = oth; oth = t; }
                 Pass(_kSmooth, vb, s, cur, oth, groups); Pass(_kSmooth, vb, s, oth, s.FieldC, groups);        // narrow -> C
-                Pass(_kSmooth, vb, s, s.FieldC, A, groups); Pass(_kSmooth, vb, s, A, B, groups); Pass(_kSmooth, vb, s, B, s.FieldD, groups);   // wide -> D
+                Pass(_kSmooth, vb, s, s.FieldC, A, groups); Pass(_kSmooth, vb, s, A, B, groups); Pass(_kSmooth, vb, s, B, A, groups);   // wide -> A
                 n += 5;
             }
             for (int d = 0; d < 4; d++)
             {
                 if ((s.DiscMask & (1 << d)) == 0) continue;
                 cs.SetBuffer(_kDisc, PVerts, vb); cs.SetBuffer(_kDisc, PCanon, s.CanonBuf); cs.SetBuffer(_kDisc, PMarks, s.MarksBuf);
-                cs.SetVector(PDisc, _discArr[d]); cs.SetFloat(PDiscAmt, _discAmt[d]);
+                cs.SetVector(PDisc, _discArr[d]); cs.SetFloat(PDiscAmt, Mathf.Min(1f, _discAmt[d] * _set.MarkBoost));
                 cs.Dispatch(_kDisc, groups, 1, 1); n++;
             }
             cs.SetBuffer(_kCompose, PVerts, vb); cs.SetBuffer(_kCompose, PCanon, s.CanonBuf); cs.SetBuffer(_kCompose, PTissue, s.TissueBuf);
-            cs.SetBuffer(_kCompose, PBend, s.BendBuf); cs.SetBuffer(_kCompose, PFieldN, s.FieldC); cs.SetBuffer(_kCompose, PFieldW, s.FieldD);
-            cs.SetBuffer(_kCompose, PFieldOut, A); cs.SetBuffer(_kCompose, PMarks, s.MarksBuf); cs.SetBuffer(_kCompose, PWaves, _waveBuf);
+            cs.SetBuffer(_kCompose, PBend, s.BendBuf); cs.SetBuffer(_kCompose, PFieldN, s.FieldC); cs.SetBuffer(_kCompose, PFieldW, A);
+            cs.SetBuffer(_kCompose, PFieldR, s.FieldD); cs.SetBuffer(_kCompose, PFieldOut, B); cs.SetBuffer(_kCompose, PMarks, s.MarksBuf); cs.SetBuffer(_kCompose, PWaves, _waveBuf);
             cs.SetInt(PNoField, s.Depth ? 0 : 1); cs.SetInt(PWaveCount, s.Wave ? nWaves : 0); cs.SetFloat(PWaveAmt, 1f);
             var amt = BendPose.Amt;
             cs.SetVector(PBendAmt0, new Vector4(amt[0], amt[1], amt[2], amt[3])); cs.SetVector(PBendAmt1, new Vector4(amt[4], amt[5], amt[6], amt[7]));
             cs.SetVector(PBendAmt2, new Vector4(amt[8], 0f, 0f, 0f));
             cs.Dispatch(_kCompose, groups, 1, 1); n++;
             cs.SetBuffer(_kGrad, PVerts, vb); cs.SetBuffer(_kGrad, PCanon, s.CanonBuf); cs.SetBuffer(_kGrad, PAdjOff, s.AdjOffBuf); cs.SetBuffer(_kGrad, PAdjV, s.AdjVBuf);
-            cs.SetBuffer(_kGrad, PFieldIn, A); cs.SetBuffer(_kGrad, PGrad, s.GradBuf);
+            cs.SetBuffer(_kGrad, PFieldIn, B); cs.SetBuffer(_kGrad, PGrad, s.GradBuf);
             cs.Dispatch(_kGrad, groups, 1, 1); n++;
             n += ApplyFinal(s, vb, groups, true);
             s.ChainRan = true;

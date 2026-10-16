@@ -359,7 +359,11 @@ namespace SfMorph
         static float Tissue(string name, float softness) { return TissueDepth(name) * Mathf.Lerp(0.7f, 1.3f, Mathf.Clamp01(softness)); }
 
         // With the soft zones off nothing dents, so only the skin's few millimetres give.
-        public static float Inset(Seg g, float softness, bool softZonesOn) { return softZonesOn ? Mathf.Max(0.004f, Tissue(g.Name, softness)) : 0.004f; }
+        // 0.8.9 (user: the physics hand still clips into her): the full tissue depth put the breast / butt colliders 2.4 cm inside her skin, but
+        // the GPU dent follows a press exactly only to 0.6 of its tissue cap and saturates after (Tissue.Press), so the last ~1 cm of a press
+        // showed the hand inside her. The collider now stops the hand where the dent still follows it.
+        public const float InsetShare = 0.6f;
+        public static float Inset(Seg g, float softness, bool softZonesOn) { return softZonesOn ? Mathf.Max(0.004f, InsetShare * Tissue(g.Name, softness)) : 0.004f; }
         public static float Inset(Seg g, float softness) { return Inset(g, softness, true); }
 
         // How far a hand may sink into the skin of segment `seg` (Defs index) before it stops, where the soft zones / GPU contact dent it:
@@ -367,7 +371,7 @@ namespace SfMorph
         public static float SkinAllowance(int seg)
         {
             if (seg < 0 || seg >= Defs.Length || !SoftZonesOn) return 0.004f;
-            return Mathf.Max(0.004f, Tissue(Defs[seg].Name, Softness));
+            return Mathf.Max(0.004f, InsetShare * Tissue(Defs[seg].Name, Softness));   // 0.8.9: where the dent still follows exactly
         }
 
         static void Build(Character her, HerBodySettings s)

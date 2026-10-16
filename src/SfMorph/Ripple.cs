@@ -165,7 +165,9 @@ namespace SfMorph
                 if (logIt) Plugin.Log.LogInfo("Ripple: impact #" + _impacts + " by " + _lastBy + " on " + _lastWhere + " " + speed.ToString("0.0") + " m/s (ripple strength 0: no wave)");
                 return;
             }
-            float a = Mathf.Clamp(0.004f * (speed - 0.5f), 0f, 0.010f) * s.Ripple;
+            // 0.8.9 (user: the ripple never shows): 4 mm/(m/s) gave 2-5 mm waves that the 12 cm falloff and the Gaussian ring cut to ~1 mm within
+            // 0.1 s, invisible in the headset. 12 mm/(m/s) from 0.4 m/s, capped at 25 mm: a 1.5 m/s slap at the default 60 % starts at ~8 mm.
+            float a = Mathf.Clamp(0.012f * (speed - 0.4f), 0f, 0.025f) * s.Ripple;
             // breast impact: the game's breast physics gets a short kick along the impact
             string pulseNote = "";
             if (IsBreast(bone, zoneId))

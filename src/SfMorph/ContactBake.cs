@@ -15,7 +15,7 @@ namespace SfMorph
         public float BendAmount = 0.6f, BicepsMm = 8f, KneeMm = 8f, CalfMm = 6f, HipMm = 5f, BellyFoldMm = 5f;
         public float Ripple = 0.6f, RippleSpeed = 1f, RippleWavelength = 0.07f, RippleDamping = 0.3f;
         public bool Marks = true;
-        public float Redness = 0.5f, MarkFade = 15f, MarkGain = 0.6f, Ao = 0.5f;
+        public float Redness = 0.5f, MarkFade = 15f, MarkGain = 0.6f, Ao = 0.5f, MarkBoost = 1f;
     }
 
     // 0.8.0: what GpuContact's v2 field chain needs per renderer, baked on the CPU once per soft-zones build (design 1.2): welded vertices,

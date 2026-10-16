@@ -463,7 +463,9 @@ namespace SfMorph
             }
             // by strength: what is still empty
             var free = new List<ClipInfo>();
-            foreach (var c in _ranked) if (Usable(c) && !used.Contains(c)) free.Add(c);
+            // 0.8.9 (log: Surprise picked 'dance_P' by strength and played it 21 times): strength-only picks skip clips named for body
+            // motions (dance, walk, idle, pose, sex positions); those move her face bones as a side effect, not as an expression
+            foreach (var c in _ranked) if (Usable(c) && !used.Contains(c) && !NotAnExpression(c.Name)) free.Add(c);
             for (int m = 0; m < NM; m++)
             {
                 if (_pick[m] != null) continue;
@@ -508,6 +510,15 @@ namespace SfMorph
         }
 
         static bool Usable(ClipInfo c) { return !c.Speech && !c.Blink && c.Len > 0.05f; }
+
+        static readonly string[] BodyMotionWords = { "dance", "walk", "idle", "pose", "sit", "stand", "cowgirl", "missionary", "doggy", "blowjob", "handjob", "sex_" };
+        static bool NotAnExpression(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            string n = name.ToLowerInvariant();
+            foreach (var w in BodyMotionWords) if (n.Contains(w)) return true;
+            return false;
+        }
         static bool HasWord(string n, string[] words) { string s = n.ToLowerInvariant(); foreach (var w in words) if (s.Contains(w)) return true; return false; }
         ClipInfo ByName(string n) { foreach (var c in _ranked) if (c.Name == n) return c; foreach (var c in _clips) if (c.Name == n && c.Bound > 0) return c; return null; }
 
