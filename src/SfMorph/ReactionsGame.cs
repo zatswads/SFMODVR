@@ -70,6 +70,17 @@ namespace SfMorph
         public float TouchReactionTime;    // LadyBreastPhysics_Function.touchReactionTime (s)
         public float Desire = -1f;         // SexMode_State_System.reikaDesire (0..100); < 0 = unknown (no gauge)
         public int Language;               // GameSetting_Function.voiceLanguage
+        // 0.8.6: her recorded lines for the touched area (DirtyTalk_Library[language].reikaNipple/reikaPussy/reikaAnal/public_DT_Lv1..3) and the
+        // feeling one-shots (SexVoice_Source_Library[language].Feeling_enter_0..3)
+        public bool HasLines;              // at least one line clip and the dirty-talk source exist (SpeakLine() works)
+        public bool HasFeeling;            // at least one Feeling_enter clip and the moan source exist (Feeling() works)
+        public bool LinePathOk;            // the game's own path (DirtyTalkTypeSelect + PlayDirtyTalk and the fields restored after it) is usable
+        public bool DirtyTalkOn;           // GameSetting_Function.dirtyTalkIsOn (off: the game mutes the dirty-talk source)
+        public float LastLineLength;       // seconds of the last line SpeakLine() started
+        public UnityEngine.Object LastLineClip;
+        public string LineHow = "";        // which path the last SpeakLine() took ("game", "own clip (...)")
+        public int LineCat, LineLevel;     // the category (0 nipple, 1 pussy, 2 anal, 3 public) and level (1..3) it actually used
+        public static readonly string[] LineCats = { "nipple", "pussy", "anal", "public" };
 
         const BindingFlags Own = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
         const BindingFlags AnyM = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -145,6 +156,14 @@ namespace SfMorph
         Mem _mSexMode, _mForeplay, _mTouchTime, _mDesire;
         MethodInfo _miMoan, _miBlink, _miDesirePlus, _miEyeIn, _miEyeOut, _miDtStop, _miSubHide;
         Mem _mSubtitle;
+        // 0.8.6 lines: the library, the game's path and every field that path changes (snapshot and restored around it)
+        Mem _mDtLib, _mDtIsOn, _mReikaLv, _mPlayerLv, _mDtLen1, _mDtLen2, _mDtLen3, _mDtTypeStr, _mDtTypeList, _mDtLevelList;
+        MethodInfo _miDtSelect, _miDtPlay;
+        readonly Bank[] _lines = new Bank[12];                       // [category * 3 + level - 1]
+        readonly UnityEngine.Object[] _feel = new UnityEngine.Object[4];
+        readonly object[] _argStr = new object[1], _argBool = new object[1];
+        int _lineLang = -1, _lineUses, _lineFails; float _feelEnd;
+        static readonly string[] LineTypes = { "reikaNipple", "reikaPussy", "reikaAnal", "handJob" };   // handJob's lists start with public_DT_LvN
         // audio members (AudioSource / AudioClip, reflected)
         PropertyInfo _pPlaying, _pClip, _pPitch, _pVolume, _pBlend, _pRolloff, _pMin, _pMax, _pPlayAwake, _pGroup, _pClipLen, _pTime;
         MethodInfo _miPlay, _miStop, _miOneShot;
@@ -192,7 +211,7 @@ namespace SfMorph
         bool _guardLoggedFirst;
         readonly Application.LogCallback _logCb;
 
-        public ReactionsGame() { _logCb = OnLog; }
+        public ReactionsGame() { _logCb = OnLog; for (int i = 0; i < _lines.Length; i++) _lines[i] = new Bank(); }
 
         void Log(string msg) { Plugin.Log.LogInfo("Reactions: " + msg); }
         void LogOnce(string key, string msg) { if (_logged.Add(key)) Plugin.Log.LogInfo("Reactions: " + msg); }
@@ -471,6 +490,21 @@ namespace SfMorph
             var tb = _bp != null ? _bp.GetType() : Ty("LadyBreastPhysics_Function");
             _mTouchTime = M(tb, "touchReactionTime", "LadyBreastPhysics_Function.touchReactionTime");
 
+            // 0.8.6 lines (optional: no Miss, the toggle's status says what is missing)
+            _mDtLib = Q(tl, "dirtyTalk_Library");
+            _mDtIsOn = Q(tg, "dirtyTalkIsOn");
+            _mReikaLv = Q(tf, "dirtyTalk_reika_level"); _mPlayerLv = Q(tf, "dirtyTalk_player_level");
+            _mDtLen1 = Q(tl, "dtClipLength_1"); _mDtLen2 = Q(tl, "dtClipLength_2"); _mDtLen3 = Q(tl, "dtClipLength_3");
+            _mDtTypeStr = Q(tl, "dirtyTalkTypeList_string"); _mDtTypeList = Q(tl, "dirtyTalkTypeList"); _mDtLevelList = Q(tl, "dirtyTalkLevelList");
+            _miDtSelect = null; _miDtPlay = null;
+            if (tl != null)
+                for (var k = tl; k != null && k != typeof(object) && (_miDtSelect == null || _miDtPlay == null); k = k.BaseType)
+                {
+                    if (_miDtSelect == null) _miDtSelect = k.GetMethod("DirtyTalkTypeSelect", AnyM | BindingFlags.DeclaredOnly, null, new[] { typeof(string) }, null);
+                    if (_miDtPlay == null) _miDtPlay = k.GetMethod("PlayDirtyTalk", AnyM | BindingFlags.DeclaredOnly, null, new[] { typeof(bool) }, null);
+                }
+            _lineLang = -1; _lineFails = 0;
+
             BuildLibrary(Int(_mLang, _gs, 0));
             HasMoan = _hasMoanFn || HasLibrary;
             BuildSfx();
@@ -544,6 +578,7 @@ namespace SfMorph
         void BuildLibrary(int lang)
         {
             _bankLang = lang;
+            BuildLines(lang);
             for (int i = 0; i < _moanBanks.Length; i++) { _moanBanks[i].Clips = null; Array.Clear(_moanBanks[i].Recent, 0, 4); for (int k = 0; k < 4; k++) _moanBanks[i].Recent[k] = -1; }
             _breath.Clips = null; for (int k = 0; k < 4; k++) _breath.Recent[k] = -1;
             HasLibrary = false; HasBreath = false;
@@ -591,6 +626,222 @@ namespace SfMorph
             }
             catch (Exception e) { LogOnce("buildlib", "voice library unreadable: " + e.Message); HasLibrary = false; }
             if (_bridgeLogged) Log("voice language " + lang + ": " + BanksText());
+        }
+
+        // 0.8.6: the language's line clips by category and level, and the four Feeling_enter one-shots. Logged once per language with the counts.
+        void BuildLines(int lang)
+        {
+            for (int i = 0; i < _lines.Length; i++) { _lines[i].Clips = null; for (int k = 0; k < 4; k++) _lines[i].Recent[k] = -1; }
+            for (int i = 0; i < _feel.Length; i++) _feel[i] = null;
+            HasLines = false; HasFeeling = false;
+            LinePathOk = _miDtSelect != null && _miDtPlay != null && _mDtList.Ok && _mDtVoice.Ok && _mDtNum.Ok && _mDtType.Ok && _mDtActive.Ok
+                      && _mReikaLv.Ok && _mPlayerLv.Ok && _mDtLen1.Ok && _mDtLen2.Ok && _mDtLen3.Ok && _mDtTypeStr.Ok && _mDtTypeList.Ok && _mDtLevelList.Ok
+                      && _pClip != null && _srcDirty != null;
+            if (_lv == null) return;
+            var sb = new StringBuilder();
+            sb.Append("lines for voice language ").Append(lang).Append(": ");
+            try
+            {
+                var libs = _mDtLib != null && _mDtLib.Ok ? _mDtLib.Get(_lv) as Array : null;
+                var lib = libs != null && lang >= 0 && lang < libs.Length ? libs.GetValue(lang) : null;
+                if (lib == null || Dead(lib)) sb.Append("no DirtyTalk_Library (").Append(libs == null ? "no array" : libs.Length + " entries").Append(')');
+                else
+                {
+                    var tl = lib.GetType();
+                    string[] fields = { "reikaNipple_DT_Lv", "reikaPussy_DT_Lv", "reikaAnal_DT_Lv", "public_DT_Lv" };
+                    for (int c = 0; c < 4; c++)
+                    {
+                        if (c > 0) sb.Append(", ");
+                        sb.Append(LineCats[c]).Append(' ');
+                        for (int l = 0; l < 3; l++)
+                        {
+                            var m = Q(tl, fields[c] + (l + 1));
+                            var clips = m.Ok ? ToClips(m.Get(lib) as Array) : null;
+                            _lines[c * 3 + l].Clips = clips != null && clips.Length > 0 ? clips : null;
+                            if (_lines[c * 3 + l].Clips != null && _srcDirty != null && _pClip != null && _miPlay != null) HasLines = true;
+                            if (l > 0) sb.Append('/');
+                            sb.Append(m.Ok ? (clips != null ? clips.Length.ToString() : "0") : "-");
+                        }
+                    }
+                    var e0 = Q(tl, "empty");
+                    var empty = e0.Ok ? e0.Get(lib) as Array : null;
+                    sb.Append(" (Lv1/Lv2/Lv3; 'empty' holds ").Append(empty != null ? empty.Length.ToString() : "-").Append(')');
+                }
+            }
+            catch (Exception e) { sb.Append("unreadable: ").Append(e.Message); }
+            try
+            {
+                var libs = _mLib.Ok ? _mLib.Get(_lv) as Array : null;
+                var lib = libs != null && lang >= 0 && lang < libs.Length ? libs.GetValue(lang) : null;
+                sb.Append("; feeling enter ");
+                if (lib == null) sb.Append("none");
+                else
+                {
+                    var tl = lib.GetType();
+                    for (int i = 0; i < 4; i++)
+                    {
+                        var m = Q(tl, "Feeling_enter_" + i);
+                        _feel[i] = m.Ok ? m.Get(lib) as UnityEngine.Object : null;
+                        if (_feel[i] == null) _feel[i] = null;   // a destroyed or missing clip
+                        if (_feel[i] != null && _srcMoan != null && _pClip != null && _miPlay != null) HasFeeling = true;
+                        if (i > 0) sb.Append(", ");
+                        sb.Append(i).Append(' ').Append(_feel[i] != null ? _feel[i].name + " " + ClipLen(_feel[i]).ToString("0.00") + "s" : "-");
+                    }
+                }
+            }
+            catch (Exception e) { sb.Append("unreadable: ").Append(e.Message); }
+            sb.Append("; the game's path (DirtyTalkTypeSelect + PlayDirtyTalk) ").Append(LinePathOk ? "usable" : "not usable, own clips on the dirty-talk source");
+            if (!LinePathOk)
+            {
+                sb.Append(" (missing:");
+                if (_miDtSelect == null) sb.Append(" DirtyTalkTypeSelect(string)");
+                if (_miDtPlay == null) sb.Append(" PlayDirtyTalk(bool)");
+                if (!_mReikaLv.Ok) sb.Append(" dirtyTalk_reika_level");
+                if (!_mPlayerLv.Ok) sb.Append(" dirtyTalk_player_level");
+                if (!_mDtLen1.Ok || !_mDtLen2.Ok || !_mDtLen3.Ok) sb.Append(" dtClipLength_1..3");
+                if (!_mDtTypeStr.Ok || !_mDtTypeList.Ok || !_mDtLevelList.Ok) sb.Append(" dirtyTalkTypeList/LevelList");
+                if (!_mDtList.Ok || !_mDtVoice.Ok || !_mDtNum.Ok || !_mDtType.Ok || !_mDtActive.Ok) sb.Append(" dirty-talk list/shuffle/type");
+                if (_srcDirty == null) sb.Append(" dirtyTalk_audioSource");
+                sb.Append(')');
+            }
+            if (lang != _lineLang) { _lineLang = lang; Log(sb.ToString()); }
+        }
+
+        Bank LineBank(int cat, int level) { return cat >= 0 && cat < 4 && level >= 1 && level <= 3 ? _lines[cat * 3 + level - 1] : null; }
+
+        // How many clips a category has at a level (0 = none).
+        public int LineCount(int cat, int level) { var b = LineBank(cat, level); return b != null ? b.Count : 0; }
+
+        // One of her recorded lines for the touched area: category 0 nipple, 1 pussy, 2 anal, 3 public, level 1..3. An empty level falls back to the
+        // lower levels of the category, then to the public lines. The game's own path when it is usable (her talking face and subtitle come with
+        // it), else the clip on the game's dirty-talk source. The arbiter is Reactions' (never over dialogue, a kiss, dirty talk or a moan).
+        public bool SpeakLine(int cat, int level, out string how)
+        {
+            how = "";
+            if (!Found || !HasLines || _lv == null || Dead(_lv) || _srcDirty == null || Dead(_srcDirty)) { how = "no lines"; return false; }
+            Bank b = null; int uc = cat, ul = level;
+            for (int l = level; l >= 1 && b == null; l--) { var x = LineBank(cat, l); if (x != null && x.Count > 0) { b = x; ul = l; } }
+            if (b == null) for (int l = level; l >= 1 && b == null; l--) { var x = LineBank(3, l); if (x != null && x.Count > 0) { b = x; uc = 3; ul = l; } }
+            if (b == null) for (int l = 1; l <= 3 && b == null; l++) { var x = LineBank(3, l); if (x != null && x.Count > 0) { b = x; uc = 3; ul = l; } }
+            if (b == null) { how = "no clips for " + (cat >= 0 && cat < 4 ? LineCats[cat] : "?"); return false; }
+            var clip = b.Pick();
+            if (clip == null) { how = "no clip"; return false; }
+            string why = null;
+            bool ok = false;
+            if (LinePathOk) { ok = LineViaGame(uc, ul, clip, out why); if (ok) how = "game"; }
+            else why = "the game's path is not usable";
+            if (!ok)
+            {
+                ok = LineOwn(clip);
+                how = ok ? "own clip (" + why + ")" : "failed (" + why + ")";
+            }
+            if (!ok) return false;
+            LastLineClip = clip; LastLineLength = ClipLen(clip); LineCat = uc; LineLevel = ul; LineHow = how;
+            _lineUses++;
+            if (_lineUses <= 10)
+                Log("line " + _lineUses + ": " + LineCats[uc] + " Lv" + ul + (uc != cat || ul != level ? " (asked " + LineCats[Mathf.Clamp(cat, 0, 3)] + " Lv" + level + ")" : "")
+                    + " '" + clip.name + "' " + LastLineLength.ToString("0.00") + " s via " + how);
+            return true;
+        }
+
+        // The game's path: the level on FacialFunction, DirtyTalkTypeSelect(type) builds the type's list, a one-entry shuffle at our clip's index makes
+        // PlayDirtyTalk(true) play exactly that clip (and DirtyTalkNumber map it to its face and subtitle); then every field the two calls wrote is
+        // put back: type, active flag, list, its segment lengths and type/level lists, the shuffle and its counter, the level. The face and subtitle
+        // already got their numbers as arguments, so they are not affected. The dirty-talk guard sees only the restored, valid state.
+        bool LineViaGame(int cat, int level, UnityEngine.Object clip, out string why)
+        {
+            why = null;
+            var lvMem = cat < 3 ? _mReikaLv : _mPlayerLv;
+            object lv = _lv;
+            object oType = _mDtType.Get(lv), oActive = _mDtActive.Get(lv), oList = _mDtList.Get(lv), oSeq = _mDtVoice.Get(lv), oNum = _mDtNum.Get(lv);
+            object oL1 = _mDtLen1.Get(lv), oL2 = _mDtLen2.Get(lv), oL3 = _mDtLen3.Get(lv);
+            object oTS = _mDtTypeStr.Get(lv), oTL = _mDtTypeList.Get(lv), oLL = _mDtLevelList.Get(lv);
+            object oLevel = lvMem.Get(_facial);
+            bool ok = false;
+            try
+            {
+                lvMem.Set(_facial, level);
+                _argStr[0] = LineTypes[cat];
+                _miDtSelect.Invoke(lv, _argStr);
+                var list = _mDtList.Get(lv) as Array;
+                int idx = list != null ? Array.IndexOf(list, clip) : -1;
+                if (idx < 0) why = "the game's " + LineTypes[cat] + " Lv" + level + " list lacks the clip";
+                else
+                {
+                    _mDtVoice.Set(lv, new int[] { idx });
+                    _mDtNum.Set(lv, 0);
+                    _argBool[0] = true;
+                    _miDtPlay.Invoke(lv, _argBool);
+                    ok = ReferenceEquals(_pClip.GetValue(_srcDirty, null), clip) && Playing(_srcDirty);
+                    if (!ok) why = "PlayDirtyTalk did not start the clip";
+                }
+            }
+            catch (Exception e)
+            {
+                var ie = e.InnerException ?? e;
+                why = "the game's path threw " + ie.GetType().Name + ": " + ie.Message;
+                if (++_lineFails >= 3) { LinePathOk = false; LogOnce("linepathoff", "lines: the game's path failed 3 times, own clips on the dirty-talk source from now on (" + why + ")"); }
+            }
+            finally
+            {
+                try
+                {
+                    _mDtType.Set(lv, oType); _mDtActive.Set(lv, oActive); _mDtList.Set(lv, oList); _mDtVoice.Set(lv, oSeq); _mDtNum.Set(lv, oNum);
+                    _mDtLen1.Set(lv, oL1); _mDtLen2.Set(lv, oL2); _mDtLen3.Set(lv, oL3);
+                    _mDtTypeStr.Set(lv, oTS); _mDtTypeList.Set(lv, oTL); _mDtLevelList.Set(lv, oLL);
+                    if (oLevel != null) lvMem.Set(_facial, oLevel);
+                    HoldDirtyTimer();
+                }
+                catch (Exception e) { LogOnce("linerestore", "lines: restoring the game's dirty-talk state failed: " + e.Message); }
+            }
+            if (ok) _lineFails = 0;
+            return ok;
+        }
+
+        // The clip on the game's dirty-talk source (the game's timer waits while it plays), the voice loop stopped like the game does. No face.
+        bool LineOwn(UnityEngine.Object clip)
+        {
+            try
+            {
+                if (_pClip == null || _miPlay == null) return false;
+                _pClip.SetValue(_srcDirty, clip, null);
+                _miPlay.Invoke(_srcDirty, null);
+                if (_srcVoice != null && !Dead(_srcVoice) && _miStop != null) _miStop.Invoke(_srcVoice, null);
+                HoldDirtyTimer();
+                return true;
+            }
+            catch (Exception e) { LogOnce("lineown:" + e.GetType().Name, "lines: own clip failed: " + e.Message); return false; }
+        }
+
+        // The game's own dirty talk does not follow ours at once: its countdown gets at least 3 s (it only runs while the source is silent).
+        void HoldDirtyTimer()
+        {
+            if (_mDtSpeed != null && _mDtSpeed.Ok && Flt(_mDtSpeed, _lv, 3f) < 3f) _mDtSpeed.Set(_lv, 3f);
+        }
+
+        // A Feeling_enter one-shot (0..3) on the moan source with the "moan" trigger for her mouth; the moan source counts as busy for its whole length.
+        public bool Feeling(int n)
+        {
+            n = Mathf.Clamp(n, 0, 3);
+            if (!Found || !HasFeeling || _srcMoan == null || Dead(_srcMoan)) return false;
+            var clip = _feel[n];
+            for (int d = 1; clip == null && d < 4; d++) clip = _feel[Mathf.Clamp(n - d, 0, 3)] ?? _feel[Mathf.Clamp(n + d, 0, 3)];
+            if (clip == null) return false;
+            try
+            {
+                RestorePitch();
+                if (_miStop != null && (Playing(_srcMoan) || _now < _ownEnd)) { _miStop.Invoke(_srcMoan, null); _ownEnd = 0f; OwnVoicePlaying = false; }
+                _moanT0 = _now; _ownOneShot = false;
+                _pClip.SetValue(_srcMoan, clip, null);
+                _miPlay.Invoke(_srcMoan, null);
+                if (_srcVoice != null && !Dead(_srcVoice) && _miStop != null) _miStop.Invoke(_srcVoice, null);
+                LastClip = clip; LastClipLength = ClipLen(clip);
+                _feelEnd = _now + LastClipLength;
+                if (HasAnim) { _anim.SetTrigger(_hMoan); MarkTrigger(); }
+                LogOnce("feeling" + n, "feeling: Feeling_enter_" + n + " '" + clip.name + "' " + LastClipLength.ToString("0.00") + " s on the moan source");
+                return true;
+            }
+            catch (Exception e) { LogOnce("feeling:" + e.GetType().Name, "feeling clip failed: " + e.Message); return false; }
         }
 
         static UnityEngine.Object[] ToClips(Array a)
@@ -876,6 +1127,7 @@ namespace SfMorph
             sb.Append("; touchReactionTime ").Append(TouchReactionTime.ToString("0.##")).Append("; language ").Append(Language);
             sb.Append("; moan banks [").Append(HasLibrary ? BanksText() : "none").Append("]");
             sb.Append("; breath clips ").Append(_breath.Count);
+            sb.Append("; lines ").Append(HasLines ? (LinePathOk ? "yes (the game's path)" : "yes (own clips)") : "none").Append(", feeling enter ").Append(HasFeeling ? "yes" : "none");
             sb.Append("; slap clips ").Append(SlapBanks.Length > 0 ? SlapBanks : "none");
             sb.Append("; eye reaction ").Append(HasEyeReact ? _eyeText : "none");
             sb.Append("; blush (skin only) ").Append(BlushText());
@@ -918,6 +1170,7 @@ namespace SfMorph
                 VoiceOn = _gs == null || _mVoiceOn == null || !_mVoiceOn.Ok || Bool(_mVoiceOn, _gs);
                 SfxOn = _gs == null || _mSfxOn == null || !_mSfxOn.Ok || Bool(_mSfxOn, _gs);
                 BreakSystemOn = Bool(_mBreakOn, _gs);
+                DirtyTalkOn = _gs == null || _mDtIsOn == null || !_mDtIsOn.Ok || Bool(_mDtIsOn, _gs);
                 int lang = Int(_mLang, _gs, 0);
                 Language = lang;
                 if (lang != _bankLang) { BuildLibrary(lang); HasMoan = _hasMoanFn || HasLibrary; }
@@ -1092,6 +1345,7 @@ namespace SfMorph
         bool TailSilent()
         {
             if (_srcMoan == null || Dead(_srcMoan) || !Playing(_srcMoan)) return false;
+            if (_now < _feelEnd && _feelEnd - _now < 10f) return false;   // a Feeling_enter clip is audible for its whole length
             try
             {
                 if (_ownOneShot)
@@ -1136,7 +1390,7 @@ namespace SfMorph
         public void StopMoan()
         {
             if (!Found || _srcMoan == null || Dead(_srcMoan) || _miStop == null) return;
-            try { _miStop.Invoke(_srcMoan, null); _ownEnd = 0f; OwnVoicePlaying = false; MoanPlaying = false; MoanTail = false; _ownOneShot = false; }
+            try { _miStop.Invoke(_srcMoan, null); _ownEnd = 0f; _feelEnd = 0f; OwnVoicePlaying = false; MoanPlaying = false; MoanTail = false; _ownOneShot = false; }
             catch (Exception e) { LogOnce("stopmoan", "stopping the moan source failed: " + e.Message); }
         }
 
@@ -2097,6 +2351,10 @@ namespace SfMorph
             _miMoan = _miBlink = _miDesirePlus = _miDtStop = _miSubHide = null; _mSubtitle = null;
             for (int i = 0; i < _moanBanks.Length; i++) _moanBanks[i].Clips = null;
             _breath.Clips = null; _slapHard.Clips = null; _slapSoft.Clips = null; _bankLang = -1;
+            for (int i = 0; i < _lines.Length; i++) _lines[i].Clips = null;
+            for (int i = 0; i < _feel.Length; i++) _feel[i] = null;
+            HasLines = HasFeeling = LinePathOk = DirtyTalkOn = false; _lineLang = -1; _lineFails = 0; _feelEnd = 0f;
+            _miDtSelect = _miDtPlay = null; LastLineClip = null; LastLineLength = 0f; LineHow = "";
             _eyeOutAt = 0f; _eyeResetAt = 0f; _eyeIds[0] = _eyeIds[1] = _eyeIds[2] = null; HasEyeReact = false; _hasEyeTrig = false; _eyeText = "";
             _miEyeIn = _miEyeOut = null; _mMixer = null; _slapDiag = false; _blushSig = ""; _gateMask = 0; _gateLogT = -100f;
             DialogueWhy = ""; SexFacialPlaying = false; SlapBanks = "";

@@ -6,8 +6,8 @@ namespace SfMorph
     // Her reactions to touch (0.7.9): what the Body hands the director each frame. Filled from the config once per frame (no allocation).
     internal class ReactionSettings
     {
-        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard;
-        public float Sensitivity, Cooldown, Volume, BlushGain, VoicePitchVar, LimbPush;
+        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines;
+        public float Sensitivity, Cooldown, Volume, BlushGain, VoicePitchVar, LimbPush, LineChance;
         public int VoiceMode, Log;
 
         public void Fill(Plugin p)
@@ -18,6 +18,7 @@ namespace SfMorph
             Sensitivity = p.ReactSensitivity.Value; Cooldown = p.ReactCooldown.Value; Volume = p.ReactVolume.Value;
             BlushGain = p.ReactBlushGain.Value; VoicePitchVar = p.ReactVoicePitchVar.Value;
             VoiceMode = p.ReactVoiceMode.Value; Log = p.ReactLog.Value;
+            Lines = p.ReactLines.Value; LineChance = p.ReactLineChance.Value;
             PushByTouch = p.HandsPushByTouch.Value;   // the geometric push of other hands: without it and without physics hands nothing is classified
             LimbPush = p.HandsLimbPush.Value;   // the flinch's swing is a push on her limbs: it needs the slider above 0
         }
@@ -108,6 +109,9 @@ namespace SfMorph
         float _lastEvT = -100f, _lastStimT = -100f, _lastVoiceT = -100f, _lastBreathT = -100f, _lastFlinchT = -100f, _lastSlapT = -100f, _lastFaceT = -100f, _lastDesireT = -100f, _lastCaressFaceT = -100f;
         float _resetAt, _blink2At, _until, _guardHold, _climaxT0, _nextBreathAt, _lastStateLog = -100f, _startledAt = -100f;
         int _stChanges, _stSuppressed;
+        // 0.8.6 lines: the last line / feeling sound, and the highest excitement tier already greeted with a feeling sound
+        float _lastLineT = -100f, _lastEnterT = -100f;
+        int _enterTier;
         bool _quiet;                       // set while a weaker hit of the same swing fires: no voice, sound or wince, only the rest
         string _moanKind = "moan";
         // the hits of one frame: a swing touches several segments at once and only the strongest is voiced / heard
@@ -226,6 +230,7 @@ namespace SfMorph
             _flush = 0f; _gazeHold = 0f; _guardHold = 0f; _until = 0f; _climaxIdx = 3; _blink2At = 0f;
             _lastEvT = -100f; _lastStimT = -100f; _lastVoiceT = -100f; _lastBreathT = -100f; _lastFlinchT = -100f; _lastSlapT = -100f; _lastFaceT = -100f; _lastDesireT = -100f; _lastCaressFaceT = -100f;
             _startledAt = -100f; _nHits = 0; _quiet = false;
+            _lastLineT = -100f; _lastEnterT = -100f; _enterTier = 0;
             System.Array.Clear(_zArr, 0, NZ); System.Array.Clear(_zCaress, 0, NZ); System.Array.Clear(_zGrope, 0, NZ); System.Array.Clear(_zAny, 0, NZ);
             ClearR();
         }
@@ -421,6 +426,7 @@ namespace SfMorph
             if (!Finite(pt)) pt = SegCentre(g);
             bool wasGuarded = State == RState.Guarded;
             float e0 = E;
+            int t0 = Tier;
             _resp.Length = 0;
             _zAny[zone] = _now; if (tier >= 3) _zArr[zone] = _now;
 
@@ -430,6 +436,8 @@ namespace SfMorph
             P = Mathf.Clamp01(P + dP);
             _lastEvT = _now; _lastStimT = _now;
             SetTier();
+            bool rose = Tier > t0 && Tier > _enterTier;   // a tier she has not reached since it last fell: greeted with a feeling sound
+            if (rose) _enterTier = Tier;
             _cnt[tier]++;
 
             // states that start with an event
@@ -445,10 +453,16 @@ namespace SfMorph
             bool voiced = false;
             if (s.Voice)
             {
+                // 0.8.6: a feeling sound when her excitement rose a tier; else, sometimes, one of her lines for the touched area instead of a moan
+                bool calm = State != RState.Startled && State != RState.Guarded && !wasGuarded;
+                if (!_quiet && s.Lines && rose && calm && TryFeeling(Tier, false)) voiced = true;
+                else if (!_quiet && s.Lines && tier <= 3 && calm && TryLine(zone, g, pt, false)) voiced = true;
+                if (voiced) _vPlayed++;
                 float chance = tier == 1 ? 0.15f + 0.1f * Tier : tier == 2 ? 0.5f + 0.1f * Tier : tier == 3 ? 0.6f + 0.1f * Tier : 1f;
                 if (tier <= 2 && (wasGuarded || State == RState.Startled)) chance = 0f;
                 if (test) chance = 1f;
-                if (_quiet) { if (tier >= 3) { Skip("same swing"); Note("voice skipped (same swing)"); } }
+                if (voiced) { }                    // a line or feeling sound carried the voice
+                else if (_quiet) { if (tier >= 3) { Skip("same swing"); Note("voice skipped (same swing)"); } }
                 else if (tier >= 3 && I < 0.12f && !test) { Skip("weak tap"); Note("voice skipped (weak tap)"); }
                 else if (!(chance >= 1f || Rand() < chance)) Note("no voice (chance " + chance.ToString("0.00") + ")");
                 else
@@ -562,6 +576,108 @@ namespace SfMorph
                 }
             }
             return null;
+        }
+
+        // ---- 0.8.6: her lines ----
+
+        // Which lines a touch speaks: 0 nipple (breasts), 1 pussy / 2 anal (between her legs, front / back), 3 her general lines (butt, hips, thighs);
+        // -1 none (chest, belly, arms, calves, face, neck keep their moans).
+        int LineCatOf(int zone, HerBody.Seg g, Vector3 pt)
+        {
+            switch (zone)
+            {
+                case ZBreast: return 0;
+                case ZButt: case ZThigh: return 3;
+                case ZHips: return PelvisCat(g, pt);
+            }
+            return -1;
+        }
+
+        // The pelvis has no genital segment of its own: the touch point in the pelvis' own frame (across the hip joints, up the spine, back toward
+        // the butt spheres) decides. Below the hip-joint line (3 cm slack) and between the thighs: front pussy, back anal; else her hips (general).
+        int PelvisCat(HerBody.Seg g, Vector3 pt)
+        {
+            if (g == null || g.A == null || g.B == null || _root == null) return 3;
+            Vector3 hl = g.A.position, hr = g.B.position, c = (hl + hr) * 0.5f, lat = hr - hl;
+            float w = lat.magnitude;
+            if (w < 1e-3f) return 3;
+            lat /= w;
+            var sp = HerBody.Find("spine");
+            Vector3 up = sp != null && sp.A != null ? sp.A.position - c : _root.up;
+            up = Vector3.ProjectOnPlane(up, lat);
+            if (up.sqrMagnitude < 1e-6f) up = _root.up;
+            up.Normalize();
+            var bl = HerBody.Find("butt_L"); var br = HerBody.Find("butt_R");
+            Vector3 back = bl != null && br != null && bl.A != null && br.A != null ? (SegCentre(bl) + SegCentre(br)) * 0.5f - c : -_root.forward;
+            back = Vector3.ProjectOnPlane(Vector3.ProjectOnPlane(back, lat), up);
+            if (back.sqrMagnitude < 1e-6f) back = Vector3.ProjectOnPlane(-_root.forward, up);
+            if (back.sqrMagnitude < 1e-6f) return 3;
+            back.Normalize();
+            Vector3 d = pt - c;
+            float below = -Vector3.Dot(d, up), side = Mathf.Abs(Vector3.Dot(d, lat)), front = -Vector3.Dot(d, back);
+            if (below < -0.03f || side > 0.3f * w + 0.02f) return 3;
+            return front >= 0f ? 1 : 2;
+        }
+
+        // The line's level from her excitement tier: 1-2 Lv1, 3 Lv2, 4 Lv3; tier 0 has none (she moans).
+        static int LineLevelOf(int t) { return t >= 4 ? 3 : t >= 3 ? 2 : t >= 1 ? 1 : 0; }
+
+        // The arbiter for lines and feeling sounds, stricter than the moans' (no slap goes through): never over dialogue, a kiss, the game's
+        // feeling loops, its dirty talk or dirty-talk pause, or a moan still sounding. Lines need sex / foreplay mode and the game's dirty talk on
+        // (the game mutes its dirty-talk source otherwise). test: no gaps.
+        string LineBlock(bool feel, bool test)
+        {
+            if (!_g.Found) return "no game link";
+            if (!_g.VoiceOn) return "voice off in the game";
+            if (!feel && !_g.InSexMode) return "outside sex mode";
+            if (!feel && !_g.DirtyTalkOn) return "dirty talk is off in the game";
+            if (_g.FunctionPause || _g.FacialLayer == "off") return "game face paused";
+            if (_g.DialoguePlaying) return _g.DialogueWhy.Length > 0 ? _g.DialogueWhy : "dialogue";
+            if (_g.SexFacialPlaying) return "sex facial";
+            if (_g.DirtyTalkPause) return "dirty talk pause";
+            if (_g.DirtyTalkPlaying) return "dirty talk";
+            if ((_g.MoanPlaying && !_g.MoanTail) || _g.OwnVoicePlaying) return "moan playing";
+            if (!test)
+            {
+                if (_now - _lastVoiceT < 1f) return "voice gap";
+                if (feel && _now - _lastEnterT < 10f) return "feeling gap";
+            }
+            return null;
+        }
+
+        // Seconds between two lines: 8 s at the default voice gap of 1.5 s, and never before the last line is over plus 2 s.
+        float LineGap() { return Mathf.Max(8f * Mathf.Max(0.1f, _s.Cooldown) / 1.5f, _g.LastLineLength + 2f); }
+
+        // A line for the touched area, if the zone has lines, she is excited (tier 1+), the line gap is over and the chance hits. True = it plays.
+        bool TryLine(int zone, HerBody.Seg g, Vector3 pt, bool test)
+        {
+            int cat = LineCatOf(zone, g, pt);
+            if (cat < 0 || !_g.HasLines) return false;
+            int lvl = LineLevelOf(Tier);
+            if (lvl == 0 || _now - _lastLineT < LineGap()) return false;
+            if (!(_s.LineChance >= 1f || Rand() < _s.LineChance)) return false;
+            if (_g.Found) _g.ReadGatesNow(_now);   // forced: ReadGates itself only reads every 0.1 s
+            string b = LineBlock(false, test);
+            if (b != null) { Skip("line: " + b); Note("line skipped (" + b + ")"); return false; }
+            string how;
+            if (!_g.SpeakLine(cat, lvl, out how)) { Skip("line failed"); Note("line failed (" + how + ")"); return false; }
+            _lastLineT = _now; _lastVoiceT = _now;
+            Note("line " + ReactionsGame.LineCats[_g.LineCat] + " Lv" + _g.LineLevel + " '" + (_g.LastLineClip != null ? _g.LastLineClip.name : "?") + "' via " + how);
+            return true;
+        }
+
+        // A Feeling_enter sound for reaching excitement tier t (1..4 -> Feeling_enter_0..3). True = it plays.
+        bool TryFeeling(int t, bool test)
+        {
+            if (!_g.HasFeeling || t < 1) return false;
+            if (_g.Found) _g.ReadGatesNow(_now);
+            string b = LineBlock(true, test);
+            if (b != null) { Note("feeling skipped (" + b + ")"); return false; }
+            int n = Mathf.Clamp(t - 1, 0, 3);
+            if (!_g.Feeling(n)) { Note("feeling failed"); return false; }
+            _lastEnterT = _now; _lastVoiceT = _now;
+            Note("feeling enter " + n + " (tier " + t + ")");
+            return true;
         }
 
         // The game's own touch moan, or our own clip when the game's would do nothing (its dirty-talk pause is up): then dirty talk is stopped
@@ -682,6 +798,7 @@ namespace SfMorph
         public void SetState(RState st, float e, float p)
         {
             E = Mathf.Clamp01(e); P = Mathf.Clamp01(p); SetTier();
+            _enterTier = Tier;                 // a jump by button is not a rise (no feeling sound)
             _wasGuarded = false;
             _lastEvT = _now;
             switch (st)
@@ -701,6 +818,7 @@ namespace SfMorph
             if (_now - Mathf.Max(_lastEvT, _lastStimT) > 10f) E = Mathf.Max(0f, E - 0.02f * dt);
             P = Mathf.Max(0f, P - 0.02f * dt);
             SetTier();
+            if (Tier < _enterTier) _enterTier = Tier;   // fallen back: the next rise is greeted again
 
             // states
             // the timed states always expire (also with AutoState off); only the automatic entries below need AutoState
@@ -737,6 +855,8 @@ namespace SfMorph
                     if (s.Voice && _g.Found)
                     {
                         _g.ReadGatesNow(_now);   // forced: ReadGates itself only reads every 0.1 s
+                        // 0.8.6: with lines on, the climax opens with her strongest feeling sound (Feeling_enter_3)
+                        if (_climaxIdx == 1 && s.Lines && _g.HasFeeling && LineBlock(true, true) == null && _g.Feeling(3)) { _lastVoiceT = _now; _lastEnterT = _now; _vPlayed++; continue; }
                         string b = VoiceBlock(5, false, false, 0f);
                         if (b == null && PlayMoan(false)) { _lastVoiceT = _now; _resetAt = _now + 1f; _vPlayed++; }
                         else Skip(b ?? "voice failed");
@@ -833,7 +953,8 @@ namespace SfMorph
             // Status: rebuilt when a flag changes
             int key = (_g.Found ? 1 : 0) | (_g.HasMoan ? 2 : 0) | (_g.VoiceOn ? 4 : 0) | (_g.InSexMode ? 8 : 0) | (s.Voice ? 16 : 0) | (s.Face ? 32 : 0) | (s.Flinch ? 64 : 0)
                 | (s.LimbPush > 0f ? 128 : 0) | (s.Sound ? 256 : 0) | (s.Blush ? 512 : 0) | (s.Gaze ? 1024 : 0) | (_slapFail ? 2048 : 0) | (HerBody.Built ? 4096 : 0)
-                | (s.VoiceMode == 1 ? 8192 : 0) | (_g.SfxOn ? 16384 : 0);
+                | (s.VoiceMode == 1 ? 8192 : 0) | (_g.SfxOn ? 16384 : 0)
+                | (s.Lines ? 1 << 25 : 0) | (_g.HasLines ? 1 << 26 : 0) | (_g.DirtyTalkOn ? 1 << 27 : 0) | (_g.LinePathOk ? 1 << 28 : 0);
             key ^= ((int)(_g.Desire + 0.5f) & 0x1FF) << 15;
             bool noHand = !PhysicsHands.Active && !s.PushByTouch;
             if (noHand) key |= 1 << 24;
@@ -853,6 +974,11 @@ namespace SfMorph
                     else _sb.Append(s.VoiceMode == 1 ? "voice ok (by intensity)" : "voice ok");
                     _sb.Append(s.Face ? ", face" : ", face off");
                     if (!s.Flinch) _sb.Append(", flinch off"); else if (s.LimbPush <= 0f) _sb.Append(", flinch (jiggle only: push is 0)"); else _sb.Append(", flinch");
+                    if (!s.Voice || !s.Lines) _sb.Append(", lines off");
+                    else if (!_g.Found) { }
+                    else if (!_g.HasLines) _sb.Append(", lines off (no line clips found)");
+                    else if (!_g.DirtyTalkOn) _sb.Append(", lines idle (dirty talk is off in the game)");
+                    else _sb.Append(_g.LinePathOk ? ", lines" : ", lines (own clips, no face)");
                     if (!s.Sound) _sb.Append(", sound off"); else if (_slapFail) _sb.Append(", sound off (no clips)"); else _sb.Append(", sound");
                     _sb.Append(s.Blush ? ", blush" : ", blush off");
                     _sb.Append(s.Gaze ? "; gaze on" : "; gaze off");
@@ -915,7 +1041,27 @@ namespace SfMorph
             Fire(zone, g, tier, ti, c, TestDir(zone, side, c), "the test button", TestV[tier], tier == 2 ? 30f : 3f, true);
         }
 
-        // 0 moan, 1 breath, 2 wince, 3 slap sound, 4 flinch butt
+        // The panel's line test: a line for the test zone at her excitement's level (at least Lv1), no chance and no gaps, the arbiter otherwise.
+        public void TestLine(int zone, int side)
+        {
+            if (_s == null || _her == null || _root == null || !_s.On) { L("test line: reactions are off"); return; }
+            if (!HerBody.Built) { L("test line: her body is not built"); return; }
+            zone = Mathf.Clamp(zone, 0, NZ - 1); side = side == 1 ? 1 : 0;
+            var g = FindSeg(zone, side);
+            if (g == null) { L("test line: no " + ZoneNames[zone] + " segment"); return; }
+            int cat = LineCatOf(zone, g, SegCentre(g));
+            if (cat < 0) { L("test line: " + ZoneNames[zone] + " has no lines (breast, hips, butt and thighs do)"); return; }
+            int lvl = Mathf.Max(1, LineLevelOf(Tier));
+            if (_g.Found) _g.ReadGatesNow(_now);
+            string b = LineBlock(false, true), res, how;
+            if (b != null) res = "blocked (" + b + ")";
+            else if (_g.SpeakLine(cat, lvl, out how)) { _lastLineT = _now; _lastVoiceT = _now; res = "played " + ReactionsGame.LineCats[_g.LineCat] + " Lv" + _g.LineLevel + " '" + (_g.LastLineClip != null ? _g.LastLineClip.name : "?") + "' via " + how; }
+            else res = "failed (" + how + ")";
+            L("test line on " + ZoneNames[zone] + " (" + ReactionsGame.LineCats[cat] + " Lv" + lvl + ", test): " + res);
+            LastLine = "last: test line on " + ZoneNames[zone] + " -> " + res;
+        }
+
+        // 0 moan, 1 breath, 2 wince, 3 slap sound, 4 flinch butt, 5 feeling sound (her tier's, at least Feeling_enter_0)
         // the panel's experimental Animator steppers (one write per press)
         public bool SetAnimFloat(string name, float v) { return _g.SetAnimFloat(name, v); }
 
@@ -941,6 +1087,12 @@ namespace SfMorph
                         bool ok = _g.Found && _g.WinceTrigger();
                         if (ok) { _lastFaceT = _now; _resetAt = _now + 1f; }
                         res = ok ? "sent" : "failed";
+                        break;
+                    }
+                case 5:
+                    {
+                        bool ok = TryFeeling(Mathf.Max(1, Tier), true);
+                        res = (ok ? "played: " : "not played: ") + _resp.ToString();
                         break;
                     }
                 case 3:

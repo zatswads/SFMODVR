@@ -41,6 +41,22 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.8.6:
+- Her touch reactions only ever moaned, breathed or played the touch loops: the game's own recorded lines for the touched area were never
+  used, although the game has them per voice language (the dirty-talk library's nipple, pussy and anal lines at three levels, its
+  general lines, and the four feeling sounds). Now she speaks them (Reactions tab, "Speak lines for the touched area", on by default,
+  with a Line chance slider, 50 %): breasts get nipple lines, between her legs pussy lines (front) or anal lines (back), butt, hips and
+  thighs her general lines; the level follows her excitement (tier 1-2 Lv1, 3 Lv2, 4 Lv3; at tier 0 she still only moans). When her
+  excitement rises a tier she makes the matching feeling sound (Feeling_enter_0..3), and the climax opens with the strongest one.
+- The line goes through the game's own dirty-talk path (it builds the list for that area and level and plays our pick through
+  PlayDirtyTalk), so her talking face and the subtitle come with it; every dirty-talk field that path changes (type, list, shuffle,
+  level) is put back right after, so the game's own dirty talk and the 0.7.9 voice guard carry on as before. If that path can't be used,
+  the clip plays on the game's dirty-talk source (no face) and the log says which path ran.
+- Lines are stricter than moans: only in sex or foreplay mode with the game's dirty talk on, never over dialogue, a kiss, the game's
+  feeling loops, its dirty talk or a moan still sounding, at most one per 8 s (scaled by Voice gap). Only the game's recorded clips are used.
+- Test buttons: "Line for the zone" and "Feeling sound". Log: the clip counts per category and level once per voice language, the
+  first 10 lines with clip name and path, and "line ..." / "feeling enter ..." in the event lines.
+
 0.8.5:
 - With Embody on, the soft zones dented her and pushed her breasts where the game's animation had his hand, not where you held it: the soft
   points read his hand capsules before Embody moved his arms to your controllers (the game's animation rewrites his arms every frame,

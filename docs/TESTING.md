@@ -97,6 +97,20 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.8.6 (her lines for the touched area)
+
+Install `dist/SfMorph.dll` (bundle unchanged). Log: `SF Body Morphs 0.8.6`, then `Reactions: lines for voice language N: nipple a/b/c,
+pussy ..., anal ..., public ... (Lv1/Lv2/Lv3 ...); feeling enter 0 ... 3 ...; the game's path ... usable` and the bridge line's `lines yes`.
+Headset, Reactions on, in foreplay or sex mode, the game's dirty talk on: (1) Reactions tab: status shows ", lines"; press Aroused 1, pick
+Breast, "Line for the zone": she says a nipple line with her talking face and the subtitle (log `line 1: nipple Lv1 '...' via game`);
+(2) Hips + "Line for the zone": a pussy line; Butt: a general line; Arm: "has no lines"; (3) Aroused 3 / Aroused 4: Lv2 / Lv3 lines;
+(4) "Feeling sound": a feeling sound with her mouth moving; (5) real touch: caress / grope her breasts until the state reads Aroused 1:
+a feeling sound at the rise, then now and then a nipple line instead of a moan, never two lines within 8 s, never over the game's own dirty
+talk or a moan; hand between her legs from the front: pussy lines, from behind: anal lines (event lines say which); (6) after a line the
+game's own dirty talk carries on with its usual lines (not stuck on nipple lines), no IndexOutOfRange spam, the voice guard line stays
+quiet; (7) game's dirty talk off in its settings: status "lines idle", moans as before; (8) Allow climax, reach E 100 %: the climax opens with
+the strongest feeling sound; (9) lines off: only moans/breaths as in 0.8.5. Send the log (lines with "line", "feeling", "voice guard").
+
 ## 0.8.5 (soft points read Embody's hands)
 
 Install `dist/SfMorph.dll` (bundle unchanged). Log: `SF Body Morphs 0.8.5`. Headset: (1) Embody on, his hands on (both), physics hands
