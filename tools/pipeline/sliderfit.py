@@ -10,7 +10,7 @@ only, and only on landmarks both rigs place alike: knee, ankle, elbow, wrist, ey
 plus skin landmarks (nipple tips, the widest hip, heel to toe). Her hip, spine, neck and shoulder joints sit elsewhere
 than VaM's (rig.py), so they never give a measure: they only carry the slider the measure is put on. VaM is scaled to her
 eye height: the fit moves proportions, not her height. Per slider (Body.cs semantics):
-  Size      ratio of a limb's girth (median radius of a band across the limb), of hand / foot length, of head width x
+  Size      ratio of a limb's girth (equivalent radius of a band's outline across the limb), of hand / foot length, of head width x
             height, of breast / glute projection, of the widest hip width (pelvis).
   Length    the change of a landmark distance put on the bone that spans it; a Size slider with Keep on the same bone
             scales its length too, so that is divided out.
@@ -138,8 +138,10 @@ def forward(f):
 
 
 def girth(f, label, a, b, t0, t1):
-    """Median radius of the points of `label` whose position along a->b is in [t0, t1], around the band's own centre
-    in the plane across the axis (metres)."""
+    """Equivalent radius sqrt(area / pi) of the convex outline, across the axis a->b, of the points of `label` whose
+    position along a->b is in [t0, t1] (metres). The median distance from the band's centre it replaces depended on how
+    the vertices are spread round the limb: her shin skin is denser on one side, which read her calf as 40 mm against an
+    outline of 50 mm and gave every character 16-23 % bigger calves (and, divided out, shorter shins)."""
     pts = f.part(label)
     if len(pts) < 30:
         return np.nan
@@ -148,8 +150,30 @@ def girth(f, label, a, b, t0, t1):
     band = pts[(t >= t0) & (t <= t1)]
     if len(band) < 20:
         return np.nan
-    q = band - np.outer((band - a) @ u, u)
-    return float(np.median(np.linalg.norm(q - q.mean(0), axis=1)))
+    e1 = np.cross(u, [0.0, 0.0, 1.0])
+    if np.linalg.norm(e1) < 0.1:
+        e1 = np.cross(u, [1.0, 0.0, 0.0])
+    e1 /= np.linalg.norm(e1); e2 = np.cross(u, e1)
+    return float(np.sqrt(hull_area(np.c_[band @ e1, band @ e2]) / np.pi))
+
+
+def hull_area(q):
+    """Area of the 2D convex hull of points q (monotone chain)."""
+    q = np.unique(np.round(q, 7), axis=0)
+    q = q[np.lexsort((q[:, 1], q[:, 0]))]
+    if len(q) < 3:
+        return 0.0
+
+    def half(pts):
+        h = []
+        for p in pts:
+            while len(h) >= 2 and (h[-1][0] - h[-2][0]) * (p[1] - h[-2][1]) - (h[-1][1] - h[-2][1]) * (p[0] - h[-2][0]) <= 0:
+                h.pop()
+            h.append(p)
+        return h
+    hull = np.array(half(q)[:-1] + half(q[::-1])[:-1])
+    x, y = hull[:, 0], hull[:, 1]
+    return float(0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
 
 
 def trunk_section(f, y, h=0.006):
@@ -213,7 +237,17 @@ def measure(f):
     m['calfR'] = mean_lr(lambda s: girth(f, 'shin' + s, f.jp('knee', s), f.jp('ankle', s), 0.25, 0.40))
     m['uarmR'] = mean_lr(lambda s: girth(f, 'uparm' + s, f.jp('shoulder', s), f.jp('elbow', s), 0.45, 0.70))
     m['farmR'] = mean_lr(lambda s: girth(f, 'forearm' + s, f.jp('elbow', s), f.jp('wrist', s), 0.20, 0.40))
-    m['neckR'] = girth(f, 'torso', f.jp('neck'), f.jp('head'), 0.35, 0.60)
+    # neck: the narrowest horizontal outline (the tailor's neck girth) 28-45 % of the way from the eyes down to the nipples,
+    # within 9 cm of the eyes' mid-line. Not between the rigs' neck and head joints: those sit at other heights on each rig
+    # (her band read the neck's base, a Genesis 9's its middle: Krista's neck came out 15 % thicker instead of 4 % thinner)
+    em_ = 0.5 * (f.jp('eye', 'L') + f.jp('eye', 'R'))
+    nr = []
+    for fr in np.arange(0.28, 0.4501, 0.01):
+        yy = em_[1] - fr * (em_[1] - nip_y)
+        q = f.p[(np.abs(f.p[:, 1] - yy) < 0.004) & (np.abs(f.p[:, 0] - em_[0]) < 0.09)]
+        if len(q) >= 20:
+            nr.append(np.sqrt(hull_area(q[:, [0, 2]]) / np.pi))
+    m['neckR'] = float(min(nr)) if nr else np.nan
     _, dn, _ = trunk_section(f, nip_y, 0.008)
     m['breastP'] = float(dn - m['ubD'])
     m['nipSp'] = float(abs(f.tip[0][0] - f.tip[1][0]))

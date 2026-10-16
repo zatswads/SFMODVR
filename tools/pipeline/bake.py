@@ -42,7 +42,9 @@ RES_DIV = {'reika_body': 1, 'reika_face_a': 2, 'reika_foot': 2}
 MARGIN_MUL = {'reika_foot': 2}   # the foot was baked at half the size with the same 24 px margin
 KINDS = ('albedo', 'normal', 'smooth')
 # face-only variant
-FACE_MAT = 'reika_face_a'
+FACE_MAT = 'reika_face_a'   # the face material being done (face_only, seam weights)
+FACE_MESH = 'reika_face_a'  # ... and its mesh (most faces' material is named after the mesh; face_e's is reika_faceE_mat)
+FACE_SET = {'reika_face_a'}  # every face material (the face targets)
 SEAM_NEIGHBOURS = ('reika_neck', 'reika_upperBody_normal')   # her meshes that meet the face at the neck seam
 SEAM_TOL = 5e-5            # m (0.05 mm): a face vertex this close to a neck/body vertex is a seam vertex
 FACE_BAND_MM = 25.0        # width of the fade: w = 0 at the seam (all hers) -> 1 this far inside (all VaM)
@@ -426,7 +428,7 @@ def seam_weights(Z, log):
     positions vc) with a neck / upper-body vertex; the eye, mouth and nostril holes do not touch those meshes, so they
     are never seam. w = smoothstep(distance to the nearest seam vertex / band). Returns (w, seam vertex indices)."""
     cKDTree = kdtree()
-    vc = Z[FACE_MAT + '|vc'].astype(np.float64)
+    vc = Z[FACE_MESH + '|vc'].astype(np.float64)
     seam = np.zeros(len(vc), bool)
     for n in SEAM_NEIGHBOURS:
         if n + '|vc' in Z.files:
@@ -523,7 +525,7 @@ def write_image(arr, res, path, fmt, quality=None):
 def bake_seam_mask(Z, w, make_obj, u2b, res, sc, scratch, out, log):
     """Bake the per-vertex fade weight w into her face UV space (colour attribute -> emission -> 8-bit Non-Color
     image, same no-hit fill and margin as the other maps). Returns the saved mask path."""
-    n = FACE_MAT
+    n = FACE_MESH
     g = [str(x) for x in Z[n + '|groups']]
     f = Z[n + '|faces'][Z[n + '|face_group'] == g.index(FACE_MAT)]
     uv = Z[n + '|uv'].copy()
@@ -578,7 +580,7 @@ def bake_seam_mask(Z, w, make_obj, u2b, res, sc, scratch, out, log):
 def log_band_width(Z, w, idx, mask, res, log):
     """How wide the fade is in texture pixels: from the face triangles (UV area per 3D area) and measured on the mask
     (distance from the seam vertices' UVs to the first pixels with w > 0.97)."""
-    n = FACE_MAT
+    n = FACE_MESH
     g = [str(x) for x in Z[n + '|groups']]
     f = Z[n + '|faces'][Z[n + '|face_group'] == g.index(FACE_MAT)]
     uv = Z[n + '|uv'].astype(np.float64)
@@ -622,7 +624,7 @@ def face_only(Z, names, out, size, make_obj, u2b, log):
     vam_n = os.path.join(out, 'tex_%s_normal.png' % FACE_MAT)
     if not os.path.isfile(vam_a):
         return [], 'WARN  ' + row + 'the face albedo was not baked, so no face-only variant'
-    if FACE_MAT + '|vc' not in Z.files or not any(n + '|vc' in Z.files for n in SEAM_NEIGHBOURS):
+    if FACE_MESH + '|vc' not in Z.files or not any(n + '|vc' in Z.files for n in SEAM_NEIGHBOURS):
         return [], 'WARN  ' + row + 'her face / neck meshes are not in the stage data'
     w, idx = seam_weights(Z, log)
     if w is None:
@@ -882,15 +884,19 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
     """Bake the textures. Returns (textures written, WARN messages). A texture that is missing or fails to load
     never stops the bake: that material falls back to the flat skin colour (_MainTex), a flat normal (_BumpMap) or
     the median gloss (_GlossTex)."""
-    global TARGETS, RES_DIV, NO_NORMAL, FACE_MAT, SEAM_NEIGHBOURS, EXPECTED
+    global TARGETS, RES_DIV, NO_NORMAL, FACE_MAT, FACE_MESH, FACE_SET, SEAM_NEIGHBOURS, EXPECTED
     clear()
     setup_cycles(log)
     # her bake targets from the exported meshes (roles.py): the body sheet (every body / nipple / nail / genital variant), one
     # target per face material (every face the game can swap in), the foot
     R = roles.Roles(names, set(str(n) for n in Z['active']) if 'active' in Z.files else set(names))
     TARGETS = {roles.BODY_MAT: R.body_sheet()}
+    face_mat = {}   # face mesh -> its material (the mesh's own name, else its one material: reika_face_e -> reika_faceE_mat)
     for fc in R.faces:
-        TARGETS[fc] = [fc]
+        g = [str(x) for x in Z[fc + '|groups']] if fc + '|groups' in Z.files else [fc]
+        face_mat[fc] = fc if fc in g else g[0]
+        TARGETS[face_mat[fc]] = [fc]
+    FACE_SET = set(face_mat.values())
     if R.foot:
         TARGETS[roles.FOOT_MAT] = [R.foot]
     RES_DIV = {k: (1 if k == roles.BODY_MAT else 2) for k in TARGETS}
@@ -1073,19 +1079,19 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
                 sc.render.bake.target = 'IMAGE_TEXTURES'
                 sc.render.bake.use_clear = kind != 'smooth'
                 if kind == 'albedo':
-                    bake_pass('EMIT', mat in R.faces, sc)
+                    bake_pass('EMIT', mat in FACE_SET, sc)
                     path = os.path.join(out, 'tex_%s_albedo.jpg' % mat)
                     sc.render.image_settings.file_format = 'JPEG'
                     sc.render.image_settings.quality = JPEG_QUALITY
                 elif kind == 'normal':
                     sc.render.bake.normal_space = 'TANGENT'
-                    bake_pass('NORMAL', mat in R.faces, sc)
+                    bake_pass('NORMAL', mat in FACE_SET, sc)
                     path = os.path.join(out, 'tex_%s_normal.png' % mat)
                     pa = os.path.join(scratch, '_bake_%s_nA.bmp' % mat); pb = os.path.join(scratch, '_bake_%s_nB.bmp' % mat)
                     save_bmp(img, pa)
                     for i, fm_ in enumerate(flat_mats):   # B: VaM's bare geometry, the same rays
                         src.data.materials[i] = fm_
-                    bake_pass('NORMAL', mat in R.faces, sc)
+                    bake_pass('NORMAL', mat in FACE_SET, sc)
                     save_bmp(img, pb)
                     miss, tilt = combine_normals(pa, pb, res)
                     log('  %s normal: detail only (%.1f%% of texels had the shape tilted > 30 deg against hers: removed); '
@@ -1104,7 +1110,7 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
                     log('baked %s %s (%dx%d) -> %s in %.1f s' % (mat, kind, res, res, path, time.time() - t0))
                     continue
                 else:
-                    bake_pass('EMIT', mat in R.faces, sc)
+                    bake_pass('EMIT', mat in FACE_SET, sc)
                     path = os.path.join(out, 'tex_%s_smooth.png' % mat)
                     sc.render.image_settings.file_format = 'PNG'
                     sc.render.image_settings.color_depth = '8'
@@ -1116,7 +1122,7 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
                     frgb = (0.5, 0.5, 1.0)
                 else:
                     frgb = (gloss_fill,) * 3
-                miss = fill_and_save(img, res, kind, frgb, sentinel, path, sc, scratch, log, nearest=mat in R.faces)
+                miss = fill_and_save(img, res, kind, frgb, sentinel, path, sc, scratch, log, nearest=mat in FACE_SET)
                 log('  %s %s: %.2f%% of pixels had no hit (filled)' % (mat, kind, 100.0 * miss))
                 written.append((mat, kind, os.path.basename(path)))
                 log('baked %s %s (%dx%d) -> %s in %.1f s' % (mat, kind, res, res, path, time.time() - t0))
@@ -1131,9 +1137,9 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
                     bpy.data.materials.remove(tm)
     extra = []   # face-only variant lines (not counted in `written`: blend.py compares that with EXPECTED)
     frows = []
-    for fc in R.faces:   # every face material gets its face-only variant (FACE_MAT is the face being done)
-        FACE_MAT = fc
-        if not any(m == fc and k == 'albedo' for m, k, _ in written):
+    for fc in R.faces:   # every face material gets its face-only variant (FACE_MAT / FACE_MESH: the face being done)
+        FACE_MESH, FACE_MAT = fc, face_mat[fc]
+        if not any(m == FACE_MAT and k == 'albedo' for m, k, _ in written):
             continue
         try:
             e_, row = face_only(Z, names, out, size, make_obj, u2b, log)

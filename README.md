@@ -58,6 +58,12 @@ Pipeline, after 0.11.10 (skin bake fixes found on the Genesis 9 character's face
 - Ears: the ear landmark is now the centroid of the whole ear (the head skin beyond 82 % of the half-width at ear height, the
   same rule on both heads; the adapter's ear labels are per side too). The outermost point at eye height it replaces fell on
   different parts of an asymmetric ear's rim (Krista: 11 mm apart), pulled one of her ears 16 mm down and crumpled it.
+- Face variants whose material is not named after the mesh (reika_face_e: reika_faceE_mat) were skipped by the bake (no skin
+  for that face); each face is now baked under its own material.
+- Slider fit: limb girths are the band's outline (sqrt(area / pi)), not the median vertex distance, which read her calf 40 mm
+  against an outline of 50 mm and gave every character 16-23 % bigger calves and, divided out, shorter shins (Krista's at the
+  0.85 clamp). The neck girth is the narrowest neck outline between the eyes and the nipples, not a band between each rig's
+  own neck and head joints (other heights per rig: Krista's neck came out 15 % thicker instead of 4 % thinner).
 
 0.11.10 (a test for the muscle shape):
 - No way to see the muscle bulge without finding a pose that tenses each muscle. Skin tab, Muscles: **Flex test** puts arms,
