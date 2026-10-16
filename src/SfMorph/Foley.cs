@@ -256,29 +256,29 @@ namespace SfMorph
             return s;
         }
 
-        // A grab / squeeze: fingers closing on skin, a soft low press (8 ms attack, ~70 ms decay) with a faint high friction grain on top.
+        // A grab / squeeze: fingers closing on skin. 0.11.11 (user: it sounded like hitting a piece of wood): 0.9.0 was low-passed noise
+        // with an 8 ms attack and a 60 ms decay, which is a knock. A hand closing on skin has no transient: a breathy skin band
+        // (250 Hz - 2.2 kHz, two poles each side) swelling in over 45-60 ms, held while the fingers settle (a slow 11-17 Hz waver), released
+        // over ~150 ms, with a faint airy slide (2.5 - 6 kHz) and a soft low press under it, all on the same envelope. Sounds\grab first.
         static float[] BuildGrab(int v)
         {
-            int n = 44100 * 22 / 100;
-            var low = Noise(n, 31 + v); LowPass(low, 600f + 80f * v); LowPass(low, 600f + 80f * v);
-            var hi = Noise(n, 61 + v); HighPass(hi, 1800f); LowPass(hi, 5000f);
-            var r = new System.Random(71 + v);
-            var grain = new float[n];
-            // friction grain: a few dozen 3-8 ms bumps spread over the press
-            for (int g = 0; g < 26; g++)
-            {
-                int at = (int)(r.NextDouble() * 0.12 * 44100), w = 130 + r.Next(220);
-                float amp = 0.4f + (float)r.NextDouble() * 0.6f;
-                for (int i = 0; i < w && at + i < n; i++) grain[at + i] += amp * Mathf.Sin(Mathf.PI * i / w);
-            }
+            int n = 44100 * 40 / 100;
+            var band = Noise(n, 31 + v); HighPass(band, 250f); HighPass(band, 250f); LowPass(band, 2200f - 150f * v); LowPass(band, 2200f - 150f * v);
+            Normalize(band, 1f);
+            var air = Noise(n, 61 + v); HighPass(air, 2500f); HighPass(air, 2500f); LowPass(air, 6000f);
+            Normalize(air, 1f);
+            var low = Noise(n, 81 + v); LowPass(low, 160f); LowPass(low, 160f);
+            Normalize(low, 1f);
+            float att = 0.045f + 0.005f * v, hold = 0.09f + 0.02f * v, rel = 0.13f + 0.02f * v, wob = 11f + 2f * v;
             for (int i = 0; i < n; i++)
             {
                 float t = i / 44100f;
-                float env = t < 0.008f ? t / 0.008f : Mathf.Exp(-(t - 0.008f) / (0.06f + 0.01f * v));
-                low[i] = (low[i] * 2.2f + 0.35f * hi[i] * grain[i] * Mathf.Exp(-t / 0.09f)) * env;
+                float env = t < att ? 0.5f - 0.5f * Mathf.Cos(Mathf.PI * t / att) : t < att + hold ? 1f : Mathf.Exp(-(t - att - hold) / rel);
+                float mod = 1f + 0.15f * Mathf.Sin(2f * Mathf.PI * wob * t + v);
+                band[i] = (band[i] + 0.18f * air[i] + 0.35f * low[i]) * env * mod;
             }
-            Normalize(low, 0.4f);
-            return low;
+            Normalize(band, 0.3f);
+            return band;
         }
 
         // A skin rub loop (2 s). 0.9.4 (user: it sounded like rubbing carpet): 0.9.0 was 500 Hz - 4 kHz noise with a new random level every

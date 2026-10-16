@@ -7,7 +7,7 @@ namespace SfMorph
     internal class ReactionSettings
     {
         public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley, RubSound, MuteGameVoice, LipSync;
-        public float LipStrength, LipLead, LipOverGame;
+        public float LipStrength, LipLead, LipOverGame, LipMood;
         public float Sensitivity, Cooldown, Volume, SkinVolume, BlushGain, VoicePitchVar, LimbPush, LineChance, FaceStrength, VoicePitch, VoiceFormant;
         public string FaceMap = "", VoicePack = "";
         public int VoiceMode, Log;
@@ -24,7 +24,7 @@ namespace SfMorph
             LinesGamePath = p.ReactLinesGamePath.Value;
             Foley = p.ReactFoley.Value; RubSound = p.ReactRubSound.Value; VoicePack = p.VoicePackName.Value ?? ""; VoicePitch = p.VoicePitch.Value; VoiceFormant = p.VoiceFormant.Value;
             FaceClips = p.ReactFaceClips.Value; FaceStrength = p.ReactFaceStrength.Value; FaceMap = p.ReactFaceMap.Value ?? "";
-            LipSync = p.LipSyncOn.Value; LipStrength = p.LipStrength.Value; LipLead = p.LipLead.Value; LipOverGame = p.LipOverGame.Value;
+            LipSync = p.LipSyncOn.Value; LipStrength = p.LipStrength.Value; LipLead = p.LipLead.Value; LipOverGame = p.LipOverGame.Value; LipMood = p.LipMood.Value;
             PushByTouch = p.HandsPushByTouch.Value;   // the geometric push of other hands: without it and without physics hands nothing is classified
             LimbPush = p.HandsLimbPush.Value;   // the flinch's swing is a push on her limbs: it needs the slider above 0
         }
@@ -706,19 +706,23 @@ namespace SfMorph
             LipSync.LoadMap(false);
             // 0.11.7: no arkit-map.txt yet (the user's PC in 0.11.4): seed the poses from her face clips once and save them, so the curves move
             // her lips out of the box instead of nothing but the loudness jaw; the editor refines them
+            // 0.11.11: a map from before 0.11.11 holds whole clip frames (curled lower lip, 7 shapes): set aside and rebuilt the same way
+            string oldMap = "";
+            if (!_autoSeeded && _s.LipSync && LipSync.RetireOldMap(out oldMap))
+                L("lip sync: the mouth poses from an older version were set aside as " + oldMap + " (they curled her lower lip); building new ones");
             if (!_autoSeeded && _s.LipSync && LipSync.PosedShapes == 0 && !System.IO.File.Exists(LipSync.MapPath))
             {
                 _autoSeeded = true;
                 string r;
                 int n = _face.Seed(true, -1, out r);
                 if (n > 0) LipSync.SaveMap();
-                L("lip sync: no mouth poses yet: " + (n > 0 ? "seeded " + n + " shapes from her face clips and saved them to " + LipSync.MapPath + " (refine them in the Reactions tab's editor)" : "could not seed them") + (r.Length > 0 ? "; " + r : ""));
+                L("lip sync: no mouth poses yet: " + (n > 0 ? "built " + n + " shapes in her mouth's frame and saved them to " + LipSync.MapPath + " (refine them in the Reactions tab's editor)" : "could not build them") + (r.Length > 0 ? "; " + r : ""));
             }
             if (LipPreview >= 0 && LipPreview < LipSync.K)
             {
                 System.Array.Clear(_lipW, 0, LipSync.K); _lipW[LipPreview] = Mathf.Clamp01(LipPreviewW);
                 LipStatus = "previewing " + LipSync.Shapes[LipPreview];
-                return _face.LipStep(_lipW, 1f, _s.LipOverGame);
+                return _face.LipStep(_lipW, 1f, _s.LipOverGame, _s.LipMood);
             }
             bool active = false;
             if (_s.LipSync)
@@ -759,6 +763,9 @@ namespace SfMorph
                         float fx = Mathf.Abs(_s.VoicePitch - 1f) > 1e-3f || Mathf.Abs(_s.VoiceFormant - 1f) > 1e-3f ? 0.045f : 0f;
                         _lipCurve.Sample(_lipT + _lipLead + _s.LipLead - fx, _lipW);
                         float k = Mathf.Max(0f, _s.LipStrength);
+                        // ARKit's mouthClose only means "lips together while the jaw is open": Audio2Face often gives more of it than of
+                        // jawOpen (0.49 vs 0.16), which pushed her lower lip up past her neutral mouth into a pout
+                        _lipW[LipSync.MouthClose] = Mathf.Min(_lipW[LipSync.MouthClose], _lipW[LipSync.JawOpen]);
                         for (int i = 0; i < LipSync.K; i++) { _lipW[i] = Mathf.Clamp01(_lipW[i] * k); _lipPrev[i] = _lipW[i]; }
                         active = true;
                         if (_now < _lipProbeUntil && _now >= _lipProbeNext) { _lipProbeNext = _now + 0.25f; _lipProbeW = true; }
@@ -773,7 +780,7 @@ namespace SfMorph
                 return false;
             }
             // fading out: the last weights held. An empty map writes nothing: the loudness jaw stays.
-            bool wrote = _face.LipStep(active ? _lipW : _lipPrev, _lipFade, _s.LipOverGame);
+            bool wrote = _face.LipStep(active ? _lipW : _lipPrev, _lipFade, _s.LipOverGame, _s.LipMood);
             if (_lipProbeW)
             {
                 _lipProbeW = false;

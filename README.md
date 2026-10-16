@@ -65,6 +65,32 @@ Pipeline, after 0.11.10 (skin bake fixes found on the Genesis 9 character's face
   0.85 clamp). The neck girth is the narrowest neck outline between the eyes and the nipples, not a band between each rig's
   own neck and head joints (other heights per rig: Krista's neck came out 15 % thicker instead of 4 % thinner).
 
+0.11.11 (lip sync rebuilt: mouth poses, lower lip, expression under it; grab sound):
+- Lip sync looked poor and pushed her lower lip out. The mouth poses that turn the Audio2Face weights into bone moves were
+  "seeded" by copying whole frames of her face clips: jawOpen came from a fellatio clip, mouthLowerDown carried a -50 deg turn of
+  the lower lip, mouthFunnel -22 deg, mouthClose +27 deg, and only 7 of the 31 mouth shapes got a pose (smile, pucker, press,
+  roll, stretch did nothing). On top of that mouthClose (lips together while the jaw is open) was used even when Audio2Face gave
+  more of it than of jawOpen (0.49 vs 0.16), which pushed the lower lip up past her neutral mouth into a pout. Now:
+  - the poses are built in her mouth's own frame (left / up / forward from her neutral lip corners and lips, sized by her mouth
+    width): millimetre moves of the lips, corners and cheeks for 30 shapes, a rotation only on the jaw (jawOpen = the survey's
+    widest jaw opening, up to 25 deg, with the lower lips carried round the jaw's pivot), mouthClose = minus that on the lips;
+  - mouthClose is clamped to jawOpen while playing;
+  - a map saved by an older version is set aside as `arkit-map-<version>.txt` and rebuilt on the first lip-synced clip (log
+    `lip sync: the mouth poses from an older version were set aside ...`, then `lip map built 30 shapes for a N mm mouth ...`);
+  - the lip probe printed degrees x 57 (`Lip_Lower_Insite ... 1930 deg` was 34 deg).
+  The editor's buttons are now Build empty shapes / Rebuild all / Rebuild this shape.
+- The built grab sound (used while `Sounds\grab` is empty) sounded like a knock on wood: an 8 ms attack and a 60 ms decay of
+  low noise. It is now a squeeze: a breathy skin band swelling in over ~50 ms, held while the fingers settle, released over ~150 ms,
+  with a faint slide and a soft low press, no transient.
+- Her expression while she speaks: while a voice-pack clip with a lip-sync curve played, her face clip's mood kept its eyes, brows and cheeks but lost its whole
+  mouth (the clip skips the mouth bones while she speaks), and the lip-sync layer then pulled the mood's cheeks halfway back to
+  neutral: a smiling or pained line was spoken with a blank mouth. Now the mood's mouth and cheek pose of that frame is kept
+  under the lip-sync poses (Reactions tab, Lip sync: **Keep her expression's mouth**, `[Voice] LipMood`, 70 %), so the visemes
+  go on top of the smile or grimace and the brows / eyes stay the mood's as before. The curves only drive the mouth (their eye
+  and brow channels are not used), so the two layers do not fight over the upper face.
+- Voice packs (user's PC, not in the repo): Pixie, Pixie Dominant, Southern Domme and Scottish Peach (vamX voices) with lip-sync
+  curves for every clip; the Maive pack was removed.
+
 0.11.10 (a test for the muscle shape):
 - No way to see the muscle bulge without finding a pose that tenses each muscle. Skin tab, Muscles: **Flex test** puts arms,
   back, core and legs in turn at full activation for 2 s each (at least 3 mm, Flex at least 1) over whatever she is playing, the

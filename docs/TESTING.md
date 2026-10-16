@@ -98,6 +98,25 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.11 (expression under lip sync, new voice packs)
+
+Install `dist/SfMorph.dll`. Log: `SF Body Morphs 0.11.11`. Reactions, Face, Face clips and Lip sync on. Voice packs installed under
+`plugins\SfMorph\Soundsoice` (Pixie, Pixie Dominant, Southern Domme, Scottish Peach), curves under `config\SfMorphs\lipsync\<pack>`.
+1. Pick each pack in turn: log `Voice pack 'Pixie': breath_calm 7, ... ; lines: nipple 0/0/0, pussy 8/0/0, ...`; the Lip sync block
+   says `Pack 'Pixie': N curves` (Pixie 191, Pixie Dominant 207, Southern Domme 321, Scottish Peach 278). No `Maive` in the chooser.
+2. Test: a pack clip with lip sync. First time: log `lip sync: the mouth poses from an older version were set aside as ...arkit-map-0.11.9.txt`
+   and `lip map built 30 shapes for a N mm mouth (jaw up to M deg) ...`; Lip sync block `Map: 30 of 31 shapes posed`. Then
+   `Lip sync: curve for <pack>\<clip> (...)`: her lips shape the words (round on o / u, wide on ee, closed on m / b / p), the lower lip
+   never pouts or curls out; lip probe lines show single-digit mm and under ~25 deg. Too small / too big: Lip strength.
+3. Make her smile (a caress at mid excitement, or the face test with a happy mood) and let a line play over it: the smile corners
+   and the cheeks stay while the lips move; the brows and eyes keep the mood. Slider **Keep her expression's mouth** 0 %: the
+   mouth goes back to the 0.11.10 look (neutral mouth + visemes); 100 %: the full smile under the visemes (check that the lips
+   still close on m / b / p).
+3b. Grab her (close a hand on a breast / thigh) with `Sounds\grab` empty: a soft squeeze / skin sound, not a knock.
+4. Hard slaps with a pack on: exertion clips (short "argh" / gasp) and sometimes an ouch line; the mouth grimaces with them.
+5. Southern Domme: guarded lines ("don't touch anything without my permission", "you can look but no touching") when she is
+   guarded; her lines are long (up to 13 s): check that she isn't interrupted mid-line.
+
 ## 0.11.10 (Flex test)
 
 Install `dist/SfMorph.dll` (the 0.11.8 `sfmorph_shaders` stays). Log: `SF Body Morphs 0.11.10`. GPU contact on (Physics tab), any
@@ -261,7 +280,7 @@ across the lower belly following its curve, no thin scar-like line. Armpit: does
 
 ## 0.9.2 (voice-pack lines, audio-driven jaw)
 
-- [ ] Voice pack Maive (or Anime): log `Voice pack 'Maive': ... lines: nipple 12/7/4, pussy 14/27/28, ...`.
+- [ ] Voice pack Anime (or Pixie): log `Voice pack 'Anime': ... lines: nipple .../.../..., pussy ..., ...`.
 - [ ] Lines on: caressing her breasts / between her legs / thighs speaks fitting lines at her excitement; log `line nipple Lv2 '...' (pack)`.
 - [ ] Turn her guarded (several hard slaps): a guard line ("not yet", "give me some space"); touching her while guarded sometimes too.
 - [ ] Hard slaps: sometimes an ouch line instead of a gasp. After the climax: an afterglow line within ~3 s.
