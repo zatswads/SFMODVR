@@ -8,14 +8,15 @@ tools/sources/humanoid.py knows) before anything is built for the game.
             [--no-render]
 
 Her pose: a recording from the Characters tab ('Record 6 s of her animation', BepInEx\\config\\SfMorphs\\poses\\*.txt),
-or without --pose a set of test poses built on her exported bind skeleton (raised leg, reach with a forearm and an
-upper-arm twist, curled fingers, eyes and jaw, a wide kneel).
+or without --pose a set of test poses built on her exported bind skeleton (raised leg, reach with the arm overhead, a
+forearm and an upper-arm twist, curled fingers, eyes and jaw, a wide kneel). Renders start with the avatar in its own rest.
 
 The retarget, per frame (all in one world frame; D_h = her bone's world rotation now x its world rotation at bind):
   aligned rest  A_b: the avatar's rest pose turned, bone by bone from the root, so each limb segment points where hers
-                points in her bind pose (upper arm, forearm, hand (two directions), fingers, thigh, shin, foot; collar
-                only in the coronal plane). The trunk, eyes and jaw are NOT aligned: their directions are rig
-                conventions (matching them tipped her torso 21 degrees in the old fit: tools/pipeline/rig.py).
+                points in her bind pose (upper arm, forearm, hand (two directions), fingers, thigh, shin, foot). The
+                trunk, collars, eyes and jaw are NOT aligned: their directions are rig conventions (matching them tipped
+                her torso 21 degrees in the old fit, tools/pipeline/rig.py; her Scapula joint sits at the back of the
+                ribcage, G9's collar starts at the sternum: aligning it dropped the avatar's clavicles 7 degrees).
   mapped bone   W_b = D_h A_b                        (her world delta on the aligned rest: frames never compared)
   trunk between anchors (G9 spine1/3, neck2)   W_b = D_lo (D_lo^-1 D_hi)^f A_b   (her bend spread over the extra bones)
   twist bones   the bend bone keeps the swing, its twist bones take f = 1/n .. 1 of the twist about the segment
@@ -217,7 +218,8 @@ def test_poses():
     curl = lambda s, d: {'%sFinger%d_%s' % (f, k, s): [('ax', d, 'PinkyFinger1_' + s, 'IndexFinger1_' + s)]
                          for f in ('Index', 'Middle', 'Ring', 'Pinky') for k in (1, 2, 3)}
     lat = ('Hip_R', 'Hip_L')   # her right -> left (Unity -x): about it, + swings a limb forward
-    reach = {'Shoulder_L': [('e', (0, 0, -95))], 'Elbow_L': [('ax', 50) + lat],
+    # arm overhead with the shoulder girdle taking about a third of the elevation (scapulohumeral rhythm)
+    reach = {'Scapula_L': [('e', (0, 0, -28))], 'Shoulder_L': [('e', (0, 0, -67))], 'Elbow_L': [('ax', 50) + lat],
              'Wrist_L': [('ax', 75, 'Wrist_L', 'MiddleFinger1_L')],                      # forearm pronation, from the hand
              'Shoulder_R': [('e', (-75, 0, 0)), ('ax', 60, 'Shoulder_R', 'Elbow_R')],    # arm forward + upper-arm twist
              'Elbow_R': [('ax', 85) + lat], 'Wrist_R': [('e', (0, 0, 35))],
@@ -344,7 +346,7 @@ JAW = {'her': 'Jaw_M', 'avatar': ('lowerjaw', 'lowerJaw', 'jaw', 'Jaw')}
 
 
 def build_map(A, H):
-    """role per avatar bone: dict(kind, her, ...). kinds: trunk / dir / xy / frame / inherit (mapped), spread, twist, copy."""
+    """role per avatar bone: dict(kind, her, ...). kinds: trunk / dir / frame / inherit (mapped), spread, twist, copy."""
     _, hm = humanoid.pick_rig(list(H.canon), 'as')
     role = {}
 
@@ -356,10 +358,8 @@ def build_map(A, H):
             if not ab or not hb or hb not in H.canon:
                 continue
             r = dict(her=hb, key=key, side=s)
-            if key in TRUNK or key == 'eye':
-                r['kind'] = 'trunk'
-            elif key == 'collar':
-                r.update(kind='xy', to=('upperarm', s))
+            if key in TRUNK or key in ('eye', 'collar'):
+                r['kind'] = 'trunk'   # change only: their directions are rig conventions
             elif key in LIMB_NEXT:
                 r.update(kind='dir', to=(LIMB_NEXT[key], s))
             elif key == 'hand':
@@ -430,11 +430,9 @@ def align_rest(A, H, role):
         carry = (Al[p] @ A.G[p].T) if p else np.eye(3)
         K = carry @ A.G[b]
         C = np.eye(3)
-        if r.get('kind') in ('dir', 'xy', 'frame') and r.get('to'):
+        if r.get('kind') in ('dir', 'frame') and r.get('to'):
             a2, h2 = r['to']
             da = carry @ (A.h[a2] - A.h[b]); dh = hb(h2) - hb(r['her'])
-            if r['kind'] == 'xy':   # coronal plane only (Blender x, z)
-                da = da * np.array([1, 0, 1]); dh = dh * np.array([1, 0, 1])
             C = minrot(da, dh)
             if r['kind'] == 'frame' and r.get('across'):
                 (aa, ha), (ab2, hb2) = r['across']
@@ -453,7 +451,7 @@ def pose_avatar(A, H, role, Al, D, X, root_off, ik=False):
     fixed = {}
     for b, r in role.items():
         k = r['kind']
-        if k in ('trunk', 'dir', 'xy', 'frame', 'inherit'):
+        if k in ('trunk', 'dir', 'frame', 'inherit'):
             fixed[b] = D[r['her']] @ Al[b]
         elif k == 'spread':
             lo, hi = D[r['lo']], D[r['hi']]
@@ -576,7 +574,7 @@ def segments(A, role):
     """(label, avatar from, avatar to, her from, her to) for every mapped limb / finger segment."""
     out = []
     for b, r in role.items():
-        if r.get('to') and r['kind'] in ('dir', 'xy', 'frame'):
+        if r.get('to') and r['kind'] in ('dir', 'frame'):
             a2, h2 = r['to']
             out.append(('%s%s' % (r['key'], ' ' + r['side'] if r['side'] else ''), b, a2, r['her'], h2))
     return sorted(out)
@@ -733,6 +731,15 @@ def main():
     lines.append('')
     worst = 0.0
     paths, labels = [], []
+    if render:   # reference: the avatar in its own rest pose (no retarget) beside her bind pose
+        skin_her(H, objs, dict(S0))
+        for pb in A.arm.pose.bones:
+            pb.matrix_basis = Matrix.Identity(4)
+        bpy.context.view_layer.update()
+        pf = os.path.join(out, 'rest_front.png'); ps = os.path.join(out, 'rest_side.png')
+        render_views(A, cam, pf, ps)
+        paths += [pf, ps]; labels.append('avatar rest')
+        lines.append('frame rest: the avatar in its own rest pose (rendered only)')
     for i, (name, S) in enumerate(frames):
         if not S:
             S = dict(S0)

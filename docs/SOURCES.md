@@ -131,7 +131,7 @@ game's Animator, FinalIK, the face Animator, our Overlap / Embody / Reactions): 
 |---|---|---|
 | Full conversion (fit her mesh to the character's shape: landmark warp + non-rigid fit) | Krista 9: skin folded under the breasts (54 flipped chest triangles), jaw / chin pulled in, a step at the face / neck seam | Her mesh is never deformed and nothing is fitted: the character's own mesh, as DAZ / VaM made it, is drawn |
 | Baking the character's textures onto her UVs | Detail-only normals needed, albedo ~2x too bright, her Skin shader's blush / makeup layers (`_BlushPower`, `_AttachColor_*`, `_AddMap`) drawn over the baked skin | The character's own UVs and maps, nothing baked. If her Skin shader is used (route A below) those layers are zeroed explicitly and the brightness is checked against hers: the two things the bake got wrong |
-| Matching rest poses by every joint direction (rig.py, early fit) | Spine / collar directions are rig conventions: matching them tipped her torso 21 degrees back and swung the shoulders 3 cm | Limbs are aligned by direction; the trunk, eyes and jaw are not (only her *change* since bind is applied); the collar only in the coronal plane, as rig.py ended up doing |
+| Matching rest poses by every joint direction (rig.py, early fit) | Spine / collar directions are rig conventions: matching them tipped her torso 21 degrees back and swung the shoulders 3 cm | Limbs are aligned by direction; the trunk, collars, eyes and jaw are not (only her *change* since bind is applied). The first check still aligned the collars in the coronal plane, as rig.py does: that dropped the avatar's clavicles 7 degrees (seen by the user in the renders), because her Scapula joint sits at the back of the ribcage and G9's collar starts at the sternum. Fixed: change only |
 | One fit per character from scratch | Fragile per character (breast shapes, the G9 mouth mesh) | Nothing per character except the bone map, which is per rig family (g9 / g8 / g2 tables; g9 found 53 of 53 on Krista) |
 | Face-only conversion (the current DAZ default) and slider-fit presets | Work, but the body is hers: her skin, her shape or the character's proportions on it | Kept as they are; avatar mode is a separate, third choice |
 
@@ -150,15 +150,17 @@ its bone map through `Animator.GetBoneTransform`, then go through the same retar
 character from her pose and renders both side by side (front + side per frame, `sheet.png`), with `retarget_check.txt` (per
 frame: the angle between each mapped segment of the avatar and hers, end-effector distances, the twist split). Her pose is a
 recording from the Characters tab (*Record 6 s of her animation*, `BepInEx\config\SfMorphs\poses\*.txt`) or, without
-`--pose`, four test poses built on her bind skeleton (bind; raised leg; reach with a 75 degree forearm pronation, a 60 degree
-upper-arm twist, curled fingers, eyes and jaw; a wide kneel).
+`--pose`, four test poses built on her bind skeleton (bind; raised leg; reach with the arm overhead (the shoulder girdle
+taking a third of the elevation), a 75 degree forearm pronation, a 60 degree upper-arm twist, curled fingers, eyes and jaw;
+a wide kneel). With renders, a first frame shows the avatar in its own rest pose beside her bind pose: the reference for
+what the retarget changes.
 
 Run 2026-10-16, RKS Krista 9 (G9 FBX from `daz_export.dsa`) on export Reika-20261016-175648, test poses:
-- map: rig g9, 53 / 53 canonical bones; 30 direction-aligned limb / finger bones, 2 hands (two directions), 2 collars
-  (coronal), 8 trunk / eye / jaw bones (change only), 3 trunk bones spread (G9 spine1, spine3, neck2 share her bends),
+- map: rig g9, 53 / 53 canonical bones; 30 direction-aligned limb / finger bones, 2 hands (two directions), 10 trunk /
+  collar / eye / jaw bones (change only), 3 trunk bones spread (G9 spine1, spine3, neck2 share her bends),
   12 twist bones, 167 copies (DAZ's follower figures), 79 bones following their parent (metacarpals, toes, face rig).
-- every mapped limb and finger segment points exactly where hers does in every frame (0.00 degrees; the collars stay
-  13 degrees off by design, coronal only); the trunk direction changes within 1.3 degrees of hers; the renders match pose
+- every mapped limb and finger segment points exactly where hers does in every frame (0.00 degrees); the avatar's bind
+  frame matches its own rest at the collars and trunk; the trunk direction changes within 1.3 degrees of hers; the renders match pose
   for pose, including the pronated hand, the curled fingers, the head turn and the open jaw. The pose written to Blender's
   bones matches the computed one within 1 micrometre.
 - proportions (avatar scaled x0.964 so its legs match hers): without IK her hands and the avatar's are 38-73 mm apart,
@@ -177,7 +179,7 @@ pose (from her SkinnedMeshRenderers' bind poses, as Export's skeleton.txt), so h
 1. **Aligned rest** (once at load): walk the avatar's skeleton from the root; each bone's rest is carried by its parent's
    alignment, then turned by the smallest rotation that makes its segment point along her matching segment in her bind
    pose: upper arm, forearm, thigh, shin, foot, fingers (k -> k+1; the last phalanx and the toes inherit), hand (the middle
-   finger direction plus a roll from pinky1 -> index1), collar (coronal plane only). Trunk, eyes, jaw: no turn.
+   finger direction plus a roll from pinky1 -> index1). Trunk, collars, eyes, jaw: no turn.
    Her bind pose and G9's rest are both A-poses (upper arm 49 vs 47 degrees down), so the turns are small.
 2. **Mapped bones**: `W = D_h A`. **Trunk bones between anchors** (G9 has spine1-4 and neck1-2 for her Spine1 / Chest /
    Neck): `W = D_lo (D_lo^-1 D_hi)^f A`, f by the place on the chain, so her bend is spread instead of kinked.
@@ -193,6 +195,25 @@ pose (from her SkinnedMeshRenderers' bind poses, as Export's skeleton.txt), so h
 7. **When**: in a PlayerLoop step right before `PostLateUpdate.UpdateAllSkinnedMeshes`, the point PoseRecorder samples
    (after the Animator, FinalIK, DynamicBone, the face Animator and our ApplyStep / Overlap / Embody): a recording is exactly
    the avatar's input, so the offline check covers the runtime maths.
+
+### Shoulders and joint correctives
+
+The clavicle follows her `Scapula` change, so the avatar's shoulder girdle rises only as far as hers does in the game's
+animation. In the check a raised arm without scapula movement collapsed the avatar's shoulder (clavicle flat, a crease from
+the neck to the armpit); with the girdle taking a third of the elevation (the scapulohumeral rhythm) it looks natural. Two
+pieces, in this order:
+1. **The figure's own correctives.** DAZ figures shape shoulders, elbows, hips and knees at large angles with joint
+   corrective morphs, driven by bone angles; `daz_export.dsa` bakes the dialled shape and exports no morphs
+   (`doMorphs false`, the FBX has 0 shape keys), so they are lost. Export the correctives as blend shapes (a morph rule for
+   the corrective names; the exact G9 / G8 names from a test export's list) and drive each by its joint angle at runtime,
+   the way converted characters already drive VaM's pJCM shapes (`JcmDef` in Morph.cs). This is DAZ's own fix for this
+   mesh, so it comes before anything hand-made.
+2. **Auto clavicle** (avatar only, if a recording shows it is needed): when her upper arm rises above ~30 degrees and her
+   Scapula does not follow, give the avatar's collar a share of the elevation. The same idea as the helper-joint clavicle
+   rigs the user pointed at (Paul Popov's Advanced Clavicle Rig, MIT, Maya: an IK clavicle plus scapula / trapezius /
+   pectoral / latissimus helper joints on aim and point constraints, e.g. the pectoral joint half way between clavicle and
+   chest). Helper joints of that kind need skin weights painted on the avatar (manual tools such as the Weight Paint Box
+   Blender add-on, paid); worth it only for avatars that come without correctives (VRChat-style), once per base mesh.
 
 ### The bundle
 
@@ -248,7 +269,7 @@ pose (from her SkinnedMeshRenderers' bind poses, as Export's skeleton.txt), so h
 3. Plugin: `Avatar.cs` (load, hide, drive, give back) + the HerBody refit + a Characters tab *Avatars* list + `[Avatar]`
    config (scale mode, IK weights, material route), exclusive with converted characters. **Ask the user before building or
    installing anything into the game.**
-4. G9 face map and blink; material tuning from the first headset run.
+4. G9 face map and blink; DAZ correctives exported and driven; material tuning from the first headset run.
 5. Soft zones, GPU contact and marks on the avatar.
 6. Wrinkle / muscle layouts per base figure; hair and outfits.
 
