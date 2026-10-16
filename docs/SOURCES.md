@@ -47,7 +47,8 @@ Community routes worth knowing (VaM Hub, read 2026-10-16):
   model, eyes repaired after. The same idea as the fit here (landmark warp + non-rigid ICP); fingers and nipples need landmarks.
 - *Wrapped model into DAZ then VaM*: Morph Loader Pro on G2F, Adjust Rigging to Shape, ERC Freeze, save as a morph .dsf.
 - *Unity AssetBundles for VaM*: the Unity version and bundle workflow for VaM 1.x (Unity 2018); for this game the bundle
-  project in tools/shaders already builds Unity 2022.3.9 bundles (the avatar replacement mode below would use that).
+  project in tools/shaders already builds Unity 2022.3.9 bundles (the avatar replacement mode below uses a separate project of
+  the same version).
 - *Clothing into VaM* (video): download, scale, fit in Blender (shrinkwrap / lattice / proportional editing) to the G2 base,
   then DAZ and VaM. Here, clothes on her already follow a character's shape (MorphState follow); bringing new clothes in is a
   later step with the same fit.
@@ -117,14 +118,139 @@ The adapter needs a skeleton. Routes that produce one in a known vocabulary:
 
 ## A third mode: avatar replacement (the VRChat way)
 
-VRChat does not reshape a base body: it drives any humanoid avatar from the player's pose through Unity's Humanoid
-retargeting. The same works here: build her a Unity `Avatar` at runtime (`AvatarBuilder.BuildHumanAvatar` from her
-AdvancedSkeleton bones), read her pose each frame with `HumanPoseHandler.GetHumanPose`, and set it on an avatar loaded from
-an asset bundle built in Unity 2022.3.9 (the bundle project in `tools/shaders` already builds bundles for this game), with
-her renderers hidden. Gains: any avatar, its own shaders and materials as made. Costs: her soft zones, GPU contact, wrinkles,
-muscles, skin marks, clothes and the game's face animation (bone-driven; avatars use blendshapes / visemes) do not carry
-over without per-system work; the partner's hand IK targets her bones, which the avatar follows only as closely as the
-proportions match. A separate project, after the adapter.
+**Design 2026-10-16; step 1 (offline retarget check) built and run on RKS Krista 9. Nothing built for the game yet.**
+
+VRChat does not reshape a base body: it drives the avatar's own mesh, rig and materials from the player's pose. Here: load
+a character's own figure (DAZ Genesis 9 / 8, VaM Genesis 2, later any rig `humanoid.py` knows) from an asset bundle, hide
+her skin renderers, and every frame drive the figure's skeleton from her bones. Her skeleton keeps animating as now (the
+game's Animator, FinalIK, the face Animator, our Overlap / Embody / Reactions): it becomes the *pose source* only.
+
+### What failed before, and why this mode does not repeat it
+
+| Earlier route | What went wrong | Avatar mode |
+|---|---|---|
+| Full conversion (fit her mesh to the character's shape: landmark warp + non-rigid fit) | Krista 9: skin folded under the breasts (54 flipped chest triangles), jaw / chin pulled in, a step at the face / neck seam | Her mesh is never deformed and nothing is fitted: the character's own mesh, as DAZ / VaM made it, is drawn |
+| Baking the character's textures onto her UVs | Detail-only normals needed, albedo ~2x too bright, her Skin shader's blush / makeup layers (`_BlushPower`, `_AttachColor_*`, `_AddMap`) drawn over the baked skin | The character's own UVs and maps, nothing baked. If her Skin shader is used (route A below) those layers are zeroed explicitly and the brightness is checked against hers: the two things the bake got wrong |
+| Matching rest poses by every joint direction (rig.py, early fit) | Spine / collar directions are rig conventions: matching them tipped her torso 21 degrees back and swung the shoulders 3 cm | Limbs are aligned by direction; the trunk, eyes and jaw are not (only her *change* since bind is applied); the collar only in the coronal plane, as rig.py ended up doing |
+| One fit per character from scratch | Fragile per character (breast shapes, the G9 mouth mesh) | Nothing per character except the bone map, which is per rig family (g9 / g8 / g2 tables; g9 found 53 of 53 on Krista) |
+| Face-only conversion (the current DAZ default) and slider-fit presets | Work, but the body is hers: her skin, her shape or the character's proportions on it | Kept as they are; avatar mode is a separate, third choice |
+
+Unity Humanoid retargeting (`AvatarBuilder.BuildHumanAvatar` + `HumanPoseHandler`, the literal VRChat route) is **not** the
+primary path: it needs both rigs in a T-pose to build the avatars (hers is an A-pose; she would have to be posed into one at
+load), its muscle space clamps poses to the humanoid limits (the wide kneels and full knee flexion of sex poses), it carries
+no twist bones beyond its own percentages and no toes, metacarpals or face bones, and it cannot be reproduced offline in
+Blender. The direct world-rotation retarget below does all of that in ~70 matrix products per frame and is checked offline
+by `tools/avatar/retarget_check.py`. An avatar that ships its own Humanoid `Avatar` (VRChat-style bundles) can still give
+its bone map through `Animator.GetBoneTransform`, then go through the same retarget.
+
+### Step 1, done: the offline retarget check
+
+`blender -b --factory-startup -P tools/avatar/retarget_check.py -- --avatar <fbx> --game <her export dir> --out <dir>
+[--pose <recording>] [--ik]` loads the character's FBX and her export (skeleton + skin), builds the map, poses the
+character from her pose and renders both side by side (front + side per frame, `sheet.png`), with `retarget_check.txt` (per
+frame: the angle between each mapped segment of the avatar and hers, end-effector distances, the twist split). Her pose is a
+recording from the Characters tab (*Record 6 s of her animation*, `BepInEx\config\SfMorphs\poses\*.txt`) or, without
+`--pose`, four test poses built on her bind skeleton (bind; raised leg; reach with a 75 degree forearm pronation, a 60 degree
+upper-arm twist, curled fingers, eyes and jaw; a wide kneel).
+
+Run 2026-10-16, RKS Krista 9 (G9 FBX from `daz_export.dsa`) on export Reika-20261016-175648, test poses:
+- map: rig g9, 53 / 53 canonical bones; 30 direction-aligned limb / finger bones, 2 hands (two directions), 2 collars
+  (coronal), 8 trunk / eye / jaw bones (change only), 3 trunk bones spread (G9 spine1, spine3, neck2 share her bends),
+  12 twist bones, 167 copies (DAZ's follower figures), 79 bones following their parent (metacarpals, toes, face rig).
+- every mapped limb and finger segment points exactly where hers does in every frame (0.00 degrees; the collars stay
+  13 degrees off by design, coronal only); the trunk direction changes within 1.3 degrees of hers; the renders match pose
+  for pose, including the pronated hand, the curled fingers, the head turn and the open jaw. The pose written to Blender's
+  bones matches the computed one within 1 micrometre.
+- proportions (avatar scaled x0.964 so its legs match hers): without IK her hands and the avatar's are 38-73 mm apart,
+  feet 40-47 mm, head 28-43 mm. With `--ik` hands and feet land exactly on hers, at the cost of the elbows / knees bending
+  differently by up to 25 degrees (Krista's arms are longer: in the bind pose her elbows have to bend).
+- found on the way: DAZ's FBX holds one armature with each follower figure (eyes, mouth, lashes, tear, brows) as its own
+  duplicate skeleton (`head.001` ...), the meshes bone-parented to their figure root *and* skinned to the duplicates (a
+  double transform: the mouth and eyes floated off her in the first renders). The runtime must rebind them (below); the
+  check script reparents them and poses the copies from the main bones.
+- open for step 1: the same check on a real recording from a sex scene (the user presses *Record 6 s* once).
+
+### The retarget (what the plugin would run every frame)
+
+All rotations are world rotations in her root's space; `D_h = R_h(now) R_h(bind)^-1` is her bone's change since her bind
+pose (from her SkinnedMeshRenderers' bind poses, as Export's skeleton.txt), so her bone axis conventions never matter.
+1. **Aligned rest** (once at load): walk the avatar's skeleton from the root; each bone's rest is carried by its parent's
+   alignment, then turned by the smallest rotation that makes its segment point along her matching segment in her bind
+   pose: upper arm, forearm, thigh, shin, foot, fingers (k -> k+1; the last phalanx and the toes inherit), hand (the middle
+   finger direction plus a roll from pinky1 -> index1), collar (coronal plane only). Trunk, eyes, jaw: no turn.
+   Her bind pose and G9's rest are both A-poses (upper arm 49 vs 47 degrees down), so the turns are small.
+2. **Mapped bones**: `W = D_h A`. **Trunk bones between anchors** (G9 has spine1-4 and neck1-2 for her Spine1 / Chest /
+   Neck): `W = D_lo (D_lo^-1 D_hi)^f A`, f by the place on the chain, so her bend is spread instead of kinked.
+3. **Twist bones**: the upper arm / thigh bend bone keeps the swing of its change, its twist bones take 1/n .. 1 of the
+   twist about the segment (G9: 0.5, 1; G8's single ShldrTwist / ThighTwist: 1; G2 has none); the forearm twist bones take
+   k/(n+1) of the hand's twist about the forearm (pronation). Without this the skin twists at the shoulder / wrist only.
+4. **Everything else** follows its parent at its rest offset (metacarpals, toes, the face rig until the face map, pectorals).
+5. **Root**: her pelvis position plus `D_root` x (avatar hips - her pelvis, at bind). Scale: uniform, the avatar's leg
+   length to hers (default; `height` and `none` too), so the feet meet the floor she stands on.
+6. **IK** (weighted): two-bone IK of arms / legs to her wrists / ankles, pole at her elbow / knee; hand and foot keep
+   `D_h A`. Weight 1 only where positions matter: her feet on the floor, her hands while planted (Overlap's planted lock) or
+   held (Embody, a partner hand on her wrist); 0 otherwise, which keeps the natural bends (see the numbers above).
+7. **When**: in a PlayerLoop step right before `PostLateUpdate.UpdateAllSkinnedMeshes`, the point PoseRecorder samples
+   (after the Animator, FinalIK, DynamicBone, the face Animator and our ApplyStep / Overlap / Embody): a recording is exactly
+   the avatar's input, so the offline check covers the runtime maths.
+
+### The bundle
+
+- **Export** stays as now: DAZ via `daz_export.dsa` (FBX at base resolution with the follower figures and collected
+  textures, `<fbx>.materials.txt` channel -> image). An option to keep the figure's hair and outfit nodes visible is the only
+  change (v2). VaM Genesis 2: the SfExport folder has no skin weights (OBJ + joints); either `SfExport.cs` also writes the
+  `DAZMergedMesh` weights (to look up in VaM's Assembly-CSharp), or the weights are transferred in Blender from a weighted
+  Genesis 2 Female FBX exported once from DAZ Studio. Open.
+- **Build**: a separate Unity 2022.3.9 project `tools/avatar/SfAvatarBundle` (not the shader project: it stays small and
+  its compute bundle unaffected), batch mode like `tools/shaders/build.ps1`. Editor script: copy the FBX + textures into
+  `Assets/Avatars/<Name>`; ModelImporter Generic rig (no Humanoid), **Read/Write on** (readable meshes: soft zones, GPU
+  contact and the HerBody hulls need no GPU readback, unlike her meshes), blend shapes on, no animation, no materials;
+  textures BC7 (albedo sRGB; roughness, translucency linear; normals BC5), mipmaps; a mask map per surface (A = 1 -
+  roughness). The bundle holds the prefab, the textures and `avatar.txt` (name, source, rig table, scale, per surface: role
+  and texture names per channel). Output `BepInEx\config\SfMorphs\avatars\<Name>\` (bundle, avatar.txt, thumb.jpg). The
+  bundle carries **no shaders**: HDRP is not in the project, and shader variants built outside the game are the usual
+  reason such bundles render pink or wrong.
+- **Materials at load**, from the game's own loaded shaders (so keywords, stencils and SSS match the game's HDRP build).
+  Route A: a copy of her body / face Skin material per avatar skin surface with the avatar's albedo / normal / roughness
+  maps, every overlay layer zeroed (`_BlushPower`, `_AttachColor_*` alpha, `_AttachMap_*`, `_AddMap`, `_NormalMap_2`: the
+  bake's clash) and tints neutral, plus a brightness gain from the albedo means (as matcheck.py does) shown as a slider.
+  Route B: `HDRP/Lit` from `Shader.Find` with subsurface scattering and her skin's diffusion profile hash, only if the game
+  has that shader loaded (logged). Eyes, cornea, tear: copies of her eye / tear materials; lashes, brows: alpha-clipped;
+  mouth, teeth, nails: Lit or her mouth material. A panel switch A / B in the first headset run decides the default.
+- **Load**: `AssetBundle.LoadFromFile`, instantiate beside her armature under her character root (not under her bones:
+  `HightSetting` moves her root for heels and the avatar must follow it), on her layer; rebind each follower figure's
+  renderer `bones[]` to the main skeleton bone of the same name (bind poses checked equal within 0.1 mm, else the copy is
+  driven as in the check script); her skin, eyes, lashes, brows, hair and clothing renderers hidden with
+  `forceRenderingOff` (the game's own `SetActive` swaps keep working underneath, nothing of hers is destroyed). Off =
+  everything given back.
+
+### Her systems: what carries over
+
+| System | v1 (first in-game step) | Plan |
+|---|---|---|
+| Pose: animation, FinalIK, Overlap, planted lock, Embody, Reactions' flinch | **Carries over**: they move her bones, the avatar follows | - |
+| Physics hands, VR hands, partner capsules | Carry over (partner side) | - |
+| HerBody segments (hand colliders, pushes, yield) | **Needed in v1**: refit the hull points on the avatar's surface (avatar skin in its aligned rest, expressed in her segment frames), else your hands touch an invisible her | Same code with a mesh source |
+| Body / Bones sliders, converted characters, slider presets | Off and greyed ("avatar mode: the avatar's own shape"): scaling her hidden bones would only bend the pose source | The Detail table on the avatar's canonical bones; DAZ morphs exported as blend shapes |
+| Face: the game's face Animator, ReactionsFace clips, lip sync, voice jaw | Jaw and eyes carry over (shown offline); blink from her lid aperture | G9 has a bone face rig (lip corners, lips, cheeks, brows, lids, squint, nostrils): a face map from her face bones (moves in the head frame scaled by the eye distance), built like ReactionsFace.Seed's mouth frame; G8 / G2 faces are morphs: ARKit / viseme blend shapes when the export carries them (LipSync already produces ARKit weights) |
+| Soft zones (SoftSim) | Off | The weight split on the avatar's readable mesh, zones anchored to mapped bones; G9's pectoral bones get a DynamicBone (the game's type, by reflection) for the breasts |
+| GPU contact (dents, ripples) | Off | ContactBake on the avatar renderer: bone classes by canonical key instead of her names, Tissue tables unchanged, one body mesh (no seam stitching) |
+| Skin marks | Off | With GPU contact; the albedo slot by material route |
+| Wrinkles, muscles | Off | Authored per UV layout: `tools/wrinkles/author.py` / `tools/muscles/author.py` once per base figure (all G9 characters share the G9 UVs), maps in the avatar bundle; MusclePose keeps reading her bones |
+| Clothes, hair | Her clothing and hair hidden (fitted to her shape and head): a bald, nude avatar unless the export includes hair | The figure's own DAZ hair / outfit (fitted by DAZ, follower figures rebound like the eyes), shown by her outfit groups' active state |
+| Partner IK targets (his hands on her hips, breasts, wrists) | They target her bones; the avatar's surface differs by its proportions (offline: 30-70 mm at the extremities) | Weighted limb IK (above); a per-region surface offset for his hand targets later |
+| Export, pose recorder, SF Neural Rendering VR | Unchanged (they read her / are independent) | - |
+
+### Steps
+
+1. Offline retarget check (done, above); the same on a real recording.
+2. The bundle project and builder (`tools/avatar`), the materials manifest; a test bundle of Krista 9 (no game change).
+3. Plugin: `Avatar.cs` (load, hide, drive, give back) + the HerBody refit + a Characters tab *Avatars* list + `[Avatar]`
+   config (scale mode, IK weights, material route), exclusive with converted characters. **Ask the user before building or
+   installing anything into the game.**
+4. G9 face map and blink; material tuning from the first headset run.
+5. Soft zones, GPU contact and marks on the avatar.
+6. Wrinkle / muscle layouts per base figure; hair and outfits.
 
 ## Order
 
@@ -132,4 +258,4 @@ proportions match. A separate project, after the adapter.
    round-trip self-test (her own export through the adapter must give a near-zero morph).
 2. `.unitypackage` / `.fbx.meta` humanoid mapping and Unity material slots (VRChat avatars as sold).
 3. UABEA-based offline export of her (optional).
-4. Avatar replacement mode (separate design).
+4. Avatar replacement mode (design and step 1 above).
