@@ -167,7 +167,7 @@ namespace SfMorph
         int _lineLang = -1, _lineUses, _lineFails; float _feelEnd;
         static readonly string[] LineTypes = { "reikaNipple", "reikaPussy", "reikaAnal", "handJob" };   // handJob's lists start with public_DT_LvN
         // audio members (AudioSource / AudioClip, reflected)
-        PropertyInfo _pPlaying, _pClip, _pPitch, _pVolume, _pBlend, _pRolloff, _pMin, _pMax, _pPlayAwake, _pGroup, _pClipLen, _pTime;
+        PropertyInfo _pPlaying, _pClip, _pPitch, _pVolume, _pBlend, _pRolloff, _pMin, _pMax, _pPlayAwake, _pGroup, _pClipLen, _pTime, _pLoop;
         MethodInfo _miPlay, _miStop, _miOneShot;
         Func<object, bool> _isPlayingFast;
         readonly object[] _argOneShot = new object[2], _argInt = new object[1], _argFlt = new object[1];
@@ -515,7 +515,7 @@ namespace SfMorph
 
         void ResolveAudioMembers()
         {
-            _pPlaying = _pClip = _pPitch = _pVolume = _pBlend = _pRolloff = _pMin = _pMax = _pPlayAwake = _pGroup = _pClipLen = _pTime = null;
+            _pPlaying = _pClip = _pPitch = _pVolume = _pBlend = _pRolloff = _pMin = _pMax = _pPlayAwake = _pGroup = _pClipLen = _pTime = _pLoop = null;
             _miPlay = _miStop = _miOneShot = null; _isPlayingFast = null;
             if (_tSrc == null) { Miss("AudioSource (no source found)"); return; }
             _pPlaying = _tSrc.GetProperty("isPlaying");
@@ -529,6 +529,7 @@ namespace SfMorph
             _pPlayAwake = _tSrc.GetProperty("playOnAwake");
             _pGroup = _tSrc.GetProperty("outputAudioMixerGroup");
             _pTime = _tSrc.GetProperty("time");
+            _pLoop = _tSrc.GetProperty("loop");
             _miPlay = _tSrc.GetMethod("Play", Type.EmptyTypes);
             _miStop = _tSrc.GetMethod("Stop", Type.EmptyTypes);
             foreach (var mi in _tSrc.GetMethods(BindingFlags.Instance | BindingFlags.Public))
@@ -842,7 +843,7 @@ namespace SfMorph
             {
                 RestorePitch();
                 if (_miStop != null && (Playing(_srcMoan) || _now < _ownEnd)) { _miStop.Invoke(_srcMoan, null); _ownEnd = 0f; OwnVoicePlaying = false; }
-                _moanT0 = _now; _ownOneShot = false;
+                _moanT0 = _now; _ownOneShot = false; _packClip = false;
                 _pClip.SetValue(_srcMoan, clip, null);
                 _miPlay.Invoke(_srcMoan, null);
                 if (_srcVoice != null && !Dead(_srcVoice) && _miStop != null) _miStop.Invoke(_srcVoice, null);
@@ -1302,7 +1303,7 @@ namespace SfMorph
             try
             {
                 RestorePitch();
-                _moanT0 = _now; _ownOneShot = false;
+                _moanT0 = _now; _ownOneShot = false; _packClip = false;
                 _miMoan.Invoke(_facial, null);
                 _moanFail = 0;
                 MarkTrigger();
@@ -1337,7 +1338,7 @@ namespace SfMorph
                 // like the game's DirtyTalkMoan: talking stops for the moan; a moan or breath still sounding is cut
                 if (stopDirty) StopDirtyTalk();
                 if (_miStop != null && (Playing(_srcMoan) || _now < _ownEnd)) { _miStop.Invoke(_srcMoan, null); _ownEnd = 0f; OwnVoicePlaying = false; }
-                _moanT0 = _now; _ownOneShot = false;
+                _moanT0 = _now; _ownOneShot = false; _packClip = false;
                 _pClip.SetValue(_srcMoan, clip, null);
                 if (_pPitch != null) _pPitch.SetValue(_srcMoan, pitch, null);
                 _pitchHold = true; _pitchSet = pitch;
@@ -1367,7 +1368,7 @@ namespace SfMorph
                 float pitch = Mathf.Max(0.5f, GetPitch(_srcMoan, 1f));
                 float len = ClipLen(_pClip != null ? _pClip.GetValue(_srcMoan, null) as UnityEngine.Object : null);
                 if (len <= 0f) return false;
-                float limit = Mathf.Min(len / pitch, 1.8f), el;
+                float limit = _packClip ? len / pitch : Mathf.Min(len / pitch, 1.8f), el;   // 0.9.0: a voice pack's clips are not padded
                 if (_pTime != null) el = Convert.ToSingle(_pTime.GetValue(_srcMoan, null)) / pitch;
                 else el = _now - _moanT0;
                 return el >= limit;
@@ -1424,6 +1425,66 @@ namespace SfMorph
         void PitchTick()
         {
             if (_pitchHold && !MoanPlaying) RestorePitch();   // MoanPlaying was just read: the clip ended
+        }
+
+        // ---- 0.9.0: a voice pack (Foley.cs VoicePack) instead of the game's voice library for our reactions ----
+        public static readonly VoicePack Pack = new VoicePack();
+        bool _packClip;
+
+        // Loads the configured pack when it changed (main thread; the first load waits for the game's AudioClip type).
+        public void UsePack(string name)
+        {
+            name = name ?? "";
+            if (name == Pack.Name && (Pack.Loaded || name.Length == 0 || Pack.Summary.Length > 0)) return;
+            if (_pClip == null) return;
+            Pack.Load(name, _pClip.PropertyType);
+        }
+
+        // A pack clip of category c on the moan source, like MoanClip (talking stopped, a sounding moan cut, the voice loop stopped, the
+        // "moan" trigger for the mouth). pitch: AudioSource.pitch, restored when it ends.
+        public bool PackVoice(int c, float pitch, bool stopDirty, bool trigger = true)
+        {
+            if (!Found || !Pack.Loaded || _srcMoan == null || Dead(_srcMoan) || _pClip == null || _miPlay == null) return false;
+            try
+            {
+                float len;
+                var clip = Pack.Pick(c, out len);
+                if (clip == null) return false;
+                if (!_pitchHold) _pitchBase = GetPitch(_srcMoan, 1f);
+                if (stopDirty) StopDirtyTalk();
+                if (_miStop != null && (Playing(_srcMoan) || _now < _ownEnd)) { _miStop.Invoke(_srcMoan, null); _ownEnd = 0f; OwnVoicePlaying = false; }
+                _moanT0 = _now; _ownOneShot = false; _packClip = true; _feelEnd = 0f;
+                _pClip.SetValue(_srcMoan, clip, null);
+                if (_pPitch != null) _pPitch.SetValue(_srcMoan, pitch, null);
+                _pitchHold = true; _pitchSet = pitch;
+                _miPlay.Invoke(_srcMoan, null);
+                if (_srcVoice != null && !Dead(_srcVoice) && _miStop != null) _miStop.Invoke(_srcVoice, null);
+                LastClip = clip; LastClipLength = len / Mathf.Max(0.5f, pitch);
+                if (trigger && HasAnim) { _anim.SetTrigger(_hMoan); MarkTrigger(); }
+                return true;
+            }
+            catch (Exception e) { LogOnce("packvoice:" + e.GetType().Name, "voice pack clip failed: " + e.Message); return false; }
+        }
+
+        // A pack breath (calm or heavy) as a one-shot on the moan source, like Breath().
+        public bool PackBreath(bool heavy)
+        {
+            if (!Found || !Pack.Loaded || _srcMoan == null || Dead(_srcMoan) || _miOneShot == null) return false;
+            try
+            {
+                if (Playing(_srcMoan)) { if (!TailSilent()) return false; StopMoan(); }
+                RestorePitch();
+                float len;
+                var clip = Pack.Pick(heavy ? VoicePack.BreathHeavy : VoicePack.BreathCalm, out len);
+                if (clip == null) return false;
+                _argOneShot[0] = clip; _argOneShot[1] = BreathVolume * 1.4f;
+                _miOneShot.Invoke(_srcMoan, _argOneShot);
+                LastClip = clip; LastClipLength = len;
+                _ownEnd = _now + len; _ownT0 = _now; _ownOneShot = true;
+                OwnVoicePlaying = true;
+                return true;
+            }
+            catch (Exception e) { LogOnce("packbreath:" + e.GetType().Name, "voice pack breath failed: " + e.Message); return false; }
         }
 
         // A quiet breath (Exhale_slow, else Exhale_normal) as a one-shot on the moan source; no trigger. Skipped while the game's moan sounds.
@@ -1497,24 +1558,32 @@ namespace SfMorph
         // ======================================================================================================================
         bool EnsureSfx()
         {
-            if (_sfxSrc != null && !Dead(_sfxSrc)) return true;
-            if (_tSrc == null || _herRoot == null || _srcSfx == null) return false;
+            _sfxSrc = MakeSrc("SfReact_sfx", ref _sfxGo, _sfxSrc);
+            return _sfxSrc != null;
+        }
+
+        // One of our 3D sources under her root on the game's sound-effect mixer group (the slap one-shots; 0.9.0: the foley one-shots, the rub loop).
+        Behaviour MakeSrc(string name, ref GameObject go, Behaviour cur)
+        {
+            if (cur != null && !Dead(cur)) return cur;
+            if (_tSrc == null || _herRoot == null || _srcSfx == null) return null;
             try
             {
-                _sfxGo = new GameObject("SfReact_sfx");
-                _sfxGo.transform.SetParent(_herRoot, false);
-                _sfxSrc = _sfxGo.AddComponent(_tSrc) as Behaviour;
-                if (_sfxSrc == null) { UnityEngine.Object.Destroy(_sfxGo); _sfxGo = null; return false; }
-                if (_pPlayAwake != null) _pPlayAwake.SetValue(_sfxSrc, false, null);
-                if (_pBlend != null) _pBlend.SetValue(_sfxSrc, 0.6f, null);                  // mostly 3D, but not lost at arm's length
-                if (_pRolloff != null) _pRolloff.SetValue(_sfxSrc, Enum.ToObject(_pRolloff.PropertyType, 0), null);   // Logarithmic
-                if (_pMin != null) _pMin.SetValue(_sfxSrc, 1.5f, null);
-                if (_pMax != null) _pMax.SetValue(_sfxSrc, 12f, null);
-                if (_pVolume != null) _pVolume.SetValue(_sfxSrc, 1f, null);
-                if (_pGroup != null) _pGroup.SetValue(_sfxSrc, _pGroup.GetValue(_srcSfx, null), null);
-                return true;
+                if (go != null) UnityEngine.Object.Destroy(go);
+                go = new GameObject(name);
+                go.transform.SetParent(_herRoot, false);
+                var src = go.AddComponent(_tSrc) as Behaviour;
+                if (src == null) { UnityEngine.Object.Destroy(go); go = null; return null; }
+                if (_pPlayAwake != null) _pPlayAwake.SetValue(src, false, null);
+                if (_pBlend != null) _pBlend.SetValue(src, 0.6f, null);                  // mostly 3D, but not lost at arm's length
+                if (_pRolloff != null) _pRolloff.SetValue(src, Enum.ToObject(_pRolloff.PropertyType, 0), null);   // Logarithmic
+                if (_pMin != null) _pMin.SetValue(src, 1.5f, null);
+                if (_pMax != null) _pMax.SetValue(src, 12f, null);
+                if (_pVolume != null) _pVolume.SetValue(src, 1f, null);
+                if (_pGroup != null) _pGroup.SetValue(src, _pGroup.GetValue(_srcSfx, null), null);
+                return src;
             }
-            catch (Exception e) { LogOnce("sfxsrc:" + e.GetType().Name, "own sound source failed: " + e.Message); _sfxSrc = null; return false; }
+            catch (Exception e) { LogOnce("sfxsrc:" + e.GetType().Name, "own sound source failed: " + e.Message); return null; }
         }
 
         // A slap clip (hard: sex_fast, soft: sex_normal, else handJob_fast; draw-and-park 4) as a one-shot at `at` with volume scale `vol`
@@ -1537,6 +1606,123 @@ namespace SfMorph
                 return true;
             }
             catch (Exception e) { LogOnce("slap:" + e.GetType().Name, "slap sound failed: " + e.Message); return false; }
+        }
+
+        // ---- 0.9.0: skin foley (Foley.cs): the user's own sound files, else built sounds; slaps fall back to the game's clips above ----
+        public static readonly SkinFoley Foley = new SkinFoley();
+        GameObject _folGo, _rubGo; Behaviour _folSrc, _rubSrc;
+        float _rubVol;
+        bool _rubOn;
+
+        // The foley is read once, on the main thread, the first time a sound is wanted (the AudioClip type comes from the game's sources).
+        public bool FoleyReady()
+        {
+            if (!Foley.Loaded && !Foley.Failed && _pClip != null) Foley.Load(_pClip.PropertyType);
+            return Foley.Loaded;
+        }
+
+        // A foley one-shot of category c at `at` (slaps on the slap source; pat / grab on their own, so a slap's pitch never bends a pat).
+        // False = no clip for it (a slap then uses the game's clips). Respects the game's sound-effect setting.
+        public bool FoleyShot(int c, Vector3 at, float vol, float pitch)
+        {
+            if (!Found || !SfxOn || _miOneShot == null || !FoleyReady()) return false;
+            bool slap = c <= SkinFoley.SlapHard;
+            if (slap && !Foley.HasFiles(SkinFoley.SlapSoft) && !Foley.HasFiles(SkinFoley.SlapMedium) && !Foley.HasFiles(SkinFoley.SlapHard)) return false;
+            Behaviour src; GameObject go;
+            if (slap) { if (!EnsureSfx()) return false; src = _sfxSrc; go = _sfxGo; }
+            else { _folSrc = MakeSrc("SfReact_foley", ref _folGo, _folSrc); if (_folSrc == null) return false; src = _folSrc; go = _folGo; }
+            try
+            {
+                float len;
+                var clip = Foley.Pick(c, out len);
+                if (clip == null) return false;
+                go.transform.position = at;
+                if (_pPitch != null) _pPitch.SetValue(src, pitch, null);
+                _argOneShot[0] = clip; _argOneShot[1] = Mathf.Max(0f, vol);
+                _miOneShot.Invoke(src, _argOneShot);
+                if (slap) LastSlapClip = clip;
+                return true;
+            }
+            catch (Exception e) { LogOnce("foley:" + e.GetType().Name, "foley sound failed: " + e.Message); return false; }
+        }
+
+        // The skin rub loop: level 0..1 (from how fast a hand slides over her), eased (up 6/s, down 3/s), stopped at 0. Call every frame.
+        public void Rub(Vector3 at, float level, float pitch, float dt)
+        {
+            if (!_rubOn && level <= 0f) return;
+            if (!Found || !SfxOn) level = 0f;
+            _rubVol = Mathf.MoveTowards(_rubVol, level, (level > _rubVol ? 6f : 3f) * dt);
+            try
+            {
+                if (_rubVol <= 0.002f)
+                {
+                    if (_rubOn && _rubSrc != null && !Dead(_rubSrc) && _miStop != null) _miStop.Invoke(_rubSrc, null);
+                    _rubOn = false; _rubVol = 0f;
+                    return;
+                }
+                if (!_rubOn)
+                {
+                    if (!FoleyReady() || _pClip == null || _miPlay == null) return;
+                    _rubSrc = MakeSrc("SfReact_rub", ref _rubGo, _rubSrc);
+                    if (_rubSrc == null) return;
+                    float len;
+                    var clip = Foley.Pick(SkinFoley.Rub, out len);
+                    if (clip == null) return;
+                    _pClip.SetValue(_rubSrc, clip, null);
+                    if (_pLoop != null) _pLoop.SetValue(_rubSrc, true, null);
+                    if (_pVolume != null) _pVolume.SetValue(_rubSrc, 0f, null);
+                    _miPlay.Invoke(_rubSrc, null);
+                    if (_pTime != null && len > 0.2f) _pTime.SetValue(_rubSrc, UnityEngine.Random.Range(0f, len * 0.9f), null);   // not always from the top
+                    _rubOn = true;
+                }
+                if (_rubSrc == null || Dead(_rubSrc)) { _rubOn = false; return; }
+                _rubGo.transform.position = at;
+                if (_pVolume != null) _pVolume.SetValue(_rubSrc, _rubVol, null);
+                if (_pPitch != null) _pPitch.SetValue(_rubSrc, pitch, null);
+            }
+            catch (Exception e) { LogOnce("rub:" + e.GetType().Name, "rub sound failed: " + e.Message); _rubOn = false; }
+        }
+
+        // ---- 0.9.0: her voice's pitch and formant (VoiceShift.cs) on the game's voice sources ----
+        readonly System.Collections.Generic.List<VoiceShift> _shift = new System.Collections.Generic.List<VoiceShift>();
+        public string VoiceFxStatus = "";
+
+        // Called once a second (also with Reactions off): sets the shared values and puts one filter on each voice source's GameObject while
+        // either value is off 1. A GameObject that also carries the game's sound-effect source is skipped (its slaps would shift too).
+        public void VoiceFx(float pitch, float formant)
+        {
+            VoiceShift.Pitch = Mathf.Clamp(pitch, 0.5f, 2f); VoiceShift.Formant = Mathf.Clamp(formant, 0.5f, 2f);
+            bool want = Mathf.Abs(pitch - 1f) > 0.004f || Mathf.Abs(formant - 1f) > 0.004f;
+            for (int i = _shift.Count - 1; i >= 0; i--) if (_shift[i] == null) _shift.RemoveAt(i);
+            if (!want) { VoiceFxStatus = ""; return; }
+            if (!Found) { VoiceFxStatus = "her voice sources are not found yet"; return; }
+            if (_shift.Count > 0) return;
+            try
+            {
+                if (_tSrc != null)
+                {
+                    var tSet = _tSrc.Assembly.GetType("UnityEngine.AudioSettings");
+                    var pRate = tSet != null ? tSet.GetProperty("outputSampleRate", BindingFlags.Static | BindingFlags.Public) : null;
+                    if (pRate != null) VoiceShift.Rate = Mathf.Clamp((int)pRate.GetValue(null, null), 8000, 192000);
+                }
+                var sfxGo = _srcSfx != null && !Dead(_srcSfx) ? _srcSfx.gameObject : null;
+                var sb = new StringBuilder();
+                int skipped = 0;
+                foreach (var s in new[] { _srcMoan, _srcDirty, _srcVoice, _srcDialogue })
+                {
+                    if (s == null || Dead(s)) continue;
+                    var go = s.gameObject;
+                    if (go == sfxGo) { skipped++; continue; }
+                    if (go.GetComponent<VoiceShift>() != null) continue;
+                    _shift.Add(go.AddComponent<VoiceShift>());
+                    if (sb.Length > 0) sb.Append(", ");
+                    sb.Append(go.name);
+                }
+                VoiceFxStatus = _shift.Count > 0 ? "on " + _shift.Count + " voice source object(s)" : "no voice source to filter";
+                Log("voice pitch/formant filter on " + (sb.Length > 0 ? sb.ToString() : "nothing") + " (output " + VoiceShift.Rate + " Hz"
+                    + (skipped > 0 ? "; " + skipped + " source(s) skipped: they share the sound-effect source's object" : "") + ")");
+            }
+            catch (Exception e) { LogOnce("vfx:" + e.GetType().Name, "voice filter failed: " + e.Message); VoiceFxStatus = "failed (see the log)"; }
         }
 
         // What the slap sounded like on paper: clip name and length, how far the listener is, the mixer group and its level in dB.
@@ -2353,7 +2539,10 @@ namespace SfMorph
             ReleaseHeld();
             if (_guardSub) { try { Application.logMessageReceived -= _logCb; } catch (Exception) { } _guardSub = false; }
             try { if (_sfxGo != null) UnityEngine.Object.Destroy(_sfxGo); } catch (Exception) { }
-            _sfxGo = null; _sfxSrc = null;
+            try { if (_folGo != null) UnityEngine.Object.Destroy(_folGo); if (_rubGo != null) UnityEngine.Object.Destroy(_rubGo); } catch (Exception) { }
+            foreach (var v in _shift) try { if (v != null) UnityEngine.Object.Destroy(v); } catch (Exception) { }
+            _shift.Clear(); VoiceFxStatus = "";
+            _sfxGo = null; _sfxSrc = null; _folGo = null; _folSrc = null; _rubGo = null; _rubSrc = null; _rubOn = false; _rubVol = 0f;
             Found = false; Missing = ""; _missing.Clear();
             _facial = _lv = _snd = _gs = _bp = _sm = _gauge = _solver = null;
             _anim = null; _herRoot = null;

@@ -1,6 +1,8 @@
 # SF Body Morphs — handoff
 
-State at **0.8.9** (branch `main`). 0.8.9 (fixes from the first headset run of 0.8.1-0.8.8: dent floor = raw contact depth in Compose
+State at **0.9.0** (branch `main`). 0.9.0 (skin foley from the user's WAV folders with built-in pat / grab / rub fallbacks, voice packs,
+voice pitch / formant filter, climax face hook fix, face pools / voice-onset faces; research notes research-vsr-face.md and
+survey-voice-packs.md in the session notes) built, not yet run in the game. 0.8.9 (fixes from the first headset run of 0.8.1-0.8.8: dent floor = raw contact depth in Compose
 (bundle rebuilt; Depth now writes FieldD, wide ends in A, Compose writes B), ripple amplitude x3, [Physics] MarksBoost, [Hands] YieldLock,
 collider inset / Embody hand stop = 0.6 x tissue depth (HerBody.InsetShare), face mood picks skip body-motion clips; triage in the session
 notes triage-0.8.8-log.md) built, not yet run in the game. 0.8.8 ([Reactions] LinesGamePath switch for the lines' game path, first-use index
@@ -87,6 +89,8 @@ commit them). Toolchain: `apt-get update && apt-get install -y mono-mcs mono-dev
 | `Reactions.cs` | Reactions (0.7.9): per HerBody segment a touch classifier (physics-hand contact ENTER speed per hand `HitVn`, hand-model/partner approach speed `GeoVn`, force, duration -> brush/caress/grope/soft/hard/too-hard slap, sensitivity scales the 1.2/2.3/4.5 m/s thresholds), 10 zones, excitement E (tiers) and pain P with decay, states Idle/Aroused/Startled/Guarded/Climax/Afterglow (auto or buttons), the director (voice chance + arbiter + tier gap, face, flinch via `Overlap.Kick`/`SoftZones.Kick`, slap sound, blush pump, gaze-away envelope, desire feed), test buttons, logs. |
 | `ReactionsGame.cs` | The game bridge for reactions, all by reflection (audio types too: UnityEngine.AudioModule isn't referenced): FacialFunction (MoanFunction, Blink, anim, facialLayer, functionPause), LadyVoice_Function gates, Sound_Function sources, GameSetting/SexMode/SexMode_State_System (desire gauge), voice library banks (Moan by length, Exhale_f32/f64/f128), SFX clips, own 3D slap AudioSource on the game's SFX mixer group, blush (`_BlushPower`) and look-at weight trackers, and the dirty-talk guard (rebuilds dirtyTalkVoice/dirtyTalkPlayNum only when PlayRandomVoice would throw). 0.8.6 lines: `BuildLines` (DirtyTalk_Library[lang] reikaNipple/reikaPussy/reikaAnal/public_DT_Lv1..3 banks, Feeling_enter_0..3), `SpeakLine` (game path `LineViaGame`: snapshot of the dirty-talk fields, level on FacialFunction.dirtyTalk_reika_level / _player_level, DirtyTalkTypeSelect(type), one-entry shuffle at the clip's index, PlayDirtyTalk(true), restore; fallback `LineOwn` on dirtyTalk_audioSource), `Feeling` (moan source, "moan" trigger). The director's `LineBlock` / `TryLine` / `TryFeeling` / `PelvisCat` are in Reactions.cs. |
 | `ReactionsFace.cs` | 0.8.7 face clips: survey of `FacialFunction.anim.runtimeAnimatorController.animationClips` (`SampleAnimation` on the Animator's object, 3 clips per frame; snapshot/restore of every transform's local pose + activeSelf, renderer enabled + property block; a sentinel pose before a sample tells which face bones a clip writes, position only if all 3 axes; score = mm + 0.2 deg per written bone vs the bind face in Head_M's frame), ranked log + `face-clips.txt`, moods (keywords, strength, `[Reactions] FaceMap`), 15 Hz tracks of the written face bones, `Step` (envelope, lerp/slerp from the Animator's pose; mouth group skipped while she speaks/moans, eyeballs and hair never), `Watch` (which clips the game's eye reaction plays). Body.ApplyAll calls `React.FaceStep` for her before `Morph.Update`/`Apply`. |
+| `Foley.cs` | 0.9.0: `SkinFoley` (WAV reader: PCM 8/16/24/32 + float, extensible, downmix, silence trim; categories slap_soft/medium/hard, pat, grab, rub from `BepInEx\plugins\SfMorph\Sounds\<cat>`; built noise sounds for pat/grab/rub; shuffle bags) and `VoicePack` (`Sounds\voice\<pack>\<cat>`, 40 clips per category, nearest-category fallback). Clips by reflected `AudioClip.Create/SetData`. ReactionsGame: `FoleyShot` (slaps on the slap source, pat/grab on `SfReact_foley`), `Rub` (loop on `SfReact_rub`), `PackVoice`/`PackBreath` on the moan source (`_packClip`: no 1.8 s padding rule). |
+| `VoiceShift.cs` | 0.9.0: `OnAudioFilterRead` filter added to the GameObjects of her voice sources (moan, dirty talk, voice, dialogue; skipped if shared with the sfx source) by `ReactionsGame.VoiceFx`: formant = delay-line shift by f, pitch = LPC (order 24, 1024/256) residual shifted by p/f and re-synthesised, level match, soft limit, dry until the first full window. Bypass at 1/1. Checked offline on a synthetic vowel (pitch/formant move independently, no overshoot), not in the game. |
 | `Panel.cs` | F8 window: character buttons, tabs Body (collapsible groups) / Bones / Presets / Characters / Physics (soft zones, motion, pushes, wrinkles) / VR (Embody, VR hands, contacts) / Reactions (`Panel.Reactions.cs`: toggles, states, tests, voice guard), filter + 80-row cap, greyed rows with reasons. |
 
 ### How changes are applied (keep this model)
@@ -169,10 +173,12 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
   driver doesn't port, only its textures/masks.
 - Pose desync at the end of that run (her lying, the partner in cowgirl): nothing in the log; needs a repeat with Apply changes off.
 - ~30 "her renderers changed" rebuilds per session (each re-bakes wrinkles, GPU contact, hulls; 6 frames with capsule fallbacks).
-- Reactions: both climaxes went to the game's own face hook (our Climax clip never played); the second climax had no feeling sound
-  (game face paused); general-area lines resolved as handJob with the restored type anal (check DirtyTalkTypeSelect's type mapping).
-- Slap foley is "too wet" (the game's sex_fast/sex_normal clips): candidates in the user's VaM packages by name only
-  (Sally.SallySoundFX, CheesyFX.BodyLanguage); ask before reading them.
+- Reactions: general-area lines resolved as handJob with the restored type anal (check DirtyTalkTypeSelect's type mapping). The climax
+  hook and the second climax's missing feeling are fixed in 0.9.0.
+- Sounds (0.9.0, user's PC only, personal use, never commit): Sounds\slap_* = BodyLanguage "Slaps" + the bqbq spank pack (Spank, spk_0/1),
+  pat = BodyLanguage "ButtSlaps"; voice packs Rebecca / Amy from VAMMoan2 (VFedit). SallySoundFX has no audio (a visualizer). More voices
+  (11 VAMMoan 2.1 voices, 20 vamX voices with spoken lines and pain clips) are extracted in the user's temp folder (survey-voice-packs.md).
+  Not done: grab/rub recordings (built sounds now), the game's own sex moans with a pack, blink-off during eyes-closed face holds.
 
 - 0.8.4 to check in the headset (TESTING.md 0.8.4): creases visible on her face, no seam lines, the metres-per-UV value in the albedo-copy
   log line plausible (it sets the crease scale), the Characters tab face/body skin toggle with Wrinkles on, marks through Wrinkles' copy.

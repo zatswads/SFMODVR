@@ -1,0 +1,415 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Reflection;
+using UnityEngine;
+
+namespace SfMorph
+{
+    // Skin-contact foley for the reactions (0.9.0): slaps in three strengths, a pat, a grab / squeeze and a skin rub loop. Clips come from WAV
+    // files in BepInEx\plugins\SfMorph\Sounds\<category>\*.wav (the user's own sounds, never shipped with the plugin); a category without
+    // files falls back: slaps to the next strength and then to the game's own slap clips (ReactionsGame), pat / grab / rub to sounds built here
+    // from shaped noise (dry, short; nothing wet). AudioClip is reached by reflection (UnityEngine.AudioModule isn't referenced): the type is
+    // the game's AudioSource.clip property type, handed in by ReactionsGame. Everything loads once, on the main thread, on first use.
+    internal sealed class SkinFoley
+    {
+        public const int SlapSoft = 0, SlapMedium = 1, SlapHard = 2, Pat = 3, Grab = 4, Rub = 5, NC = 6;
+        public static readonly string[] Folders = { "slap_soft", "slap_medium", "slap_hard", "pat", "grab", "rub" };
+
+        sealed class Set
+        {
+            public readonly List<UnityEngine.Object> Clips = new List<UnityEngine.Object>();
+            public readonly List<float> Len = new List<float>();
+            public int Files;                  // clips from files (the rest were built here)
+            public int[] Bag = new int[0];     // shuffle bag: every clip once before any repeats
+            public int BagPos;
+        }
+
+        readonly Set[] _sets = new Set[NC];
+        readonly System.Random _rng = new System.Random();
+        MethodInfo _create, _setData;
+        public bool Loaded, Failed;
+        public string Summary = "";
+
+        public static string Dir { get { return Path.Combine(Path.Combine(BepInEx.Paths.PluginPath, "SfMorph"), "Sounds"); } }
+
+        public bool HasFiles(int c) { return Loaded && c >= 0 && c < NC && _sets[c] != null && _sets[c].Files > 0; }
+        public bool Has(int c) { return Loaded && c >= 0 && c < NC && _sets[c] != null && _sets[c].Clips.Count > 0; }
+
+        // Loads the files and builds the fallbacks. tClip = UnityEngine.AudioClip. Logs one summary line; never throws.
+        public void Load(Type tClip)
+        {
+            if (Loaded || Failed) return;
+            try
+            {
+                _create = tClip != null ? tClip.GetMethod("Create", new[] { typeof(string), typeof(int), typeof(int), typeof(int), typeof(bool) }) : null;
+                _setData = tClip != null ? tClip.GetMethod("SetData", new[] { typeof(float[]), typeof(int) }) : null;
+                if (_create == null || _setData == null) { Failed = true; Summary = "AudioClip.Create / SetData not found"; Plugin.Log.LogWarning("Skin foley: " + Summary); return; }
+                for (int c = 0; c < NC; c++) _sets[c] = new Set();
+                string dir = Dir;
+                EnsureFolders(dir);
+                var sb = new System.Text.StringBuilder("Skin foley: ");
+                int bad = 0;
+                for (int c = 0; c < NC; c++)
+                {
+                    string d = Path.Combine(dir, Folders[c]);
+                    if (!Directory.Exists(d)) continue;
+                    var files = Directory.GetFiles(d, "*.wav");
+                    Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+                    for (int i = 0; i < files.Length && _sets[c].Clips.Count < 64; i++)
+                    {
+                        float[] s; int rate; string why;
+                        if (!ReadWav(files[i], c == Rub ? 12f : 4f, c != Rub, out s, out rate, out why)) { bad++; if (bad <= 5) Plugin.Log.LogWarning("Skin foley: skipped " + Path.GetFileName(files[i]) + " (" + why + ")"); continue; }
+                        if (Add(c, "SfFoley_" + Folders[c] + "_" + Path.GetFileNameWithoutExtension(files[i]), s, rate)) _sets[c].Files++;
+                    }
+                }
+                // the built fallbacks: pat, grab, rub only (slaps fall back to the game's clips)
+                if (_sets[Pat].Clips.Count == 0) for (int i = 0; i < 4; i++) Add(Pat, "SfFoley_pat_built" + i, BuildPat(i), 44100);
+                if (_sets[Grab].Clips.Count == 0) for (int i = 0; i < 4; i++) Add(Grab, "SfFoley_grab_built" + i, BuildGrab(i), 44100);
+                if (_sets[Rub].Clips.Count == 0) Add(Rub, "SfFoley_rub_built", BuildRub(), 44100);
+                for (int c = 0; c < NC; c++)
+                {
+                    if (c > 0) sb.Append(", ");
+                    var st = _sets[c];
+                    sb.Append(Folders[c]).Append(' ');
+                    if (st.Files > 0) sb.Append(st.Files).Append(st.Files == 1 ? " file" : " files");
+                    else if (st.Clips.Count > 0) sb.Append("built");
+                    else sb.Append(c <= SlapHard ? "none (next strength / the game's clips)" : "none");
+                }
+                if (bad > 0) sb.Append("; ").Append(bad).Append(" file(s) skipped");
+                sb.Append(" (folder ").Append(dir).Append(')');
+                Summary = sb.ToString();
+                Plugin.Log.LogInfo(Summary);
+                Loaded = true;
+            }
+            catch (Exception e) { Failed = true; Summary = "failed: " + e.Message; Plugin.Log.LogWarning("Skin foley failed: " + e); }
+        }
+
+        // A clip of category c (shuffle bag), or the next strength down / up for slaps; null = none (the caller falls back to the game's clips).
+        public UnityEngine.Object Pick(int c, out float len)
+        {
+            len = 0f;
+            if (!Loaded || c < 0 || c >= NC) return null;
+            if (c <= SlapHard && _sets[c].Clips.Count == 0)
+            {
+                // soft -> medium -> hard; hard -> medium -> soft
+                int[] order = c == SlapSoft ? new[] { SlapMedium, SlapHard } : c == SlapMedium ? new[] { SlapSoft, SlapHard } : new[] { SlapMedium, SlapSoft };
+                foreach (int o in order) if (_sets[o].Clips.Count > 0) { c = o; break; }
+            }
+            var st = _sets[c];
+            int n = st.Clips.Count;
+            if (n == 0) return null;
+            if (st.Bag.Length != n || st.BagPos >= n)
+            {
+                int last = st.Bag.Length == n && n > 1 ? st.Bag[n - 1] : -1;
+                if (st.Bag.Length != n) { st.Bag = new int[n]; }
+                for (int i = 0; i < n; i++) st.Bag[i] = i;
+                for (int i = n - 1; i > 0; i--) { int j = _rng.Next(i + 1); int t = st.Bag[i]; st.Bag[i] = st.Bag[j]; st.Bag[j] = t; }
+                if (n > 1 && st.Bag[0] == last) { int t = st.Bag[0]; st.Bag[0] = st.Bag[1]; st.Bag[1] = t; }   // no repeat across bags
+                st.BagPos = 0;
+            }
+            int k = st.Bag[st.BagPos++];
+            len = st.Len[k];
+            return st.Clips[k];
+        }
+
+        bool Add(int c, string name, float[] s, int rate)
+        {
+            if (s == null || s.Length < 16) return false;
+            var clip = _create.Invoke(null, new object[] { name, s.Length, 1, rate, false }) as UnityEngine.Object;
+            if (clip == null) return false;
+            _setData.Invoke(clip, new object[] { s, 0 });
+            clip.hideFlags = HideFlags.DontUnloadUnusedAsset;
+            _sets[c].Clips.Add(clip); _sets[c].Len.Add(s.Length / (float)rate);
+            return true;
+        }
+
+        // The folders and a short readme, so the user sees where the files go (only when the Sounds folder doesn't exist yet).
+        static void EnsureFolders(string dir)
+        {
+            try
+            {
+                if (Directory.Exists(dir)) return;
+                Directory.CreateDirectory(dir);
+                foreach (var f in Folders) Directory.CreateDirectory(Path.Combine(dir, f));
+                File.WriteAllText(Path.Combine(dir, "README.txt"),
+                    "SF Body Morphs skin foley: put WAV files (PCM 8/16/24/32-bit or float, mono or stereo, any rate) in these folders.\r\n" +
+                    "slap_soft / slap_medium / slap_hard: slaps by strength. pat: light taps. grab: a hand closing on her. rub: a skin-on-skin\r\n" +
+                    "stroke, played as a loop while a hand slides over her (seamless loops sound best).\r\n" +
+                    "Empty folders fall back: slaps to the next strength, then to the game's own slap clips; pat, grab and rub to built-in sounds.\r\n" +
+                    "Read once per game start.\r\n");
+            }
+            catch (Exception) { }
+        }
+
+        // ---------------- WAV ----------------
+
+        // RIFF/WAVE: PCM 8/16/24/32, IEEE float 32 (also WAVE_FORMAT_EXTENSIBLE), downmixed to mono; trimmed: leading silence below -50 dB,
+        // trailing silence below -60 dB (plus 30 ms), capped at maxSec. trim false: the whole file (loops).
+        internal static bool ReadWav(string path, float maxSec, bool trim, out float[] mono, out int rate, out string why)
+        {
+            mono = null; rate = 0; why = null;
+            var fi = new FileInfo(path);
+            if (fi.Length > 32L * 1024 * 1024) { why = "over 32 MB"; return false; }
+            byte[] b = File.ReadAllBytes(path);
+            if (b.Length < 44 || b[0] != 'R' || b[1] != 'I' || b[2] != 'F' || b[3] != 'F' || b[8] != 'W' || b[9] != 'A' || b[10] != 'V' || b[11] != 'E') { why = "not a RIFF/WAVE file"; return false; }
+            int fmt = -1, ch = 0, bits = 0, dataOff = -1, dataLen = 0;
+            int p = 12;
+            while (p + 8 <= b.Length)
+            {
+                string id = System.Text.Encoding.ASCII.GetString(b, p, 4);
+                int len = BitConverter.ToInt32(b, p + 4);
+                int body = p + 8;
+                if (len < 0) break;
+                if (id == "fmt " && body + 16 <= b.Length)
+                {
+                    fmt = BitConverter.ToUInt16(b, body); ch = BitConverter.ToUInt16(b, body + 2); rate = BitConverter.ToInt32(b, body + 4); bits = BitConverter.ToUInt16(b, body + 14);
+                    if (fmt == 0xFFFE && len >= 40 && body + 26 <= b.Length) fmt = BitConverter.ToUInt16(b, body + 24);   // extensible: the sub-format GUID starts with the format tag
+                }
+                else if (id == "data") { dataOff = body; dataLen = Math.Min(len, b.Length - body); break; }
+                p = body + len + (len & 1);
+            }
+            if (fmt < 0 || dataOff < 0) { why = "no fmt or data chunk"; return false; }
+            if (ch < 1 || ch > 8 || rate < 8000 || rate > 192000) { why = "unsupported channels/rate " + ch + "/" + rate; return false; }
+            bool flt = fmt == 3;
+            if (!(fmt == 1 || flt) || (flt && bits != 32) || (!flt && bits != 8 && bits != 16 && bits != 24 && bits != 32)) { why = "unsupported format " + fmt + " / " + bits + " bit (convert to PCM WAV)"; return false; }
+            int bps = bits / 8, frame = bps * ch;
+            int n = dataLen / frame;
+            int cap = (int)(maxSec * rate);
+            if (n < 16) { why = "empty"; return false; }
+            var s = new float[Math.Min(n, trim ? n : cap)];
+            for (int i = 0; i < s.Length; i++)
+            {
+                float acc = 0f;
+                int o = dataOff + i * frame;
+                for (int c = 0; c < ch; c++, o += bps)
+                {
+                    float v;
+                    if (flt) v = BitConverter.ToSingle(b, o);
+                    else if (bits == 16) v = BitConverter.ToInt16(b, o) / 32768f;
+                    else if (bits == 24) v = ((b[o] | (b[o + 1] << 8) | (b[o + 2] << 16)) << 8 >> 8) / 8388608f;
+                    else if (bits == 32) v = BitConverter.ToInt32(b, o) / 2147483648f;
+                    else v = (b[o] - 128) / 128f;
+                    acc += v;
+                }
+                s[i] = acc / ch;
+            }
+            if (trim)
+            {
+                float pk = 0f;
+                for (int i = 0; i < s.Length; i++) pk = Mathf.Max(pk, Mathf.Abs(s[i]));
+                if (pk < 1e-4f) { why = "silent"; return false; }
+                float lead = pk * 0.003f, tail = pk * 0.001f;
+                int a = 0; while (a < s.Length && Mathf.Abs(s[a]) < lead) a++;
+                a = Math.Max(0, a - rate / 1000);                 // 1 ms before the onset
+                int e = s.Length - 1; while (e > a && Mathf.Abs(s[e]) < tail) e--;
+                e = Math.Min(s.Length - 1, e + rate * 3 / 100);
+                int m = Math.Min(e - a + 1, cap);
+                if (m < 16) { why = "silent"; return false; }
+                var t = new float[m];
+                Array.Copy(s, a, t, 0, m);
+                int fade = Math.Min(m / 4, rate / 200);           // 5 ms fade-out
+                for (int i = 0; i < fade; i++) t[m - 1 - i] *= i / (float)fade;
+                s = t;
+            }
+            mono = s;
+            return true;
+        }
+
+        // ---------------- built sounds (44.1 kHz mono) ----------------
+
+        // first-order filters on white noise; seeded so every start sounds the same
+        static float[] Noise(int n, int seed)
+        {
+            var r = new System.Random(seed);
+            var s = new float[n];
+            for (int i = 0; i < n; i++) s[i] = (float)(r.NextDouble() * 2.0 - 1.0);
+            return s;
+        }
+        static void LowPass(float[] s, float hz) { float a = 1f - Mathf.Exp(-2f * Mathf.PI * hz / 44100f), y = 0f; for (int i = 0; i < s.Length; i++) { y += a * (s[i] - y); s[i] = y; } }
+        static void HighPass(float[] s, float hz) { float a = 1f - Mathf.Exp(-2f * Mathf.PI * hz / 44100f), y = 0f; for (int i = 0; i < s.Length; i++) { y += a * (s[i] - y); s[i] -= y; } }
+        static void Normalize(float[] s, float peak) { float pk = 1e-6f; foreach (var v in s) pk = Mathf.Max(pk, Mathf.Abs(v)); float g = peak / pk; for (int i = 0; i < s.Length; i++) s[i] *= g; }
+
+        // A pat: a flat palm landing softly, a short broadband tap (2 ms attack, 25-40 ms decay) with a little low body.
+        static float[] BuildPat(int v)
+        {
+            int n = 44100 * 9 / 100;
+            var s = Noise(n, 11 + v);
+            HighPass(s, 250f + 60f * v); LowPass(s, 3200f + 500f * v);
+            var body = Noise(n, 101 + v); LowPass(body, 260f); LowPass(body, 260f);
+            float dec = 0.025f + 0.005f * v;
+            for (int i = 0; i < n; i++)
+            {
+                float t = i / 44100f;
+                float env = t < 0.002f ? t / 0.002f : Mathf.Exp(-(t - 0.002f) / dec);
+                s[i] = (s[i] + 2.5f * body[i] * Mathf.Exp(-t / 0.018f)) * env;
+            }
+            Normalize(s, 0.5f);
+            return s;
+        }
+
+        // A grab / squeeze: fingers closing on skin, a soft low press (8 ms attack, ~70 ms decay) with a faint high friction grain on top.
+        static float[] BuildGrab(int v)
+        {
+            int n = 44100 * 22 / 100;
+            var low = Noise(n, 31 + v); LowPass(low, 600f + 80f * v); LowPass(low, 600f + 80f * v);
+            var hi = Noise(n, 61 + v); HighPass(hi, 1800f); LowPass(hi, 5000f);
+            var r = new System.Random(71 + v);
+            var grain = new float[n];
+            // friction grain: a few dozen 3-8 ms bumps spread over the press
+            for (int g = 0; g < 26; g++)
+            {
+                int at = (int)(r.NextDouble() * 0.12 * 44100), w = 130 + r.Next(220);
+                float amp = 0.4f + (float)r.NextDouble() * 0.6f;
+                for (int i = 0; i < w && at + i < n; i++) grain[at + i] += amp * Mathf.Sin(Mathf.PI * i / w);
+            }
+            for (int i = 0; i < n; i++)
+            {
+                float t = i / 44100f;
+                float env = t < 0.008f ? t / 0.008f : Mathf.Exp(-(t - 0.008f) / (0.06f + 0.01f * v));
+                low[i] = (low[i] * 2.2f + 0.35f * hi[i] * grain[i] * Mathf.Exp(-t / 0.09f)) * env;
+            }
+            Normalize(low, 0.4f);
+            return low;
+        }
+
+        // A skin rub loop (2 s): band-limited friction noise (500 Hz - 4 kHz) with a slow irregular grain, made seamless by a 100 ms crossfade.
+        static float[] BuildRub()
+        {
+            int n = 44100 * 2, x = 4410;
+            var s = Noise(n + x, 91);
+            HighPass(s, 500f); HighPass(s, 500f); LowPass(s, 4000f);
+            var r = new System.Random(97);
+            var mod = new float[n + x];
+            float m = 0.6f, target = 0.6f;
+            for (int i = 0; i < mod.Length; i++)
+            {
+                if (i % 441 == 0) target = 0.35f + (float)r.NextDouble() * 0.65f;   // a new grain level every 10 ms, eased
+                m += (target - m) * 0.004f;
+                mod[i] = m;
+            }
+            var o = new float[n];
+            for (int i = 0; i < n; i++) o[i] = s[i] * mod[i];
+            for (int i = 0; i < x; i++) { float f = i / (float)x; o[i] = o[i] * f + s[n + i] * mod[n + i] * (1f - f); }   // the tail flows into the head
+            Normalize(o, 0.35f);
+            return o;
+        }
+    }
+
+    // A voice pack (0.9.0): her reaction voice from WAV files in BepInEx\plugins\SfMorph\Sounds\voice\<pack>\<category>\*.wav instead of the
+    // game's voice library: breaths (calm / heavy), moans by intensity (low / mid / high), climax and exertion (the short pained or startled
+    // sounds of a slap). Only the selected pack is loaded (on the main thread, when it is chosen), at most PerCat clips per category picked
+    // evenly over the sorted file list, so a big pack doesn't fill the memory. The game's own lines and feeling sounds are another voice, so
+    // the director keeps them off while a pack is on.
+    internal sealed class VoicePack
+    {
+        public const int BreathCalm = 0, BreathHeavy = 1, MoanLow = 2, MoanMid = 3, MoanHigh = 4, Climax = 5, Exertion = 6, NC = 7;
+        public static readonly string[] Folders = { "breath_calm", "breath_heavy", "moan_low", "moan_mid", "moan_high", "climax", "exertion" };
+        const int PerCat = 40;
+
+        readonly List<UnityEngine.Object>[] _clips = new List<UnityEngine.Object>[NC];
+        readonly List<float>[] _len = new List<float>[NC];
+        readonly int[][] _recent = new int[NC][];
+        readonly System.Random _rng = new System.Random();
+        public string Name = "", Summary = "";
+        public bool Loaded;
+
+        public static string Root { get { return Path.Combine(SkinFoley.Dir, "voice"); } }
+
+        // The pack folders that exist (sorted), for the panel's chooser.
+        public static string[] List()
+        {
+            try
+            {
+                if (!Directory.Exists(Root)) return new string[0];
+                var d = Directory.GetDirectories(Root);
+                var n = new string[d.Length];
+                for (int i = 0; i < d.Length; i++) n[i] = Path.GetFileName(d[i]);
+                Array.Sort(n, StringComparer.OrdinalIgnoreCase);
+                return n;
+            }
+            catch (Exception) { return new string[0]; }
+        }
+
+        public bool Has(int c) { return Loaded && _clips[c] != null && _clips[c].Count > 0; }
+
+        // Loads pack `name` (empty: unloads). tClip = UnityEngine.AudioClip. Logs one line; never throws.
+        public void Load(string name, Type tClip)
+        {
+            Unload();
+            Name = name ?? "";
+            if (Name.Length == 0) { Summary = ""; return; }
+            try
+            {
+                var create = tClip != null ? tClip.GetMethod("Create", new[] { typeof(string), typeof(int), typeof(int), typeof(int), typeof(bool) }) : null;
+                var setData = tClip != null ? tClip.GetMethod("SetData", new[] { typeof(float[]), typeof(int) }) : null;
+                string dir = Path.Combine(Root, Name);
+                if (create == null || setData == null || !Directory.Exists(dir)) { Summary = create == null ? "AudioClip.Create not found" : "folder not found: " + dir; Plugin.Log.LogWarning("Voice pack '" + Name + "': " + Summary); return; }
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var sb = new System.Text.StringBuilder();
+                int total = 0, bad = 0;
+                for (int c = 0; c < NC; c++)
+                {
+                    _clips[c] = new List<UnityEngine.Object>(); _len[c] = new List<float>(); _recent[c] = new[] { -1, -1, -1, -1 };
+                    string d = Path.Combine(dir, Folders[c]);
+                    if (!Directory.Exists(d)) continue;
+                    var files = Directory.GetFiles(d, "*.wav");
+                    Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+                    int n = files.Length, take = Math.Min(n, PerCat);
+                    for (int k = 0; k < take; k++)
+                    {
+                        string f = files[take == n ? k : (int)((long)k * n / take)];   // evenly over the list
+                        float[] s; int rate; string why;
+                        if (!SkinFoley.ReadWav(f, c == BreathCalm ? 12f : 8f, true, out s, out rate, out why)) { bad++; continue; }
+                        var clip = create.Invoke(null, new object[] { "SfVoice_" + Name + "_" + Path.GetFileNameWithoutExtension(f), s.Length, 1, rate, false }) as UnityEngine.Object;
+                        if (clip == null) { bad++; continue; }
+                        setData.Invoke(clip, new object[] { s, 0 });
+                        clip.hideFlags = HideFlags.DontUnloadUnusedAsset;
+                        _clips[c].Add(clip); _len[c].Add(s.Length / (float)rate);
+                    }
+                    total += _clips[c].Count;
+                    if (sb.Length > 0) sb.Append(", ");
+                    sb.Append(Folders[c]).Append(' ').Append(_clips[c].Count);
+                    if (n > take) sb.Append('/').Append(n);
+                }
+                Loaded = total > 0;
+                Summary = (Loaded ? "" : "no clips: ") + sb + (bad > 0 ? "; " + bad + " file(s) skipped" : "");
+                Plugin.Log.LogInfo("Voice pack '" + Name + "': " + Summary + " (" + sw.ElapsedMilliseconds + " ms)");
+            }
+            catch (Exception e) { Unload(); Summary = "failed: " + e.Message; Plugin.Log.LogWarning("Voice pack '" + name + "' failed: " + e); }
+        }
+
+        public void Unload()
+        {
+            for (int c = 0; c < NC; c++)
+            {
+                if (_clips[c] != null) foreach (var o in _clips[c]) try { if (o != null) UnityEngine.Object.Destroy(o); } catch (Exception) { }
+                _clips[c] = null; _len[c] = null;
+            }
+            Loaded = false;
+        }
+
+        // A clip of category c (not one of the last 4 when there are more), or of the nearest category that has clips; null = none.
+        public UnityEngine.Object Pick(int c, out float len)
+        {
+            len = 0f;
+            if (!Loaded) return null;
+            if (!Has(c))
+            {
+                int[] near = c == BreathCalm ? new[] { BreathHeavy } : c == BreathHeavy ? new[] { BreathCalm } : c == MoanLow ? new[] { MoanMid, MoanHigh }
+                           : c == MoanMid ? new[] { MoanLow, MoanHigh } : c == MoanHigh ? new[] { MoanMid, Climax } : c == Climax ? new[] { MoanHigh, MoanMid }
+                           : new[] { MoanHigh, MoanMid };
+                c = -1;
+                foreach (int o in near) if (Has(o)) { c = o; break; }
+                if (c < 0) return null;
+            }
+            var l = _clips[c]; var r = _recent[c];
+            int n = l.Count, hold = Math.Min(r.Length, n - 1), idx = -1;
+            for (int t = 0; t < 12 && idx < 0; t++) { int k = _rng.Next(n); if (Array.IndexOf(r, k, 0, hold) < 0) idx = k; }
+            if (idx < 0) idx = _rng.Next(n);
+            Array.Copy(r, 0, r, 1, r.Length - 1); r[0] = idx;
+            len = _len[c][idx];
+            return l[idx];
+        }
+    }
+}

@@ -64,6 +64,11 @@ namespace SfMorph
         readonly Dictionary<string, Track> _tracks = new Dictionary<string, Track>();
         readonly ClipInfo[] _pick = new ClipInfo[NM];
         readonly string[] _pickWhy = new string[NM];
+        // 0.9.0 (from a VaM scene's face reactions: pools of hand-keyed clips per tier, picked at random without the last ones): a few clips
+        // per pleasure level and for the climax, all from the picked clip's own name family; the pick is always in its pool
+        readonly List<ClipInfo>[] _pool = new List<ClipInfo>[NM];
+        readonly int[,] _recent = new int[NM, 2];
+        readonly System.Random _rng = new System.Random();
         readonly Dictionary<string, string> _hooked = new Dictionary<string, string>();
         string _map = null;
         int _phase, _next;            // 0 not started, 1 surveying, 2 ranking, 3 done
@@ -72,7 +77,7 @@ namespace SfMorph
         readonly Queue<Track> _build = new Queue<Track>();
 
         // playback
-        Track _cur; int _curMood = -1; float _t, _w, _hold, _env; bool _rel;
+        Track _cur; int _curMood = -1; float _t, _w, _hold, _env, _att = 0.12f, _relT = 0.45f; bool _rel;
         int _pendMood = -1; float _pendW, _pendHold, _pendUntil;
         // hook watch
         string _watchTag; float _watchUntil; readonly HashSet<string> _watchBase = new HashSet<string>(), _watchNew = new HashSet<string>();
@@ -274,7 +279,7 @@ namespace SfMorph
         void Reset(string why)
         {
             _phase = 0; _next = 0; _clips.Clear(); _ranked.Clear(); _tracks.Clear(); _build.Clear(); _hooked.Clear();
-            for (int i = 0; i < NM; i++) { _pick[i] = null; _pickWhy[i] = null; }
+            for (int i = 0; i < NM; i++) { _pick[i] = null; _pickWhy[i] = null; if (_pool[i] != null) _pool[i].Clear(); }
             _anim = null; _go = null; _root = null; _head = null; _ctrl = null; _all = null; _rends = null; _face = null;
             _cur = null; _curMood = -1; _pendMood = -1; _sampleBroken = false; _map = null; _watchTag = null;
             Status = why;
@@ -461,6 +466,7 @@ namespace SfMorph
                 }
                 _pickWhy[m] = "by name"; used.Add(_pick[m]);
             }
+            BuildPools();
             // by strength: what is still empty
             var free = new List<ClipInfo>();
             // 0.8.9 (log: Surprise picked 'dance_P' by strength and played it 21 times): strength-only picks skip clips named for body
@@ -506,7 +512,75 @@ namespace SfMorph
                 L(sb.ToString());
             }
             // the picked clips' tracks are built ahead (a few samples per frame)
-            for (int m = 0; m < NM; m++) if (_pick[m] != null) TrackOf(_pick[m]);
+            for (int m = 0; m < NM; m++)
+            {
+                if (_pick[m] != null) TrackOf(_pick[m]);
+                if (_pool[m] != null) foreach (var c in _pool[m]) TrackOf(c);
+            }
+            if (log || !_poolLogged)
+            {
+                var sb = new StringBuilder();
+                for (int m = 0; m < NM; m++)
+                {
+                    if (_pool[m] == null || _pool[m].Count < 2) continue;
+                    if (sb.Length > 0) sb.Append("; ");
+                    sb.Append(MoodNames[m]).Append(": ");
+                    for (int i = 0; i < _pool[m].Count; i++) { if (i > 0) sb.Append(", "); sb.Append(_pool[m][i].Name); }
+                }
+                if (sb.Length > 0) { _poolLogged = true; L("mood pools: " + sb); }
+            }
+        }
+        bool _poolLogged;
+
+        // The pools: for each pleasure level picked by name, up to 4 clips of the same keyword family around its strength (weakest third /
+        // middle third / strongest third); the climax: its pick, the strongest climax-named clips and the strongest third of the pleasure family.
+        // A mood picked in the panel (or by strength) keeps exactly that clip.
+        void BuildPools()
+        {
+            for (int m = 0; m < NM; m++) { if (_pool[m] == null) _pool[m] = new List<ClipInfo>(); _pool[m].Clear(); _recent[m, 0] = _recent[m, 1] = -1; }
+            var fam = new List<ClipInfo>();
+            foreach (var c in _ranked) if (Usable(c) && HasWord(c.Name, MoodWords[Pleasure1]) && !NotAnExpression(c.Name)) fam.Add(c);
+            fam.Sort((a, b) => a.Score.CompareTo(b.Score));
+            int n = fam.Count;
+            for (int m = Pleasure1; m <= Pleasure3; m++)
+            {
+                if (_pick[m] == null) continue;
+                _pool[m].Add(_pick[m]);
+                if (_pickWhy[m] != "by name" || n < 3) continue;
+                int lo = (m - Pleasure1) * n / 3, hi = (m - Pleasure1 + 1) * n / 3;
+                for (int i = lo; i < hi && _pool[m].Count < 4; i++) if (!_pool[m].Contains(fam[i])) _pool[m].Add(fam[i]);
+            }
+            if (_pick[Climax] != null)
+            {
+                _pool[Climax].Add(_pick[Climax]);
+                if (_pickWhy[Climax] == "by name")
+                {
+                    var cl = new List<ClipInfo>();
+                    foreach (var c in _ranked) if (Usable(c) && HasWord(c.Name, MoodWords[Climax]) && !NotAnExpression(c.Name)) cl.Add(c);
+                    cl.Sort((a, b) => b.Score.CompareTo(a.Score));
+                    for (int i = 0; i < cl.Count && _pool[Climax].Count < 3; i++) if (!_pool[Climax].Contains(cl[i])) _pool[Climax].Add(cl[i]);
+                    for (int i = n - 1; i >= 2 * n / 3 && i >= 0 && _pool[Climax].Count < 5; i--) if (!_pool[Climax].Contains(fam[i])) _pool[Climax].Add(fam[i]);
+                }
+            }
+        }
+
+        // One clip of the mood's pool: at random among the ready ones, never one of the last two played (when the pool has more).
+        ClipInfo Choose(int m)
+        {
+            var pl = _pool[m];
+            if (pl == null || pl.Count <= 1) return _pick[m];
+            int pick = -1, seen = 0;
+            for (int i = 0; i < pl.Count; i++)
+            {
+                if (i == _recent[m, 0] || (pl.Count > 2 && i == _recent[m, 1])) continue;
+                Track tr;
+                if (!_tracks.TryGetValue(pl[i].Name, out tr) || !tr.Ready || tr.Failed) continue;
+                seen++;
+                if (_rng.Next(seen) == 0) pick = i;   // reservoir: uniform over the candidates
+            }
+            if (pick < 0) return _pick[m];
+            _recent[m, 1] = _recent[m, 0]; _recent[m, 0] = pick;
+            return pl[pick];
         }
 
         static bool Usable(ClipInfo c) { return !c.Speech && !c.Blink && c.Len > 0.05f; }
@@ -588,13 +662,19 @@ namespace SfMorph
             why = null;
             if (_phase != 3 || _sampleBroken) { why = _sampleBroken ? "off" : "surveying"; return false; }
             if (m < 0 || m >= NM || _pick[m] == null) { why = "no clip"; return false; }
-            string hk;
-            if (_hooked.TryGetValue(_pick[m].Name, out hk)) { why = "hook"; return false; }
             if (_cur != null && !_rel && Prio(_curMood) > Prio(m)) { why = "busy"; return false; }
-            var tr = TrackOf(_pick[m]);
+            var ci = Choose(m);
+            // 0.9.0 (0.8.8 log: both climaxes were "left to the game's own hook"): a clip the game's eye reaction once played is left to it only
+            // while the game is playing it now, and never for the climax (ours is not the game's hook firing). 0.8.7 kept it hooked for good.
+            string hk;
+            if (m != Climax && _hooked.TryGetValue(ci.Name, out hk) && PlayingNow(ci.Name)) { why = "hook"; return false; }
+            var tr = TrackOf(ci);
             if (tr.Failed) { why = "no clip"; return false; }
             if (!tr.Ready) { _pendMood = m; _pendW = weight; _pendHold = hold; _pendUntil = _lastNow + 3f; why = "building"; return false; }
             _cur = tr; _curMood = m; _t = 0f; _w = Mathf.Clamp01(weight); _hold = Mathf.Max(0.1f, hold); _rel = false;
+            // pleasure and climax fade in and out slowly (the scene's 0.75 s crossfade); a wince or a start is quick (its peak at 0.2-0.4 s)
+            bool slow = m <= Pleasure3 || m == Climax;
+            _att = slow ? 0.35f : 0.12f; _relT = slow ? 0.75f : 0.45f;
             return true;
         }
 
@@ -606,7 +686,7 @@ namespace SfMorph
         {
             if (_cur == null || _face == null || _anim == null || !_anim.isActiveAndEnabled) return;
             _t += dt;
-            const float attack = 0.12f, release = 0.45f;
+            float attack = _att, release = _relT;
             float env;
             if (_t < attack) env = _t / attack;
             else if (_t < attack + _hold) env = 1f;
@@ -663,6 +743,14 @@ namespace SfMorph
             _watchTag = null;
         }
 
+        readonly HashSet<string> _nowSet = new HashSet<string>();
+        bool PlayingNow(string clip)
+        {
+            if (_anim == null) return false;
+            _nowSet.Clear(); ReadLayers(_nowSet);
+            return _nowSet.Contains(clip);
+        }
+
         void ReadLayers(HashSet<string> into)
         {
             try
@@ -670,6 +758,7 @@ namespace SfMorph
                 int n = _anim.layerCount;
                 for (int l = 1; l < n; l++)
                 {
+                    if (_anim.GetLayerWeight(l) < 0.1f) continue;   // 0.9.0: a layer at weight 0 shows nothing
                     foreach (var ci in _anim.GetCurrentAnimatorClipInfo(l)) if (ci.clip != null && ci.weight > 0.1f) into.Add(ci.clip.name);
                     foreach (var ci in _anim.GetNextAnimatorClipInfo(l)) if (ci.clip != null && ci.weight > 0.1f) into.Add(ci.clip.name);
                 }

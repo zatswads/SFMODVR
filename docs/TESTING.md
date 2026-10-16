@@ -97,6 +97,22 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.9.0 (skin sounds, voice packs, voice pitch/formant, face reactions)
+
+Copy `SfMorph.dll`; the sounds are in `BepInEx\plugins\SfMorph\Sounds` (copied on the user's PC; never in the repo).
+- [ ] Log `Skin foley: slap_soft 11 files, slap_medium 9 files, slap_hard 12 files, pat 16 files, grab built, rub built` on the first sound.
+- [ ] Slaps sound dry (hand on skin), stronger slaps louder / harder; the panel's slap test plays a hard one. Skin sounds off: the game's
+      clips again.
+- [ ] Light taps (below a soft slap) make a soft pat; a grope's onset a short grab; stroking her skin a quiet rub that follows the hand's
+      speed and stops within ~0.3 s of stopping; no rub while the hand rests.
+- [ ] Voice pack Rebecca / Amy (Game voice -> Voice pack): log `Voice pack 'Rebecca': breath_calm 28, breath_heavy 40/445, ...`; caresses
+      breathe, gropes moan low / mid / high by excitement, hard slaps give an exertion, the climax its climax moans; no game lines while on.
+- [ ] Voice pitch 1.2 / formant 1.0: higher voice, same speed and lip sync; formant 1.15 alone: smaller voice, same pitch. Log
+      `voice pitch/formant filter on ...` lists her voice objects (none skipped). Listen for crackle on long moans.
+- [ ] Climax: log `face Climax '...'` (no "left to the game's own hook"), the feeling or a climax moan also when the game face is paused.
+- [ ] `mood pools:` line lists 2-4 clips per pleasure level; faces fade in softly, not on every touch (lockout), and also when she moans by
+      herself.
+
 ## 0.8.9 (0.8.8 headset fixes)
 
 Copy both `SfMorph.dll` and `sfmorph_shaders` (the dent floor is in the compute shader).

@@ -41,6 +41,31 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.9.0 (skin sounds, voice packs, voice pitch/formant, face reactions):
+- The slap sound was too wet: it used the game's sex_fast / sex_normal clips (thrust sounds). Slaps now come from your own WAV files in
+  `BepInEx\plugins\SfMorph\Sounds\slap_soft|slap_medium|slap_hard` by strength (soft slap: soft or medium by force; hard: medium or
+  hard; too hard: hard), falling back to the next strength and then to the game's clips. New skin sounds: a pat on light taps (a hand
+  landing at 0.45-1.2 m/s, below a soft slap; before, nothing), a grab when a hand closes on her (the grope's onset) and a skin rub loop
+  while a hand slides over her (the touch point's speed in her segment's own frame, 4-40 cm/s; louder with a firmer hand). pat / grab / rub
+  use your files in those folders, else built-in dry sounds. Toggle "Skin sounds" under Slap volume ([Reactions] Foley, on). Files are
+  read once per game start (log `Skin foley: ...`); the plugin ships no audio.
+- Voice packs: her reaction voice from WAV folders in `Sounds\voice\<pack>\breath_calm|breath_heavy|moan_low|moan_mid|moan_high|climax|exertion`
+  ([Voice] Pack, chooser under Game voice). Moans by her excitement, exertion on hard slaps, climax moans, calm / heavy breaths; at most
+  40 clips per category are loaded. While a pack is on, the game's lines and feeling sounds stay off (they are another voice); the game's
+  own moans during sex are still the game's.
+- Voice pitch and formant ([Voice] Pitch 0.75-1.4, Formant 0.8-1.25, sliders under Game voice): an audio filter on her voice sources
+  (moan, dirty talk, voice loop, dialogue) changes pitch without changing speed (the lip sync stays) and the formants (the voice's size)
+  separately; at 1 / 1 it is bypassed. Works with Reactions off too.
+- Both climaxes in the 0.8.8 log played no climax face ("left to the game's own hook"): the game's eye reaction had once played the
+  same clip (Feeling_enter_3), and 0.8.7 then left that clip to the game for the rest of the session. A clip is now left to the game only
+  while the game is playing it at that moment, and never for the climax.
+- The second climax had no feeling sound ("game face paused"): with our climax face on her, a paused game face no longer blocks the
+  climax voice (dialogue, dirty talk and a sounding moan still do).
+- Face reactions, ideas from a VaM scene's facial reactions: each pleasure level and the climax play from a small pool of clips of the same
+  family (random, not the last two), pleasure and climax faces fade in 0.35 s and out 0.75 s (slaps stay quick), a pleasure face is
+  followed by a random 2.5-5.5 s lockout, a face also starts when any moan of hers starts (the game's own too), and every climax moan
+  renews the climax face.
+
 0.8.9 (headset test of 0.8.8):
 - A hard, pixelated seam around a finger's dent on her breast: the dent's two smoothing passes lowered it under a small contact (a
   fingertip) below the real penetration, so her skin stayed a few mm inside his finger and the depth intersection drew an aliased line.

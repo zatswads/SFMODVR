@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.8.9";
+        public const string Version = "0.9.0";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -37,9 +37,9 @@ namespace SfMorph
         internal ConfigEntry<float> WrinkStrength, WrinkThreshold, WrinkAttack, WrinkRelease, WrinkSpacingFace, WrinkSpacingBody, WrinkCullDistance, WrinkCavity;
         internal ConfigEntry<int> WrinkDebug, WrinkResolution;
         // 0.7.9 reactions
-        internal ConfigEntry<bool> ReactOn, ReactVoice, ReactFace, ReactFlinch, ReactSound, ReactBlush, ReactBlushBody, ReactGaze, ReactFeedDesire, ReactAuto, ReactClimax, VoiceGuard, ReactLines, ReactFaceClips, ReactLinesGamePath;
-        internal ConfigEntry<float> ReactSensitivity, ReactCooldown, ReactVolume, ReactBlushGain, ReactVoicePitchVar, ReactLineChance, ReactFaceStrength;
-        internal ConfigEntry<string> ReactFaceMap;
+        internal ConfigEntry<bool> ReactOn, ReactVoice, ReactFace, ReactFlinch, ReactSound, ReactBlush, ReactBlushBody, ReactGaze, ReactFeedDesire, ReactAuto, ReactClimax, VoiceGuard, ReactLines, ReactFaceClips, ReactLinesGamePath, ReactFoley;
+        internal ConfigEntry<float> ReactSensitivity, ReactCooldown, ReactVolume, ReactBlushGain, ReactVoicePitchVar, ReactLineChance, ReactFaceStrength, VoicePitch, VoiceFormant;
+        internal ConfigEntry<string> ReactFaceMap, VoicePackName;
         internal ConfigEntry<int> ReactVoiceMode, ReactLog, ReactConfigRev;
         // 0.8.0 contact visuals v2 (GPU contact: dent edge, rim bulge, bent normals, self-contact, partner body, bend bulges, ripple, skin marks)
         internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn;
@@ -158,7 +158,11 @@ namespace SfMorph
             ReactFace = Config.Bind("Reactions", "Face", true, "Her face reacts to touch: the game's own eye reaction on slaps (and soft ones on caresses and gropes), with a wince or blink alongside when no moan carries the face.");
             ReactFlinch = Config.Bind("Reactions", "Flinch", true, "Her body swings and her soft zones jiggle after a slap (needs the limb push slider above 0).");
             ReactSound = Config.Bind("Reactions", "Sound", true, "A slap sound at the spot of a slap.");
-            ReactVolume = Config.Bind("Reactions", "Volume", 0.6f, new ConfigDescription("Slap sound volume.", new AcceptableValueRange<float>(0f, 1f)));
+            ReactVolume = Config.Bind("Reactions", "Volume", 0.6f, new ConfigDescription("Slap and skin sound volume.", new AcceptableValueRange<float>(0f, 1f)));
+            ReactFoley = Config.Bind("Reactions", "Foley", true, "Skin sounds: slaps from your own WAV files in BepInEx\\plugins\\SfMorph\\Sounds (slap_soft / slap_medium / slap_hard; none: the game's clips), a pat on light taps, a grab when a hand closes on her, a rub while a hand slides over her skin (your files in pat / grab / rub, else built-in sounds). Off: the game's slap clips only.");
+            VoicePackName = Config.Bind("Voice", "Pack", "", "Her reaction voice from a voice pack: a folder name under BepInEx\\plugins\\SfMorph\\Sounds\\voice (breath_calm, breath_heavy, moan_low, moan_mid, moan_high, climax, exertion with WAV files). Empty: the game's own voice. While a pack is on, the game's lines and feeling sounds are not used (another voice).");
+            VoicePitch = Config.Bind("Voice", "Pitch", 1f, new ConfigDescription("Her voice's pitch (moans, lines, dialogue), without changing its speed. 1 = as recorded.", new AcceptableValueRange<float>(0.75f, 1.4f)));
+            VoiceFormant = Config.Bind("Voice", "Formant", 1f, new ConfigDescription("Her voice's formants (the size of the voice: below 1 fuller / older, above 1 smaller / younger), without changing pitch or speed. 1 = as recorded.", new AcceptableValueRange<float>(0.8f, 1.25f)));
             ReactBlush = Config.Bind("Reactions", "Blush", true, "Her face reddens with excitement and after slaps.");
             ReactBlushBody = Config.Bind("Reactions", "BlushBody", false, "Her body skin reddens too, at half strength.");
             ReactBlushGain = Config.Bind("Reactions", "BlushGain", 0.6f, new ConfigDescription("How strong the redness is.", new AcceptableValueRange<float>(0f, 2f)));

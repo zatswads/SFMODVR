@@ -59,6 +59,18 @@ namespace SfMorph
             if (Mathf.Abs(gap - gapCfg) > 0.0001f) _p.ReactCooldown.Value = gap;
             float vol = Slider("Slap volume", volCfg * 100f, 0f, 100f, "0", 60f, sound ? null : "off: Sound is off", " %") / 100f;
             if (sound && Mathf.Abs(vol - volCfg) > 0.0001f) _p.ReactVolume.Value = vol;
+            // 0.9.0: skin foley
+            bool foley = _p.ReactFoley.Value;
+            GUI.enabled = sub == null && sound;
+            bool tfo = GUILayout.Toggle(foley, " Skin sounds: slaps from your sound files, pat, grab, rub");
+            GUI.enabled = true;
+            if (sub == null && sound && tfo != foley) _p.ReactFoley.Value = tfo;
+            if (!sound) GUILayout.Label("    off: Sound is off", _off);
+            else if (foley)
+            {
+                var fs = ReactionsGame.Foley;
+                GUILayout.Label(fs.Loaded ? fs.Summary.Replace("Skin foley: ", "") : fs.Failed ? "off: " + fs.Summary : "read on the first sound (WAV files in BepInEx\\plugins\\SfMorph\\Sounds)", fs.Failed ? _off : _hint);
+            }
 
             // what she reacts with
             GUI.enabled = sub == null;
@@ -260,6 +272,28 @@ namespace SfMorph
         void GameVoiceBlock(string whoOff, bool guard, string guardStatus, Reactions react, bool bridge, bool diagBusy, bool diagRan)
         {
             GUILayout.Label("Game voice", _bold);
+            // 0.9.0: her voice's pitch and formant (also with Reactions off)
+            float pc = _p.VoicePitch.Value, fc = _p.VoiceFormant.Value;
+            float np = Slider("Voice pitch", pc, 0.75f, 1.4f, "0.00", 1f, whoOff, "");
+            float nf = Slider("Voice formant", fc, 0.8f, 1.25f, "0.00", 1f, whoOff, "");
+            if (whoOff == null && Mathf.Abs(np - pc) > 0.0001f) _p.VoicePitch.Value = np;
+            if (whoOff == null && Mathf.Abs(nf - fc) > 0.0001f) _p.VoiceFormant.Value = nf;
+            // 0.9.0: voice pack chooser (folders under Sounds\voice)
+            string pk = _p.VoicePackName.Value ?? "";
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Voice pack", GUILayout.Width(170));
+            GUI.enabled = whoOff == null;
+            if (GUILayout.Button("<", GUILayout.Width(32))) _p.VoicePackName.Value = NextPack(pk, -1);
+            GUILayout.Label(pk.Length > 0 ? pk : "the game's voice", GUILayout.Width(160));
+            if (GUILayout.Button(">", GUILayout.Width(32))) _p.VoicePackName.Value = NextPack(pk, 1);
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+            var vp = ReactionsGame.Pack;
+            if (pk.Length > 0) GUILayout.Label(vp.Name == pk && vp.Summary.Length > 0 ? (vp.Loaded ? "" : "off: ") + vp.Summary : "loads within a second (in the game scene)", vp.Name == pk && !vp.Loaded && vp.Summary.Length > 0 ? _off : _hint);
+            GUILayout.Label("A voice pack replaces her reaction moans, breaths, slap exertions and climax (the game's own lines and feeling sounds stay off while one is on).", _hint);
+            string vfs = react.VoiceFxStatus;
+            GUILayout.Label("Pitch: higher or lower without changing her speed (the lip sync stays). Formant: the size of her voice, below 1 fuller, above 1 smaller. 1 = as recorded."
+                            + (vfs.Length > 0 ? " Now: " + vfs + "." : ""), _hint);
             GUI.enabled = whoOff == null;
             bool g = GUILayout.Toggle(guard, " Repair the game's voice shuffle errors (dirty talk and sex sound effects)");
             GUI.enabled = true;
@@ -275,6 +309,17 @@ namespace SfMorph
             else if (diagBusy) GUILayout.Label("Listen for two short beeps and a slap; she may wince once.", _hint);
             else if (diagRan) GUILayout.Label("Diagnose ran: see LogOutput.log, 'Reactions diagnose'", _hint);
             else GUILayout.Label("Plays a test tone and one slap clip, sets the moan trigger once, and logs what the audio and face chain looks like.", _hint);
+        }
+
+        // The next voice pack folder ("" = the game's voice comes first).
+        static string NextPack(string cur, int dir)
+        {
+            var l = VoicePack.List();
+            var all = new string[l.Length + 1];
+            all[0] = ""; System.Array.Copy(l, 0, all, 1, l.Length);
+            int i = System.Array.IndexOf(all, cur);
+            if (i < 0) i = 0;
+            return all[((i + dir) % all.Length + all.Length) % all.Length];
         }
 
         // A label with - / + buttons and the value; returns the new value.

@@ -6,9 +6,9 @@ namespace SfMorph
     // Her reactions to touch (0.7.9): what the Body hands the director each frame. Filled from the config once per frame (no allocation).
     internal class ReactionSettings
     {
-        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath;
-        public float Sensitivity, Cooldown, Volume, BlushGain, VoicePitchVar, LimbPush, LineChance, FaceStrength;
-        public string FaceMap = "";
+        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley;
+        public float Sensitivity, Cooldown, Volume, BlushGain, VoicePitchVar, LimbPush, LineChance, FaceStrength, VoicePitch, VoiceFormant;
+        public string FaceMap = "", VoicePack = "";
         public int VoiceMode, Log;
 
         public void Fill(Plugin p)
@@ -21,6 +21,7 @@ namespace SfMorph
             VoiceMode = p.ReactVoiceMode.Value; Log = p.ReactLog.Value;
             Lines = p.ReactLines.Value; LineChance = p.ReactLineChance.Value;
             LinesGamePath = p.ReactLinesGamePath.Value;
+            Foley = p.ReactFoley.Value; VoicePack = p.VoicePackName.Value ?? ""; VoicePitch = p.VoicePitch.Value; VoiceFormant = p.VoiceFormant.Value;
             FaceClips = p.ReactFaceClips.Value; FaceStrength = p.ReactFaceStrength.Value; FaceMap = p.ReactFaceMap.Value ?? "";
             PushByTouch = p.HandsPushByTouch.Value;   // the geometric push of other hands: without it and without physics hands nothing is classified
             LimbPush = p.HandsLimbPush.Value;   // the flinch's swing is a push on her limbs: it needs the slider above 0
@@ -128,6 +129,14 @@ namespace SfMorph
         int _nHits;
         readonly System.Collections.Generic.Dictionary<string, int> _why = new System.Collections.Generic.Dictionary<string, int>();
         int _climaxIdx; bool _wasGuarded;
+        // 0.9.0 foley: per segment where the touch point was in the segment's own frame and how fast it slides; the rub level of this frame
+        struct Slide { public Vector3 L, Pt; public float Spd; public int Src; }
+        readonly Slide[] _sl = new Slide[HerBody.SegNames.Length];
+        float _rubLvl, _lastPatT = -100f, _lastGrabT = -100f;
+        Vector3 _rubPt;
+        // 0.9.0 face: the next pleasure face not before this (a random 2.5-5.5 s after each), and the voice-onset edge
+        float _faceLock = -100f;
+        bool _voiceWas;
         float _flush, _blushCur, _away, _gazeHold;
         bool _blushSent, _gazeSent, _wasOn, _bridgeLogged, _slapFail;
         int _evN, _barE = -1, _barP = -1, _stKey = int.MinValue, _slKey = int.MinValue;
@@ -154,7 +163,7 @@ namespace SfMorph
             _now += Mathf.Min(dt, 0.1f);
 
             // the game link, the voice guard (independent of On) and the delayed trigger reset
-            if (_now >= _nextRefresh) { _nextRefresh = _now + 1f; _g.Refresh(her, _now); }
+            if (_now >= _nextRefresh) { _nextRefresh = _now + 1f; _g.Refresh(her, _now); _g.VoiceFx(s.VoicePitch, s.VoiceFormant); _g.UsePack(s.VoicePack); }
             if (_g.Found && !_bridgeLogged) { _bridgeLogged = true; if (_g.BridgeLine != null && _g.BridgeLine.Length > 0) L(_g.BridgeLine); }
             else if (!_g.Found) _bridgeLogged = false;       // a re-found bridge is logged again
             _g.Pump(_now);
@@ -166,6 +175,7 @@ namespace SfMorph
             if (!s.On)
             {
                 if (_wasOn) { _wasOn = false; GiveBack(); ResetSession(); }
+                _g.Rub(Vector3.zero, 0f, 1f, dt);
                 Status = "off: reactions are off"; StateLine = ""; Bars = ""; LastLine = ""; _stKey = int.MinValue; _slKey = int.MinValue; _barE = -1;
                 return;
             }
@@ -176,6 +186,7 @@ namespace SfMorph
                 // 0.8.7: the face clip survey and track building (a few samples per frame, restored in the same frame)
                 _face.Tick(her, _g.Anim, s.Face && s.FaceClips && _g.Found, s.FaceMap, _now, dt);
 
+                _rubLvl = 0f;
                 if (HerBody.Built)
                 {
                     if (HerBody.BuildVersion != _bv) RebuildMap();
@@ -183,6 +194,9 @@ namespace SfMorph
                     else Classify(dt, s);
                 }
                 else if (_bv != -2) { _bv = -2; ClearR(); }
+                // 0.9.0: the skin rub loop follows the fastest sliding touch of this frame
+                bool rub = s.Sound && s.Foley && _rubLvl > 0f && State != RState.Climax;
+                _g.Rub(_rubPt, rub ? _rubLvl * s.Volume * 0.55f : 0f, 0.92f + 0.2f * _rubLvl, dt);
 
                 if (cut) return;
                 Tick(dt, s);
@@ -200,6 +214,7 @@ namespace SfMorph
 
         // ---- the Diagnose button (see ReactionsGame.DiagStart) ----
         public bool BridgeFound { get { return _g.Found; } }
+        public string VoiceFxStatus { get { return _g.VoiceFxStatus ?? ""; } }
         public bool DiagBusy { get { return _g.DiagBusy; } }
         public bool DiagRan { get { return _g.DiagRan; } }
         public void Diagnose()
@@ -232,6 +247,7 @@ namespace SfMorph
             if (_gazeSent) { _gazeSent = false; _g.SetGaze(0f); }
             try { _face.Stop(); } catch { }
             try { _g.RestorePitch(); } catch { }                       // the moan source gets its own pitch back
+            try { _g.Rub(Vector3.zero, 0f, 1f, 1f); } catch { }
             _blushCur = 0f; _away = 0f;
         }
 
@@ -243,6 +259,7 @@ namespace SfMorph
             _lastEvT = -100f; _lastStimT = -100f; _lastVoiceT = -100f; _lastBreathT = -100f; _lastFlinchT = -100f; _lastSlapT = -100f; _lastFaceT = -100f; _lastDesireT = -100f; _lastCaressFaceT = -100f;
             _startledAt = -100f; _nHits = 0; _quiet = false;
             _lastLineT = -100f; _lastEnterT = -100f; _enterTier = 0; _lastFaceClipT = -100f;
+            _lastPatT = -100f; _lastGrabT = -100f; _faceLock = -100f; _voiceWas = false; _rubLvl = 0f;
             System.Array.Clear(_zArr, 0, NZ); System.Array.Clear(_zCaress, 0, NZ); System.Array.Clear(_zGrope, 0, NZ); System.Array.Clear(_zAny, 0, NZ);
             ClearR();
         }
@@ -266,6 +283,7 @@ namespace SfMorph
         void ClearR()
         {
             System.Array.Clear(_r, 0, _r.Length);
+            System.Array.Clear(_sl, 0, _sl.Length);
             var segs = HerBody.Segs;
             for (int i = 0; i < segs.Count; i++)
                 if (segs[i].Index >= 0 && segs[i].Index < _r.Length) _r[segs[i].Index].LastHitRead = segs[i].HitT;
@@ -313,7 +331,19 @@ namespace SfMorph
                     int t = v >= 4.5f * k ? 5 : v >= 2.3f * k ? 4 : v >= 1.2f * k ? 3 : 0;
                     if (t > 0 && _now - _zArr[zone] >= ArrCool[zone])
                         Collect(zone, g, t, Mathf.Clamp01((v - 1.2f * k) / (3.3f * k)), pt, dir, by, v, force);   // one continuous strength over all slap tiers
+                    // 0.9.0: a light landing below the soft slap is a pat (only a sound: it moves nothing else)
+                    else if (t == 0 && v >= 0.45f * k && s.Sound && s.Foley && _now - _lastPatT >= 0.12f && _now - _zArr[zone] >= ArrCool[zone])
+                    {
+                        _lastPatT = _now;
+                        float pv = Mathf.Clamp01((v - 0.45f * k) / (0.75f * k));
+                        bool ok = _g.FoleyShot(SkinFoley.Pat, Finite(pt) ? pt : SegCentre(g), s.Volume * Mathf.Lerp(0.3f, 0.8f, pv), Mathf.Lerp(0.95f, 1.08f, Rand()));
+                        if (ok) _sfx++;
+                        if (s.Log >= 2) L("pat on " + g.Name + " by " + (by ?? "a hand") + " (" + v.ToString("0.00") + " m/s)" + (ok ? "" : ": no sound"));
+                    }
                 }
+
+                // 0.9.0 rub: how fast the touch point slides over her skin, in the segment's own frame (her animation doesn't count)
+                TrackSlide(gi, g, touching, geo, force, dt);
 
                 // contact time
                 if (touching) { _r[gi].ContactT += dt; _r[gi].LastContactT = _now; _lastStimT = _now; }
@@ -355,6 +385,25 @@ namespace SfMorph
                 }
             }
             FireHits();
+        }
+
+        void TrackSlide(int gi, HerBody.Seg g, bool touching, bool geo, float force, float dt)
+        {
+            int src = !touching || g.A == null ? 0 : g.PhysF.sqrMagnitude > 1e-6f ? 1 : geo ? 2 : 0;
+            if (src == 0) { _sl[gi].Src = 0; _sl[gi].Spd = 0f; return; }
+            Vector3 cp = src == 1 ? g.PhysPt : g.GeoPt;
+            if (!Finite(cp)) { _sl[gi].Src = 0; return; }
+            Vector3 lp = g.A.InverseTransformPoint(cp);
+            if (_sl[gi].Src == src)
+            {
+                float sp = g.A.TransformVector(lp - _sl[gi].L).magnitude / Mathf.Max(dt, 1e-4f);
+                if (sp < 3f) _sl[gi].Spd += (sp - _sl[gi].Spd) * Mathf.Clamp01(dt / 0.08f);   // a jump of the contact point is not a slide
+            }
+            else _sl[gi].Spd = 0f;
+            _sl[gi].L = lp; _sl[gi].Pt = cp; _sl[gi].Src = src;
+            // from 4 cm/s, full at 40 cm/s; a firmer hand is a little louder
+            float lvl = Mathf.Clamp01((_sl[gi].Spd - 0.04f) / 0.36f) * Mathf.Lerp(0.6f, 1f, Mathf.Clamp01(force / 20f));
+            if (lvl > _rubLvl) { _rubLvl = lvl; _rubPt = cp; }
         }
 
         // A slap arrival of this frame: held until the whole frame was seen (the swing touches several segments at once).
@@ -486,8 +535,8 @@ namespace SfMorph
                     else
                     {
                         bool ok;
-                        if (tier == 1) { ok = _g.Breath(); if (ok) _lastBreathT = _now; _moanKind = "breath"; }
-                        else ok = PlayMoan(cut);
+                        if (tier == 1) { ok = ReactionsGame.Pack.Loaded ? _g.PackBreath(Tier >= 2) : _g.Breath(); if (ok) _lastBreathT = _now; _moanKind = ReactionsGame.Pack.Loaded ? "breath (pack)" : "breath"; }
+                        else ok = PlayMoan(cut, tier);
                         if (ok) { voiced = true; _vPlayed++; Note(_moanKind); }
                         else { Skip("voice failed"); Note("voice failed"); }
                     }
@@ -518,6 +567,12 @@ namespace SfMorph
                 SkinMarks.Slap(pt, 0.07f, I);
                 Ripple.Impact(pt, dir, Mathf.Max(v, 1f), g != null ? g.A : null, by);
                 if (s.Gaze && (tier >= 4 || wasGuarded)) _gazeHold = Mathf.Max(_gazeHold, _now + (tier >= 5 ? 1.5f : 0.4f));
+            }
+            // 0.9.0: a grab sound when a hand closes on her (the grope's onset)
+            if (tier == 2 && s.Sound && s.Foley && !_quiet && _now - _lastGrabT >= 0.5f)
+            {
+                _lastGrabT = _now;
+                if (_g.FoleyShot(SkinFoley.Grab, pt, s.Volume * Mathf.Lerp(0.35f, 0.8f, I), Mathf.Lerp(0.92f, 1.08f, Rand()))) { _sfx++; Note("grab sound"); }
             }
             // the game's desire: groping and slaps (every 3 s); a caress only once she is well aroused (excitement tier 3) and every 6 s
             if (s.FeedDesire && (tier >= 2 || (tier == 1 && Tier >= 3)) && _g.InSexMode && _now - _lastDesireT >= (tier == 1 ? 6f : 3f)) { _lastDesireT = _now; _g.FeedDesire(); Note("desire"); }
@@ -562,13 +617,14 @@ namespace SfMorph
         // Real scripted speech (dialogue, a kiss, the dialogue source) blocks everything. The game's feeling loops (sexFacialPlaying) and its
         // dirty-talk pause only stop caresses and gropes: a slap (tier 3+) still goes through the game's own touch path. A hard slap (tier 4+
         // with strength >= 0.5) cuts a moan that is still sounding.
-        string VoiceBlock(int tier, bool breath, bool gap, float I)
+        string VoiceBlock(int tier, bool breath, bool gap, float I, bool facePauseOk = false)
         {
             if (!_g.Found) return "no game link";
-            if (!_g.HasMoan) return "no moan available";
+            bool pack = ReactionsGame.Pack.Loaded;
+            if (!_g.HasMoan && !pack) return "no moan available";
             if (!_g.VoiceOn) return "voice off in the game";
-            if (!_g.InSexMode && !_g.HasLibrary) return "no own voice clips (outside sex mode)";
-            if (_g.FunctionPause || _g.FacialLayer == "off") return "game face paused";
+            if (!_g.InSexMode && !_g.HasLibrary && !pack) return "no own voice clips (outside sex mode)";
+            if (!facePauseOk && (_g.FunctionPause || _g.FacialLayer == "off")) return "game face paused";
             if (_g.DialoguePlaying) return _g.DialogueWhy.Length > 0 ? _g.DialogueWhy : "dialogue";
             bool slap = tier >= 3;
             bool cut = tier >= 4 && I >= 0.5f;
@@ -617,8 +673,29 @@ namespace SfMorph
             }
             else { m = tier == 2 ? ReactionsFace.Surprise : ReactionsFace.Ticklish; w = 0.6f; hold = 1f; gap = 3f; chance = 0.4f; }
             if (_now - _lastFaceClipT < gap) return;
+            bool pleasure = m <= ReactionsFace.Pleasure3;
+            if (pleasure && _now < _faceLock) return;
             if (!(chance >= 1f || Rand() < chance)) return;
-            PlayFace(m, w, hold);
+            if (PlayFace(m, w, hold) && pleasure) _faceLock = _now + 2.5f + 3f * Rand();
+        }
+
+        // 0.9.0 (the VaM scene's faces mostly follow her voice, not the touch): when any moan of hers starts (the game's own too), a pleasure
+        // face by her excitement, at most one per lockout; in the climax every moan renews the climax face.
+        void VoiceFace()
+        {
+            bool v = (_g.MoanPlaying && !_g.MoanTail) || _g.OwnVoicePlaying;
+            bool onset = v && !_voiceWas;
+            _voiceWas = v;
+            if (!onset || _s == null || !_s.Face || !_s.FaceClips || !_g.Found) return;
+            if (State == RState.Climax) { if (_now - _lastFaceClipT >= 0.8f) PlayFace(ReactionsFace.Climax, 1f, 1.6f); return; }
+            if (Tier < 1 || State == RState.Guarded || State == RState.Startled || _now < _faceLock || _now - _lastFaceClipT < 1f) return;
+            int m = Tier >= 4 ? ReactionsFace.Pleasure3 : Tier >= 2 ? ReactionsFace.Pleasure2 : ReactionsFace.Pleasure1;
+            _resp.Length = 0;
+            if (PlayFace(m, 0.75f, 1.4f))
+            {
+                _faceLock = _now + 2.5f + 3f * Rand();
+                if (_s.Log >= 2) L("face on her voice: " + _resp);
+            }
         }
 
         bool PlayFace(int m, float w, float hold)
@@ -706,13 +783,13 @@ namespace SfMorph
         // The arbiter for lines and feeling sounds, stricter than the moans' (no slap goes through): never over dialogue, a kiss, the game's
         // feeling loops, its dirty talk or dirty-talk pause, or a moan still sounding. Lines need sex / foreplay mode and the game's dirty talk on
         // (the game mutes its dirty-talk source otherwise). test: no gaps.
-        string LineBlock(bool feel, bool test)
+        string LineBlock(bool feel, bool test, bool facePauseOk = false)
         {
             if (!_g.Found) return "no game link";
             if (!_g.VoiceOn) return "voice off in the game";
             if (!feel && !_g.InSexMode) return "outside sex mode";
             if (!feel && !_g.DirtyTalkOn) return "dirty talk is off in the game";
-            if (_g.FunctionPause || _g.FacialLayer == "off") return "game face paused";
+            if (!facePauseOk && (_g.FunctionPause || _g.FacialLayer == "off")) return "game face paused";
             if (_g.DialoguePlaying) return _g.DialogueWhy.Length > 0 ? _g.DialogueWhy : "dialogue";
             if (_g.SexFacialPlaying) return "sex facial";
             if (_g.DirtyTalkPause) return "dirty talk pause";
@@ -733,7 +810,7 @@ namespace SfMorph
         bool TryLine(int zone, HerBody.Seg g, Vector3 pt, bool test)
         {
             int cat = LineCatOf(zone, g, pt);
-            if (cat < 0 || !_g.HasLines) return false;
+            if (cat < 0 || !_g.HasLines || ReactionsGame.Pack.Loaded) return false;   // 0.9.0: the game's lines are another voice than the pack
             int lvl = LineLevelOf(Tier);
             if (lvl == 0 || _now - _lastLineT < LineGap()) return false;
             if (!(_s.LineChance >= 1f || Rand() < _s.LineChance)) return false;
@@ -750,7 +827,7 @@ namespace SfMorph
         // A Feeling_enter sound for reaching excitement tier t (1..4 -> Feeling_enter_0..3). True = it plays.
         bool TryFeeling(int t, bool test)
         {
-            if (!_g.HasFeeling || t < 1) return false;
+            if (!_g.HasFeeling || t < 1 || ReactionsGame.Pack.Loaded) return false;
             if (_g.Found) _g.ReadGatesNow(_now);
             string b = LineBlock(true, test);
             if (b != null) { Note("feeling skipped (" + b + ")"); return false; }
@@ -763,10 +840,20 @@ namespace SfMorph
 
         // The game's own touch moan, or our own clip when the game's would do nothing (its dirty-talk pause is up): then dirty talk is stopped
         // like the game's DirtyTalkMoan does. cut: a moan still sounding is stopped first.
-        bool PlayMoan(bool cut)
+        bool PlayMoan(bool cut, int tier)
         {
             int bank = Tier <= 1 ? 0 : Tier <= 3 ? 1 : 2;
             float pitch = 1f + (Rand() * 2f - 1f) * _s.VoicePitchVar;
+            // 0.9.0: a voice pack carries every moan: exertion on hard slaps, climax in the climax, else low / mid / high by her excitement
+            if (ReactionsGame.Pack.Loaded)
+            {
+                int c = tier >= 6 ? VoicePack.Climax : tier >= 4 ? VoicePack.Exertion : bank == 0 ? VoicePack.MoanLow : bank == 1 ? VoicePack.MoanMid : VoicePack.MoanHigh;
+                if ((cut || _g.MoanTail) && (_g.MoanPlaying || _g.OwnVoicePlaying)) _g.StopMoan();
+                if (!_g.PackVoice(c, pitch, _g.DirtyTalkPlaying, true)) return false;
+                _lastVoiceT = _now; _resetAt = _now + 1f;
+                _moanKind = "pack " + VoicePack.Folders[c] + (cut ? ", cut" : "");
+                return true;
+            }
             bool pause = _g.DirtyTalkPause, sex = _g.InSexMode;
             // outside sex / foreplay mode our own clip plays and the Animator "moan" trigger is set too (the lips move; the 1 s reset in
             // ReactionsGame stops it from staying queued)
@@ -839,9 +926,17 @@ namespace SfMorph
         void DoSlap(int tier, float I, Vector3 pt, bool force)
         {
             if (!_g.Found || (!force && !_g.SfxOn) || _now - _lastSlapT < 0.25f) return;
+            _lastSlapT = _now;
+            // 0.9.0: the slap files by strength (dry recordings: little pitch spread), else the game's clips below
+            if (_s.Foley)
+            {
+                int cat = tier >= 5 ? SkinFoley.SlapHard : tier == 4 ? (I >= 0.55f ? SkinFoley.SlapHard : SkinFoley.SlapMedium) : (I >= 0.3f ? SkinFoley.SlapMedium : SkinFoley.SlapSoft);
+                float fv = _s.Volume * Mathf.Lerp(0.55f, 1f, I);
+                if (_g.FoleyShot(cat, pt, fv, Mathf.Lerp(0.95f, 1.05f, Rand()) - (tier >= 5 ? 0.04f : 0f)))
+                { _sfx++; _slapFail = false; Note("slap " + SkinFoley.Folders[cat] + " " + fv.ToString("0.0")); return; }
+            }
             float vol = _s.Volume * Mathf.Lerp(0.6f, 1f, I) * 1.6f;   // PlayOneShot's scale may exceed 1
             float pitch = Mathf.Lerp(0.85f, 1.15f, Rand()) + (tier == 3 ? 0.05f : tier >= 4 ? -0.05f : 0f);
-            _lastSlapT = _now;
             if (_g.Slap(pt, vol, pitch, tier >= 4, false)) { _sfx++; _slapFail = false; Note("slap " + vol.ToString("0.0")); }
             else _slapFail = true;
         }
@@ -931,6 +1026,7 @@ namespace SfMorph
                 }
                 if (s.AllowClimax && E >= 1f && State != RState.Climax && State != RState.Afterglow) EnterClimax();
             }
+            VoiceFace();
             if (State == RState.Climax)
             {
                 // three moans, if the arbiter lets them through
@@ -941,9 +1037,12 @@ namespace SfMorph
                     {
                         _g.ReadGatesNow(_now);   // forced: ReadGates itself only reads every 0.1 s
                         // 0.8.6: with lines on, the climax opens with her strongest feeling sound (Feeling_enter_3)
-                        if (_climaxIdx == 1 && s.Lines && _g.HasFeeling && LineBlock(true, true) == null && _g.Feeling(3)) { _lastVoiceT = _now; _lastEnterT = _now; _vPlayed++; continue; }
-                        string b = VoiceBlock(5, false, false, 0f);
-                        if (b == null && PlayMoan(false)) { _lastVoiceT = _now; _resetAt = _now + 1f; _vPlayed++; }
+                        // 0.9.0 (0.8.8 log: the second climax had no feeling sound, "game face paused"): with our climax face on her, a paused game
+                        // face doesn't stop the climax voice (its face is ours); everything else still does
+                        bool ours = _face.CurrentMood == ReactionsFace.Climax;
+                        if (_climaxIdx == 1 && s.Lines && _g.HasFeeling && !ReactionsGame.Pack.Loaded && LineBlock(true, true, ours) == null && _g.Feeling(3)) { _lastVoiceT = _now; _lastEnterT = _now; _vPlayed++; continue; }
+                        string b = VoiceBlock(5, false, false, 0f, ours);
+                        if (b == null && PlayMoan(false, 6)) { _lastVoiceT = _now; _resetAt = _now + 1f; _vPlayed++; }
                         else Skip(b ?? "voice failed");
                     }
                 }
@@ -952,7 +1051,7 @@ namespace SfMorph
             {
                 _nextBreathAt = _now + 4f + Rand() * 2f;
                 _g.ReadGatesNow(_now);   // forced: ReadGates itself only reads every 0.1 s
-                if (VoiceBlock(1, true, true, 0f) == null && _g.Breath()) { _lastBreathT = _now; _vPlayed++; }
+                if (VoiceBlock(1, true, true, 0f) == null && (ReactionsGame.Pack.Loaded ? _g.PackBreath(true) : _g.Breath())) { _lastBreathT = _now; _vPlayed++; }
             }
 
             // delayed second blink of a startle
@@ -1163,8 +1262,8 @@ namespace SfMorph
                         if (_g.Found) _g.ReadGatesNow(_now);   // forced: ReadGates itself only reads every 0.1 s
                         string block = VoiceBlock(Mathf.Max(Tier, 3), which == 1, false, 0f);
                         if (block != null) res = "blocked (" + block + ")";
-                        else if (which == 1) { bool ok = _g.Breath(); if (ok) _lastBreathT = _now; res = ok ? "played" : "failed"; }
-                        else { bool ok = PlayMoan(false); res = ok ? "played" : "failed"; }
+                        else if (which == 1) { bool ok = ReactionsGame.Pack.Loaded ? _g.PackBreath(Tier >= 2) : _g.Breath(); if (ok) _lastBreathT = _now; res = ok ? "played" : "failed"; }
+                        else { bool ok = PlayMoan(false, 2); res = ok ? "played" : "failed"; }
                         break;
                     }
                 case 2:
@@ -1183,7 +1282,7 @@ namespace SfMorph
                 case 3:
                     {
                         var g = FindSeg(ZButt, 0); Vector3 at = g != null ? SegCentre(g) : _root.position;
-                        bool ok = _g.Found && _g.Slap(at, _s.Volume * 1.6f, 1f, true, true);
+                        bool ok = _g.Found && ((_s.Foley && _g.FoleyShot(SkinFoley.SlapHard, at, _s.Volume, 1f)) || _g.Slap(at, _s.Volume * 1.6f, 1f, true, true));
                         res = ok ? "played" : "failed";
                         break;
                     }
