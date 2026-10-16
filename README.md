@@ -41,7 +41,7 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
-Pipeline, after 0.11.6 (skin bake fixes found on the Genesis 9 character's face; the plugin is unchanged):
+Pipeline, after 0.11.10 (skin bake fixes found on the Genesis 9 character's face; the plugin is unchanged):
 - The adapter writes VaM's triangle winding. A file that came in the other way round (Krista's FBX) made the bake rebuild
   inverted source normals, so most of the normal detail was thrown away as "tilted" (face 96 %, body 64 %; now 1 %, 3 %).
 - Faces get a second, tight bake pass (4 mm cage over the 12 mm one; the tight hit wins, its misses keep the wide one): the
@@ -58,6 +58,73 @@ Pipeline, after 0.11.6 (skin bake fixes found on the Genesis 9 character's face;
 - Ears: the ear landmark is now the centroid of the whole ear (the head skin beyond 82 % of the half-width at ear height, the
   same rule on both heads; the adapter's ear labels are per side too). The outermost point at eye height it replaces fell on
   different parts of an asymmetric ear's rim (Krista: 11 mm apart), pulled one of her ears 16 mm down and crumpled it.
+
+0.11.10 (a test for the muscle shape):
+- No way to see the muscle bulge without finding a pose that tenses each muscle. Skin tab, Muscles: **Flex test** puts arms,
+  back, core and legs in turn at full activation for 2 s each (at least 3 mm, Flex at least 1) over whatever she is playing, the
+  other areas at 0, then hands back to her pose's tension. It needs only GPU contact (works with the relief off). The log says per
+  step how far the bellies go and on how many vertices of which meshes (`Muscles: Flex test arms at full for 2 s: bulge up to ...`).
+
+0.11.9 (the tickle face is a helpless laugh):
+- Ticklish now reads as an agonizing laugh instead of a plain smile: the smile / laugh clip keeps her mouth and cheeks, the Pain
+  clip's squeezed eyes (85 %) and half of its knitted brows go over it, and her inner brows rise while the rest of the brows drop
+  and the lids squeeze (built offsets on her lid / brow bones, like the built Surprise). "Shy" and "embarrass" clips no longer
+  count as ticklish faces. A clip you pick for Ticklish in the panel gets the same treatment.
+
+0.11.8 (tensed muscles as shape, firmer under a hand):
+- Muscles were normal-map relief only: a flexed biceps or a back at full fitness looked painted on, the silhouette never changed.
+  Each muscle now also pushes its belly out as geometry through the GPU contact chain (the inverse of a dent): the bake reads the
+  muscle region map at every body vertex (two muscle ids + share) and gives it a belly weight, 0 at the muscle's edges and
+  tendons, rising over 2.5 cm (arms) to 4 cm (legs) of geodesic distance, lower in the authored grooves (linea alba, spinal
+  groove), so the abs and back keep their valley. Per frame the muscles' activations (the same ones the relief uses: Fitness
+  plus the pose's tension) x the area's size in mm x Flex go to the compute shader; Compose adds the bulge under the dent and
+  Grad / Apply bend the normals with it. The relief stays on top as the fine detail. Ribcage (bone showing, not a muscle) stays
+  relief only. Needs GPU contact (Physics tab) and the shader bundle that comes with this DLL.
+- A hand pressed a flexed muscle as deep as a relaxed one. The soft tissue depth under a muscle now shrinks with its activation
+  (x (1 - Firmness x activation), Firmness 0.5): the GPU dent, the physics hands' stop (HerBody.SkinAllowance) and the soft
+  zones' resistance (glutes, outer / inner thigh, belly) all read it. The hands meet the bulged surface, not the relaxed one.
+- Pose -> tension, anatomy pass (the tension now moves geometry, so a stretched muscle must not read as working): hamstrings no
+  longer tense for a straight leg lifted while lying (a passive stretch), they do for hip extension; lats overhead 0.7 -> 0.35
+  (stretched; they work propping her up and pulling the arm back); adductors at a wide straddle only under her weight; abs brace
+  when she lies on her back with her legs lifted.
+- Panel, Skin tab, Muscles: Flex, Core / Back / Arms / Legs (mm), Firmness, each greyed with its reason (muscles off, GPU contact
+  off, old bundle, no muscle on her baked meshes). Config [Muscles] Flex, CoreMm, BackMm, LegsMm, ArmsMm, Firmness.
+- Cost: a frame with only muscle bulges runs Compose + Grad + Apply on her body meshes (3 dispatches each, no dilate / smooth
+  passes), the same path as the bend bulges. With Fitness above 0 that runs every frame; Flex 0 removes it. Not measured in the
+  game: compare the `Perf` line's `gpuRun` stage and GPU ms with Flex 1 and 0.
+
+0.11.7 (fixes from the 0.11.4 headset run; the lip sync arrives):
+- Panel jumped when an option changed or a debug line updated, and could not be resized: it was a layout window that grew and
+  shrank with its content. Now a fixed-size window: any edge or corner resizes it, the title bar moves it, the content scrolls,
+  the timing line folds away (closed by default). Tabs moved to a column on the left; a new **Skin** tab holds wrinkles, muscles
+  and skin marks (out of Physics).
+- No dents or marks on her face and neck: both meshes are GPU-only, so their skinning space could never be checked on the CPU and
+  the dent stayed off for them ("cannot be calibrated (mesh is not readable)"). They now take the space her body found (rootBone).
+  Her face and neck give a little more (head 1.5 + 3 mm, neck 3 mm soft), so they dent at a lighter press.
+- Hands stopped centimetres off her face and throat: her head collider was a 9.5 cm default sphere about Head_M (her face mesh was
+  never read for her body's shape). Her shown face and neck meshes now shape the head and neck colliders.
+- Dents looked polygonal: the dent smoothing was a fixed number of vertex hops, sized for her own mesh (about 7 mm edges). With
+  Fidelity's subdivision (edges halved) it blurred half as far and the dent kept the hand capsules' outline. The passes are now
+  sized in metres (about 1.2 cm narrow, 2.4 cm wide) from the skin's own edge length (not the dense fingers').
+- Skin sounds inaudible: pat, grab and rub were scaled by the slap volume (0.12 in the user's config; the rub also by 0.4). They
+  have their own **skin volume** (default 80 %) and test buttons (pat, grab, rub); the rub's start is logged.
+- Embody: his fingers kept the animation's pose: no skinned renderer carries his finger bones, so there was no bind pose to
+  take the neutral hand from. The neutral hand is now the animation's hand straightened (each joint's curl taken out), so rest
+  curl, grab and the clasp stop work again. The thumb curls across the palm toward the fingers (it curled toward the palm normal
+  like a finger) and has its own joint limits (base 50, middle and tip 80 deg; the physics hand's thumb allowed 100-110, the
+  embodied one up to 120). His hands hide the controller models while they follow them. Embody is off at every game start
+  (`[Embody] OnAtStart`). View forward / up / right sliders move the view from his eyes (his head's axes, +-20 cm).
+- Lip sync (the 0.9.9 Audio2Face player, never merged into 0.10-0.11.6, so 0.11.4 had only the loudness jaw): baked ARKit curves
+  played in step with her voice clips through a mouth-bone map (`arkit-map.txt`, editor in the Reactions tab). With no map yet,
+  the poses are seeded from her face clips on first use and saved. "Test: a pack clip with lip sync" logs every link (switch,
+  face survey, curves found for the pack, posed shapes) and then 3 s of the top weights and the mouth bones moved. `tools/a2f`
+  bakes the curves. Curves for the Rebecca and Anime packs were baked on the user's PC.
+- The Physics tab's "Smoke test" (it sinks all of her skin 1 cm for 3 s on purpose, to check the GPU dents) is now "GPU check" with a line saying so.
+- Ripple from his hips: his pelvis and thighs stay on her during sex, so the "fresh contact" rule only fired on the first touch.
+  Every stroke (0.35 m/s or faster, at most one per 0.35 s) now sends a ripple (`[Physics] RippleThrust`, Physics tab).
+- Voice packs: **Mute the game's own voice** while a pack is on (its moans and dirty talk at volume 0; the pack's clips on the same
+  sources keep theirs; story dialogue untouched). The pack's lines are hooked into her states (guard, afterglow, ouch, request,
+  invite lines played in the 0.11.4 log).
 
 0.11.6 (fit fixes found on the Genesis 9 character; the plugin is unchanged):
 - Jaw and chin: the rigid VaM head was blended into the body warp up to her Head_M (mouth height), so a large body warp sheared

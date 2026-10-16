@@ -502,6 +502,7 @@ namespace SfMorph
             VrHands.GateHidden = _p.GateHidden.Value; VrHands.BreastColliders = _p.BreastColliders.Value;
             FillContact();
             SoftZones.PartnerBody = Contact.PartnerBody;
+            SoftZones.ThrustRipple = _p.RippleThrust.Value;
             // Physics just went off: take our colliders out of the game's breast DynamicBones now, not at the next 2 s refresh
             // (and when nothing else needs the hands, the refresh below never runs again)
             if (_physicsWas && !physics)
@@ -652,6 +653,7 @@ namespace SfMorph
                 _emb.Partner = _p.EmbodyPartner.Value;
                 _emb.NeutralFingers = _p.EmbodyNeutralFingers.Value; _emb.ElbowAvoid = _p.EmbodyElbowAvoid.Value; _emb.RestCurl = _p.HandsRestCurl.Value; _emb.Softness = _p.Softness.Value; _emb.SoftZonesOn = physics;
                 _emb.ViewAlign = _p.EmbodyViewAlign.Value; _emb.ViewYaw = _p.EmbodyViewYaw.Value; _emb.ViewPitch = _p.EmbodyViewPitch.Value; _emb.ViewRoll = _p.EmbodyViewRoll.Value;
+                _emb.ViewOffset = new Vector3(_p.EmbodyViewRight.Value, _p.EmbodyViewUp.Value, _p.EmbodyViewForward.Value);
                 _emb.LeftPos = _p.LeftHandPos.Value; _emb.LeftRot = _p.LeftHandRot.Value; _emb.RightPos = _p.RightHandPos.Value; _emb.RightRot = _p.RightHandRot.Value;
                 Perf.Begin(Perf.S.Embody);
                 try { Embody.Update(her, Found, _emb); _embodyOn = true; }
@@ -665,6 +667,10 @@ namespace SfMorph
                 Perf.End(Perf.S.Embody);
             }
             else if (_embodyOn) { _embodyOn = false; try { Embody.Release(); } catch { } }
+            // 0.11.7 (user): his hands replace the controller models while they follow your controllers (the physics hands hide them
+            // themselves when they are on)
+            int eh = embody && _embodyOn ? _p.EmbodyHands.Value : 0;
+            try { PhysicsHands.EmbodyHide(eh == 1 || eh == 3, eh == 2 || eh == 3); } catch (Exception e) { Plugin.Log.LogWarning("Embody: hiding the controller models failed: " + e.Message); }
             // the soft points after her bones carry our changes AND after Embody (0.8.5), before the game's physics and IK: the Animator
             // rewrites the embodied partner's arms before this step and Embody writes them back at your controllers just above, so the
             // "partner" capsules on his hand bones are where you hold his hand only from here on (before 0.8.5 the soft points were
@@ -735,6 +741,8 @@ namespace SfMorph
             s.SelfContact = _p.SelfContact.Value; s.PartnerBody = _p.PartnerBody.Value;
             s.BendAmount = _p.BendBulge.Value; s.BicepsMm = _p.BendBicepsMm.Value; s.KneeMm = _p.BendKneeMm.Value; s.CalfMm = _p.BendCalfMm.Value;
             s.HipMm = _p.BendHipMm.Value; s.BellyFoldMm = _p.BendBellyFoldMm.Value;
+            s.Flex = _p.MuscleFlexAmt.Value; s.CoreMm = _p.MuscleCoreMm.Value; s.BackMm = _p.MuscleBackMm.Value; s.LegsMm = _p.MuscleLegsMm.Value; s.ArmsMm = _p.MuscleArmsMm.Value;
+            MuscleFlex.Firm = _p.MuscleOn.Value ? _p.MuscleFirmness.Value : 0f;   // 0.11.8 (the activations stop being published with the muscles off anyway)
             s.Ripple = _p.RippleAmount.Value; s.RippleSpeed = _p.RippleSpeed.Value; s.RippleImpact = _p.RippleImpact.Value; s.RippleWavelength = _p.RippleWavelength.Value; s.RippleDamping = _p.RippleDamping.Value;
             s.Marks = _p.SkinMarksOn.Value; s.MarkFade = _p.MarksFade.Value;
             // 0.8.9 (user: marks too subtle): the boost multiplies the build-up, the redness (saturates sooner) and the pressed darkening (capped so

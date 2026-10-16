@@ -38,7 +38,8 @@ namespace SfMorph
         // fan stops them at her skin so they no longer need to be stiff to hold their place), so they splay and bend on her instead of
         // holding their curl (a 12 N fingertip press at 7 cm is 0.84 N*m, well over either).
         const float GiveScale = 0.3f, GiveProx = ForceProx * GiveScale, GiveFused = ForceFused * GiveScale;
-        const float RangeProxMin = -10f, RangeProxMax = 100f, RangeFusedMin = -5f, RangeFusedMax = 110f;   // curl angle range (degrees, + = toward the palm)
+        const float RangeProxMin = -10f, RangeProxMax = 100f, RangeFusedMin = -5f, RangeFusedMax = 110f;
+        const float ThumbRangeProx = 50f, ThumbRangeFused = 80f;   // curl angle range (degrees, + = toward the palm)
         const float SideLimit = 8f;                                                        // proximal sideways play
         const float InertiaFloor = 1e-5f;
         // 0.8.0 finger commands and conform (section 5): the rest curl per finger at [Hands] RestCurl 0.25 (scaled by RestCurl / 0.25), the
@@ -136,6 +137,9 @@ namespace SfMorph
             var g = new Fing { Finger = f, Joint = joint, Slot = slot, Bone = bi, Rb = rb, Conn = conn, AxisL = h.AxisLocal[slot].normalized, Rest = h.Rest[slot], MaxDeg = JointMax(f, joint) };
             g.AMin = prox ? RangeProxMin : RangeFusedMin;
             g.AMax = prox ? RangeProxMax : RangeFusedMax;
+            // 0.11.7 (user: the thumb closes wrong and bends unrealistically): a thumb joint bends far less than a finger's (about 50 deg
+            // at the base, 80 at the fused middle + tip) and barely backwards
+            if (f == 0) { g.AMin = prox ? -5f : -5f; g.AMax = prox ? ThumbRangeProx : ThumbRangeFused; }
             Vector3 sec = h.DirLocal[slot];
             sec -= g.AxisL * Vector3.Dot(sec, g.AxisL);
             if (sec.sqrMagnitude < 1e-6f) sec = Vector3.Cross(g.AxisL, Mathf.Abs(g.AxisL.y) < 0.9f ? Vector3.up : Vector3.right);

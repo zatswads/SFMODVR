@@ -22,7 +22,7 @@ namespace SfMorph
     //   - The caress breath uses PlayOneShot on the moan source (its clip/pitch stay untouched); it is not seen by the source's isPlaying,
     //     so OwnVoicePlaying tells when our own breath is still sounding.
     //   - Time: every "now" is whatever monotonic seconds Reactions passes (call ReadGates(now) every frame; it gates itself to 0.1 s).
-    internal sealed class ReactionsGame
+    internal sealed partial class ReactionsGame
     {
         // ---- the 6.3 contract ----
         public bool Found;                 // the game's FacialFunction (and so the voice/face/sound objects) is bridged for this session
@@ -1241,6 +1241,7 @@ namespace SfMorph
             TickTrigger();
             TickEye();
             OwnVoicePlaying = now < _ownEnd;
+            DumpTick();
         }
 
         // ---- the game's eye reaction (FacialFunction.ReactionFacialEnter_Eye(k) now, ReactionFacialOut_Eye(k) 0.6-1.0 s later) ----
@@ -1430,6 +1431,7 @@ namespace SfMorph
         // ---- 0.9.0: a voice pack (Foley.cs VoicePack) instead of the game's voice library for our reactions ----
         public static readonly VoicePack Pack = new VoicePack();
         bool _packClip;
+        public static Func<UnityEngine.Object, bool> LipCurveFor;   // 0.9.9: set by Reactions (lip sync on and a curve for the pack clip)
 
         // Loads the configured pack when it changed (main thread; the first load waits for the game's AudioClip type).
         public void UsePack(string name)
@@ -1519,6 +1521,8 @@ namespace SfMorph
                 LastClip = clip; LastClipLength = len / Mathf.Max(0.5f, pitch);
                 Pack.Busy1 = clip;
                 if (line) { LastLineClip = clip; LastLineLength = LastClipLength; }
+                // 0.9.9: a clip with a lip-sync curve moves her mouth itself: no "moan" mouth animation of the game's over it
+                if (trigger && LipCurveFor != null && LipCurveFor(clip)) trigger = false;
                 if (trigger && HasAnim) { _anim.SetTrigger(_hMoan); MarkTrigger(); }
                 return true;
             }
@@ -1740,6 +1744,57 @@ namespace SfMorph
                 if (_pPitch != null) _pPitch.SetValue(_rubSrc, pitch, null);
             }
             catch (Exception e) { LogOnce("rub:" + e.GetType().Name, "rub sound failed: " + e.Message); _rubOn = false; }
+        }
+
+        // ---- 0.11.7: the game's own voice silent while a voice pack is on ([Voice] MuteGameVoice) ----
+        // The pack plays on the same moan source as the game's moans, so the source is not stopped: its volume is 0 while it holds a clip
+        // that isn't ours (the pack's are named SfVoice_*), and the game's own volume comes back the moment ours plays or the option is off.
+        // A tracker per source: a volume the game wrote over our 0 becomes the base we give back.
+        readonly float[] _muteBase = new float[3], _muteLast = new float[3];
+        readonly bool[] _muted = new bool[3];
+        readonly UnityEngine.Object[] _muteClip = new UnityEngine.Object[3];
+        readonly bool[] _muteOurs = new bool[3];
+        public int MutedNow;
+
+        public void MuteGameVoice(bool on)
+        {
+            if (!on && !_muted[0] && !_muted[1] && !_muted[2]) { MutedNow = 0; return; }
+            if (!Found || _pVolume == null || _pClip == null) return;
+            MutedNow = 0;
+            MuteOne(0, _srcMoan, on); MuteOne(1, _srcDirty, on); MuteOne(2, _srcVoice, on);
+        }
+
+        void MuteOne(int i, Behaviour src, bool on)
+        {
+            if (src == null || Dead(src)) { _muted[i] = false; return; }
+            try
+            {
+                float cur = (float)_pVolume.GetValue(src, null);
+                bool ours = false;
+                if (on)
+                {
+                    var clip = _pClip.GetValue(src, null) as UnityEngine.Object;
+                    if (!ReferenceEquals(clip, _muteClip[i]))
+                    {
+                        _muteClip[i] = clip;
+                        _muteOurs[i] = clip != null && clip.name.StartsWith("SfVoice_", StringComparison.Ordinal);   // once per new clip
+                    }
+                    ours = clip != null && _muteOurs[i];
+                }
+                if (on && !ours)
+                {
+                    if (!_muted[i] || Mathf.Abs(cur - _muteLast[i]) > 1e-4f) _muteBase[i] = cur;
+                    if (cur != 0f) _pVolume.SetValue(src, 0f, null);
+                    _muted[i] = true; _muteLast[i] = 0f;
+                    MutedNow++;
+                }
+                else if (_muted[i])
+                {
+                    if (Mathf.Abs(cur - _muteLast[i]) <= 1e-4f) _pVolume.SetValue(src, _muteBase[i], null);
+                    _muted[i] = false;
+                }
+            }
+            catch (Exception e) { LogOnce("mute:" + e.GetType().Name, "muting the game's voice failed: " + e.Message); }
         }
 
         // ---- 0.9.0: her voice's pitch and formant (VoiceShift.cs) on the game's voice sources ----

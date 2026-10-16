@@ -148,7 +148,14 @@ namespace SfMorph
         // trailing silence below -60 dB (plus 30 ms), capped at maxSec. trim false: the whole file (loops).
         internal static bool ReadWav(string path, float maxSec, bool trim, out float[] mono, out int rate, out string why)
         {
-            mono = null; rate = 0; why = null;
+            int lead;
+            return ReadWav(path, maxSec, trim, out mono, out rate, out lead, out why);
+        }
+
+        // lead: samples cut from the start by the trim (0.9.9: lip-sync curves are timed to the file as it is)
+        internal static bool ReadWav(string path, float maxSec, bool trim, out float[] mono, out int rate, out int lead, out string why)
+        {
+            mono = null; rate = 0; why = null; lead = 0;
             var fi = new FileInfo(path);
             if (fi.Length > 32L * 1024 * 1024) { why = "over 32 MB"; return false; }
             byte[] b = File.ReadAllBytes(path);
@@ -199,8 +206,8 @@ namespace SfMorph
                 float pk = 0f;
                 for (int i = 0; i < s.Length; i++) pk = Mathf.Max(pk, Mathf.Abs(s[i]));
                 if (pk < 1e-4f) { why = "silent"; return false; }
-                float lead = pk * 0.003f, tail = pk * 0.001f;
-                int a = 0; while (a < s.Length && Mathf.Abs(s[a]) < lead) a++;
+                float onset = pk * 0.003f, tail = pk * 0.001f;
+                int a = 0; while (a < s.Length && Mathf.Abs(s[a]) < onset) a++;
                 a = Math.Max(0, a - rate / 1000);                 // 1 ms before the onset
                 int e = s.Length - 1; while (e > a && Mathf.Abs(s[e]) < tail) e--;
                 e = Math.Min(s.Length - 1, e + rate * 3 / 100);
@@ -208,6 +215,7 @@ namespace SfMorph
                 if (m < 16) { why = "silent"; return false; }
                 var t = new float[m];
                 Array.Copy(s, a, t, 0, m);
+                lead = a;
                 int fade = Math.Min(m / 4, rate / 200);           // 5 ms fade-out
                 for (int i = 0; i < fade; i++) t[m - 1 - i] *= i / (float)fade;
                 s = t;
@@ -328,6 +336,9 @@ namespace SfMorph
         readonly Cat[] _state = new Cat[5];
         readonly Dictionary<string, UnityEngine.Object> _clip = new Dictionary<string, UnityEngine.Object>();
         readonly Dictionary<string, float> _lenOf = new Dictionary<string, float>();
+        // 0.9.9: clip -> its file and the seconds the silence trim cut from its start (lip-sync curves follow the file)
+        readonly Dictionary<UnityEngine.Object, string> _pathOf = new Dictionary<UnityEngine.Object, string>();
+        readonly Dictionary<string, float> _leadOf = new Dictionary<string, float>();
         readonly LinkedList<string> _lru = new LinkedList<string>();
         readonly System.Random _rng = new System.Random();
         MethodInfo _create, _setData;
@@ -404,7 +415,7 @@ namespace SfMorph
         public void Unload()
         {
             foreach (var kv in _clip) try { if (kv.Value != null) UnityEngine.Object.Destroy(kv.Value); } catch (Exception) { }
-            _clip.Clear(); _lenOf.Clear(); _lru.Clear();
+            _clip.Clear(); _lenOf.Clear(); _lru.Clear(); _pathOf.Clear(); _leadOf.Clear();
             for (int c = 0; c < NC; c++) _cats[c] = null;
             for (int i = 0; i < _lines.Length; i++) _lines[i] = null;
             for (int i = 0; i < _state.Length; i++) _state[i] = null;
@@ -470,6 +481,15 @@ namespace SfMorph
             return null;
         }
 
+        // 0.9.9: the file a clip of this pack was read from and the seconds trimmed from its start. False = not one of the pack's clips.
+        public bool Source(UnityEngine.Object clip, out string path, out float lead)
+        {
+            lead = 0f; path = null;
+            if (clip == null || !_pathOf.TryGetValue(clip, out path)) return false;
+            _leadOf.TryGetValue(path, out lead);
+            return true;
+        }
+
         // The clip of a file, read on first use; the least recently used beyond Cache are destroyed (not one a source holds now).
         UnityEngine.Object Get(string path, out float len)
         {
@@ -481,14 +501,15 @@ namespace SfMorph
                 return clip;
             }
             len = 0f;
-            float[] s; int rate; string why;
-            if (!SkinFoley.ReadWav(path, 12f, true, out s, out rate, out why)) { Plugin.Log.LogWarning("Voice pack: skipped " + Path.GetFileName(path) + " (" + why + ")"); return null; }
+            float[] s; int rate, lead; string why;
+            if (!SkinFoley.ReadWav(path, 12f, true, out s, out rate, out lead, out why)) { Plugin.Log.LogWarning("Voice pack: skipped " + Path.GetFileName(path) + " (" + why + ")"); return null; }
             clip = _create.Invoke(null, new object[] { "SfVoice_" + Path.GetFileNameWithoutExtension(path), s.Length, 1, rate, false }) as UnityEngine.Object;
             if (clip == null) return null;
             _setData.Invoke(clip, new object[] { s, 0 });
             clip.hideFlags = HideFlags.DontUnloadUnusedAsset;
             len = s.Length / (float)rate;
             _clip[path] = clip; _lenOf[path] = len; _lru.AddFirst(path);
+            _pathOf[clip] = path; _leadOf[path] = lead / (float)rate;
             var node = _lru.Last;
             while (_clip.Count > Cache && node != null)
             {
@@ -497,7 +518,8 @@ namespace SfMorph
                 if (!ReferenceEquals(o, Busy1) && !ReferenceEquals(o, Busy2) && !ReferenceEquals(o, clip))
                 {
                     try { if (o != null) UnityEngine.Object.Destroy(o); } catch (Exception) { }
-                    _clip.Remove(node.Value); _lenOf.Remove(node.Value); _lru.Remove(node);
+                    if (o != null) _pathOf.Remove(o);
+                    _clip.Remove(node.Value); _lenOf.Remove(node.Value); _leadOf.Remove(node.Value); _lru.Remove(node);
                 }
                 node = prev;
             }

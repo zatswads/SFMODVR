@@ -58,7 +58,13 @@ namespace SfMorph
         string _noSrcLabel = "";       // Owner/Kind of the capsules without a source that touched her this frame
         int _stamp, _nContacts;
         // 0.8.0 impacts (design 4.1): a fresh fast contact on a soft zone -> Impacts (Ripple.Collect reads them after Simulate)
-        const float ImpactMinSpeed = 0.7f, ImpactGap = 0.3f;     // m/s approach along the skin's inward normal; s between impacts of one source / zone
+        const float ImpactMinSpeed = 0.7f, ImpactGap = 0.3f;
+        // 0.11.7 (user: the ripple should also come from the animation, his hips): his pelvis and thighs stay on her during sex, so the fresh
+        // contact rule above only fired on the first touch. Their strokes count instead: a forward approach of 0.35 m/s or more, at most one
+        // per 0.35 s per zone and source (a thrust every 0.4-1 s in the game's loops).
+        const float ThrustMinSpeed = 0.35f, ThrustGap = 0.35f;
+        public static bool ThrustRipple = true;   // Body sets it from [Physics] RippleThrust
+        bool[] _cBody = new bool[0];     // m/s approach along the skin's inward normal; s between impacts of one source / zone
         // 0.8.0 Tissue.Zone: per zone stiffness / depth / damping multipliers (set at build) and this frame's values
         float[] _zKMul, _zLimMul, _zDampMul, _zK, _zLim, _zDamp;
         ulong[] _hPrevSrc;                                       // per helper: its SrcMask of the previous Simulate (is this source new on it?)
@@ -129,7 +135,7 @@ namespace SfMorph
             int m = Math.Max(n, Math.Max(16, _cA.Length * 2));
             _cA = new Vector3[m]; _cB = new Vector3[m]; _cPA = new Vector3[m]; _cPB = new Vector3[m]; _cVA = new Vector3[m]; _cVB = new Vector3[m]; _cMid = new Vector3[m];
             _cR = new float[m]; _cReach2 = new float[m]; _cCode = new int[m]; _cHand = new int[m]; _cOk = new bool[m]; _cHit = new bool[m];
-            _cSrc = new CapSource[m]; _cLive = new bool[m]; _cId = new int[m]; _cLabel = new string[m];
+            _cSrc = new CapSource[m]; _cLive = new bool[m]; _cId = new int[m]; _cLabel = new string[m]; _cBody = new bool[m];
             _capVersion = -1;   // the old previous positions are gone
         }
 
@@ -258,7 +264,8 @@ namespace SfMorph
             // 0.8.0 (Tissue.Zone): each zone has its own stiffness, depth limit and damping: breasts softest and bounciest, outer thighs firm and shallow
             for (int z = 0; z < _zSagV.Length; z++)
             {
-                _zK[z] = k * _zKMul[z]; _zLim[z] = limit * _zLimMul[z];
+                // 0.11.8: a flexed muscle under the zone (glute, quads / adductors, abs) dents less and pushes back sooner (MuscleFlex)
+                _zK[z] = k * _zKMul[z]; _zLim[z] = limit * _zLimMul[z] * MuscleFlex.SoftFactor(Zones[z].Id);
                 _zDamp[z] = 2f * zeta * Mathf.Sqrt(_zK[z]) * _zDampMul[z];
                 _zSagV[z] = gravity > 0f ? Vector3.down * (_zSag[z] * _zLim[z] * gravity) : Vector3.zero;
             }
@@ -304,6 +311,7 @@ namespace SfMorph
                     _cHand[i] = HandOf(cp);
                     _cSrc[i] = cp.Src;
                     _cLabel[i] = cp.Src != null ? null : cp.Owner + "/" + cp.Kind;
+                    _cBody[i] = cp.Kind == "partnerBody";
                 }
                 // alive unless its source is hidden this frame; a dead capsule is still tracked so its speed is right when it comes back
                 _cLive[i] = (cp.Src == null || cp.Src.Live) && (cp.Kind != "partnerBody" || PartnerBody);   // 0.8.0: his pelvis/thighs only with [Physics] PartnerBody
@@ -429,7 +437,7 @@ namespace SfMorph
                     _cHit[ci] = true;
                     Vector3 capVel = _cVA[ci] + (_cVB[ci] - _cVA[ci]) * t;
                     float approach = Vector3.Dot(capVel, h.N);
-                    if (approach >= ImpactMinSpeed) NoteImpact(h, i, ci, approach, capVel, np);
+                    if (approach >= (ThrustRipple && _cBody[ci] ? ThrustMinSpeed : ImpactMinSpeed)) NoteImpact(h, i, ci, approach, capVel, np);
                 }
                 if (h.Touched) h.Push = h.Disp - before;
             }
@@ -551,7 +559,8 @@ namespace SfMorph
             float now = Time.time;
             bool fresh = (_hPrevSrc[hi] & (1UL << id)) == 0UL;
             if (!fresh && now - _zLastImpact[z] >= ImpactGap && approach >= 1.5f * _zLastApproach[z]) fresh = true;
-            if (!fresh || now - _srcLastImpact[id] < ImpactGap) return;
+            if (ThrustRipple && _cBody[ci]) fresh = now - _zLastImpact[z] >= ThrustGap && now - _srcLastImpact[id] >= ThrustGap;   // a stroke of his hips
+            if (!fresh || now - _srcLastImpact[id] < (ThrustRipple && _cBody[ci] ? ThrustGap : ImpactGap)) return;
             int slot;
             if (ImpactCount < Impacts.Length) slot = ImpactCount++;
             else

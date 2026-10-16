@@ -380,7 +380,10 @@ namespace SfMorph
             for (int f = 0; f < 5; f++)
             {
                 Vector3 dir = cnt[f] >= 2 ? (P[f][cnt[f] - 1] - P[f][0]).normalized : fwd;
-                Vector3 ax = Vector3.Cross(dir, normal);
+                // 0.11.7: the thumb curls across the palm toward the fingers (opposition), not straight toward the palm normal
+                Vector3 toward = normal;
+                if (f == 0) { var t = normal.normalized - across.normalized; if (t.sqrMagnitude > 1e-6f) toward = t.normalized; }
+                Vector3 ax = Vector3.Cross(dir, toward);
                 if (ax.sqrMagnitude < 1e-8f) ax = Vector3.Cross(fwd, normal);
                 sp.FAxis[f] = ax.normalized;
                 sp.FDir[f] = dir;
@@ -1164,6 +1167,15 @@ namespace SfMorph
                 var r = hd.R[i];
                 if (r != null && r.enabled) r.enabled = false;
             }
+        }
+
+        // 0.11.7: Embody's hands replace the controller models too (own hiders, so the physics hands' restore never fights them)
+        static readonly Hider _embL = new Hider(), _embR = new Hider();
+        public static void EmbodyHide(bool left, bool right)
+        {
+            float now = Time.unscaledTime;
+            if (left && !Active) HideController(_embL, true, now); else if (_embL.R.Count > 0) RestoreHide(_embL);
+            if (right && !Active) HideController(_embR, false, now); else if (_embR.R.Count > 0) RestoreHide(_embR);
         }
 
         static void RestoreHide(Hider hd)

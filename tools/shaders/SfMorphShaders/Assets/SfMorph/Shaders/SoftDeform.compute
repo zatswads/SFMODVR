@@ -25,6 +25,7 @@
 #pragma kernel ApplyMap
 #pragma kernel ForeignMarks
 #pragma kernel SeamBlend
+#pragma kernel MuscleFlex
 
 RWByteAddressBuffer _Verts;          // skinned output: per vertex _Stride bytes, position at _PosOff, normal at _NrmOff
 uint _Stride, _PosOff, _NrmOff, _Count;
@@ -192,6 +193,14 @@ float _WaveImpact;                   // 0.9.7: the wave's share at the impact po
 float4 _BendAmt0, _BendAmt1, _BendAmt2;   // 9 slot amplitudes (m): [0..3], [4..7], [8]
 float4 _Disc;                        // MarkDisc: xyz world centre, w radius (m)
 float _DiscAmt;
+// 0.11.8 tensed muscles as geometry: per vertex the muscle ids of the body atlas and a belly weight (ContactBake.BakeMuscles), per muscle
+// its bulge (m, activation x area mm x Flex) and activation (CPU, MuscleFlex). _MusOn = 0: none of it is read (renderers without muscles).
+StructuredBuffer<float4> _Mus;       // (id0, share0, id1, share1), id < 0 = none
+StructuredBuffer<float> _MusBelly;   // 0 at the muscle's edge / tendon, 1 mid-belly
+float4 _MusAmp[8];                   // 32 bulges (m)
+float4 _MusAct[8];                   // 32 activations 0..1
+float _MusFirm;                      // soft depth x (1 - _MusFirm x activation): a flexed muscle dents less
+uint _MusOn;
 
 float3 WorldPos(uint v)
 {
@@ -210,6 +219,33 @@ float3 WorldNormal(uint v)
 float TissueCap(float2 t)
 {
     return (t.x + t.y * _SoftScale) * _Depth;
+}
+
+float MusOf(float4 a[8], float id)
+{
+    if (id < -0.5) return 0.0;
+    uint j = (uint)(id + 0.5);
+    if (j >= 32u) return 0.0;
+    return a[j >> 2][j & 3u];
+}
+
+// 0.11.8: the vertex's muscle bulge (m, outward) and its share-weighted activation
+void Muscle(uint v, out float bulge, out float act)
+{
+    bulge = 0.0; act = 0.0;
+    if (_MusOn == 0u) return;
+    float4 m = _Mus[v];
+    if (m.x < -0.5) return;
+    act = m.y * MusOf(_MusAct, m.x) + m.w * MusOf(_MusAct, m.z);
+    bulge = _MusBelly[v] * (m.y * MusOf(_MusAmp, m.x) + m.w * MusOf(_MusAmp, m.z));
+}
+
+// The vertex's tissue with its muscle's firmness: the soft part shrinks with the activation (the hard part, skin over bone, stays).
+float2 TissueOf(uint v, float act)
+{
+    float2 t = _Tissue[v];
+    t.y *= 1.0 - saturate(_MusFirm * act);
+    return t;
 }
 
 // Shown depth for a penetration against a cap: exact up to 0.6 cap, then a C1 saturation toward the cap (Tissue.Press).
@@ -233,10 +269,12 @@ void Depth(uint3 id : SV_DispatchThreadID)
     float3 nOut = WorldNormal(v);
     if (dot(nOut, nOut) < 0.5) { _FieldOut[v] = 0; _Foreign[v] = float2(0, 0); return; }
     float3 nIn = -nOut;
-    float3 p = WorldPos(v);
-    float2 t = _Tissue[v];
+    float mb, ma;
+    Muscle(v, mb, ma);
+    float3 p = WorldPos(v) + nOut * mb;     // 0.11.8: the hand meets the flexed (bulged) surface, Compose subtracts the bulge again
+    float2 t = TissueOf(v, ma);
     float cap = TissueCap(t);
-    bool bony = t.y < 0.0035;
+    bool bony = _Tissue[v].y < 0.0035;      // by the anatomy, not by how flexed the muscle is
     uint cls = _Class[v];
     float depth = 0;
     float2 fo = float2(0, 0);
@@ -336,7 +374,9 @@ void Compose(uint3 id : SV_DispatchThreadID)
     uint v = id.x;
     if (v >= _Count) return;
     if (_Canon[v] != v) return;
-    float2 t = _Tissue[v];
+    float mb, ma;
+    Muscle(v, mb, ma);
+    float2 t = TissueOf(v, ma);
     float n = 0, w = 0;
     // 0.8.9 (user: a hard pixelated seam around a finger's dent): the two Smooth passes lower the narrow field under a small contact (a
     // fingertip) below the real penetration, so the skin stayed a few mm inside the finger and the depth intersection drew an aliased line.
@@ -364,7 +404,7 @@ void Compose(uint3 id : SV_DispatchThreadID)
         float wcap = 1.5 * TissueCap(t);
         wave = clamp(wave, -wcap, wcap);            // 0.9.4: bigger waves, but never deeper than the flesh is
     }
-    _FieldOut[v] = n - bulge - bend - wave;
+    _FieldOut[v] = n - bulge - bend - wave - mb;   // 0.11.8: the muscle bulge sits under the dent (Depth measured from the bulged surface)
     if (_MarkOn != 0u)
     {
         float cap = TissueCap(t);
@@ -538,5 +578,11 @@ void ForeignMarks(uint3 id : SV_DispatchThreadID)
 // SeamBlend: never dispatched; its presence tells the plugin ApplyMap reads _MapW (0.9.7 skin seams) and Compose reads _WaveImpact.
 [numthreads(1, 1, 1)]
 void SeamBlend(uint3 id : SV_DispatchThreadID)
+{
+}
+
+// MuscleFlex: never dispatched; its presence tells the plugin Depth and Compose read the 0.11.8 muscle bulge and firmness (_Mus, _MusOn ...).
+[numthreads(1, 1, 1)]
+void MuscleFlex(uint3 id : SV_DispatchThreadID)
 {
 }

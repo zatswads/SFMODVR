@@ -98,6 +98,65 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.10 (Flex test)
+
+Install `dist/SfMorph.dll` (the 0.11.8 `sfmorph_shaders` stays). Log: `SF Body Morphs 0.11.10`. GPU contact on (Physics tab), any
+scene with her animating. Skin tab, Muscles, **Flex test**:
+1. The label counts down "now: arms / back / core / legs at full"; each area visibly rises in turn (side view of the upper arm,
+   her back from behind, the belly in profile, the thighs and calves) and settles back after its 2 s. Stop test ends it at once.
+2. Log, 4 lines + `Flex test done`: `Muscles: Flex test <area> at full for 2 s: bulge up to X mm (... x belly 0.9x) on N verts
+   (<meshes>)`. Send the lines: N = 0 or a belly far below 1 means that area has no geometry to move.
+3. A bulge in the wrong place (e.g. "arms" lifting her chest): the Muscles debug view "Muscles" shows the region; screenshot both.
+
+## 0.11.9 (agonizing laugh for Ticklish)
+
+Log: `Reactions face: moods: ... Ticklish = '<clip>' (...; laughing in agony: Pain's eyes / brows and grief brows over it)`.
+Headset: Reactions tab, Face clips, Ticklish "Test" (or caress her side / belly): a wide smile with squeezed eyes and raised, knitted
+inner brows (a pained, helpless laugh), not a happy smile; the face panel line names the clip "+ '<pain clip>' eyes/brows + grief
+brows". If the eyes close too much or the brows look angry, say so (the shares are APainEyes / APainBrows / ABrowInMm in ReactionsFace.cs).
+
+## 0.11.8 (muscles as shape, firmness)
+
+Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`. Log: `SF Body Morphs 0.11.8`; no `old sfmorph_shaders (no MuscleFlex)`
+warning; `GPU contact: muscle maps read back (27 muscles, region 1024x1024, detail 2048x2048)`; `GPU contact: baked reika_body...:
+..., muscles N verts [core:.. back:.. legs:.. arms:..]` for her body meshes (none for face / neck / overlays); the status line ends
+`muscles N verts`. Skin tab: Muscles on, GPU contact on (Physics tab). Headset:
+1. Flexed elbow: bend her elbow past 90 degrees (a pose or Embody's hands): the biceps belly rises (side view: the upper arm's
+   front outline gets rounder), fading to nothing at the elbow crease and the shoulder; no step at the biceps / triceps border.
+   Arms slider to 0 -> it flattens (the relief and the bend bulge stay).
+2. Back relief: Fitness 1, arms overhead or a back arch: the spinal erectors stand up on both sides of the spine with the groove
+   between them kept, the lats show along her sides. Back slider 0 / Flex 0 -> flat again.
+3. Firmness: Firmness 0.5. Press a relaxed biceps (arm straight) with a palm, then the same arm with the elbow bent past 90: the
+   flexed one dents visibly less and the physics hand stops sooner. Firmness 0 -> both the same.
+4. A squat / kneeling pose: the quads and glutes rise; lying on her back with straight legs raised: the hamstrings do NOT bulge
+   (passive stretch), the abs do a little.
+5. No seam or step at the waist (her upper / lower body meshes) and at the neck; the areolas, tattoo and vulva rim stay on the skin.
+6. Perf line (10 s in the log / panel): `gpuRun` and the GPU ms with Flex 1 vs Flex 0, standing idle: report both numbers.
+7. If a muscle bulges in the wrong place, Muscles debug view "Muscles" shows which region the skin belongs to (the bulge follows
+   those regions); send a screenshot.
+
+## 0.11.7 (0.11.4 headset fixes, lip sync)
+
+Install `dist/SfMorph.dll`. Log: `SF Body Morphs 0.11.7`; `GPU contact: renderer reika_face_c space rootBone taken from ...` (and
+reika_neck, reika_face_a) instead of "cannot be calibrated"; `Her body: segments from N body meshes` with `head (...): <n> verts`
+(not "0 verts ... (default)") and a neck hull; `GPU contact: baked ...: edge X mm (skin Y mm)`; `Embody: neutral finger pose
+straightened from the animation's hand` (when no bind pose); `Lip sync: map: ...` or `Lip sync: no mouth poses yet: seeded N
+shapes ...`. Headset:
+1. Panel: drag an edge / corner to resize (also smaller); the title bar moves it; ticking options or the 10 s timing update no
+   longer makes it jump; tabs in the left column; Skin tab = wrinkles, muscles, marks.
+2. Press / slap her cheek, jaw and neck: a small dent and marks (lighter than the body). Hands stop on her face / throat, not a few
+   cm before it.
+3. Fidelity on, press her back / breast with a palm: the dent edge is round and soft, no capsule outline (compare Balanced).
+4. Reactions tab: skin volume slider; Test pat / grab / rub are audible; a hand sliding on her plays the rub (`rub sound on`).
+5. Embody: on after a game restart it starts off; on, hands Both: controller models hidden, his fingers rest open (not the
+   animation's grip), the grab button closes them and the thumb closes across the palm without bending backwards; View
+   forward / up / right move the view.
+6. Lip sync: Reactions tab, voice pack Anime or Rebecca, "Test: a pack clip with lip sync": the log line lists switch on, face
+   survey done, curves N > 0, mouth poses > 0; then `lip probe at ...: jawOpen 0.xx, mouthFunnel ... -> bones: Lip_... x mm, y deg`.
+   Her lips move with the words, not just the jaw. If the lips look wrong, refine the poses in "Mouth poses for the lip sync".
+7. Sex scene with Physics -> partner's body on: ripples on her glutes / thighs at each stroke (`Ripple: impact #... by Player`).
+8. Voice pack on + Mute the game's own voice: the game's moans / dirty talk are silent, the pack still speaks.
+
 ## 0.11.3 (built Surprise face)
 
 - [ ] Log `surprise: built from 16 face bones ...` and the `moods:` line shows `Surprise = built: wide eyes, raised brows`; no

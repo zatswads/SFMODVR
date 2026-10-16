@@ -84,6 +84,10 @@ namespace SfMorph
             public int Level;                        // dispatch pass: 0 no parent, then one more than its parent (a parent's Grad is ready first)
             // this frame's plan
             public bool Run, NeedCalib, IsV2, Imprint1, Depth, Bend, Wave, MarkOn, Decay, Work, Probe, SelfOnly, ChainRan, MapOnly;
+            // 0.11.8 muscles as geometry: per vertex ids + shares and the belly weight (null: no muscle on this renderer); this frame: Flex = a
+            // bulge to draw (Compose / Grad / Apply run like a bend-only frame), MusOn = Depth / Compose read the muscles (bulge or firmness)
+            public GraphicsBuffer MusBuf, BellyBuf;
+            public bool Flex, MusOn;
             public int DiscMask, CapOff, CapN, CapN1;
         }
 
@@ -103,7 +107,9 @@ namespace SfMorph
             PBendAmt0 = Shader.PropertyToID("_BendAmt0"), PBendAmt1 = Shader.PropertyToID("_BendAmt1"), PBendAmt2 = Shader.PropertyToID("_BendAmt2"),
             PDisc = Shader.PropertyToID("_Disc"), PDiscAmt = Shader.PropertyToID("_DiscAmt"),
             PHits = Shader.PropertyToID("_Hits"), PMap = Shader.PropertyToID("_Map"), PParentGrad = Shader.PropertyToID("_ParentGrad"),
-            PParentOn = Shader.PropertyToID("_ParentOn"), POwnOn = Shader.PropertyToID("_OwnOn"), PCountHits = Shader.PropertyToID("_CountHits");
+            PParentOn = Shader.PropertyToID("_ParentOn"), POwnOn = Shader.PropertyToID("_OwnOn"), PCountHits = Shader.PropertyToID("_CountHits"),
+            PMus = Shader.PropertyToID("_Mus"), PMusBelly = Shader.PropertyToID("_MusBelly"), PMusAmp = Shader.PropertyToID("_MusAmp"), PMusAct = Shader.PropertyToID("_MusAct"),
+            PMusFirm = Shader.PropertyToID("_MusFirm"), PMusOn = Shader.PropertyToID("_MusOn");
         static readonly uint[] ZeroHits = new uint[1];
         const int SelfHitHold = 30;               // frames a positive probe keeps the full chain on (readbacks arrive 1-3 frames late)
 
@@ -115,6 +121,20 @@ namespace SfMorph
         int _kDepth, _kDilate, _kSmooth, _kCompose, _kGrad, _kApply, _kDisc, _kDecay, _kApplyMap;   // 0.8.0 v2 kernels
         bool _v2Kernels, _v2Failed, _loggedFirstV2;
         bool _foreignMarks;
+        bool _muscleK;                        // 0.11.8 bundle: Depth / Compose read the muscle bulge and firmness (MuscleFlex marker kernel)
+        ContactBake.MuscleMap _mmap;          // the muscle maps read back once (the first bake that wants them)
+        bool _mmapTried;
+        GraphicsBuffer _musDummy4, _musDummy1;   // bound while a renderer has no muscles (_MusOn 0: never read)
+        readonly Vector4[] _musAmp = new Vector4[8], _musAct = new Vector4[8];
+        float _musMax;                        // this frame's largest bulge (m); 0 = no muscle geometry
+        bool _musLive;
+        public string FlexNote = "";          // why the muscle bulge is not drawn ("" = it is, or nothing baked yet)
+        public bool MuscleKernels { get { return _muscleK && _v2Kernels && !_v2Failed; } }
+        // canonical vertices of her baked renderers that carry a muscle (0 = no muscle geometry)
+        public int MuscleVerts
+        {
+            get { int n = 0; for (int i = 0; i < _rs.Count; i++) if (_rs[i].V2 && _rs[i].Bake != null) n += _rs[i].Bake.MuscleCount; return n; }
+        }
         bool _seamBlend;                      // 0.9.7 bundle: ApplyMap blends by _MapW (skin seams), Compose reads _WaveImpact                   // 0.9.4 bundle: Depth writes the foreign-only press (_Foreign) that Compose takes marks from
         ComputeBuffer _capBuf, _waveBuf;
         readonly CapData[] _capArr = new CapData[CapBufCount];
@@ -180,6 +200,8 @@ namespace SfMorph
                 g._v2Kernels = miss.Length == 0;
                 g._foreignMarks = g._cs.HasKernel("ForeignMarks");
                 g._seamBlend = g._cs.HasKernel("SeamBlend");
+                g._muscleK = g._cs.HasKernel("MuscleFlex");
+                if (g._v2Kernels && !g._muscleK) Plugin.Log.LogWarning("GPU contact: old sfmorph_shaders (no MuscleFlex): tensed muscles don't bulge or firm up; install the bundle that came with this DLL");
                 Plugin.Log.LogInfo("GPU contact: bundle loaded, kernels Smoke=" + g._kSmoke + " Imprint=" + g._kImprint + (g._v2Kernels ? ", v2: Depth Dilate Smooth Compose Grad Apply MarkDisc MarksDecay ApplyMap" : ""));
                 if (!g._v2Kernels) Plugin.Log.LogWarning("GPU contact: bundle has no v2 kernels (old sfmorph_shaders?): v1 imprint (missing:" + miss + ")");
                 else if (!g._seamBlend) Plugin.Log.LogWarning("GPU contact: old sfmorph_shaders (no SeamBlend): her skin meshes are not stitched at their seams, no neck / face marks, no ripple impact setting; install the bundle that came with this DLL");
@@ -511,7 +533,7 @@ namespace SfMorph
         void MakeBake(RendState s, float[] zone)
         {
             string err;
-            ContactBake b = ContactBake.Build(s.R, zone, _her, out err);
+            ContactBake b = ContactBake.Build(s.R, zone, _her, s.Extra ? null : MuscleMapFor(), out err);
             if (b == null || b.V != s.Count)
             {
                 Plugin.Log.LogWarning("GPU contact: renderer " + s.Name + ": v2 bake failed (" + (b == null ? err : "vertex count " + b.V + " != " + s.Count) + "): v1 imprint for it");
@@ -526,6 +548,7 @@ namespace SfMorph
                 s.TissueBuf = Upload(b.Tissue, V, 8);
                 s.ClassBuf = Upload(b.Class, V, 4);
                 s.BendBuf = Upload(b.Bend, V, 16);
+                if (b.Muscle != null && b.Belly != null) { s.MusBuf = Upload(b.Muscle, V, 16); s.BellyBuf = Upload(b.Belly, V, 4); }
                 var zeroF = new float[V];
                 s.FieldA = Upload(zeroF, V, 4); s.FieldB = Upload(zeroF, V, 4); s.FieldC = Upload(zeroF, V, 4); s.FieldD = Upload(zeroF, V, 4);
                 s.Foreign = Upload(new Vector2[V], V, 8);
@@ -558,6 +581,139 @@ namespace SfMorph
             Plugin.Log.LogInfo("GPU contact: baked " + s.Name + ": " + b.Note);
         }
 
+        // 0.11.8: the body layout's muscle maps (the same muscle_layouts / textures as Wrinkles, read from the bundle on our own so the bake
+        // doesn't depend on the wrinkle system being loaded), read back to the CPU once. The textures aren't CPU-readable (and the detail is
+        // BC7): a blit into a linear RT and ReadPixels. null (said once) = no muscle geometry.
+        ContactBake.MuscleMap MuscleMapFor()
+        {
+            if (_mmapTried) return _mmap;
+            _mmapTried = true;
+            if (!_muscleK) return null;
+            try
+            {
+                var table = ShaderBundle.Load<TextAsset>("muscle_layouts");
+                if (table == null) { FlexNote = "no muscle layout in the shader bundle"; Plugin.Log.LogInfo("GPU contact: " + FlexNote); return null; }
+                var notes = new List<string>();
+                MuscleLayer L = null;
+                foreach (var l in MuscleLayer.Parse(table.text, n => ShaderBundle.Load<Texture2D>(n), notes)) if (l.Name == "body") L = l;
+                if (L == null) { FlexNote = "no body muscle layout in the shader bundle"; Plugin.Log.LogInfo("GPU contact: " + FlexNote); return null; }
+                var m = new ContactBake.MuscleMap { Layer = L };
+                m.Region = ReadBack(L.Region, out m.RW, out m.RH);
+                m.Detail = ReadBack(L.Detail, out m.DW, out m.DH);
+                if (m.Region == null) { FlexNote = "muscle map unreadable"; Plugin.Log.LogWarning("GPU contact: " + FlexNote); return null; }
+                Plugin.Log.LogInfo("GPU contact: muscle maps read back (" + L.Count + " muscles, region " + m.RW + "x" + m.RH + ", detail " + m.DW + "x" + m.DH + ")");
+                _mmap = m;
+                return m;
+            }
+            catch (Exception e) { FlexNote = "muscle maps failed (" + e.Message + ")"; Plugin.Log.LogWarning("GPU contact: " + FlexNote); return null; }
+        }
+
+        static Color32[] ReadBack(Texture2D t, out int w, out int h)
+        {
+            w = h = 0;
+            if (t == null) return null;
+            w = t.width; h = t.height;
+            if (t.isReadable)
+                try { return t.GetPixels32(); } catch (Exception) { }
+            var rt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+            var prev = RenderTexture.active;
+            Texture2D tmp = null;
+            try
+            {
+                Graphics.Blit(t, rt);
+                RenderTexture.active = rt;
+                tmp = new Texture2D(w, h, TextureFormat.RGBA32, false, true);
+                tmp.ReadPixels(new Rect(0, 0, w, h), 0, 0, false);
+                return tmp.GetPixels32();
+            }
+            finally
+            {
+                RenderTexture.active = prev;
+                RenderTexture.ReleaseTemporary(rt);
+                if (tmp != null) UnityEngine.Object.Destroy(tmp);
+            }
+        }
+
+        // 0.11.8: this frame's muscle bulges (m) and activations for the shader, from the body sheet's activations (MuscleFlex): bulge =
+        // activation x the muscle's area mm x Flex. Returns the largest bulge.
+        float FillMuscles()
+        {
+            string test = MuscleFlex.TestArea();
+            if (test != _testArea) LogTest(test);
+            _musLive = _mmap != null && (test != null || MuscleFlex.Live);
+            for (int i = 0; i < 8; i++) { _musAmp[i] = Vector4.zero; _musAct[i] = Vector4.zero; }
+            if (!_musLive) return 0f;
+            var L = _mmap.Layer;
+            float flex = test != null ? Mathf.Max(1f, _set.Flex) : Mathf.Max(0f, _set.Flex), mx = 0f;
+            for (int k = 0; k < L.Count && k < MuscleFlex.Max; k++)
+            {
+                string a = L.Area[k];
+                float mm = a == "core" ? _set.CoreMm : a == "back" ? _set.BackMm : a == "legs" ? _set.LegsMm : a == "arms" ? _set.ArmsMm : 0f;
+                if (test != null) mm = Mathf.Max(3f, mm);       // the test always shows something (Flex at least 1, 3 mm at least)
+                if (L.MuscleName[k] == "ribcage") mm = 0f;   // bone showing through, not a muscle belly: relief only, never pushed out
+                float act = test != null ? (a == test ? 1f : 0f) : MuscleFlex.Act[k];
+                float amp = act * Mathf.Max(0f, mm) * 0.001f * flex;
+                _musAmp[k >> 2][k & 3] = amp;
+                _musAct[k >> 2][k & 3] = act;
+                if (amp > mx) mx = amp;
+            }
+            return mx;
+        }
+
+        // 0.11.8 Flex test: one log line per step (how far the area's bellies go, on how many vertices of which meshes) and at the end
+        string _testArea;
+        void LogTest(string area)
+        {
+            string prev = _testArea;
+            _testArea = area;
+            if (area == null) { if (prev != null) Plugin.Log.LogInfo("Muscles: Flex test done, back to her pose's tension"); return; }
+            if (_mmap == null) { Plugin.Log.LogInfo("Muscles: Flex test " + area + ": nothing to bulge (" + (FlexNote.Length > 0 ? FlexNote : "no muscle map") + ")"); return; }
+            var L = _mmap.Layer;
+            int verts = 0;
+            float maxBelly = 0f, mmMax = 0f;
+            var meshes = new List<string>();
+            for (int i = 0; i < _rs.Count; i++)
+            {
+                var b = _rs[i].Bake;
+                if (!_rs[i].V2 || b == null || b.Muscle == null) continue;
+                int n = 0;
+                for (int v = 0; v < b.V; v++)
+                {
+                    if (b.Canon[v] != (uint)v) continue;
+                    var m = b.Muscle[v];
+                    int id = (int)(m.x + 0.5f);
+                    if (m.x < 0f || id >= L.Count || L.Area[id] != area) continue;
+                    n++;
+                    if (b.Belly[v] > maxBelly) maxBelly = b.Belly[v];
+                }
+                if (n > 0) { verts += n; meshes.Add(_rs[i].Name + " " + n); }
+            }
+            for (int k = 0; k < L.Count; k++)
+            {
+                if (L.Area[k] != area || L.MuscleName[k] == "ribcage") continue;
+                float mm = area == "core" ? _set.CoreMm : area == "back" ? _set.BackMm : area == "legs" ? _set.LegsMm : _set.ArmsMm;
+                mmMax = Mathf.Max(3f, mm) * Mathf.Max(1f, _set.Flex);
+            }
+            Plugin.Log.LogInfo("Muscles: Flex test " + area + " at full for " + MuscleFlex.TestStep.ToString("0") + " s: bulge up to "
+                + (mmMax * maxBelly).ToString("0.0") + " mm (" + mmMax.ToString("0.0") + " mm x belly " + maxBelly.ToString("0.00") + ") on " + verts + " verts"
+                + (meshes.Count > 0 ? " (" + string.Join(", ", meshes.ToArray()) + ")" : " - none baked: no bulge"));
+        }
+
+        // The muscle inputs of Depth / Compose for one renderer (dummies with _MusOn 0 when it has none this frame).
+        void BindMuscles(int kernel, RendState s)
+        {
+            if (!_muscleK) return;
+            var cs = _cs;
+            bool on = s.MusOn && s.MusBuf != null && s.BellyBuf != null;
+            if (_musDummy4 == null) { _musDummy4 = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 1, 16); _musDummy1 = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 1, 4); }
+            cs.SetBuffer(kernel, PMus, on ? s.MusBuf : _musDummy4);
+            cs.SetBuffer(kernel, PMusBelly, on ? s.BellyBuf : _musDummy1);
+            cs.SetInt(PMusOn, on ? 1 : 0);
+            cs.SetVectorArray(PMusAmp, _musAmp);
+            cs.SetVectorArray(PMusAct, _musAct);
+            cs.SetFloat(PMusFirm, Mathf.Clamp01(MuscleFlex.Firm));
+        }
+
         static void Rel(ref GraphicsBuffer b) { if (b != null) { b.Release(); b = null; } }
 
         // Frees a renderer's v2 buffers and bake (bumps BakeVersion when there was a bake).
@@ -566,7 +722,7 @@ namespace SfMorph
             bool had = s.Bake != null;
             Rel(ref s.CanonBuf); Rel(ref s.AdjOffBuf); Rel(ref s.AdjVBuf); Rel(ref s.TissueBuf); Rel(ref s.ClassBuf); Rel(ref s.BendBuf);
             Rel(ref s.FieldA); Rel(ref s.FieldB); Rel(ref s.FieldC); Rel(ref s.FieldD); Rel(ref s.Foreign); Rel(ref s.MarksBuf); Rel(ref s.GradBuf);
-            Rel(ref s.HitsBuf); Rel(ref s.MapBuf); Rel(ref s.MapWBuf);
+            Rel(ref s.HitsBuf); Rel(ref s.MapBuf); Rel(ref s.MapWBuf); Rel(ref s.MusBuf); Rel(ref s.BellyBuf);
             s.Parent = null; s.Mapped = 0; s.Level = 0;
             for (int i = 0; i < _rs.Count; i++) if (_rs[i].Parent == s) { _rs[i].Parent = null; Rel(ref _rs[i].MapBuf); Rel(ref _rs[i].MapWBuf); _rs[i].Mapped = 0; _rs[i].Level = 0; }
             s.Bake = null;
@@ -881,6 +1037,7 @@ namespace SfMorph
                     try
                     {
                         BendPose.Update(_set);
+                        _musMax = _muscleK ? FillMuscles() : 0f;
                         nWaves = Mathf.Clamp(Ripple.Fill(now, _waveArr), 0, Ripple.MaxWaves);
                         if (nWaves > 0) _waveBuf.SetData(_waveArr, 0, 0, 2 * nWaves);
                         nDisc = Mathf.Clamp(SkinMarks.TakeDiscs(_discArr, _discAmt), 0, 4);
@@ -906,7 +1063,7 @@ namespace SfMorph
                 if (s.R == null || !s.R.enabled || !s.R.gameObject.activeInHierarchy) continue;
                 if (s.Mesh != s.R.sharedMesh && _z != null) { if (s.Extra) SetupMesh(s, new float[s.R.sharedMesh != null ? s.R.sharedMesh.vertexCount : 0], null); else SetupMesh(s, _z.MaskFor(s.R), _z.ZoneFor(s.R)); }   // the mesh was swapped under us
                 if (!s.Ok) continue;
-                s.NeedCalib = s.Space == 0 && s.CalibState == 0 && s.CalibTries < CalibMaxTries && frame >= s.CalibNextFrame;
+                s.NeedCalib = s.Space == 0 && s.CalibState == 0 && s.CalibTries < CalibMaxTries + 4 && frame >= s.CalibNextFrame;   // +4: an unreadable mesh waits for a sibling's space (RequestCalibration)
                 bool v2 = useV2 && s.V2 && s.Space > 0;
                 s.IsV2 = v2;
                 s.CapOff = capUsed; s.CapN = 0; s.CapN1 = 0;
@@ -929,6 +1086,10 @@ namespace SfMorph
                 s.Depth = v2 && s.CapN > 0 && (!s.SelfOnly || (s.SelfHits > 0 && frame - s.HitFrame <= SelfHitHold));
                 s.Probe = s.SelfOnly && !s.Depth;
                 s.Bend = v2 && BendPose.Any && s.Bake.BendCount > 0;
+                // 0.11.8: a flexed muscle bulges (Compose / Grad / Apply alone without contact, like a bend); its firmness only matters under a press
+                bool hasMus = v2 && _muscleK && _musLive && s.MusBuf != null;
+                s.Flex = hasMus && _musMax > 1e-5f;
+                s.MusOn = hasMus && (s.Flex || MuscleFlex.Firm > 0f);
                 s.Wave = v2 && nWaves > 0 && WaveReaches(b, nWaves);
                 s.DiscMask = 0;
                 if (v2 && nDisc > 0)
@@ -939,7 +1100,7 @@ namespace SfMorph
                     }
                 if (v2 && _set.Marks && (s.Depth || s.DiscMask != 0)) s.MarkUntil = now + 4f * Mathf.Max(3f, _set.MarkFade);   // pressure or a slap: fade for 4 time constants
                 // marks switched off: wipe what is left once, so switching them on again doesn't bring back an old print
-                bool work = s.Depth || s.Bend || s.Wave || s.DiscMask != 0;
+                bool work = s.Depth || s.Bend || s.Flex || s.Wave || s.DiscMask != 0;
                 s.ClearMarks = v2 && !_set.Marks && s.MarkUntil > 0f && !work;   // on the first frame without other work; MarkUntil cleared once it dispatched
                 s.MarkOn = v2 && _set.Marks && now < s.MarkUntil;
                 s.Decay = v2 && !work && (s.MarkOn || s.ClearMarks);
@@ -1095,6 +1256,7 @@ namespace SfMorph
                 cs.SetBuffer(_kDepth, PVerts, vb); cs.SetBuffer(_kDepth, PCanon, s.CanonBuf); cs.SetBuffer(_kDepth, PTissue, s.TissueBuf);
                 cs.SetBuffer(_kDepth, PClass, s.ClassBuf); cs.SetBuffer(_kDepth, PCaps, _capBuf); cs.SetBuffer(_kDepth, PFieldOut, s.FieldD);   // raw kept in D for Compose
                 cs.SetBuffer(_kDepth, PHits, s.HitsBuf);
+                BindMuscles(_kDepth, s);
                 if (_foreignMarks) cs.SetBuffer(_kDepth, PForeign, s.Foreign);
                 cs.SetInt(PCapCount, s.CapN); cs.SetInt(PCapOff, s.CapOff);
                 cs.Dispatch(_kDepth, groups, 1, 1); n++;
@@ -1107,14 +1269,23 @@ namespace SfMorph
             }
             if (s.Depth)
             {
-                int iters = Mathf.Clamp(Mathf.CeilToInt(3f * skirt / Mathf.Max(0.001f, s.Bake.AvgEdge)), 2, 10);
-                // 0.8.9: Depth's raw field stays in D (Compose's floor); dilate D -> A, then A/B; wide ends in A; Compose writes B
+                // 0.11.7 (user: the dents look polygonal again): the passes are sized in metres, not in vertex hops. Fidelity's subdivision
+                // halves the edges, so the fixed 2 + 3 smoothing passes (sized for her own mesh, ~7 mm edges) blurred half as far and the
+                // dent kept the capsules' outline; the dilate was sized by the mean edge, which the dense fingers pull down to 2.4 mm (cap 10).
+                float e = Mathf.Max(0.001f, s.Bake.SkinEdge > 0f ? s.Bake.SkinEdge : s.Bake.AvgEdge);
+                int iters = Mathf.Clamp(Mathf.CeilToInt(3f * skirt / e), 2, 16);
+                int narrow = Mathf.Clamp(Mathf.RoundToInt(0.012f / e), 2, 6);    // ~1.2 cm (2 passes at 7 mm)
+                int wide = Mathf.Clamp(Mathf.RoundToInt(0.024f / e), 3, 10);     // ~2.4 cm (3 passes at 7 mm)
+                // 0.8.9: Depth's raw field stays in D (Compose's floor); dilate D -> A, then A/B; narrow ends in C, wide in A; Compose writes B
                 Pass(_kDilate, vb, s, s.FieldD, A, groups); n++;
                 GraphicsBuffer cur = A, oth = B;
                 for (int i = 1; i < iters; i++) { Pass(_kDilate, vb, s, cur, oth, groups); n++; var t = cur; cur = oth; oth = t; }
-                Pass(_kSmooth, vb, s, cur, oth, groups); Pass(_kSmooth, vb, s, oth, s.FieldC, groups);        // narrow -> C
-                Pass(_kSmooth, vb, s, s.FieldC, A, groups); Pass(_kSmooth, vb, s, A, B, groups); Pass(_kSmooth, vb, s, B, A, groups);   // wide -> A
-                n += 5;
+                for (int i = 0; i < narrow - 1; i++) { Pass(_kSmooth, vb, s, cur, oth, groups); n++; var t = cur; cur = oth; oth = t; }
+                Pass(_kSmooth, vb, s, cur, s.FieldC, groups); n++;                                            // narrow -> C
+                // wide from C: an odd count ends in A when it starts C -> A
+                cur = s.FieldC; oth = A;
+                for (int i = 0; i < wide; i++) { Pass(_kSmooth, vb, s, cur, oth, groups); n++; cur = oth; oth = ReferenceEquals(cur, A) ? B : A; }
+                if (!ReferenceEquals(cur, A)) { Pass(_kSmooth, vb, s, cur, A, groups); n++; }                 // wide -> A
             }
             for (int d = 0; d < 4; d++)
             {
@@ -1127,6 +1298,7 @@ namespace SfMorph
             cs.SetBuffer(_kCompose, PBend, s.BendBuf); cs.SetBuffer(_kCompose, PFieldN, s.FieldC); cs.SetBuffer(_kCompose, PFieldW, A);
             cs.SetBuffer(_kCompose, PFieldR, s.FieldD); cs.SetBuffer(_kCompose, PFieldOut, B); cs.SetBuffer(_kCompose, PMarks, s.MarksBuf); cs.SetBuffer(_kCompose, PWaves, _waveBuf);
             if (_foreignMarks) cs.SetBuffer(_kCompose, PForeignR, s.Foreign);
+            BindMuscles(_kCompose, s);
             cs.SetInt(PNoField, s.Depth ? 0 : 1); cs.SetInt(PWaveCount, s.Wave ? nWaves : 0); cs.SetFloat(PWaveAmt, 1f); cs.SetFloat(PWaveImpact, Mathf.Clamp01(_set.RippleImpact));
             var amt = BendPose.Amt;
             cs.SetVector(PBendAmt0, new Vector4(amt[0], amt[1], amt[2], amt[3])); cs.SetVector(PBendAmt1, new Vector4(amt[4], amt[5], amt[6], amt[7]));
@@ -1231,7 +1403,23 @@ namespace SfMorph
             var m = r.sharedMesh;
             var bones = r.bones;
             var bind = m.bindposes;
-            if (!m.isReadable) { CalibFail(s, "mesh is not readable"); return; }
+            if (!m.isReadable)
+            {
+                // 0.11.7: her face and neck are GPU-only meshes (no CPU vertices to skin), so they never calibrated and had no dents or
+                // marks since 0.9.7. Unity skins every renderer of one rig into the same convention: take the space a readable renderer
+                // of hers found (rootBone in every log so far), waiting a few tries for one to finish.
+                RendState from = null;
+                foreach (var o in _rs)
+                    if (o != s && o.Space > 0 && o.R != null && (from == null || (o.Space == 1 && from.Space != 1))) from = o;
+                if (from != null)
+                {
+                    s.Space = from.Space;
+                    Plugin.Log.LogInfo("GPU contact: renderer " + s.Name + " space " + SpaceNames[s.Space] + " taken from " + from.Name + " (its mesh is not readable for a CPU check)");
+                    UpdateStatus();
+                }
+                else if (s.CalibTries >= CalibMaxTries + 3) CalibFail(s, "mesh is not readable and no other renderer of hers calibrated");
+                return;
+            }
             var bw = m.boneWeights;
             var verts = m.vertices;
             if (bw.Length != verts.Length || bones.Length != bind.Length || bones.Length == 0) { CalibFail(s, "no usable bone weights/bindposes (bones " + bones.Length + ", bindposes " + bind.Length + ")"); return; }
@@ -1375,6 +1563,9 @@ namespace SfMorph
                 sb.Append(", skirt ").Append((_set.Skirt * 1000f).ToString("0")).Append(" mm, bulge ").Append(_set.Bulge.ToString("0.0#")).Append(_set.Normals ? ", normals" : ", positions only");
                 sb.Append(_set.SelfContact ? ", self " + _selfN + " capsules" : ", self contact off").Append(_set.PartnerBody ? ", partner body " + _pbN : ", partner body off");
                 sb.Append(", bend ").Append(BendPose.Joints).Append(" joints");
+                int mv = 0;
+                for (int i = 0; i < _rs.Count; i++) if (_rs[i].V2 && _rs[i].Bake != null) mv += _rs[i].Bake.MuscleCount;
+                if (_muscleK) sb.Append(mv > 0 ? ", muscles " + mv + " verts" : ", no muscle geometry");
             }
             else if (_v2Failed) sb.Append(", v2 failed (see the log)");
             Status = sb.ToString();
@@ -1449,6 +1640,8 @@ namespace SfMorph
         {
             if (_capBuf != null) { _capBuf.Release(); _capBuf = null; }
             if (_waveBuf != null) { _waveBuf.Release(); _waveBuf = null; }
+            Rel(ref _musDummy4); Rel(ref _musDummy1);
+            _mmap = null; _mmapTried = false;
             _cs = null;
             if (_bundleHeld) { _bundleHeld = false; ShaderBundle.Release(); }
         }
