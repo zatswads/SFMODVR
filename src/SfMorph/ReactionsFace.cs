@@ -69,6 +69,10 @@ namespace SfMorph
         readonly List<ClipInfo>[] _pool = new List<ClipInfo>[NM];
         readonly int[,] _recent = new int[NM, 2];
         readonly System.Random _rng = new System.Random();
+        // 0.9.1: the jaw for audio-driven mouth movement (a voice pack's clips have no lip sync of the game's): the widest jaw opening any
+        // face clip writes, as a rotation relative to her neutral jaw (head frame), found by the survey
+        int _jaw = -1; Quaternion _jawD = Quaternion.identity; float _jawDeg; string _jawFrom = "";
+        public bool HasJaw { get { return _phase == 3 && _jaw >= 0 && _jawDeg >= 2f && _face != null && _face[_jaw] != null; } }
         readonly Dictionary<string, string> _hooked = new Dictionary<string, string>();
         string _map = null;
         int _phase, _next;            // 0 not started, 1 surveying, 2 ranking, 3 done
@@ -153,6 +157,8 @@ namespace SfMorph
                 }
             }
             for (int b = 0; b < nf; b++) { _snapP[b] = _head.InverseTransformPoint(_face[b].position); _snapR[b] = Quaternion.Inverse(_head.rotation) * _face[b].rotation; }
+            _jaw = -1; _jawDeg = 0f; _jawD = Quaternion.identity; _jawFrom = "";
+            for (int b = 0; b < nf; b++) { string jn = _face[b].name.ToLowerInvariant(); if (jn == "jaw_m") { _jaw = b; break; } if (_jaw < 0 && jn.Contains("jaw")) _jaw = b; }
             L("bound to '" + _root.name + "' (" + n + " transforms, " + _rends.Length + " renderers), " + nf + " face bones under Head_M (" + nb + " with a bind pose; eyeballs and hair left out)");
             return nf > 0;
         }
@@ -315,6 +321,7 @@ namespace SfMorph
                     float mm = _head.TransformVector(p - p0).magnitude * 1000f;
                     float deg = ci.RotB[b] ? Quaternion.Angle(q, q0) : 0f;   // an unwritten rotation is the game's current face, not the clip's
                     float s = Mathf.Min(mm, 40f) + 0.2f * Mathf.Min(deg, 90f);
+                    if (b == _jaw && ci.RotB[b] && !ci.Speech && deg > _jawDeg && deg < 35f) { _jawDeg = deg; _jawD = Quaternion.Inverse(q0) * q; _jawFrom = ci.Name; }
                     gs[_grp[b]] += s;
                     if (s > top[b]) top[b] = s;
                 }
@@ -370,6 +377,8 @@ namespace SfMorph
             var sb = new StringBuilder();
             sb.Append(_ranked.Count).Append(" of ").Append(_clips.Count).Append(" clips move her face (surveyed in ").Append((now - _t0).ToString("0.0")).Append(" s)");
             L(sb.ToString());
+            L(_jaw < 0 ? "jaw: no jaw bone among her face bones (no audio-driven mouth)" : _jawDeg < 2f ? "jaw: no clip opens her jaw (no audio-driven mouth)"
+              : "jaw: " + _face[_jaw].name + " opens up to " + _jawDeg.ToString("0") + " deg (widest in '" + _jawFrom + "'): used for the voice pack's mouth");
             for (int i = 0; i < _ranked.Count && i < 40; i += 5)
             {
                 sb.Length = 0;
@@ -715,6 +724,14 @@ namespace SfMorph
         }
 
         public void Stop() { _cur = null; _curMood = -1; _pendMood = -1; }
+
+        // 0.9.1: open 0..1 of the widest jaw opening, on top of what the Animator (and a face clip) left on the jaw this frame.
+        public void JawStep(float open)
+        {
+            if (!HasJaw || !(open > 0.001f) || _anim == null || !_anim.isActiveAndEnabled) return;
+            var t = _face[_jaw];
+            t.localRotation = t.localRotation * Quaternion.SlerpUnclamped(Quaternion.identity, _jawD, Mathf.Clamp01(open));
+        }
 
         // ---------------- the game's hooks ----------------
 

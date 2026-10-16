@@ -41,6 +41,17 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.9.2 (voice-pack lines, audio-driven jaw):
+- Voice packs can now speak: `Sounds\voice\<pack>\lines\nipple_1..3|pussy_1..3|anal_1..3|public_1..3` (the game's line banks by level)
+  and `invite|request|afterglow|guard|ouch`. With Lines on, a voiced touch sometimes speaks the area's line at her level (an area without
+  lines: her general lines; tier 4: sometimes asking for more; tier 1-2 outside sex mode: sometimes inviting), on the moan source, so
+  neither sex mode nor the game's dirty talk is needed. Guarded: a guard line when she turns guarded and sometimes when touched while
+  guarded; afterglow: a line 1.5-3 s after the climax; a hard slap: 40 % an ouch line instead of the exertion. Two packs built from the
+  vamX voices Maive and Anime (personal copies on the user's PC; lines sorted by their file names' transcript and arousal tags).
+- A pack voice moved no lips (the game's lip sync is baked into its own clips): her jaw now follows the pack audio's loudness
+  (AudioSource.GetOutputData, relative to a slow peak, open 30 ms / close 90 ms), up to 75 % of the widest jaw opening any of her face
+  clips writes (found by the face survey, log `jaw: ...`). Needs Face clips on. The game's "moan" trigger is skipped for pack moans then.
+- Voice packs read each clip on first use and keep the last 64 in memory (0.9.0 loaded up to 280 clips at once; a vamX pack has thousands).
 0.9.1 (skin wrinkles redesigned: authored lines faded in per region):
 - On her body the wrinkles were dark zebra stripes over her breasts, shoulders and brow at rest, and ridges over the whole torso; on her
   face they were barely visible. Cause: 0.7.5-0.8.8 synthesised a sine fold pattern wherever any skin compressed, along the compression

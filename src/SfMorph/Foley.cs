@@ -296,23 +296,36 @@ namespace SfMorph
         }
     }
 
-    // A voice pack (0.9.0): her reaction voice from WAV files in BepInEx\plugins\SfMorph\Sounds\voice\<pack>\<category>\*.wav instead of the
-    // game's voice library: breaths (calm / heavy), moans by intensity (low / mid / high), climax and exertion (the short pained or startled
-    // sounds of a slap). Only the selected pack is loaded (on the main thread, when it is chosen), at most PerCat clips per category picked
-    // evenly over the sorted file list, so a big pack doesn't fill the memory. The game's own lines and feeling sounds are another voice, so
-    // the director keeps them off while a pack is on.
+
+    // A voice pack (0.9.0; lines and lazy loading 0.9.1): her reaction voice from WAV files in
+    // BepInEx\plugins\SfMorph\Sounds\voice\<pack>\ instead of the game's voice library:
+    //   <category>\*.wav  breaths (calm / heavy), moans by intensity (low / mid / high), climax, exertion (short pained / startled sounds);
+    //   lines\<bank>[_<level>]\*.wav  spoken lines: nipple / pussy / anal / public by level 1-3 (like the game's DirtyTalk_Library banks),
+    //   invite, request (asking for more), afterglow, guard (not yet / give me space), ouch (a slap).
+    // Choosing a pack only lists its files; a clip is read when it is first picked (a few ms on the main thread) and the last 64 clips stay
+    // in memory, so a pack of thousands of lines costs no more than that.
     internal sealed class VoicePack
     {
         public const int BreathCalm = 0, BreathHeavy = 1, MoanLow = 2, MoanMid = 3, MoanHigh = 4, Climax = 5, Exertion = 6, NC = 7;
         public static readonly string[] Folders = { "breath_calm", "breath_heavy", "moan_low", "moan_mid", "moan_high", "climax", "exertion" };
-        const int PerCat = 40;
+        public static readonly string[] LineBanks = { "nipple", "pussy", "anal", "public" };   // by level 1-3, same order as ReactionsGame.LineCats
+        public static readonly string[] StateLines = { "invite", "request", "afterglow", "guard", "ouch" };
+        public const int SInvite = 0, SRequest = 1, SAfterglow = 2, SGuard = 3, SOuch = 4;
+        const int Cache = 64;
 
-        readonly List<UnityEngine.Object>[] _clips = new List<UnityEngine.Object>[NC];
-        readonly List<float>[] _len = new List<float>[NC];
-        readonly int[][] _recent = new int[NC][];
+        sealed class Cat { public string[] Files = new string[0]; public readonly int[] Recent = { -1, -1, -1, -1, -1, -1 }; }
+        readonly Cat[] _cats = new Cat[NC];
+        readonly Cat[] _lines = new Cat[4 * 3];
+        readonly Cat[] _state = new Cat[5];
+        readonly Dictionary<string, UnityEngine.Object> _clip = new Dictionary<string, UnityEngine.Object>();
+        readonly Dictionary<string, float> _lenOf = new Dictionary<string, float>();
+        readonly LinkedList<string> _lru = new LinkedList<string>();
         readonly System.Random _rng = new System.Random();
+        MethodInfo _create, _setData;
         public string Name = "", Summary = "";
         public bool Loaded;
+        public bool HasLines;
+        public UnityEngine.Object Busy1, Busy2;   // clips the game's sources hold now: never evicted
 
         public static string Root { get { return Path.Combine(SkinFoley.Dir, "voice"); } }
 
@@ -331,9 +344,18 @@ namespace SfMorph
             catch (Exception) { return new string[0]; }
         }
 
-        public bool Has(int c) { return Loaded && _clips[c] != null && _clips[c].Count > 0; }
+        static Cat Scan(string d)
+        {
+            var c = new Cat();
+            if (Directory.Exists(d)) { c.Files = Directory.GetFiles(d, "*.wav"); Array.Sort(c.Files, StringComparer.OrdinalIgnoreCase); }
+            return c;
+        }
 
-        // Loads pack `name` (empty: unloads). tClip = UnityEngine.AudioClip. Logs one line; never throws.
+        public bool Has(int c) { return Loaded && _cats[c] != null && _cats[c].Files.Length > 0; }
+        bool HasLine(int bank, int lvl) { return _lines[bank * 3 + lvl - 1] != null && _lines[bank * 3 + lvl - 1].Files.Length > 0; }
+        public bool HasState(int s) { return Loaded && _state[s] != null && _state[s].Files.Length > 0; }
+
+        // Lists pack `name` (empty: unloads). tClip = UnityEngine.AudioClip. Logs one line; never throws.
         public void Load(string name, Type tClip)
         {
             Unload();
@@ -341,55 +363,46 @@ namespace SfMorph
             if (Name.Length == 0) { Summary = ""; return; }
             try
             {
-                var create = tClip != null ? tClip.GetMethod("Create", new[] { typeof(string), typeof(int), typeof(int), typeof(int), typeof(bool) }) : null;
-                var setData = tClip != null ? tClip.GetMethod("SetData", new[] { typeof(float[]), typeof(int) }) : null;
+                _create = tClip != null ? tClip.GetMethod("Create", new[] { typeof(string), typeof(int), typeof(int), typeof(int), typeof(bool) }) : null;
+                _setData = tClip != null ? tClip.GetMethod("SetData", new[] { typeof(float[]), typeof(int) }) : null;
                 string dir = Path.Combine(Root, Name);
-                if (create == null || setData == null || !Directory.Exists(dir)) { Summary = create == null ? "AudioClip.Create not found" : "folder not found: " + dir; Plugin.Log.LogWarning("Voice pack '" + Name + "': " + Summary); return; }
-                var sw = System.Diagnostics.Stopwatch.StartNew();
+                if (_create == null || _setData == null || !Directory.Exists(dir)) { Summary = _create == null ? "AudioClip.Create not found" : "folder not found: " + dir; Plugin.Log.LogWarning("Voice pack '" + Name + "': " + Summary); return; }
                 var sb = new System.Text.StringBuilder();
-                int total = 0, bad = 0;
+                int total = 0, lines = 0;
                 for (int c = 0; c < NC; c++)
                 {
-                    _clips[c] = new List<UnityEngine.Object>(); _len[c] = new List<float>(); _recent[c] = new[] { -1, -1, -1, -1 };
-                    string d = Path.Combine(dir, Folders[c]);
-                    if (!Directory.Exists(d)) continue;
-                    var files = Directory.GetFiles(d, "*.wav");
-                    Array.Sort(files, StringComparer.OrdinalIgnoreCase);
-                    int n = files.Length, take = Math.Min(n, PerCat);
-                    for (int k = 0; k < take; k++)
-                    {
-                        string f = files[take == n ? k : (int)((long)k * n / take)];   // evenly over the list
-                        float[] s; int rate; string why;
-                        if (!SkinFoley.ReadWav(f, c == BreathCalm ? 12f : 8f, true, out s, out rate, out why)) { bad++; continue; }
-                        var clip = create.Invoke(null, new object[] { "SfVoice_" + Name + "_" + Path.GetFileNameWithoutExtension(f), s.Length, 1, rate, false }) as UnityEngine.Object;
-                        if (clip == null) { bad++; continue; }
-                        setData.Invoke(clip, new object[] { s, 0 });
-                        clip.hideFlags = HideFlags.DontUnloadUnusedAsset;
-                        _clips[c].Add(clip); _len[c].Add(s.Length / (float)rate);
-                    }
-                    total += _clips[c].Count;
+                    _cats[c] = Scan(Path.Combine(dir, Folders[c]));
+                    total += _cats[c].Files.Length;
                     if (sb.Length > 0) sb.Append(", ");
-                    sb.Append(Folders[c]).Append(' ').Append(_clips[c].Count);
-                    if (n > take) sb.Append('/').Append(n);
+                    sb.Append(Folders[c]).Append(' ').Append(_cats[c].Files.Length);
                 }
-                Loaded = total > 0;
-                Summary = (Loaded ? "" : "no clips: ") + sb + (bad > 0 ? "; " + bad + " file(s) skipped" : "");
-                Plugin.Log.LogInfo("Voice pack '" + Name + "': " + Summary + " (" + sw.ElapsedMilliseconds + " ms)");
+                string ld = Path.Combine(dir, "lines");
+                var lb = new System.Text.StringBuilder();
+                for (int b = 0; b < 4; b++)
+                {
+                    lb.Append(lb.Length > 0 ? ", " : "").Append(LineBanks[b]);
+                    for (int l = 1; l <= 3; l++) { var c = Scan(Path.Combine(ld, LineBanks[b] + "_" + l)); _lines[b * 3 + l - 1] = c; lines += c.Files.Length; lb.Append(l == 1 ? " " : "/").Append(c.Files.Length); }
+                }
+                for (int s = 0; s < StateLines.Length; s++) { _state[s] = Scan(Path.Combine(ld, StateLines[s])); lines += _state[s].Files.Length; lb.Append(", ").Append(StateLines[s]).Append(' ').Append(_state[s].Files.Length); }
+                HasLines = lines > 0;
+                Loaded = total + lines > 0;
+                Summary = (Loaded ? "" : "no clips: ") + sb + (HasLines ? "; lines: " + lb : "; no lines");
+                Plugin.Log.LogInfo("Voice pack '" + Name + "': " + Summary + " (read as they are first used, " + Cache + " kept in memory)");
             }
             catch (Exception e) { Unload(); Summary = "failed: " + e.Message; Plugin.Log.LogWarning("Voice pack '" + name + "' failed: " + e); }
         }
 
         public void Unload()
         {
-            for (int c = 0; c < NC; c++)
-            {
-                if (_clips[c] != null) foreach (var o in _clips[c]) try { if (o != null) UnityEngine.Object.Destroy(o); } catch (Exception) { }
-                _clips[c] = null; _len[c] = null;
-            }
-            Loaded = false;
+            foreach (var kv in _clip) try { if (kv.Value != null) UnityEngine.Object.Destroy(kv.Value); } catch (Exception) { }
+            _clip.Clear(); _lenOf.Clear(); _lru.Clear();
+            for (int c = 0; c < NC; c++) _cats[c] = null;
+            for (int i = 0; i < _lines.Length; i++) _lines[i] = null;
+            for (int i = 0; i < _state.Length; i++) _state[i] = null;
+            Loaded = false; HasLines = false;
         }
 
-        // A clip of category c (not one of the last 4 when there are more), or of the nearest category that has clips; null = none.
+        // A clip of category c (not one of the last 6 when there are more), or of the nearest category that has files; null = none.
         public UnityEngine.Object Pick(int c, out float len)
         {
             len = 0f;
@@ -403,13 +416,83 @@ namespace SfMorph
                 foreach (int o in near) if (Has(o)) { c = o; break; }
                 if (c < 0) return null;
             }
-            var l = _clips[c]; var r = _recent[c];
-            int n = l.Count, hold = Math.Min(r.Length, n - 1), idx = -1;
-            for (int t = 0; t < 12 && idx < 0; t++) { int k = _rng.Next(n); if (Array.IndexOf(r, k, 0, hold) < 0) idx = k; }
-            if (idx < 0) idx = _rng.Next(n);
-            Array.Copy(r, 0, r, 1, r.Length - 1); r[0] = idx;
-            len = _len[c][idx];
-            return l[idx];
+            return From(_cats[c], out len);
+        }
+
+        // A line of bank b (0 nipple, 1 pussy, 2 anal, 3 public) at level 1-3: the nearest level of that bank, else the public bank at that
+        // level (an area without lines speaks her general lines). Null = none.
+        public UnityEngine.Object PickLine(int b, int lvl, out float len, out int gotBank, out int gotLvl)
+        {
+            len = 0f; gotBank = -1; gotLvl = 0;
+            if (!Loaded || !HasLines) return null;
+            lvl = Mathf.Clamp(lvl, 1, 3);
+            foreach (int bank in b == 3 ? new[] { 3 } : new[] { b, 3 })
+                foreach (int l in new[] { lvl, lvl - 1, lvl + 1, lvl - 2, lvl + 2 })
+                {
+                    if (l < 1 || l > 3 || !HasLine(bank, l)) continue;
+                    var clip = From(_lines[bank * 3 + l - 1], out len);
+                    if (clip != null) { gotBank = bank; gotLvl = l; return clip; }
+                }
+            return null;
+        }
+
+        public UnityEngine.Object PickState(int s, out float len)
+        {
+            len = 0f;
+            if (!HasState(s)) return null;
+            return From(_state[s], out len);
+        }
+
+        UnityEngine.Object From(Cat c, out float len)
+        {
+            len = 0f;
+            int n = c.Files.Length;
+            if (n == 0) return null;
+            int hold = Math.Min(c.Recent.Length, n - 1);
+            for (int tries = 0; tries < 4; tries++)
+            {
+                int idx = -1;
+                for (int t = 0; t < 12 && idx < 0; t++) { int k = _rng.Next(n); if (Array.IndexOf(c.Recent, k, 0, hold) < 0) idx = k; }
+                if (idx < 0) idx = _rng.Next(n);
+                Array.Copy(c.Recent, 0, c.Recent, 1, c.Recent.Length - 1); c.Recent[0] = idx;
+                var clip = Get(c.Files[idx], out len);
+                if (clip != null) return clip;          // an unreadable file: try another
+            }
+            return null;
+        }
+
+        // The clip of a file, read on first use; the least recently used beyond Cache are destroyed (not one a source holds now).
+        UnityEngine.Object Get(string path, out float len)
+        {
+            UnityEngine.Object clip;
+            if (_clip.TryGetValue(path, out clip) && clip != null)
+            {
+                _lru.Remove(path); _lru.AddFirst(path);
+                len = _lenOf[path];
+                return clip;
+            }
+            len = 0f;
+            float[] s; int rate; string why;
+            if (!SkinFoley.ReadWav(path, 12f, true, out s, out rate, out why)) { Plugin.Log.LogWarning("Voice pack: skipped " + Path.GetFileName(path) + " (" + why + ")"); return null; }
+            clip = _create.Invoke(null, new object[] { "SfVoice_" + Path.GetFileNameWithoutExtension(path), s.Length, 1, rate, false }) as UnityEngine.Object;
+            if (clip == null) return null;
+            _setData.Invoke(clip, new object[] { s, 0 });
+            clip.hideFlags = HideFlags.DontUnloadUnusedAsset;
+            len = s.Length / (float)rate;
+            _clip[path] = clip; _lenOf[path] = len; _lru.AddFirst(path);
+            var node = _lru.Last;
+            while (_clip.Count > Cache && node != null)
+            {
+                var prev = node.Previous;
+                var o = _clip[node.Value];
+                if (!ReferenceEquals(o, Busy1) && !ReferenceEquals(o, Busy2) && !ReferenceEquals(o, clip))
+                {
+                    try { if (o != null) UnityEngine.Object.Destroy(o); } catch (Exception) { }
+                    _clip.Remove(node.Value); _lenOf.Remove(node.Value); _lru.Remove(node);
+                }
+                node = prev;
+            }
+            return clip;
         }
     }
 }

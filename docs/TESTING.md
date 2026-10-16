@@ -97,6 +97,14 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.9.2 (voice-pack lines, audio-driven jaw)
+
+- [ ] Voice pack Maive (or Anime): log `Voice pack 'Maive': ... lines: nipple 12/7/4, pussy 14/27/28, ...`.
+- [ ] Lines on: caressing her breasts / between her legs / thighs speaks fitting lines at her excitement; log `line nipple Lv2 '...' (pack)`.
+- [ ] Turn her guarded (several hard slaps): a guard line ("not yet", "give me some space"); touching her while guarded sometimes too.
+- [ ] Hard slaps: sometimes an ouch line instead of a gasp. After the climax: an afterglow line within ~3 s.
+- [ ] Her jaw moves with the pack's voice (log `jaw: Jaw_M opens up to N deg ...` after the face survey); not with the game's own voice.
+- [ ] No stutter when a new line plays (each is read on first use, a few ms).
 ## 0.9.1 (authored wrinkles)
 
 Copy both `SfMorph.dll` and `sfmorph_shaders` (the maps are inside the bundle; an old bundle is refused: `Wrinkles: off: the shader bundle

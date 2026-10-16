@@ -290,7 +290,7 @@ namespace SfMorph
             GUILayout.EndHorizontal();
             var vp = ReactionsGame.Pack;
             if (pk.Length > 0) GUILayout.Label(vp.Name == pk && vp.Summary.Length > 0 ? (vp.Loaded ? "" : "off: ") + vp.Summary : "loads within a second (in the game scene)", vp.Name == pk && !vp.Loaded && vp.Summary.Length > 0 ? _off : _hint);
-            GUILayout.Label("A voice pack replaces her reaction moans, breaths, slap exertions and climax (the game's own lines and feeling sounds stay off while one is on).", _hint);
+            GUILayout.Label("A voice pack replaces her reaction moans, breaths, slap exertions and climax; a pack with lines also speaks for the touched area (with Lines on, no sex mode needed), guards, asks for more and talks in the afterglow. Her jaw follows the pack's audio (needs Face clips). The game's own lines and feeling sounds stay off while a pack is on.", _hint);
             string vfs = react.VoiceFxStatus;
             GUILayout.Label("Pitch: higher or lower without changing her speed (the lip sync stays). Formant: the size of her voice, below 1 fuller, above 1 smaller. 1 = as recorded."
                             + (vfs.Length > 0 ? " Now: " + vfs + "." : ""), _hint);

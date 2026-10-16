@@ -1440,16 +1440,68 @@ namespace SfMorph
             Pack.Load(name, _pClip.PropertyType);
         }
 
+        // 0.9.1: a pack line (bank 0 nipple, 1 pussy, 2 anal, 3 public at level 1-3; falls back to the nearest level, then public) or a state
+        // line (VoicePack.SInvite..SOuch) on the moan source, without the "moan" trigger (the mouth follows the audio, Reactions.FaceStep).
+        public bool PackLine(int bank, int lvl, out string what)
+        {
+            what = "";
+            if (!Found || !Pack.Loaded) return false;
+            float len; int gb, gl;
+            var clip = Pack.PickLine(bank, lvl, out len, out gb, out gl);
+            if (clip == null) return false;
+            what = VoicePack.LineBanks[gb] + " Lv" + gl + " '" + clip.name + "'";
+            return PlayPack(clip, len, 1f, true, false, true);
+        }
+
+        public bool PackState(int s, out string what)
+        {
+            what = "";
+            if (!Found || !Pack.Loaded) return false;
+            float len;
+            var clip = Pack.PickState(s, out len);
+            if (clip == null) return false;
+            what = VoicePack.StateLines[s] + " '" + clip.name + "'";
+            return PlayPack(clip, len, 1f, true, false, true);
+        }
+
+        // How loud the pack voice on the moan source is now (RMS of its last 1024 output samples), -1 when no pack clip is sounding. For the jaw.
+        MethodInfo _miOut; bool _outTried;
+        readonly float[] _outBuf = new float[1024];
+        readonly object[] _outArgs = new object[2];
+        float _packBreathEnd;
+        public float PackLevel()
+        {
+            if (!Found || _srcMoan == null || Dead(_srcMoan)) return -1f;
+            bool sounding = (_packClip && Playing(_srcMoan)) || _now < _packBreathEnd;
+            if (!sounding) return -1f;
+            if (!_outTried) { _outTried = true; _miOut = _tSrc != null ? _tSrc.GetMethod("GetOutputData", new[] { typeof(float[]), typeof(int) }) : null; if (_miOut == null) LogOnce("getout", "AudioSource.GetOutputData not found: no audio-driven mouth"); }
+            if (_miOut == null) return -1f;
+            try
+            {
+                _outArgs[0] = _outBuf; _outArgs[1] = 0;
+                _miOut.Invoke(_srcMoan, _outArgs);
+                double e = 0; for (int i = 0; i < _outBuf.Length; i++) e += _outBuf[i] * _outBuf[i];
+                return (float)Math.Sqrt(e / _outBuf.Length);
+            }
+            catch (Exception ex) { LogOnce("getout:" + ex.GetType().Name, "reading the voice level failed: " + ex.Message); _miOut = null; return -1f; }
+        }
+
         // A pack clip of category c on the moan source, like MoanClip (talking stopped, a sounding moan cut, the voice loop stopped, the
         // "moan" trigger for the mouth). pitch: AudioSource.pitch, restored when it ends.
         public bool PackVoice(int c, float pitch, bool stopDirty, bool trigger = true)
         {
-            if (!Found || !Pack.Loaded || _srcMoan == null || Dead(_srcMoan) || _pClip == null || _miPlay == null) return false;
+            if (!Found || !Pack.Loaded) return false;
+            float len;
+            var clip = Pack.Pick(c, out len);
+            if (clip == null) return false;
+            return PlayPack(clip, len, pitch, stopDirty, trigger, false);
+        }
+
+        bool PlayPack(UnityEngine.Object clip, float len, float pitch, bool stopDirty, bool trigger, bool line)
+        {
+            if (_srcMoan == null || Dead(_srcMoan) || _pClip == null || _miPlay == null) return false;
             try
             {
-                float len;
-                var clip = Pack.Pick(c, out len);
-                if (clip == null) return false;
                 if (!_pitchHold) _pitchBase = GetPitch(_srcMoan, 1f);
                 if (stopDirty) StopDirtyTalk();
                 if (_miStop != null && (Playing(_srcMoan) || _now < _ownEnd)) { _miStop.Invoke(_srcMoan, null); _ownEnd = 0f; OwnVoicePlaying = false; }
@@ -1460,6 +1512,8 @@ namespace SfMorph
                 _miPlay.Invoke(_srcMoan, null);
                 if (_srcVoice != null && !Dead(_srcVoice) && _miStop != null) _miStop.Invoke(_srcVoice, null);
                 LastClip = clip; LastClipLength = len / Mathf.Max(0.5f, pitch);
+                Pack.Busy1 = clip;
+                if (line) { LastLineClip = clip; LastLineLength = LastClipLength; }
                 if (trigger && HasAnim) { _anim.SetTrigger(_hMoan); MarkTrigger(); }
                 return true;
             }
@@ -1479,8 +1533,8 @@ namespace SfMorph
                 if (clip == null) return false;
                 _argOneShot[0] = clip; _argOneShot[1] = BreathVolume * 1.4f;
                 _miOneShot.Invoke(_srcMoan, _argOneShot);
-                LastClip = clip; LastClipLength = len;
-                _ownEnd = _now + len; _ownT0 = _now; _ownOneShot = true;
+                LastClip = clip; LastClipLength = len; Pack.Busy2 = clip;
+                _ownEnd = _now + len; _ownT0 = _now; _ownOneShot = true; _packBreathEnd = _now + len;
                 OwnVoicePlaying = true;
                 return true;
             }

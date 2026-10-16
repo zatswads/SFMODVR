@@ -137,6 +137,8 @@ namespace SfMorph
         // 0.9.0 face: the next pleasure face not before this (a random 2.5-5.5 s after each), and the voice-onset edge
         float _faceLock = -100f;
         bool _voiceWas;
+        // 0.9.1: the pack's state lines (guard, afterglow) and the audio-driven jaw
+        float _lastStateLineT = -100f, _afterLineAt, _jawOpen, _jawPeak = 0.05f;
         float _flush, _blushCur, _away, _gazeHold;
         bool _blushSent, _gazeSent, _wasOn, _bridgeLogged, _slapFail;
         int _evN, _barE = -1, _barP = -1, _stKey = int.MinValue, _slKey = int.MinValue;
@@ -260,6 +262,7 @@ namespace SfMorph
             _startledAt = -100f; _nHits = 0; _quiet = false;
             _lastLineT = -100f; _lastEnterT = -100f; _enterTier = 0; _lastFaceClipT = -100f;
             _lastPatT = -100f; _lastGrabT = -100f; _faceLock = -100f; _voiceWas = false; _rubLvl = 0f;
+            _lastStateLineT = -100f; _afterLineAt = 0f; _jawOpen = 0f;
             System.Array.Clear(_zArr, 0, NZ); System.Array.Clear(_zCaress, 0, NZ); System.Array.Clear(_zGrope, 0, NZ); System.Array.Clear(_zAny, 0, NZ);
             ClearR();
         }
@@ -521,6 +524,8 @@ namespace SfMorph
                 if (voiced) _vPlayed++;
                 float chance = tier == 1 ? 0.15f + 0.1f * Tier : tier == 2 ? 0.5f + 0.1f * Tier : tier == 3 ? 0.6f + 0.1f * Tier : 1f;
                 if (tier <= 2 && (wasGuarded || State == RState.Startled)) chance = 0f;
+                // 0.9.1: touched while she is guarded: sometimes a guard line from the pack ("not yet", "give me some space")
+                if (!voiced && !_quiet && tier <= 2 && wasGuarded && s.Lines && Rand() < 0.35f && TryStateLine(VoicePack.SGuard, "touched while guarded")) { voiced = true; Note("guard line"); }
                 if (test) chance = 1f;
                 if (voiced) { }                    // a line or feeling sound carried the voice
                 else if (_quiet) { if (tier >= 3) { Skip("same swing"); Note("voice skipped (same swing)"); } }
@@ -656,6 +661,18 @@ namespace SfMorph
             // the mouth stays the game's while she speaks or moans (the lip sync is in the game's clips)
             bool mouthFree = !((_g.MoanPlaying && !_g.MoanTail) || _g.OwnVoicePlaying || _g.DirtyTalkPlaying || _g.DialoguePlaying);
             _face.Step(dt, mouthFree, _g.SexFacialPlaying ? 0.6f : 1f);
+            // 0.9.1: a voice pack's clip has no lip sync of the game's: her jaw follows its loudness (relative to a slow peak follower, so quiet
+            // and loud packs both move it; fast open 30 ms, close 90 ms)
+            float lv = _g.PackLevel();
+            float target = 0f;
+            if (lv >= 0f)
+            {
+                _jawPeak = Mathf.Max(lv, Mathf.Max(0.02f, _jawPeak - 0.05f * _jawPeak * dt));
+                float db = 20f * Mathf.Log10(Mathf.Max(lv, 1e-5f) / _jawPeak);   // 0 at the recent peak
+                target = Mathf.Clamp01((db + 24f) / 22f);
+            }
+            _jawOpen = Mathf.MoveTowards(_jawOpen, target, (target > _jawOpen ? 1f / 0.03f : 1f / 0.09f) * dt);
+            if (_jawOpen > 0.001f) _face.JawStep(_jawOpen * 0.75f);
         }
 
         // The face clip for a touch: pain on hard slaps, surprise on soft ones; caress / grope: pleasure by her excitement on erogenous zones,
@@ -783,12 +800,12 @@ namespace SfMorph
         // The arbiter for lines and feeling sounds, stricter than the moans' (no slap goes through): never over dialogue, a kiss, the game's
         // feeling loops, its dirty talk or dirty-talk pause, or a moan still sounding. Lines need sex / foreplay mode and the game's dirty talk on
         // (the game mutes its dirty-talk source otherwise). test: no gaps.
-        string LineBlock(bool feel, bool test, bool facePauseOk = false)
+        string LineBlock(bool feel, bool test, bool facePauseOk = false, bool pack = false)
         {
             if (!_g.Found) return "no game link";
             if (!_g.VoiceOn) return "voice off in the game";
-            if (!feel && !_g.InSexMode) return "outside sex mode";
-            if (!feel && !_g.DirtyTalkOn) return "dirty talk is off in the game";
+            if (!feel && !pack && !_g.InSexMode) return "outside sex mode";
+            if (!feel && !pack && !_g.DirtyTalkOn) return "dirty talk is off in the game";
             if (!facePauseOk && (_g.FunctionPause || _g.FacialLayer == "off")) return "game face paused";
             if (_g.DialoguePlaying) return _g.DialogueWhy.Length > 0 ? _g.DialogueWhy : "dialogue";
             if (_g.SexFacialPlaying) return "sex facial";
@@ -810,7 +827,8 @@ namespace SfMorph
         bool TryLine(int zone, HerBody.Seg g, Vector3 pt, bool test)
         {
             int cat = LineCatOf(zone, g, pt);
-            if (cat < 0 || !_g.HasLines || ReactionsGame.Pack.Loaded) return false;   // 0.9.0: the game's lines are another voice than the pack
+            if (ReactionsGame.Pack.Loaded) return TryPackLine(cat, test);   // 0.9.1: the pack's own lines (the game's are another voice)
+            if (cat < 0 || !_g.HasLines) return false;
             int lvl = LineLevelOf(Tier);
             if (lvl == 0 || _now - _lastLineT < LineGap()) return false;
             if (!(_s.LineChance >= 1f || Rand() < _s.LineChance)) return false;
@@ -821,6 +839,44 @@ namespace SfMorph
             if (!_g.SpeakLine(cat, lvl, _s.LinesGamePath, out how)) { Skip("line failed"); Note("line failed (" + how + ")"); return false; }
             _lastLineT = _now; _lastVoiceT = _now;
             Note("line " + ReactionsGame.LineCats[_g.LineCat] + " Lv" + _g.LineLevel + " '" + (_g.LastLineClip != null ? _g.LastLineClip.name : "?") + "' via " + how);
+            return true;
+        }
+
+        // 0.9.1: a line from the voice pack: the area's bank at her level (an area without lines, and chest / belly / ..., her general lines);
+        // at excitement tier 4 sometimes asking for more (request), at tier 1-2 outside sex mode sometimes inviting (invite). Same gaps and
+        // chance as the game's lines; needs neither sex mode nor the game's dirty talk (it plays on the moan source).
+        bool TryPackLine(int cat, bool test)
+        {
+            var pk = ReactionsGame.Pack;
+            if (!pk.HasLines) return false;
+            int lvl = LineLevelOf(Tier);
+            if (lvl == 0 || (!test && _now - _lastLineT < LineGap())) return false;
+            if (!test && !(_s.LineChance >= 1f || Rand() < _s.LineChance)) return false;
+            if (_g.Found) _g.ReadGatesNow(_now);
+            string b = LineBlock(false, test, false, true);
+            if (b != null) { Skip("line: " + b); Note("line skipped (" + b + ")"); return false; }
+            string what; bool ok;
+            if (Tier >= 4 && pk.HasState(VoicePack.SRequest) && Rand() < 0.35f) ok = _g.PackState(VoicePack.SRequest, out what);
+            else if (Tier <= 2 && !_g.InSexMode && pk.HasState(VoicePack.SInvite) && Rand() < 0.25f) ok = _g.PackState(VoicePack.SInvite, out what);
+            else ok = _g.PackLine(cat < 0 ? 3 : cat, lvl, out what);
+            if (!ok) { Skip("line failed"); Note("line failed (pack)"); return false; }
+            _lastLineT = _now; _lastVoiceT = _now;
+            Note("line " + what + " (pack)");
+            return true;
+        }
+
+        // A state line from the pack (guard, afterglow): own 6 s gap, the lines' arbiter. True = it plays.
+        bool TryStateLine(int st, string why)
+        {
+            var pk = ReactionsGame.Pack;
+            if (_s == null || !_s.Voice || !_s.Lines || !pk.HasState(st) || _now - _lastStateLineT < 6f) return false;
+            if (_g.Found) _g.ReadGatesNow(_now);
+            string b = LineBlock(false, false, false, true);
+            if (b != null && b != "voice gap") { Skip("state line: " + b); return false; }
+            string what;
+            if (!_g.PackState(st, out what)) return false;
+            _lastStateLineT = _now; _lastLineT = _now; _lastVoiceT = _now; _vPlayed++;
+            if (_s.Log >= 1) L("line " + what + " (pack, " + why + ")");
             return true;
         }
 
@@ -849,7 +905,11 @@ namespace SfMorph
             {
                 int c = tier >= 6 ? VoicePack.Climax : tier >= 4 ? VoicePack.Exertion : bank == 0 ? VoicePack.MoanLow : bank == 1 ? VoicePack.MoanMid : VoicePack.MoanHigh;
                 if ((cut || _g.MoanTail) && (_g.MoanPlaying || _g.OwnVoicePlaying)) _g.StopMoan();
-                if (!_g.PackVoice(c, pitch, _g.DirtyTalkPlaying, true)) return false;
+                // 0.9.1: a hard slap sometimes says it ("ouch", "be gentle") instead of the exertion, when lines are on
+                string what;
+                if (tier >= 4 && tier < 6 && _s.Lines && ReactionsGame.Pack.HasState(VoicePack.SOuch) && Rand() < 0.4f && _g.PackState(VoicePack.SOuch, out what))
+                { _lastVoiceT = _now; _resetAt = _now + 1f; _moanKind = "pack line " + what + (cut ? ", cut" : ""); return true; }
+                if (!_g.PackVoice(c, pitch, _g.DirtyTalkPlaying, !_face.HasJaw)) return false;
                 _lastVoiceT = _now; _resetAt = _now + 1f;
                 _moanKind = "pack " + VoicePack.Folders[c] + (cut ? ", cut" : "");
                 return true;
@@ -947,6 +1007,9 @@ namespace SfMorph
         {
             if (st == State) { _until = _now + duration; return; }
             RState old = State;
+            // 0.9.1: the pack's state lines: guarded (at once, if the voice is free) and afterglow (1.5-3 s after the climax ends)
+            if (st == RState.Guarded) TryStateLine(VoicePack.SGuard, "guarded");
+            if (st == RState.Afterglow && old == RState.Climax) _afterLineAt = _now + 1.5f + 1.5f * Rand();
             State = st; _until = duration > 0f ? _now + duration : 0f; _guardHold = 0f;
             _stChanges++;
             if (_s != null && _s.Log >= 1)
@@ -1047,6 +1110,12 @@ namespace SfMorph
                     }
                 }
             }
+            if (_afterLineAt > 0f && _now >= _afterLineAt)
+            {
+                _afterLineAt = 0f;
+                if (State == RState.Afterglow && TryStateLine(VoicePack.SAfterglow, "afterglow")) _nextBreathAt = Mathf.Max(_nextBreathAt, _now + _g.LastLineLength + 2f);
+            }
+            if (State == RState.Climax) { }
             else if (State == RState.Afterglow && s.Voice && _g.Found && _now >= _nextBreathAt)
             {
                 _nextBreathAt = _now + 4f + Rand() * 2f;
