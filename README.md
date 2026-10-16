@@ -41,6 +41,14 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.9.3 (voice pitch / formant redone):
+- Voice pitch / formant sounded robotic and the formant slider barely did what it says: 0.9.0 shifted the linear-prediction residual
+  with a fixed 25 ms delay-line window, which smeared her glottal pulses at every crossfade and blurred the envelope. Now TD-PSOLA:
+  her pitch is tracked (YIN, 80-900 Hz), the voice is cut into one-pulse grains (one period either side of each pulse), and they are
+  laid down at the new period (pitch) and resampled (formant); breaths and hiss keep their own timing. Checked offline on real lines
+  and moans: pitch 1.20 moves 314 -> 378 Hz, formant alone leaves the pitch, formant 1.15 / 0.88 moves a known vowel's formants up 19 % /
+  down 9 %, no clicks or added hiss. Latency while on about 45 ms (bypassed at 1 / 1).
+
 0.9.2 (voice-pack lines, audio-driven jaw):
 - Voice packs can now speak: `Sounds\voice\<pack>\lines\nipple_1..3|pussy_1..3|anal_1..3|public_1..3` (the game's line banks by level)
   and `invite|request|afterglow|guard|ouch`. With Lines on, a voiced touch sometimes speaks the area's line at her level (an area without

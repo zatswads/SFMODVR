@@ -97,6 +97,11 @@ Debug = Activation: red where her face folds in expressions, none at rest; (2) D
 for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a bone slider, press Recapture: no red at rest;
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
+## 0.9.3 (voice pitch / formant redone)
+
+- [ ] Voice pitch 1.2: higher, same speed, natural (no buzz or metallic ring); 0.85: lower, still natural. Long moans: no warble.
+- [ ] Voice formant 1.15 alone: smaller / younger, same pitch; 0.88: fuller. Lip sync unchanged (~45 ms late at most).
+
 ## 0.9.2 (voice-pack lines, audio-driven jaw)
 
 - [ ] Voice pack Maive (or Anime): log `Voice pack 'Maive': ... lines: nipple 12/7/4, pussy 14/27/28, ...`.
