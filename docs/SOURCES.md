@@ -170,7 +170,12 @@ Run 2026-10-16, RKS Krista 9 (G9 FBX from `daz_export.dsa`) on export Reika-2026
   duplicate skeleton (`head.001` ...), the meshes bone-parented to their figure root *and* skinned to the duplicates (a
   double transform: the mouth and eyes floated off her in the first renders). The runtime must rebind them (below); the
   check script reparents them and poses the copies from the main bones.
-- open for step 1: the same check on a real recording from a sex scene (the user presses *Record 6 s* once).
+- real recording (Room_Scene, 6 s at 10 fps, 254 bones; 4 frames rendered, the cameras follow her pelvis and facing): every
+  limb and finger segment again 0.00 degrees from hers, the trunk within 2.3 degrees; the renders match pose for pose (hands
+  on hips, arms out, bending forward with a shrug). Hands 39-63 mm from hers, feet 34-43 mm, head 30-40 mm.
+- the recording shows **self-contact**: her fists rest on her own hips, Krista's hover beside hers (Krista's hips are
+  narrower). IK to her wrists would not fix it (her hips are wider). Contacts with her own body need targets relative to the
+  avatar's surface (below).
 
 ### The retarget (what the plugin would run every frame)
 
@@ -192,21 +197,27 @@ pose (from her SkinnedMeshRenderers' bind poses, as Export's skeleton.txt), so h
 6. **IK** (weighted): two-bone IK of arms / legs to her wrists / ankles, pole at her elbow / knee; hand and foot keep
    `D_h A`. Weight 1 only where positions matter: her feet on the floor, her hands while planted (Overlap's planted lock) or
    held (Embody, a partner hand on her wrist); 0 otherwise, which keeps the natural bends (see the numbers above).
+   **Self-contact** (her hand on her own hip, thigh, breast, face): the target is not her wrist but the same place on the
+   avatar's body: her palm's nearest HerBody segment, the surface point (segment, height along it, angle around it) and the
+   gap there, rebuilt on the avatar's refitted segment (the HerBody refit of v1); weight by that gap (full within ~3 cm).
 7. **When**: in a PlayerLoop step right before `PostLateUpdate.UpdateAllSkinnedMeshes`, the point PoseRecorder samples
    (after the Animator, FinalIK, DynamicBone, the face Animator and our ApplyStep / Overlap / Embody): a recording is exactly
    the avatar's input, so the offline check covers the runtime maths.
 
-### Her reference pose: bind for the body, her neutral face for the face
+### Her reference pose
 
-Her exported bind pose is not what the game shows: rendered as stored (0.00 mm from the export, so not a skinning effect)
-her lower face droops, the inner brows are bent, the trapezius / clavicle and neck look off (the user's reading of the check
-renders). In the game her face Animator holds the jaw, lips, brows and cheeks in an expression every frame and the
-animation poses the neck and shoulder helpers. Because the avatar takes her change *since the reference*, a jaw that hangs
-open at bind and is held closed in game would close the avatar's jaw past its own rest, into the skull. So the reference
-is per group: her bind pose for the limbs and trunk (what the check uses), her neutral in-game pose for the jaw, eyes, lids
-and face rig, and the neck if a recording shows the same offset there: sampled from her face Animator's idle (the face clip
-survey already samples clips against the bind face; Wrinkles keeps an idle baseline) or a quiet stretch of a recording, and
-matched to the avatar's own rest face. The first real recording shows how large the offsets are.
+The check renders her as a grey, eyeless, bald figure whose lower face droops and whose brows, neck, trapezius and
+clavicles look wrong (the user's reading). That is her real geometry: skinned with the recorded pose, the check's mesh
+lands on the game's own BakeMesh of the same frame (95 % of vertices within 0.00 mm, 2.95 mm at most where the soft-zone
+helper bones are approximated). In the game her textures, eyes, lashes, hair and the plugin's PN smoothing (Fidelity) hide
+it; in avatar mode none of her geometry is drawn.
+
+What matters for the avatar is whether her bind pose is a fair zero for her bone changes. The recording says yes for the
+face: over 60 frames her jaw never leaves its bind rotation (0.0 degrees), the lips sit 1-3 mm from bind (5 mm at most),
+the lids move only to blink (up to 14 mm), the cheeks 0.7 mm. So the bind pose stays the reference for every bone. To
+check again on a talking / moaning clip (lip sync and the game's sex faces drive the jaw); if the jaw then rests away from
+bind, the face bones take her neutral (idle) face as their zero instead. The neck and head turn 6-18 degrees in this clip,
+which is her looking around, not a constant offset.
 
 ### Shoulders and joint correctives
 

@@ -636,16 +636,22 @@ def setup_render():
     return co
 
 
-def render_views(A, cam, path_front, path_side):
+def render_views(A, cam, path_front, path_side, center=(0.0, 0.0), yaw=0.0):
+    """Front and side views in her frame: the cameras follow her pelvis (center, Blender x, y) and her facing (yaw about Z,
+    0 = facing -Y as in her bind pose); the avatar stands OFF to her left (front) or behind her (side)."""
     from mathutils import Euler
+    c, sn = math.cos(yaw), math.sin(yaw)
+    r = Vector((c, sn, 0.0))         # her left (+X at bind): screen right in the front view
+    f = Vector((sn, -c, 0.0))        # her facing (-Y at bind)
+    o = Vector((center[0], center[1], 0.0))
     base = A.arm.location.copy()
-    A.arm.location = base + Vector((OFF, 0, 0))
-    cam.location = (OFF / 2, -5, 0.85); cam.rotation_euler = Euler((math.radians(90), 0, 0))
+    A.arm.location = base + OFF * r
+    cam.location = o + (OFF / 2) * r + 5 * f + Vector((0, 0, 0.85)); cam.rotation_euler = Euler((math.radians(90), 0, yaw))
     bpy.context.view_layer.update()
     bpy.context.scene.render.filepath = path_front
     bpy.ops.render.render(write_still=True)
-    A.arm.location = base + Vector((0, OFF, 0))
-    cam.location = (5, OFF / 2, 0.85); cam.rotation_euler = Euler((math.radians(90), 0, math.radians(90)))
+    A.arm.location = base - OFF * f
+    cam.location = o + 5 * r - (OFF / 2) * f + Vector((0, 0, 0.85)); cam.rotation_euler = Euler((math.radians(90), 0, math.radians(90) + yaw))
     bpy.context.view_layer.update()
     bpy.context.scene.render.filepath = path_side
     bpy.ops.render.render(write_still=True)
@@ -759,7 +765,8 @@ def main():
             skin_her(H, objs, S)
             apply_pose(A, W, Xa)
             pf = os.path.join(out, 'frame_%02d_front.png' % i); ps = os.path.join(out, 'frame_%02d_side.png' % i)
-            render_views(A, cam, pf, ps)
+            fw = D[her_root] @ np.array([0.0, -1.0, 0.0])   # her facing, from her pelvis' change
+            render_views(A, cam, pf, ps, center=(X[her_root][0], X[her_root][1]), yaw=math.atan2(fw[0], -fw[1]))
             paths += [pf, ps]; labels.append(name)
             log('rendered frame %d (%s)' % (i, name))
     lines.append('')
