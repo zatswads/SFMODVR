@@ -41,6 +41,12 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.9 (the tickle face is a helpless laugh):
+- Ticklish now reads as an agonizing laugh instead of a plain smile: the smile / laugh clip keeps her mouth and cheeks, the Pain
+  clip's squeezed eyes (85 %) and half of its knitted brows go over it, and her inner brows rise while the rest of the brows drop
+  and the lids squeeze (built offsets on her lid / brow bones, like the built Surprise). "Shy" and "embarrass" clips no longer
+  count as ticklish faces. A clip you pick for Ticklish in the panel gets the same treatment.
+
 0.11.8 (tensed muscles as shape, firmer under a hand):
 - Muscles were normal-map relief only: a flexed biceps or a back at full fitness looked painted on, the silhouette never changed.
   Each muscle now also pushes its belly out as geometry through the GPU contact chain (the inverse of a dent): the bake reads the

@@ -98,6 +98,14 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+
+## 0.11.9 (agonizing laugh for Ticklish)
+
+Log: `Reactions face: moods: ... Ticklish = '<clip>' (...; laughing in agony: Pain's eyes / brows and grief brows over it)`.
+Headset: Reactions tab, Face clips, Ticklish "Test" (or caress her side / belly): a wide smile with squeezed eyes and raised, knitted
+inner brows (a pained, helpless laugh), not a happy smile; the face panel line names the clip "+ '<pain clip>' eyes/brows + grief
+brows". If the eyes close too much or the brows look angry, say so (the shares are APainEyes / APainBrows / ABrowInMm in ReactionsFace.cs).
+
 ## 0.11.8 (muscles as shape, firmness)
 
 Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`. Log: `SF Body Morphs 0.11.8`; no `old sfmorph_shaders (no MuscleFlex)`

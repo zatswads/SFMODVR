@@ -30,7 +30,7 @@ namespace SfMorph
             new[] { "feeling", "moan", "pleasure", "sexfacial", "kimochi", "enjoy", "excite", "aroused" },
             new[] { "feeling", "moan", "pleasure", "sexfacial", "kimochi", "enjoy", "excite", "aroused" },
             new[] { "feeling", "moan", "pleasure", "sexfacial", "kimochi", "enjoy", "excite", "aroused" },
-            new[] { "tickle", "laugh", "giggle", "smile", "shy", "embarrass", "happy" },
+            new[] { "tickle", "laugh", "giggle", "smile", "happy" },   // 0.11.9: no "shy" / "embarrass" (a coy face, not a laugh)
             new[] { "surprise", "shock", "startle", "gasp", "odoro", "scare" },
             new[] { "pain", "hurt", "itai", "frown", "cry", "grimace", "angry", "sad" },
             new[] { "orgasm", "climax", "ahe", "ecsta", "extas", "iku", "cum", "loop_3", "enter_3" },
@@ -82,6 +82,12 @@ namespace SfMorph
         static readonly string[] SBrowIn = { "Eyebrow_Left_Insite", "Eyebrow_Right_Insite" };
         const float SUpMm = 2.6f, SLowMm = -1.0f, SBrowMm = 4.0f, SBrowInMm = 5.0f, SJaw = 0.22f;
         int[] _sBones; float[] _sMm;
+        // 0.11.9 (user: "Tickle expression needs to change too to an agonizing smile/laugh"): the Ticklish face is a helpless laugh. The
+        // smile / laugh clip keeps the mouth and cheeks; the Pain clip's squeezed eyes (and half of its knitted brows) go over it; and these
+        // offsets on the same lid / brow bones as the built surprise give the "grief" brow: inner brows up, the rest down, lids squeezed.
+        const float AUpMm = -1.6f, ALowMm = 1.0f, ABrowMm = -1.0f, ABrowInMm = 3.5f, APainEyes = 0.85f, APainBrows = 0.5f;
+        float[] _aMm;
+        Track _over;      // the Pain clip's track while Ticklish plays (eyes and brows only)
         Vector3 _upH = Vector3.up;
         bool _sOn, _sRel; float _sT, _sW, _sHold;
         public bool HasBuiltSurprise { get { return _face != null && _sBones != null && _sBones.Length > 0; } }
@@ -190,30 +196,30 @@ namespace SfMorph
         void FilterSurprise()
         {
             if (_sBones == null || _sBones.Length == 0) return;
-            var keep = new List<int>(); var mm = new List<float>(); var dropped = new StringBuilder();
+            var keep = new List<int>(); var mm = new List<float>(); var am = new List<float>(); var dropped = new StringBuilder();
             for (int i = 0; i < _sBones.Length; i++)
             {
                 int b = _sBones[i]; bool w = false;
                 foreach (var c in _clips) if (c.PosB != null && c.PosB[b]) { w = true; break; }
-                if (w) { keep.Add(b); mm.Add(_sMm[i]); } else { if (dropped.Length > 0) dropped.Append(", "); dropped.Append(_face[b].name); }
+                if (w) { keep.Add(b); mm.Add(_sMm[i]); am.Add(_aMm != null && i < _aMm.Length ? _aMm[i] : 0f); } else { if (dropped.Length > 0) dropped.Append(", "); dropped.Append(_face[b].name); }
             }
-            _sBones = keep.ToArray(); _sMm = mm.ToArray();
+            _sBones = keep.ToArray(); _sMm = mm.ToArray(); _aMm = am.ToArray();
             if (dropped.Length > 0) L("surprise: left out (no clip animates their position, an offset would add up): " + dropped);
             if (_sBones.Length == 0) L("surprise: no animated lid or brow bone left: Surprise falls back to a clip");
         }
 
         void BindSurprise(Dictionary<Transform, Matrix4x4> bp)
         {
-            var idx = new List<int>(); var mm = new List<float>();
+            var idx = new List<int>(); var mm = new List<float>(); var am = new List<float>();
             for (int b = 0; b < _face.Length; b++)
             {
                 string n = _face[b].name;
-                if (Array.IndexOf(SUp, n) >= 0) { idx.Add(b); mm.Add(SUpMm); }
-                else if (Array.IndexOf(SLow, n) >= 0) { idx.Add(b); mm.Add(SLowMm); }
-                else if (Array.IndexOf(SBrowIn, n) >= 0) { idx.Add(b); mm.Add(SBrowInMm); }
-                else if (Array.IndexOf(SBrow, n) >= 0) { idx.Add(b); mm.Add(SBrowMm); }
+                if (Array.IndexOf(SUp, n) >= 0) { idx.Add(b); mm.Add(SUpMm); am.Add(AUpMm); }
+                else if (Array.IndexOf(SLow, n) >= 0) { idx.Add(b); mm.Add(SLowMm); am.Add(ALowMm); }
+                else if (Array.IndexOf(SBrowIn, n) >= 0) { idx.Add(b); mm.Add(SBrowInMm); am.Add(ABrowInMm); }
+                else if (Array.IndexOf(SBrow, n) >= 0) { idx.Add(b); mm.Add(SBrowMm); am.Add(ABrowMm); }
             }
-            _sBones = idx.ToArray(); _sMm = mm.ToArray();
+            _sBones = idx.ToArray(); _sMm = mm.ToArray(); _aMm = am.ToArray();
             // her up in Head_M's frame: pelvis -> chest at bind (else as posed now)
             Transform pel = null, chest = null;
             foreach (var t in _all) { if (t == null) continue; if (t.name == "Root_M") pel = t; else if (t.name == "Chest_M") chest = t; }
@@ -351,7 +357,7 @@ namespace SfMorph
             for (int i = 0; i < NM; i++) { _pick[i] = null; _pickWhy[i] = null; if (_pool[i] != null) _pool[i].Clear(); }
             _anim = null; _go = null; _root = null; _head = null; _ctrl = null; _all = null; _rends = null; _face = null;
             _cur = null; _curMood = -1; _pendMood = -1; _sampleBroken = false; _map = null; _watchTag = null;
-            _sOn = false; _sBones = null; _sMm = null;
+            _sOn = false; _sBones = null; _sMm = null; _aMm = null; _over = null;
             Status = why;
         }
 
@@ -576,6 +582,7 @@ namespace SfMorph
                 if (c != null) { _pick[m] = c; _pickWhy[m] = m == Climax || m == Ticklish ? "same as " + MoodNames[m == Climax ? Pleasure3 : Pleasure1] : "by strength only"; used.Add(c); }
             }
             if (HasBuiltSurprise && _pickWhy[Surprise] != "your pick") { _pick[Surprise] = null; _pickWhy[Surprise] = "built: wide eyes, raised brows"; }
+            if (_pick[Ticklish] != null) _pickWhy[Ticklish] += "; laughing in agony: Pain's eyes / brows and grief brows over it";
             if (log || !_logged)
             {
                 _logged = true;
@@ -754,13 +761,19 @@ namespace SfMorph
             if (tr.Failed) { why = "no clip"; return false; }
             if (!tr.Ready) { _pendMood = m; _pendW = weight; _pendHold = hold; _pendUntil = _lastNow + 3f; why = "building"; return false; }
             _cur = tr; _curMood = m; _t = 0f; _w = Mathf.Clamp01(weight); _hold = Mathf.Max(0.1f, hold); _rel = false;
+            _over = null;
+            if (m == Ticklish && _pick[Pain] != null && _pick[Pain] != ci)
+            {
+                var ot = TrackOf(_pick[Pain]);
+                if (ot.Ready && !ot.Failed) _over = ot;
+            }
             // pleasure and climax fade in and out slowly (the scene's 0.75 s crossfade); a wince or a start is quick (its peak at 0.2-0.4 s)
             bool slow = m <= Pleasure3 || m == Climax;
             _att = slow ? 0.35f : 0.12f; _relT = slow ? 0.75f : 0.45f;
             return true;
         }
 
-        public string CurrentName { get { return _cur != null ? _cur.Ci.Name : _sOn ? "built surprise" : ""; } }
+        public string CurrentName { get { return _cur != null ? _cur.Ci.Name + (_curMood == Ticklish ? (_over != null ? " + '" + _over.Ci.Name + "' eyes/brows" : "") + " + grief brows" : "") : _sOn ? "built surprise" : ""; } }
         public int CurrentMood { get { return _cur != null ? _curMood : -1; } }
 
         // Body.ApplyAll for her, after the Animator and before the bone sliders: the face of this frame. mouthFree: she isn't speaking or moaning.
@@ -819,6 +832,44 @@ namespace SfMorph
                 if (tr.PosB[k]) p = Vector3.LerpUnclamped(p, Vector3.LerpUnclamped(tr.P[i0 * nb + k], tr.P[i1 * nb + k], f), w);
                 if (tr.RotB[k]) q = Quaternion.SlerpUnclamped(q, Quaternion.SlerpUnclamped(tr.R[i0 * nb + k], tr.R[i1 * nb + k], f), w);
                 t.SetLocalPositionAndRotation(p, q);
+            }
+            if (_curMood == Ticklish) AgonyStep(w, mouthFree);
+        }
+
+        // 0.11.9: the helpless laugh over the Ticklish clip: the Pain clip's eyes (and half its brows) at its own time, then the grief-brow /
+        // squeezed-lid offsets. The offsets go on bones the Animator rewrites every frame (FilterSurprise), so nothing adds up.
+        void AgonyStep(float w, bool mouthFree)
+        {
+            var ot = _over;
+            if (ot != null && ot.Ready && !ot.Failed)
+            {
+                float len = ot.Ci.Len;
+                float ct = ot.Ci.Loop && len > 0.05f ? _t % len : Mathf.Min(_t, len);
+                float fi = Mathf.Clamp(ct / ot.Dt, 0f, ot.N - 1);
+                int i0 = Mathf.Min((int)fi, ot.N - 1), i1 = Mathf.Min(i0 + 1, ot.N - 1);
+                float f = fi - i0;
+                int nb = ot.Bones.Length;
+                for (int k = 0; k < nb; k++)
+                {
+                    int b = ot.Bones[k];
+                    float g = _grp[b] == GEyes ? APainEyes : _grp[b] == GBrows ? APainBrows : 0f;
+                    if (g <= 0f) continue;
+                    var t = _face[b];
+                    if (t == null) continue;
+                    float wb = w * g;
+                    Vector3 p; Quaternion q; t.GetLocalPositionAndRotation(out p, out q);
+                    if (ot.PosB[k]) p = Vector3.LerpUnclamped(p, Vector3.LerpUnclamped(ot.P[i0 * nb + k], ot.P[i1 * nb + k], f), wb);
+                    if (ot.RotB[k]) q = Quaternion.SlerpUnclamped(q, Quaternion.SlerpUnclamped(ot.R[i0 * nb + k], ot.R[i1 * nb + k], f), wb);
+                    t.SetLocalPositionAndRotation(p, q);
+                }
+            }
+            if (_aMm == null || _sBones == null || _head == null) return;
+            for (int i = 0; i < _sBones.Length && i < _aMm.Length; i++)
+            {
+                var t = _face[_sBones[i]];
+                if (t == null || t.parent == null || _aMm[i] == 0f) continue;
+                Vector3 world = _head.TransformVector(_upH * (_aMm[i] * 0.001f * w));
+                t.localPosition += t.parent.InverseTransformVector(world);
             }
         }
 
