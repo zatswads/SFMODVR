@@ -23,6 +23,11 @@ ignores it and the next -All tries it again.
   run.ps1 -Sliders             slider fit instead of a conversion: the newest VaM export's (or -VamExport's) relative
                                body proportions as her own Body sliders, written as the preset "<Name> (fit)" in
                                <Game>\BepInEx\config\SfMorphs\presets (Presets tab > Load). Her mesh and skin stay hers.
+  run.ps1 -Source <file>       any rigged humanoid instead of a VaM export (DAZ Genesis 2/3/8/9 FBX, Unity / VRChat FBX,
+                               Mixamo, VRM, GLB, Character Creator, Unreal; tools/sources/humanoid.py, docs/SOURCES.md):
+                               converted to an SfExport folder in %LOCALAPPDATA%\SfMorph\sources\<file name>, then
+                               as above (with -Sliders: the slider fit). -Rig <id> forces the bone table, -SourceMesh
+                               <object> picks the body mesh; the adapter's report is source.txt in that folder.
   -Brightness hers|vam         albedo brightness (default hers: VaM's skin brought to her body's luminance, VaM's colours
                                kept; vam: VaM's values as they are, usually about twice too bright in the game).
 #>
@@ -42,6 +47,9 @@ param(
     [switch]$Check,
     [switch]$Rebake,
     [switch]$Sliders,
+    [string]$Source,
+    [string]$Rig = 'auto',
+    [string]$SourceMesh,
     [ValidateSet('hers', 'vam')][string]$Brightness = 'hers'
 )
 $ErrorActionPreference = 'Stop'
@@ -269,6 +277,22 @@ function Update-Textures($charName, $checkOnly) {
 }
 
 # ---- run ---------------------------------------------------------------------------------------------------
+if ($Source) {
+    # any rigged humanoid -> an SfExport folder (tools/sources/humanoid.py), then the usual steps on it
+    if (-not (Test-Path $Source)) { throw "-Source: no file $Source" }
+    $leaf = [IO.Path]::GetFileNameWithoutExtension($Source) -replace '[\\/:*?"<>|]', '_'
+    $srcOut = Join-Path $store "sources\$leaf"
+    Write-Host "Source     : $Source -> $srcOut"
+    $a3 = @('-b', '--factory-startup', '--python-exit-code', '1', '-P', (Join-Path $here '..\sources\humanoid.py'), '--', '--in', $Source, '--out', $srcOut, '--rig', $Rig)
+    if ($Name) { $a3 += @('--name', $Name) }
+    if ($SourceMesh) { $a3 += @('--mesh', $SourceMesh) }
+    $ErrorActionPreference = 'Continue'
+    & $Blender @a3 2>&1 | ForEach-Object { $t = "$_"; if ($t -match '^\[humanoid\]|Error|Traceback') { Write-Host $t } }
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($code -ne 0 -or -not (Test-Path (Join-Path $srcOut 'body.obj'))) { Write-Host "FAILED: the source adapter (exit $code); see the lines above"; exit 1 }
+    $VamExport = $srcOut
+}
 if ($Sliders) {
     if (-not $VamExport) { $VamExport = Newest $vamRoot }
     # any export of her has her shape (a clone export too: the same surface, only more vertices)

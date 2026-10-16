@@ -41,6 +41,16 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.2 (other character sources: the plugin is unchanged, the pipeline takes any rigged humanoid):
+- `run.ps1 -Source <file>` (`tools/sources/humanoid.py`): a DAZ Genesis 2/3/8/9 FBX, a Unity / VRChat avatar FBX, Mixamo, VRM,
+  GLB, Character Creator or Unreal figure becomes the same folder the VaM plugin writes (Genesis 2 joints from a bone table
+  picked by the names present, the body's faces given body roles by their nearest bone and material name, nipples from the
+  chest shape, the materials' base colour / normal images, the pipeline's frame and units), then converts as usual or, with
+  `-Sliders`, as a slider fit. A round trip through FBX of a VaM figure gives the same joints (1.3 mm), vertices and slider fit;
+  the other rig tables wait for a real file of each kind. Unrigged meshes: rig them first (ActionForge, Mixamo, AccuRIG).
+- The fit, bake and slider fit read groups as `Role@material`, so a body role spread over several source materials keeps each
+  material's textures.
+
 0.11.1 (the pipeline is no longer tied to one face and one set of her parts):
 - The pipeline only knew her default variants by name (`reika_face_a`, `reika_nipple_type_1`, ...), while the game swaps her
   face, nipples, genitals, nails, lashes, brows and bodies by customisation: a character converted while she wore face_a had

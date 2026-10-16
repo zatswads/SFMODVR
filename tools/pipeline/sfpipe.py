@@ -216,9 +216,9 @@ def breast_projection(sets, log):
 def male_reason(vam):
     """Why this export looks like a male Genesis 2 figure (or None): no 'Nipples' material, a 'Genitals' material
     (Genesis 2 Male's; the female figure's genitals are 'defaultMat'), or info.txt naming a male figure."""
-    if 'Nipples' not in vam.groups:
+    if not role_idx(vam, 'Nipples'):
         return "body.obj has no 'Nipples' material group"
-    if 'Genitals' in vam.groups:
+    if role_idx(vam, 'Genitals'):
         return "body.obj has a 'Genitals' material group (Genesis 2 Male)"
     for k, v in vam.info.items():
         if k.strip().lower() in ('character', 'atom'):   # names the user chose: not evidence
@@ -229,14 +229,26 @@ def male_reason(vam):
     return None
 
 
+def role(g):
+    """A source group's body role: VaM's material name, or the part before '@' in an adapter's 'Role@material'
+    (tools/sources: a role spread over several source materials, each keeping its own textures)."""
+    return g.split('@', 1)[0]
+
+
+def role_idx(vam, g):
+    """Indices of the groups that have role g."""
+    return [i for i, x in enumerate(vam.groups) if role(x) == g]
+
+
 def has_group(vam, g):
-    """The VaM export has material group g with at least one face."""
-    return g in vam.groups and bool((vam.face_group == vam.groups.index(g)).any())
+    """The export has faces with role g."""
+    gi = role_idx(vam, g)
+    return bool(gi) and bool(np.isin(vam.face_group, gi).any())
 
 
 def group_verts(vam, groups):
-    """Vertex indices of the faces of the given material groups (those that exist, with faces)."""
-    gi = [vam.groups.index(g) for g in groups if has_group(vam, g)]
+    """Vertex indices of the faces of the given roles (those that exist, with faces)."""
+    gi = [i for g in groups for i in role_idx(vam, g)]
     if not gi:
         return np.zeros(0, np.int64)
     return np.unique(vam.faces[np.isin(vam.face_group, gi)])
@@ -914,13 +926,13 @@ def run(a, chk):
         lab[near & (pts[:, 1] < mc[1])] = names.index('lipL')
         return lab
     vsign = sfio.winding_sign(vam.v, vam.faces, vam.vn)
-    skin_g = [i for i, g in enumerate(vam.groups) if g in VAM_SKIN and has_group(vam, g)]
+    skin_g = [i for i, g in enumerate(vam.groups) if role(g) in VAM_SKIN and (vam.face_group == i).any()]
     vf = vam.faces[np.isin(vam.face_group, skin_g)]
     vfn, _ = sfio.face_normals(vam_v, vf)
     vfn *= vsign
     # faces of VaM's 'Nipples' group: kept for measuring, but not an ICP target (her own nipple overlay replaces it; the
     # bump would half-pull the skin under the overlay)
-    keep_t = (vam.face_group[np.isin(vam.face_group, skin_g)] != vam.groups.index('Nipples')) if feat['Nipples'] else np.ones(len(vf), bool)
+    keep_t = ~np.isin(vam.face_group[np.isin(vam.face_group, skin_g)], role_idx(vam, 'Nipples')) if feat['Nipples'] else np.ones(len(vf), bool)
     vlab = rig.labels(vam_v[vf].mean(1), vsegs, vj)
     hlab = lip_labels(wp, hlab, her_mouth)
     vlab = lip_labels(vam_v[vf].mean(1), vlab, vam_mouth, lip_r)
@@ -1173,7 +1185,7 @@ def run(a, chk):
         nip_shift = np.zeros((nw, 3)); rim_pin = np.zeros(nw, bool); rim_pos = np.zeros((nw, 3))
         if nip is not None and use_nip:
             all_srf = fit.Surface(vam_b, vf, vfn_b)
-            fN = vam.faces[vam.face_group == vam.groups.index('Nipples')]
+            fN = vam.faces[np.isin(vam.face_group, role_idx(vam, 'Nipples'))]
             for sgn in (-1, 1):
                 hi = np.flatnonzero(np.sign(nip.vc[:, 0]) == sgn)
                 hf = nip.faces[np.isin(nip.faces, hi).all(1)]
@@ -1314,13 +1326,14 @@ def run(a, chk):
         cap_sgn = sfio.winding_sign(nip.vc, nip.faces, np.einsum('nij,nj->ni', nip.C[:, :3, :3], nip.vn))
         log('  nipple cap winding sign %g, skin %g' % (cap_sgn, hsign))
         if feat['Nipples']:
-            ig = vam.groups.index('Nipples'); it = vam.groups.index('Torso')
             fg = vam.face_group[np.isin(vam.face_group, skin_g)]
-            nip_srf = fit.Surface(vam_out, vf[fg == ig], vfn_b[fg == ig]) if (fg == ig).any() else None
+            in_nip = np.isin(fg, role_idx(vam, 'Nipples'))
+            nip_srf = fit.Surface(vam_out, vf[in_nip], vfn_b[in_nip]) if in_nip.any() else None
             # (VaM's 'Nipples' group is the whole areola patch, about as big as her cap, and its Torso has a hole there: the
             # disc vertices' target is the Torso and the Nipples faces together, the nearest of both)
-            mt = (fg == it) | (fg == ig)
-            disc_srf = fit.Surface(vam_out, vf[mt], vfn_b[mt]) if (fg == it).any() else None
+            in_torso = np.isin(fg, role_idx(vam, 'Torso'))
+            mt = in_torso | in_nip
+            disc_srf = fit.Surface(vam_out, vf[mt], vfn_b[mt]) if in_torso.any() else None
         else:
             nip_srf = disc_srf = None
         if nip_srf is not None and disc_srf is not None:

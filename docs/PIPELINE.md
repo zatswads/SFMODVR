@@ -16,7 +16,8 @@ transfer the **shape** and **skin textures** of a VaM character onto her:
    worn or not (`active` column in meshes.txt): the pipeline works by role (`tools/pipeline/roles.py`: upper / lower body,
    foot, neck, face, nipples, nails, lashes, brows, genitals); the worn variant of each role is fitted (else the default),
    the others follow the fitted skin, and each face material gets its own bake, so a game-side swap keeps the character.
-   Other sources than VaM: `docs/SOURCES.md` (design).
+   Other sources than VaM (DAZ Genesis 3/8/9 FBX, VRChat / Unity avatars, VRM, Mixamo, ...): `run.ps1 -Source <file>`,
+   `docs/SOURCES.md`.
    All 36 of her meshes are GPU-only (0.5.0 exported nothing), so `MeshData` reads their vertex and index buffers
    back from the GPU and decodes them with the mesh's vertex layout; `meshes.txt` says CPU or GPU per mesh.
 2. **VaM side** (written, compile-checked against VaM's Assembly-CSharp, not yet run): `tools/vam/SfExport.cs`, a

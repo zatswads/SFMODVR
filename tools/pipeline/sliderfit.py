@@ -104,7 +104,8 @@ def load_her(gdir):
 
 def load_vam(vdir):
     v = sfio.read_vam_export(vdir)
-    gi = [i for i, g in enumerate(v.groups) if g in VAM_SKIN]
+    grole = lambda g: g.split('@', 1)[0]   # noqa: E731  ('Role@material' groups from tools/sources/humanoid.py)
+    gi = [i for i, g in enumerate(v.groups) if grole(g) in VAM_SKIN]
     pts = v.v[np.unique(v.faces[np.isin(v.face_group, gi)])]
     vj = {k: j['pos'] for k, j in v.joints.items()}
     joints = {}
@@ -117,8 +118,9 @@ def load_vam(vdir):
             joints[(role, None)] = vj[vn]
     # nipples: the centre of VaM's 'Nipples' group per side (its lNipple / rNipple joints are not in the rest frame)
     nips = []
-    if 'Nipples' in v.groups and ('hip', 'L') in joints and ('hip', 'R') in joints:
-        nv = v.v[np.unique(v.faces[v.face_group == v.groups.index('Nipples')])]
+    ni = [i for i, g in enumerate(v.groups) if grole(g) == "Nipples"]
+    if ni and ('hip', 'L') in joints and ('hip', 'R') in joints:
+        nv = v.v[np.unique(v.faces[np.isin(v.face_group, ni)])]
         lpos = joints[('hip', 'L')][0] > joints[('hip', 'R')][0]
         for left in (True, False):
             sel = nv[(nv[:, 0] > 0) == (left == lpos)]

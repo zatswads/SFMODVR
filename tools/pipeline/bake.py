@@ -63,6 +63,16 @@ VAM_SKIN = {'Legs', 'Nostrils', 'Lips', 'Face', 'Toenails', 'Fingernails', 'Head
             'Hips', 'Torso', 'Nipples', 'Forearms', 'Feet', 'Ears', 'defaultMat'}
 
 
+def vmat(vmats, g):
+    """The texture slots of role g: VaM's material g, or the first adapter group 'g@material'."""
+    if g in vmats:
+        return vmats[g]
+    for k, v in vmats.items():
+        if k.split('@', 1)[0] == g:
+            return v
+    return {}
+
+
 def read_materials(vamdir):
     mats = {}
     with open(os.path.join(vamdir, 'materials.txt'), encoding='utf-8') as f:
@@ -162,7 +172,7 @@ def slot_image(vamdir, sl, slot, kind, log):
 def skin_fill(vmats, vamdir, log, fill=(0.8, 0.62, 0.52, 1.0)):
     """Skin tone for pixels no ray reaches (inner folds): median of the first skin texture that loads (face, torso, ...)."""
     for g in ('Face', 'Torso', 'Head', 'Hips', 'Legs'):
-        im = slot_image(vamdir, vmats.get(g, {}), '_MainTex', 'color', log)
+        im = slot_image(vamdir, vmat(vmats, g), '_MainTex', 'color', log)
         if im is None:
             continue
         w, h = im.size
@@ -680,7 +690,8 @@ def read_matprops(vamdir):
 
 def vam_color(props, g):
     """VaM's diffuse colour of a material as linear RGB (None when not exported or white)."""
-    c = props.get(g, {}).get('_Color') or props.get(g, {}).get('_DiffuseColor')
+    p = props.get(g) or next((v for k, v in props.items() if k.split('@', 1)[0] == g), {})
+    c = p.get('_Color') or p.get('_DiffuseColor')
     if not c or len(c) < 3:
         return None
     lin = srgb_to_lin(np.array(c[:3], np.float32))
@@ -733,13 +744,13 @@ def albedo_gain(vmats, vamdir, props, log):
     # VaM's body skin: torso and limbs pooled (her body sheet carries both; VaM's limbs map is often darker than its torso)
     pool, used, seen = [], [], set()
     for g in ('Torso', 'Hips', 'Legs', 'Shoulders', 'Forearms'):
-        fn = vmats.get(g, {}).get('_MainTex')
+        fn = vmat(vmats, g).get('_MainTex')
         c = vam_color(props, g)
         key = (fn, None if c is None else tuple(np.round(c, 4)))
         if not fn or key in seen:
             continue
         seen.add(key)
-        im = slot_image(vamdir, vmats.get(g, {}), '_MainTex', 'color', log)
+        im = slot_image(vamdir, vmat(vmats, g), '_MainTex', 'color', log)
         if im is None:
             continue
         a = srgb_to_lin(image_samples(im)[:, :3])
@@ -842,7 +853,7 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
     INFO['albedo brightness'] = gain_txt
     groups = [str(g) for g in Z['vam_groups']]
     # --- source: VaM skin, one material slot per VaM material ---------------------------------------
-    keep = [i for i, g in enumerate(groups) if g in VAM_SKIN]
+    keep = [i for i, g in enumerate(groups) if g.split('@', 1)[0] in VAM_SKIN]   # 'Role@material' from an adapter
     m = np.isin(Z['vam_g'], keep)
     # VaM's eyelids (often caught mid-blink) sit where her open eyes are: left out, her lids get the skin average.
     # The exclusion zone is relative to the VaM eyeball radius (15.3 mm on the character it was tuned on).
@@ -882,9 +893,9 @@ def run(Z, names, out, vamdir, size, make_obj, u2b, clear, log):
         else:
             am = emission_material('src_' + g, cimg, vam_color(props, g), gain)[0]
         have_normal |= nimg is not None
-        if nimg is None and g in BUMP_EXPECTED:
+        if nimg is None and g.split('@', 1)[0] in BUMP_EXPECTED:
             nobump.append(g)
-        if gimg is None and g in GLOSS_EXPECTED:
+        if gimg is None and g.split('@', 1)[0] in GLOSS_EXPECTED:
             no_gloss.append(g)
         gloss_imgs[g] = gimg
         used_groups.append(g)

@@ -1,4 +1,26 @@
-# Character sources beyond VaM (design, not built yet)
+# Character sources beyond VaM
+
+**State (0.11.2):** the adapter is built: `tools/sources/humanoid.py`, `run.ps1 -Source <file>` (also with `-Sliders`).
+Verified by a round trip: a VaM export packed as an FBX with its Genesis 2 (DAZ-named) skeleton and materials
+(`tools/sources/selftest_fbx.py`) comes back with all 53 joints within 1.3 mm (the floor), the same vertices, outward normals,
+the same winding, 81 % of faces in the same body role (the rest are boundary conventions: VaM's Hips reach down the thighs, the
+elbow / neck splits) and an identical slider fit. The Genesis 3/8/9, Mixamo, Unity / VRChat, VRM, CC, UE and AdvancedSkeleton
+tables are written but not yet run on a real file of that kind: the first DAZ Genesis 8/9 FBX the user gives is the next test
+(`blender -b -P humanoid.py -- --in <file> --list` prints its bones and materials first).
+
+Community routes worth knowing (VaM Hub, read 2026-10-16):
+- *Daz Generations Converter* (Blender extension, Blender 4.4-5.1, download on Mega, contains executable code): converts a
+  female shape between G2, G3, G8, G8.1 and G9 base meshes by barycentric placement, keeping vertex order (eyes and mouth
+  moved but not morphed). An alternative for DAZ figures: G8/G9 shape -> a G2 morph -> the existing VaM path; it carries no
+  textures (the adapter bakes the source's own textures instead).
+- *Wrapping* (R3DS Wrap): paired landmark dots (each finger, toes, face, nipples) then a non-rigid wrap of a G2 base onto any
+  model, eyes repaired after. The same idea as the fit here (landmark warp + non-rigid ICP); fingers and nipples need landmarks.
+- *Wrapped model into DAZ then VaM*: Morph Loader Pro on G2F, Adjust Rigging to Shape, ERC Freeze, save as a morph .dsf.
+- *Unity AssetBundles for VaM*: the Unity version and bundle workflow for VaM 1.x (Unity 2018); for this game the bundle
+  project in tools/shaders already builds Unity 2022.3.9 bundles (the avatar replacement mode below would use that).
+- *Clothing into VaM* (video): download, scale, fit in Blender (shrinkwrap / lattice / proportional editing) to the G2 base,
+  then DAZ and VaM. Here, clothes on her already follow a character's shape (MorphState follow); bringing new clothes in is a
+  later step with the same fit.
 
 The pipeline (`docs/PIPELINE.md`) reads one source format: an SfExport folder written by the VaM plugin, i.e. a Genesis 2
 Female in VaM's vocabulary (`body.obj` with VaM material groups, `joints.txt` with Genesis 2 bone names, `materials.txt` +
@@ -8,7 +30,9 @@ On her side, 0.11.1 already handles every variant the game swaps (faces, nipples
 
 ## The adapter: any rigged humanoid -> an SfExport folder
 
-`tools/sources/humanoid.py`, run in Blender (`blender -b -P humanoid.py -- --in <file> --out <SfExport dir>`):
+`tools/sources/humanoid.py`, run in Blender (`blender -b -P humanoid.py -- --in <file> --out <SfExport dir>`). Groups are
+written as `Role@material`: the fit (sfpipe `role()`, bake, slider fit) reads the role, the bake keys the textures by the full
+name, so a role spread over several source materials keeps each material's own maps. VaM exports (no '@') are unchanged.
 
 1. **Import** whatever Blender reads: FBX (VRChat / Unity avatars, Mixamo, DAZ Studio FBX export, Character Creator,
    ActorCore, Unreal mannequins), glTF / GLB, VRM (the VRM add-on), DAE, OBJ + a separate rig.
