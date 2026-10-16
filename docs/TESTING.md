@@ -98,6 +98,16 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.16 (naturalistic sculpt, pecs and traps)
+
+Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`. Log: `Muscles: layouts body (30 muscles, ...)`.
+
+- Debug tab Flex test, all areas at 10-16 mm: soft abdominal blocks (no sharp chocolate bar), an oblique pad over each hip,
+  broad erector columns and a deep lower-back groove, shoulder blades and traps, lats tapering to the waist, pecs over the
+  breasts, calves with two heads; no straight cut-off edges at the knees, hips, neck or shoulders.
+- Arms forward / crossed or weight on the hands: the pecs come up; arms raised or propping herself up: the traps.
+- The relief alone (Flex 0, Strength 1): the same shapes as shading, softer than 0.11.13's lines.
+
 ## 0.11.13 (sculpted muscles)
 
 Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`. Log: `GPU contact: muscle maps read back (... sculpted height 1024x1024)` and per

@@ -274,6 +274,10 @@ namespace SfMorph
                 else if (n.StartsWith("deltoids")) t = Mathf.Max(Mathf.Max(Sm(60f, 110f, Elev[s]), 0.6f * ArmLoad[s]), 0.5f * Sm(15f, 45f, Mathf.Abs(ArmSwing[s])));
                 else if (n.StartsWith("biceps")) t = Mathf.Max(Sm(30f, 110f, Elbow[s]), 0.3f * ArmLoad[s]);
                 else if (n.StartsWith("triceps")) t = Mathf.Max(Sm(10f, 40f, -ArmSwing[s]), ArmLoad[s] * (1f - 0.6f * Sm(30f, 80f, Elbow[s])));
+                // 0.11.13: pecs push the arm forward / across and bear weight on the hands; traps lift and brace the shoulders (arms raised,
+                // propping her up, an arched or held trunk)
+                else if (n.StartsWith("pecs")) t = Mathf.Max(Mathf.Max(Sm(15f, 60f, ArmSwing[s]) * (1f - 0.5f * Sm(100f, 150f, Elev[s])), 0.8f * ArmLoad[s]), 0.3f * absT);
+                else if (n == "traps") t = Mathf.Max(Mathf.Max(0.8f * Sm(80f, 150f, elevMax), 0.7f * Mathf.Max(ArmLoad[0], ArmLoad[1])), 0.6f * backT);
                 else if (n.StartsWith("forearms")) t = Mathf.Max(Mathf.Max(0.6f * Sm(30f, 110f, Elbow[s]), Sm(15f, 50f, Wrist[s])), 0.8f * ArmLoad[s]);
                 else t = 0f;
                 tension[k] = Mathf.Clamp01(t);
@@ -390,7 +394,9 @@ namespace SfMorph
                 case "calf": want = new[] { "calves" }; break;
                 case "butt": case "glute": want = new[] { "glutes" }; break;
                 case "spine": case "belly": want = new[] { "abs", "obliques_L", "obliques_R" }; side = ""; break;
-                default: return new int[0];   // breasts, chest, head, hands, feet: no authored muscle under them
+                case "chest": want = new[] { "pecs_L", "pecs_R" }; side = ""; break;           // 0.11.13
+                case "scapula": want = new[] { "traps", "lats_L", "lats_R" }; side = ""; break;
+                default: return new int[0];   // breasts, head, hands, feet: no authored muscle under them
             }
             var res = new List<int>();
             for (int k = 0; k < L.Count && k < Max; k++)

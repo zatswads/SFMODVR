@@ -911,13 +911,13 @@ namespace SfMorph
             if (off != null) GUILayout.Label("off: " + off, _off);
             else if (_p.MuscleOn.Value && _body.WrinkleStatus.Length > 0) GUILayout.Label(_body.WrinkleStatus, _body.WrinkleStatus.Contains("off:") ? _off : _hint);
             GUILayout.Label("Authored muscle relief (abs, obliques, serratus, ribcage; spine, lats, shoulder blades; glutes, quads, hamstrings, " +
-                            "adductors, calves; deltoids, biceps, triceps, forearms) in her skin's normal map. Fitness: the resting tone every muscle " +
+                            "adductors, calves; deltoids, biceps, triceps, forearms; pecs, traps) in her skin's normal map. Fitness: the resting tone every muscle " +
                             "keeps. Tension gain: how much her pose adds: her spine bent forward or held leaning back tenses the abs, an arch or a " +
                             "bend over the back, a squat the glutes and thighs, a bent elbow the biceps, tiptoes the calves, arms overhead the " +
                             "serratus and lats, propping herself up the arms. Groove shade darkens the grooves in her skin colour. Surface detail " +
                             "only: a converted character's Fitness body slider (Characters tab) is the shape; this sits on top of either. Debug views " +
                             "are in the Debug tab. Speed is in the config file ([Muscles]). Shape: with GPU contact on, the sculpted muscles become " +
-                            "geometry: separate abdominal bellies, serratus, lats, quads, calves, with the grooves between them going in (mm = the " +
+                            "geometry: soft abdominal blocks, oblique pads, serratus, pecs, traps, the erector columns, scapulae and lats, quads, hamstrings, calf heads, with soft valleys between them (mm = the " +
                             "area's highest belly at full activation, the rest in proportion; Fitness counts, so a high resting tone keeps some " +
                             "shape; 15-20 mm with Flex 1-2 is a bodybuilder); the relief above stays the fine detail. Firmness: a tensed muscle dents less under a hand and the physics hands meet more resistance there. Flex test: " +
                             "each area at full (at least 3 mm) for 2 s over whatever she is doing, whatever her pose's tension; the log says how far " +

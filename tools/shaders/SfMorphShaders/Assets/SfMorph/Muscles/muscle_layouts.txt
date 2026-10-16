@@ -29,3 +29,6 @@ muscle 24 deltoids_R arms R
 muscle 25 biceps_R arms R
 muscle 26 triceps_R arms R
 muscle 27 forearms_R arms R
+muscle 28 pecs_L arms L
+muscle 29 pecs_R arms R
+muscle 30 traps back C

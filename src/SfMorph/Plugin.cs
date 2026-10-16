@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.11.15";
+        public const string Version = "0.11.16";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -146,9 +146,9 @@ namespace SfMorph
             MuscleStrength = Config.Bind("Muscles", "Strength", 1f, new ConfigDescription("Depth of the muscle relief (0 none, 2 strong).", new AcceptableValueRange<float>(0f, 2f)));
             MuscleShade = Config.Bind("Muscles", "Shade", 0.3f, new ConfigDescription("Groove shade: how much darker her skin colour is in the grooves between muscles (0 off, 1 strong).", new AcceptableValueRange<float>(0f, 1f)));
             MuscleCore = Config.Bind("Muscles", "Core", true, "Abs, obliques, serratus, ribcage.");
-            MuscleBack = Config.Bind("Muscles", "Back", true, "Spine (erectors), lats, shoulder blades.");
+            MuscleBack = Config.Bind("Muscles", "Back", true, "Spine (erectors), lats, shoulder blades, traps.");
             MuscleLegs = Config.Bind("Muscles", "Legs", true, "Glutes, quads, hamstrings, adductors, calves.");
-            MuscleArms = Config.Bind("Muscles", "Arms", true, "Deltoids, biceps, triceps, forearms.");
+            MuscleArms = Config.Bind("Muscles", "Arms", true, "Deltoids, biceps, triceps, forearms, pecs.");
             MuscleDebug = Config.Bind("Muscles", "Debug", 0, new ConfigDescription("0 off, 1 tint the muscles green (relaxed) to red (tensed), 2 show every muscle in its own colour.", new AcceptableValueRange<int>(0, 2)));
             MuscleAttack = Config.Bind("Muscles", "Attack", 0.25f, new ConfigDescription("Seconds for a muscle to tense.", new AcceptableValueRange<float>(0.02f, 2f)));
             MuscleRelease = Config.Bind("Muscles", "Release", 0.8f, new ConfigDescription("Seconds for a muscle to relax.", new AcceptableValueRange<float>(0.02f, 3f)));

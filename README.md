@@ -41,6 +41,26 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.16 (a naturalistic muscle sculpt; pecs and traps):
+- The sculpt still read as cartoonish: every muscle was a few Gaussian dots and the definition was drawn lines, so a flexed
+  abdomen became a chocolate bar of small sharp bumps, the back two thin rods beside the spine, and there were no pecs or traps.
+  `tools/muscles/author.py` now builds muscles as masses along their fibres: a spindle along a curved centreline with a rounded
+  plateau across it, its ends easing off, and overlapping bellies merged by a soft maximum, so neighbouring muscles meet in soft
+  valleys; drawn grooves are kept only where anatomy has a real line (linea alba, tendinous intersections, spine, inguinal line,
+  glute fold, the calf's lower edge), shallower and wider. Re-authored against an athletic female sculpt: soft abdominal blocks
+  (the upper pairs smaller, the lower abdomen one smooth mass), an oblique pad over the hip, serratus fingers; broad erector
+  columns either side of a deep lower-back groove, upper / middle traps, infraspinatus and teres on the shoulder blade, the lats as
+  one sheet tapering to the waist; gluteus medius / maximus; rectus femoris, the vastus lateralis sweep and the inner-knee teardrop,
+  split hamstrings, calf heads (the inner larger and lower) with a heart-shaped lower edge, soleus and tibialis; three-head deltoids,
+  biceps, brachialis, triceps horseshoe and forearm masses. New muscles: pecs (Arms area: arm forward / across, weight on the hands)
+  and traps (Back area: arms raised, propping her up, a held trunk).
+- Back muscles were placed by angle around an axis that runs 2-4 cm under the skin of her lower back, where a degree is a
+  millimetre (the rods); they now use their own frame through the middle of her trunk. Muscles near a joint reach across the limb
+  boundary (calves to the back of the knee, hamstrings, traps to the neck and shoulders, deltoids and pecs to the trunk, the
+  oblique pad to the hips), which removed straight cut-off edges there.
+- `author.py --preview` writes clay renders of the geometry (`muscle_body_geo.png`, `muscle_body_geo_close.png`: torso front, back,
+  legs from behind / side / front), used to tune this. Shader bundle rebuilt.
+
 0.11.15 (Gloss works):
 - The Characters tab's Gloss slider made no visible change (seen on a face-only character). It multiplied
   `_SmoothnessPower`, but her skin shader (read from its compiled GBuffer pass) computes smoothness as
