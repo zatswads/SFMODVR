@@ -159,7 +159,8 @@ def belly_eval(pr, si, ri_, pi, ds=0.0, da=0.0):
         bu[u] = ((seglen[k] + tt * (seglen[k + 1] - seglen[k])) / total)[u]
         bw[u] = (pr.w[k] + tt * (pr.w[k + 1] - pr.w[k]))[u]
     x = np.clip(best / np.maximum(bw, 1e-6), 0, 1)
-    across = (1 - x ** pr.flat) ** 2
+    # flat < 2 would put a sharp ridge on the centreline (x^k with k < 2 has no flat top at 0): the bellies read as rods / tubes
+    across = (1 - x ** max(pr.flat, 2.0)) ** 2
     along = pr.end + (1 - pr.end) * np.sin(np.pi * np.clip(bu, 0, 1)) ** 0.6
     return across * along
 
@@ -245,10 +246,10 @@ def muscles(sk, navel_s, log):
         r = reg('obliques_' + sd, 'core', sd)
         # 0.11.18 (user: a prominent adonis belt and a bulgier waist): the external oblique is a full pad over the hip bone that rolls
         # down onto the belt and fills the waist's side, and the belt (the inguinal line from the hip bone to the pubis) is a deep crease
-        prims[r].append(Belly(T, [(0.04, 58 * sgn, 26), (0.07, 67 * sgn, 38), (0.12, 75 * sgn, 38), (0.19, 75 * sgn, 26)], 5.2, flat=2.2, end=0.55,
+        prims[r].append(Belly(T, [(0.04, 58 * sgn, 28), (0.075, 67 * sgn, 40), (0.125, 75 * sgn, 40), (0.19, 75 * sgn, 28)], 6.8, flat=2.3, end=0.55,
                               segs=(T, 'thighL', 'thighR')))  # flank pad
         prims[r].append(Belly(T, [(0.06, 42 * sgn, 13), (0.13, 46 * sgn, 17), (0.20, 50 * sgn, 13)], 1.6, flat=2.0))   # front sheet to the semilunaris
-        prims[r].append(Groove(T, [(0.07, 74 * sgn), (0.04, 61 * sgn), (0.005, 46 * sgn), (-0.03, 31 * sgn), (-0.065, 17 * sgn)], 2.4, 12.0,
+        prims[r].append(Groove(T, [(0.07, 74 * sgn), (0.04, 61 * sgn), (0.005, 46 * sgn), (-0.03, 31 * sgn), (-0.065, 17 * sgn)], 2.8, 12.0,
                                taper=(1, 1), segs=(T, 'thighL', 'thighR')))      # adonis belt (inguinal line)
         r = reg('serratus_' + sd, 'core', sd)
         for k in range(4):
@@ -260,25 +261,27 @@ def muscles(sk, navel_s, log):
     prims[r_rib].append(Groove(T, [(0.27, 0), (0.39, 0)], 0.5, 7.0))                             # sternum
     # ---- back: erectors (one region), lats + scapula per side
     r_back = reg('back', 'back', 'C')
-    prims[r_back].append(Groove(B, [(-0.01, 180), (0.12, 180), (0.30, 180), (0.50, 180)], 1.9, 8.0))   # spinal groove (0.11.18: deeper, to the neck)
+    # 0.11.19 (user: the erectors read as two lone tendons down the spine): the lower back is two broad, low, soft masses that fade up
+    # the thorax and flatten into the sacrum; the spine is a soft valley between them and, higher, between the shoulder-blade muscles
+    prims[r_back].append(Groove(B, [(0.0, 180), (0.12, 180), (0.30, 180), (0.50, 180)], 1.5, 12.0))   # spinal valley
     for sgn in (1, -1):
         # the erector columns: thick in the lower back (2 cm either side of the spine), thinning up the thorax
-        prims[r_back].append(Belly(B, [(-0.03, 180 - 15 * sgn, 20), (0.06, 180 - 19 * sgn, 26), (0.16, 180 - 20 * sgn, 25), (0.27, 180 - 16 * sgn, 20),
-                                       (0.40, 180 - 12 * sgn, 15)], 4.4, flat=2.0, end=0.6))
+        prims[r_back].append(Belly(B, [(-0.02, 180 - 15 * sgn, 26), (0.07, 180 - 21 * sgn, 36), (0.17, 180 - 22 * sgn, 34), (0.28, 180 - 18 * sgn, 22)],
+                                   2.8, flat=1.5, end=0.15))
         prims[r_back].append(Belly(B, [(0.0, 180 - 5 * sgn, 10), (0.05, 180 - 6 * sgn, 8)], -1.2, flat=2.0))       # the sacral diamond's hollow
         prims[r_back].append(Bulge(B, 0.05, 180 - 17 * sgn, 0.012, 0.014, -0.9))                    # dimples of Venus
-        prims[r_back].append(Groove(B, [(0.02, 180 - 31 * sgn), (0.12, 180 - 34 * sgn), (0.24, 180 - 27 * sgn)], 0.55, 10.0))   # the columns' outer edge
     for sd, sgn in (('L', 1), ('R', -1)):
         ua = 'upperarm' + sd
         r = reg('lats_' + sd, 'back', sd)
         prims[r].append(Belly(B, [(0.40, 114 * sgn, 30), (0.32, 124 * sgn, 60), (0.23, 136 * sgn, 58), (0.14, 150 * sgn, 40), (0.08, 158 * sgn, 22)],
-                              3.6, flat=1.8, end=0.35, segs=(B, ua)))
-        prims[r].append(Belly(B, [(0.44, 128 * sgn, 22), (0.40, 122 * sgn, 26), (0.36, 117 * sgn, 16)], 3.0, flat=2.0, segs=(B, ua)))   # teres major
-        prims[r].append(Belly(B, [(0.47, 148 * sgn, 26), (0.43, 141 * sgn, 34), (0.39, 146 * sgn, 22)], 3.0, flat=2.0, segs=(B, ua)))   # infraspinatus
-        prims[r].append(Groove(B, [(0.48, 158 * sgn), (0.42, 156 * sgn), (0.36, 160 * sgn)], 0.55, 10.0))   # the scapula's inner edge
+                              4.0, flat=1.8, end=0.35, segs=(B, ua)))
+        # 0.11.19: along their fibres - teres major from the shoulder blade's lower angle up and out to the armpit, infraspinatus across
+        # the blade from its inner edge to the arm (vertical bellies side by side read as a row of knuckles)
+        prims[r].append(Belly(B, [(0.36, 148 * sgn, 22), (0.38, 132 * sgn, 28), (0.40, 116 * sgn, 22)], 3.8, flat=1.4, end=0.6, segs=(B, ua)))   # teres major
+        prims[r].append(Belly(B, [(0.425, 157 * sgn, 40), (0.435, 140 * sgn, 44), (0.445, 124 * sgn, 26)], 4.4, flat=1.4, end=0.65, segs=(B, ua)))   # infraspinatus
+        prims[r].append(Groove(B, [(0.49, 159 * sgn), (0.42, 157 * sgn), (0.365, 156 * sgn), (0.345, 146 * sgn)], 1.0, 11.0))   # the scapula's inner edge and lower angle
         # 0.11.18 (user: the back should read like a lean athletic back under tension): the shoulder blade's muscles separate
-        prims[r].append(Belly(B, [(0.445, 137 * sgn, 13), (0.415, 132 * sgn, 15)], 1.8, flat=1.8, segs=(B, ua)))           # teres minor
-        prims[r].append(Groove(B, [(0.455, 152 * sgn), (0.415, 136 * sgn), (0.385, 124 * sgn)], 0.6, 7.0, segs=(B, ua)))     # infraspinatus / teres
+        prims[r].append(Groove(B, [(0.39, 154 * sgn), (0.395, 136 * sgn), (0.41, 120 * sgn)], 0.45, 10.0, segs=(B, ua)))     # infraspinatus / teres
         prims[r].append(Groove(B, [(0.405, 112 * sgn), (0.375, 122 * sgn), (0.36, 134 * sgn)], 0.55, 8.0, segs=(B, ua)))     # teres major / lat
     # ---- legs
     for sd in ('L', 'R'):
@@ -340,10 +343,9 @@ def muscles(sk, navel_s, log):
     r_tr = reg('traps', 'back', 'C')
     for sgn in (1, -1):
         sides = (B, 'neck', 'upperarmL', 'upperarmR')
-        prims[r_tr].append(Belly(B, [(0.555, 175 * sgn, 22), (0.52, 148 * sgn, 32), (0.485, 118 * sgn, 20)], 2.4, flat=1.6, end=0.4, segs=sides))   # upper
-        prims[r_tr].append(Belly(B, [(0.51, 176 * sgn, 22), (0.44, 166 * sgn, 34), (0.36, 174 * sgn, 18)], 2.6, flat=1.8, end=0.4, segs=sides))   # middle
-        prims[r_tr].append(Belly(B, [(0.455, 171 * sgn, 14), (0.41, 166 * sgn, 19), (0.36, 170 * sgn, 13)], 3.0, flat=2.0, end=0.5))    # rhomboids
-        prims[r_tr].append(Belly(B, [(0.40, 173 * sgn, 15), (0.32, 175 * sgn, 13), (0.25, 177 * sgn, 7)], 1.6, flat=1.8, end=0.5))     # lower traps (the diamond)
+        prims[r_tr].append(Belly(B, [(0.555, 175 * sgn, 24), (0.52, 148 * sgn, 34), (0.485, 118 * sgn, 22)], 3.6, flat=1.7, end=0.4, segs=sides))   # upper
+        prims[r_tr].append(Belly(B, [(0.47, 177 * sgn, 30), (0.475, 155 * sgn, 32), (0.485, 130 * sgn, 20)], 2.6, flat=1.4, end=0.6, segs=sides))   # middle (across to the shoulder)
+        prims[r_tr].append(Belly(B, [(0.45, 177 * sgn, 22), (0.415, 168 * sgn, 26), (0.385, 161 * sgn, 20)], 2.8, flat=1.4, end=0.6))    # rhomboids (spine down and out to the blade)
     n = sum(len(p) for p in prims)
     log('muscles: %d primitives in %d regions (navel at s %.3f m above Root_M)' % (n, len(regions), navel_s))
     return segs, regions, prims

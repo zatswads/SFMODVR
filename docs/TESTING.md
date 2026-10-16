@@ -98,6 +98,11 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.19 (natural back)
+
+Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`. Flex test, Back 10-16 mm: no rods or tubes along the spine or across the shoulder
+blades; the shoulder blades read as broad rounded masses, the lower back smooth with a soft valley; the obliques bulge over the belt.
+
 ## 0.11.18 (adonis belt, athletic back)
 
 Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`.

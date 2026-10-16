@@ -41,6 +41,15 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.19 (a natural back; stronger obliques):
+- The back's erectors read as two lone tendons down the spine and the shoulder-blade muscles as rows of rods / tubes. Cause: a
+  belly's cross-section (1 - x^k)^2 with k under 2 has no flat top - it peaks sharply on its centreline - and several muscles used
+  k 1.4-1.8 to look "softer"; they became ridges. k is now at least 2 everywhere (softness comes from width). The lower back is two
+  broad, low masses that fade up the thorax into a soft spinal valley (no column-edge groove); the upper back carries the shape:
+  traps, the infraspinatus as a fan across the shoulder blade, teres major rolling up to the armpit, rhomboids running from the
+  spine down and out, all along their fibres; the lower traps' pointed ridges are gone. Modelled on a lean athletic back.
+- The external obliques are more prominent (a 6.8 mm pad over a 2.8 mm adonis belt). Shader bundle rebuilt.
+
 0.11.18 (adonis belt, fuller waist, a lean athletic back):
 - No adonis belt, and the lower abdomen narrowed into a V. The inguinal line is now a deep crease from each hip bone down to the
   pubis with the external oblique as a full pad rolling over it, so her waist bulges at the sides instead of tapering; the rectus
