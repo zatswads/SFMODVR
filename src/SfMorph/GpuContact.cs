@@ -614,8 +614,31 @@ namespace SfMorph
                 var m = new ContactBake.MuscleMap { Layer = L };
                 m.Region = ReadBack(L.Region, out m.RW, out m.RH);
                 m.Detail = ReadBack(L.Detail, out m.DW, out m.DH);
+                // 0.11.12: the sculpted height, decoded, and each muscle's peak over the texels it owns (share >= 0.5)
+                var hp = L.Height != null ? ReadBack(L.Height, out m.HW, out m.HH) : null;
+                if (hp != null && m.HW == m.RW && m.HH == m.RH)
+                {
+                    m.Height = new float[hp.Length];
+                    m.Peak = new float[L.Count];
+                    for (int i = 0; i < hp.Length; i++)
+                    {
+                        var c = hp[i];
+                        float h = ((c.r * 256 + c.g) / 65535f - 0.5f) * 2f * L.HeightMax;
+                        m.Height[i] = h;
+                        var q = m.Region[i];
+                        int id = q.b >= 128 ? q.r : q.g;
+                        if (id >= 1 && id <= L.Count && q.a > 0 && h > m.Peak[id - 1]) m.Peak[id - 1] = h;
+                    }
+                    // one peak per area (the highest belly of core / back / legs / arms): a muscle's own peak made the weight jump wherever
+                    // the owning muscle changed (lats 6.6 mm next to obliques 4.0 and erectors 9.4: crinkles down her sides)
+                    var areaPeak = new Dictionary<string, float>();
+                    for (int k = 0; k < L.Count; k++) { float ap; areaPeak.TryGetValue(L.Area[k], out ap); areaPeak[L.Area[k]] = Mathf.Max(ap, m.Peak[k]); }
+                    for (int k = 0; k < L.Count; k++) m.Peak[k] = Mathf.Max(areaPeak[L.Area[k]], 0.0005f);
+                }
+                else if (hp != null) Plugin.Log.LogWarning("GPU contact: muscle height map " + m.HW + "x" + m.HH + " is not the region map's size: the belly falloff is used");
                 if (m.Region == null) { FlexNote = "muscle map unreadable"; Plugin.Log.LogWarning("GPU contact: " + FlexNote); return null; }
-                Plugin.Log.LogInfo("GPU contact: muscle maps read back (" + L.Count + " muscles, region " + m.RW + "x" + m.RH + ", detail " + m.DW + "x" + m.DH + ")");
+                Plugin.Log.LogInfo("GPU contact: muscle maps read back (" + L.Count + " muscles, region " + m.RW + "x" + m.RH + ", detail " + m.DW + "x" + m.DH
+                                   + (m.Height != null ? ", sculpted height " + m.HW + "x" + m.HH : ", no height map: belly falloff") + ")");
                 _mmap = m;
                 return m;
             }

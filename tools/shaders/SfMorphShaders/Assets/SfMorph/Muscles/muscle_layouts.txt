@@ -1,7 +1,7 @@
-# SF Body Morphs muscle layouts (tools/muscles/author.py). layout <name> <detail size> <region size> <slope max>; then
+# SF Body Morphs muscle layouts (tools/muscles/author.py). layout <name> <detail size> <region size> <slope max> <height max m>; then
 # muscle <index from 1> <name> <area core|back|legs|arms> <side L|R|C>
 # export Reika-20261016-023017
-layout body 2048 1024 0.600
+layout body 2048 1024 0.600 0.016
 muscle 1 abs core C
 muscle 2 obliques_L core L
 muscle 3 serratus_L core L

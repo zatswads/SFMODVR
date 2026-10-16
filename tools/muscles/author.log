@@ -4,6 +4,7 @@ body: 59.1% of the texels on her skin
 navel: s 0.120 m above Root_M (y 0.971), 7.6 mm deep
 muscles: 140 primitives in 27 regions (navel at s 0.120 m above Root_M)
 body: slope max 0.245 (encoded up to 0.60), groove shade max 1.00
+body: height -2.94 to 9.44 mm (encoded +-16 mm)
   muscle  1 abs           core C:  119696 texels
   muscle  2 obliques_L    core L:   67113 texels
   muscle  3 serratus_L    core L:   14166 texels
@@ -31,4 +32,3 @@ body: slope max 0.245 (encoded up to 0.60), groove shade max 1.00
   muscle 25 biceps_R      arms R:   30200 texels
   muscle 26 triceps_R     arms R:   55258 texels
   muscle 27 forearms_R    arms R:   65528 texels
-preview: C:\Users\rings\Claude\Projects\Modding\SFMODVR\.claude\worktrees\serene-fermi-8b6a4e\tools\muscles\preview

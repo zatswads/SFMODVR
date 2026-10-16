@@ -9,6 +9,8 @@ wrinkles and faded in per muscle by her pose:
   muscle_<layout>_region.png  RGBA8 linear, MxM, point-fetched in the blend: R = first muscle index + 1 (0 = none), G = second muscle
                               index + 1 (0 = none), B = the first muscle's share 0..1 (the texel's activation = B x act[R] + (1-B) x
                               act[G]; the shader interpolates that between region texels), A = coverage.
+  muscle_<layout>_height.png  (0.11.12) RGBA8 linear, MxM: the relief's signed height in 16 bits (R high, G low byte of
+                              h / HEIGHT_MAX x 0.5 + 0.5), B = coverage; GpuContact's bake turns it into the tensed-muscle geometry.
   muscle_layouts.txt          the muscle table the plugin reads (index, name, area core|back|legs|arms, side L|R|C).
 
 The relief is a height field on her bind-pose skin made of muscle bellies (smooth bumps) and the grooves between them (linea alba,
@@ -47,6 +49,7 @@ GAME_EXPORT = r'E:\Bak\New folder\Misc\SF\VR\BepInEx\config\SfMorphs\export'
 SLOPE_MAX = 0.6          # slope encoded in R,G: +-SLOPE_MAX -> 0..1 (muscles are gentler than creases: finer steps)
 SHADE_DEPTH = 0.0015     # groove depth (m) that gives a full groove shade (B = 1)
 BULGE_GAIN = 2.0         # muscle bellies: heights below are x this (the first preview read flat next to the grooves)
+HEIGHT_MAX = 0.016       # 0.11.12: the height map's range, +- metres
 LIMB_WIDTH = 1.6         # grooves on the limbs are wider than the torso's (thin ones read as drawn lines)
 
 # ---------------------------------------------------------------- segments (her limbs as cylinders)
@@ -297,6 +300,7 @@ def evaluate(surf, X, N, t, segs, regions, prims, excl, log):
     for ec, er in excl:
         keep *= np.clip((np.linalg.norm(X - ec, axis=1) - er) / 0.015, 0, 1)
     G = np.zeros((M, 3))
+    H = np.zeros(M)          # 0.11.12: the height itself (m, signed), for the geometry bake
     shade = np.zeros(M)
     wreg = np.zeros((M, len(regions)), np.float32)
     for ri, plist in enumerate(prims):
@@ -362,6 +366,7 @@ def evaluate(surf, X, N, t, segs, regions, prims, excl, log):
             nn = N[ii]
             grad = grad - (grad * nn).sum(1)[:, None] * nn
             G[ii] += grad
+            H[ii] += h
             wreg[ii, ri] += env.astype(np.float32)
     # slope in the texel's tangent frame (tangent = d pos/du, bitangent = d pos/dv, normalised), as the wrinkle maps
     pu, pv = surf.pu[t], surf.pv[t]
@@ -373,7 +378,7 @@ def evaluate(surf, X, N, t, segs, regions, prims, excl, log):
     w1 = wreg[np.arange(M), order[:, 0]]
     w2 = wreg[np.arange(M), order[:, 1]]
     tot = wreg.sum(1)
-    return dict(G=G, sx=sx, sy=sy, shade=np.clip(shade, 0, 1), id1=order[:, 0], id2=order[:, 1], w1=w1, w2=w2, tot=tot, member=member)
+    return dict(G=G, H=H, sx=sx, sy=sy, shade=np.clip(shade, 0, 1), id1=order[:, 0], id2=order[:, 1], w1=w1, w2=w2, tot=tot, member=member)
 
 
 def build(name, surf, sk, n, nreg, log, preview_dir=None, colour=None):
@@ -410,6 +415,23 @@ def build(name, surf, sk, n, nreg, log, preview_dir=None, colour=None):
     det[idx, 2] = ev['shade']
     det[idx, 3] = np.clip(ev['tot'], 0, 1)
     det = wr.dilate(det.reshape(n, n, 4), cov.reshape(n, n), 6)
+
+    # 0.11.12 height map at nreg (the geometry: GpuContact's bake reads it per vertex and scales each muscle's height by its
+    # activation): the signed height in 16 bits, R = high byte, G = low byte of (h / HEIGHT_MAX x 0.5 + 0.5) x 65535; 2x2 mean of the
+    # full-res texels, dilated (the bake samples it bilinearly at the vertex UV), B = coverage
+    hf = np.zeros((n * n, 1), np.float32)
+    hf[idx, 0] = ev['H']
+    hf = wr.dilate(hf.reshape(n, n, 1), cov.reshape(n, n), 8)
+    st = n // nreg
+    hr = hf.reshape(nreg, st, nreg, st).mean(axis=(1, 3))
+    cr = cov.reshape(nreg, st, nreg, st).any(axis=(1, 3))
+    q = np.clip((hr / HEIGHT_MAX * 0.5 + 0.5) * 65535 + 0.5, 0, 65535).astype(np.uint32)
+    hgt = np.zeros((nreg, nreg, 4), np.uint8)
+    hgt[:, :, 0] = (q >> 8).astype(np.uint8)
+    hgt[:, :, 1] = (q & 255).astype(np.uint8)
+    hgt[:, :, 2] = np.where(cr, 255, 0).astype(np.uint8)
+    hgt[:, :, 3] = 255
+    log('%s: height %.2f to %.2f mm (encoded +-%.0f mm)' % (name, ev['H'].min() * 1000, ev['H'].max() * 1000, HEIGHT_MAX * 1000))
 
     # region map at nreg: id pair + share, from the full-res texels (nearest), dilated the same way so the shader's bilinear
     # interpolation of the activation never pulls in "none" at an island edge
@@ -448,7 +470,7 @@ def build(name, surf, sk, n, nreg, log, preview_dir=None, colour=None):
         log('  muscle %2d %-13s %-4s %s: %7d texels' % (k + 1, rn, ra, rs, m1.sum()))
     if preview_dir:
         previews(name, n, idx, X, N, ev, regions, colour, preview_dir, log)
-    return det, out, regions
+    return det, out, hgt, regions
 
 
 # ---------------------------------------------------------------- previews
@@ -551,14 +573,15 @@ def main():
             if f.lower() == 'reika_body_colormap.png':
                 col = wr.read_png_rgb(os.path.join(d, f))
     n, nreg = 2048, 1024
-    det, reg, regions = build('body', surf, sk, n, nreg, log, PREVIEW if preview else None, col)
+    det, reg, hgt, regions = build('body', surf, sk, n, nreg, log, PREVIEW if preview else None, col)
     os.makedirs(OUT, exist_ok=True)
     wr.write_png(os.path.join(OUT, 'muscle_body_detail.png'), wr.to_u8(det))
     wr.write_png(os.path.join(OUT, 'muscle_body_region.png'), reg)
-    table = ['# SF Body Morphs muscle layouts (tools/muscles/author.py). layout <name> <detail size> <region size> <slope max>; then',
+    wr.write_png(os.path.join(OUT, 'muscle_body_height.png'), hgt)
+    table = ['# SF Body Morphs muscle layouts (tools/muscles/author.py). layout <name> <detail size> <region size> <slope max> <height max m>; then',
              '# muscle <index from 1> <name> <area core|back|legs|arms> <side L|R|C>',
              '# export ' + os.path.basename(d),
-             'layout body %d %d %.3f' % (n, nreg, SLOPE_MAX)]
+             'layout body %d %d %.3f %.3f' % (n, nreg, SLOPE_MAX, HEIGHT_MAX)]
     for k, (rn, ra, rs) in enumerate(regions):
         table.append('muscle %d %s %s %s' % (k + 1, rn, ra, rs))
     with open(os.path.join(OUT, 'muscle_layouts.txt'), 'w', newline='\n') as f:

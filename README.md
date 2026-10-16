@@ -41,7 +41,7 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
-0.11.13 (face-only characters: the bad body combination can no longer be picked):
+0.11.14 (face-only characters: the bad body combination can no longer be picked):
 - A DAZ character converted for her showed a wrong body at Body 100 % and Krista's whole-body skin with the game's blush
   layers glaring on it when the body skin was on: the body conversion folds a body of quite another shape (Genesis 9) and
   is parked. Characters from other sources than VaM (DAZ, any -Source file) are now converted face-only: character.txt
@@ -72,6 +72,18 @@ Pipeline, after 0.11.10 (skin bake fixes found on the Genesis 9 character's face
   against an outline of 50 mm and gave every character 16-23 % bigger calves and, divided out, shorter shins (Krista's at the
   0.85 clamp). The neck girth is the narrowest neck outline between the eyes and the nipples, not a band between each rig's
   own neck and head joints (other heights per rig: Krista's neck came out 15 % thicker instead of 4 % thinner).
+
+0.11.13 (sculpted muscles as geometry):
+- The tensed-muscle shape (0.11.8) was one smooth pillow per muscle: a weight that rose from each muscle's edge to 1 over a few
+  cm, so a fully flexed abdomen was one dome, not a six-pack, and nothing approached an athletic sculpt. `tools/muscles/author.py`
+  already evaluated the sculpt (abdominal bellies and the tendinous lines between them, linea alba, serratus fingers, obliques, lats,
+  erectors, glutes, the quad teardrop, hamstrings, calf heads, deltoid / biceps / triceps / forearm bellies) but only wrote its slope
+  for the normal map. It now also writes the height itself (`muscle_body_height.png`, 16 bits over R / G, +-16 mm), and the GPU
+  contact bake uses it per vertex: each vertex's shape = its sculpted height / the area's highest belly, times the activation, so
+  the bellies rise and the grooves between them sink as she tenses. The area sliders (Skin tab: Core / Back / Arms / Legs) are the
+  area's highest belly in mm, now up to 20 mm (15-20 mm with Flex 1-2 is a bodybuilder). The normal-map relief stays as the fine
+  detail on top. A bundle without the height map falls back to the 0.11.8 pillow. Checked offline on her export (her body displaced
+  at 8 mm and lit: separate abs, serratus, lats, scapulae, quads and knees); not seen in the game yet. Shader bundle rebuilt.
 
 0.11.12 (fixes from the 0.11.11 headset run; a Debug tab):
 - A seam / cut-off around her calves with the leg muscles up. Her lower calves and feet are their own mesh (`reika_foot`: a

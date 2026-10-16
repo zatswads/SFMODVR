@@ -560,6 +560,17 @@ namespace SfMorph
             public MuscleLayer Layer;
             public Color32[] Region, Detail;
             public int RW, RH, DW, DH;
+            // 0.11.12: the authored height (m) per texel and each muscle's peak (m, the highest texel it owns): the geometry is height / peak
+            public float[] Height; public int HW, HH; public float[] Peak;
+            public float HeightAt(Vector2 t)
+            {
+                float x = t.x * HW - 0.5f, y = t.y * HH - 0.5f;
+                int x0 = Mathf.Clamp(Mathf.FloorToInt(x), 0, HW - 1), y0 = Mathf.Clamp(Mathf.FloorToInt(y), 0, HH - 1);
+                int x1 = Mathf.Min(x0 + 1, HW - 1), y1 = Mathf.Min(y0 + 1, HH - 1);
+                float fx = Mathf.Clamp01(x - x0), fy = Mathf.Clamp01(y - y0);
+                float a = Mathf.Lerp(Height[y0 * HW + x0], Height[y0 * HW + x1], fx), b = Mathf.Lerp(Height[y1 * HW + x0], Height[y1 * HW + x1], fx);
+                return Mathf.Lerp(a, b, fy);
+            }
         }
 
         // How far a muscle's bulge ramps up from its edge (m) by area: an arm muscle is narrow, a thigh / the back broad.
@@ -603,7 +614,8 @@ namespace SfMorph
             // dilated rim, was dropped as "no muscle" and every UV seam drew a groove down the bulge (the leg sides, the calves).
             var dom = new int[V];
             var bestA = new int[V];
-            for (int v = 0; v < V; v++) bestA[v] = -1;
+            var bestUv = new Vector2[V];   // 0.11.12: the UV the winning texel came from (the height is read there)
+            for (int v = 0; v < V; v++) { bestA[v] = -1; bestUv[v] = uv[v]; }
             for (int v = 0; v < V; v++)
             {
                 int cv = (int)canon[v];
@@ -616,7 +628,7 @@ namespace SfMorph
                 var q = mm.Region[py * mm.RW + px];
                 int i1 = q.r, i2 = q.g;
                 if (i1 < 1 || i1 > L.Count || i1 > MuscleFlex.Max || q.a <= bestA[cv]) continue;
-                bestA[cv] = q.a;
+                bestA[cv] = q.a; bestUv[cv] = t;
                 float sh = q.b / 255f;
                 if (i2 < 1 || i2 > L.Count || i2 > MuscleFlex.Max) { i2 = 0; sh = 1f; }
                 dom[cv] = sh >= 0.5f || i2 == 0 ? i1 : i2;
@@ -641,6 +653,33 @@ namespace SfMorph
                     }
                     if (n > 0 && bestN * 3 >= n * 2) { dom[v] = dom[best]; mus[v] = mus[best]; bestA[v] = 0; }
                 }
+            // 0.11.12 (user: the muscles should approach a sculpted athletic body): with the authored height map the belly weight is the
+            // sculpt itself, height / the muscle's peak: separate abdominal bellies with the linea alba and the tendinous lines between them,
+            // the serratus fingers, the quad teardrop, the calf heads, grooves going in (negative) as the muscle tenses. The uniform
+            // geodesic pillow below stays for a bundle without the map.
+            if (mm.Height != null && mm.Peak != null)
+            {
+                int nh = 0;
+                var bh = new float[V];
+                for (int v = 0; v < V; v++)
+                {
+                    if (dom[v] == 0) continue;
+                    nh++;
+                    bh[v] = Mathf.Clamp(mm.HeightAt(bestUv[v]) / mm.Peak[dom[v] - 1], -0.8f, 1.25f);
+                }
+                if (nh == 0) { note = "muscles: none under her UVs"; return 0; }
+                // one light pass (the map is ~1 cm per 5 texels: bilinear already; this only takes the texel stair off coarse meshes)
+                var bs = new float[V];
+                for (int v = 0; v < V; v++)
+                {
+                    if (dom[v] == 0) continue;
+                    uint o0 = adjOff[v], o1 = adjOff[v + 1];
+                    float sum = 0f; int n = 0;
+                    for (uint k = o0; k < o1; k++) { int u = (int)adjV[k]; if (dom[u] != 0) { sum += bh[u]; n++; } }
+                    bs[v] = n > 0 ? 0.6f * bh[v] + 0.4f * sum / n : bh[v];
+                }
+                return FinishMuscles(L, dom, mus, bs, canon, V, belly, true, out note);
+            }
             // 2. geodesic distance to the nearest muscle edge (seeds: a muscle vertex next to another muscle or to none)
             var dist = new float[V];
             var heap = new MinHeap(4096);
@@ -698,19 +737,33 @@ namespace SfMorph
                 }
                 var tmp = b0; b0 = b1; b1 = tmp;
             }
-            // welded copies take their canonical's values
+            return FinishMuscles(L, dom, mus, b0, canon, V, belly, false, out note);
+        }
+
+        // Welded copies take their canonical's values; the bake note per area.
+        static int FinishMuscles(MuscleLayer L, int[] dom, Vector4[] mus, float[] b, uint[] canon, int V, float[] belly, bool sculpt, out string note)
+        {
             var perArea = new Dictionary<string, int>();
+            int musN = 0;
+            float lo = 0f, hi = 0f;
             for (int v = 0; v < V; v++)
             {
                 int c = (int)canon[v];
-                belly[v] = dom[c] != 0 ? Mathf.Clamp01(b0[c]) : 0f;
+                belly[v] = dom[c] != 0 ? (sculpt ? b[c] : Mathf.Clamp01(b[c])) : 0f;
                 mus[v] = dom[c] != 0 ? mus[c] : new Vector4(-1f, 0f, -1f, 0f);
-                if (c == v && dom[v] != 0) { string a = L.Area[dom[v] - 1]; int n; perArea.TryGetValue(a, out n); perArea[a] = n + 1; }
+                if (c == v && dom[v] != 0)
+                {
+                    musN++;
+                    string a = L.Area[dom[v] - 1]; int n; perArea.TryGetValue(a, out n); perArea[a] = n + 1;
+                    lo = Mathf.Min(lo, belly[v]); hi = Mathf.Max(hi, belly[v]);
+                }
             }
             var sb = new StringBuilder("muscles ").Append(musN).Append(" verts [");
             bool first = true;
             foreach (var kv in perArea) { sb.Append(first ? "" : " ").Append(kv.Key).Append(':').Append(kv.Value); first = false; }
-            note = sb.Append(']').ToString();
+            sb.Append(']');
+            if (sculpt) sb.Append(" sculpted, belly ").Append(lo.ToString("0.00")).Append(" to ").Append(hi.ToString("0.00"));
+            note = sb.ToString();
             return musN;
         }
 
