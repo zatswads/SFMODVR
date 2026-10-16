@@ -41,6 +41,14 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.22 (grab sound on the grab button; a softer rub):
+- The grab sound "didn't work": it only played at the onset of a classified grope (a press of 20 N or 1.5 cm held for 0.25 s), so
+  closing your hand on her was silent. Now the grab button closing while that physics hand touches her plays it at the contact
+  point (log `Reactions: grab sound: your left hand closed on ...`); the grope onset keeps its own, at most one per 0.5 s.
+- The built rub sound (used while `Soundsub` is empty) still sounded like clothing: fabric is the bright rustle above 2.5 kHz.
+  It is now a duller, softer skin band (150-850 Hz), the airy sheen at a sixteenth and below 4 kHz, with slower, deeper swells.
+  Recorded skin sounds from the user's VaM folder are being surveyed; nothing is installed until they are picked.
+
 0.11.21 (fixes from a headset run: breast physics, fingers, smooth marks, muscles, pelvis):
 - The default Physics settings deformed her breasts oddly (a fold where her arm pressed one). Two causes. (1) The only soft-zone default
   that changes her shape is Quality: Balanced keeps the unsmoothed body mesh, Fidelity (the setup that looked right) subdivides and

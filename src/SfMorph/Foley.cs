@@ -285,22 +285,23 @@ namespace SfMorph
         // 10 ms, a rough crackle like fibres. Skin on skin is a soft, breathy swish: a warm band (180 Hz - 1.2 kHz, two poles each side) with
         // a faint airy sheen (2.5 - 6 kHz at a fifth), its level swelling slowly like a stroke (2.5 / 3.5 / 5 Hz, all periodic in the 2 s loop),
         // no grain. Seamless by a 100 ms equal-power crossfade. Your own recordings in Sounds\rub still come first.
+        // 0.11.22 (user: it still sounds like clothing): fabric is the bright rustle above 2.5 kHz; skin sliding on skin is duller and
+        // softer: the band now 150 - 850 Hz, the airy sheen at a sixteenth (was a fifth) and below 4 kHz, slower and deeper swells.
         static float[] BuildRub()
         {
             int n = 44100 * 2, x = 4410;
             var s = Noise(n + x, 91);
-            HighPass(s, 180f); HighPass(s, 180f); LowPass(s, 1200f); LowPass(s, 1200f);
+            HighPass(s, 150f); HighPass(s, 150f); LowPass(s, 850f); LowPass(s, 850f);
             Normalize(s, 1f);
             var air = Noise(n + x, 93);
-            HighPass(air, 2500f); HighPass(air, 2500f); LowPass(air, 6000f);
+            HighPass(air, 1800f); HighPass(air, 1800f); LowPass(air, 4000f);
             Normalize(air, 1f);
             var o = new float[n];
             Func<int, float> sample = i =>
             {
                 float t = (i % n) / 44100f;
-                float mod = 0.75f + 0.12f * Mathf.Sin(2f * Mathf.PI * 2.5f * t + 0.4f) + 0.08f * Mathf.Sin(2f * Mathf.PI * 3.5f * t + 1.9f)
-                    + 0.05f * Mathf.Sin(2f * Mathf.PI * 5f * t + 4.1f);
-                return (s[i] + 0.2f * air[i]) * mod;
+                float mod = 0.7f + 0.2f * Mathf.Sin(2f * Mathf.PI * 1.5f * t + 0.4f) + 0.08f * Mathf.Sin(2f * Mathf.PI * 2.5f * t + 1.9f);
+                return (s[i] + 0.06f * air[i]) * mod;
             };
             for (int i = 0; i < n; i++) o[i] = sample(i);
             for (int i = 0; i < x; i++)

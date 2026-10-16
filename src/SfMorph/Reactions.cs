@@ -135,6 +135,7 @@ namespace SfMorph
         struct Slide { public Vector3 L, Pt; public float Spd; public int Src; }
         readonly Slide[] _sl = new Slide[HerBody.SegNames.Length];
         float _rubLvl, _lastPatT = -100f, _lastGrabT = -100f;
+        readonly bool[] _grabWas = new bool[2];
         Vector3 _rubPt, _testRubAt;
         float _testRubUntil = -1f;
         bool _rubNoted;
@@ -198,7 +199,7 @@ namespace SfMorph
                 {
                     if (HerBody.BuildVersion != _bv) RebuildMap();
                     if (cut) ClearR();
-                    else Classify(dt, s);
+                    else { Classify(dt, s); GrabButtonSound(s); }
                 }
                 else if (_bv != -2) { _bv = -2; ClearR(); }
                 // 0.9.0: the skin rub loop follows the fastest sliding touch of this frame
@@ -307,6 +308,36 @@ namespace SfMorph
             var segs = HerBody.Segs;
             for (int i = 0; i < segs.Count; i++)
                 if (segs[i].Index >= 0 && segs[i].Index < _r.Length) _r[segs[i].Index].LastHitRead = segs[i].HitT;
+        }
+
+        // 0.11.22 (user: the grab sound doesn't work): it only played at the onset of a classified grope (20 N or 1.5 cm for 0.25 s), so
+        // closing your hand on her - what a grab is - was silent. Now the grab button closing (Grip.Grab* crossing 0.6 from under 0.35) while
+        // that physics hand touches her (contact within 0.3 s) plays it at the contact point; the grope onset keeps its own (0.5 s apart).
+        void GrabButtonSound(ReactionSettings s)
+        {
+            if (!s.Sound || !s.Foley || _quiet) return;
+            float fnow = Time.fixedTime;
+            for (int h = 0; h < 2; h++)
+            {
+                float gv = h == 0 ? Grip.GrabLeft : Grip.GrabRight;
+                bool closed = _grabWas[h] ? gv > 0.35f : gv >= 0.6f;
+                bool edge = closed && !_grabWas[h];
+                _grabWas[h] = closed;
+                if (!edge || _now - _lastGrabT < 0.5f) continue;
+                HerBody.Seg best = null; float bt = 0.3f;
+                var segs = HerBody.Segs;
+                for (int i = 0; i < segs.Count; i++)
+                {
+                    float dtT = fnow - (h == 0 ? segs[i].TouchTL : segs[i].TouchTR);
+                    if (dtT < bt) { bt = dtT; best = segs[i]; }
+                }
+                if (best == null) continue;
+                _lastGrabT = _now;
+                Vector3 pt = best.PhysPt.sqrMagnitude > 1e-8f ? best.PhysPt : SegCentre(best);
+                bool ok = _g.FoleyShot(SkinFoley.Grab, pt, s.SkinVolume * Mathf.Lerp(0.6f, 0.9f, gv), Mathf.Lerp(0.94f, 1.06f, Rand()));
+                if (ok) _sfx++;
+                if (s.Log >= 1) L("grab sound: your " + (h == 0 ? "left" : "right") + " hand closed on " + best.Name + (ok ? "" : " (no sound: " + (_g.Found ? "sound effects off or no clip" : "no game link") + ")"));
+            }
         }
 
         // ================= classifier (design 1.4) =================

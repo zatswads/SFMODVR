@@ -98,6 +98,13 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.22 (grab button sound, softer rub)
+
+Install `dist/SfMorph.dll`. Reactions on, Sound and Skin sounds on, physics hands on.
+
+- Put a hand on her and press the grab button: a grab sound at your hand, and a `grab sound: your ... hand closed on ...` log line.
+- Slide a hand over her skin: the rub should sound like skin (dull, soft), not fabric.
+
 ## 0.11.21 (headset fixes)
 
 Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`.
