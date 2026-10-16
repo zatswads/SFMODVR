@@ -98,6 +98,15 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.18 (adonis belt, athletic back)
+
+Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`.
+
+- Flex test, Core 10-16 mm: a deep crease from each hip bone towards the pubis with the oblique pad bulging over it; the lower
+  abdomen wide, not a V.
+- Flex test, Back 10-16 mm, and a pose with her hands behind her back: the spine a deep valley between two columns, the shoulder
+  blades' muscles and the diamond between them, lats spreading out from the armpits.
+
 ## 0.11.17 (irregular abs, lower body subdivided twice)
 
 Install `dist/SfMorph.dll` and `dist/sfmorph_shaders`. Physics quality Fidelity. Log: `Fidelity subdivided reika_lowerBody_normal ...: 2 levels`

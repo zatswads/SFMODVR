@@ -41,6 +41,15 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.18 (adonis belt, fuller waist, a lean athletic back):
+- No adonis belt, and the lower abdomen narrowed into a V. The inguinal line is now a deep crease from each hip bone down to the
+  pubis with the external oblique as a full pad rolling over it, so her waist bulges at the sides instead of tapering; the rectus
+  stays nearly as wide down to the pubis (the semilunaris lines run almost parallel).
+- The back, modelled on a lean athletic back under tension: a deeper spinal groove up to the neck, erector columns that stay
+  strong through the thorax with their outer edges marked, rhomboids and lower traps (the diamond between the shoulder blades),
+  teres minor and the creases that separate infraspinatus / teres / lat, fuller lats. Pulling the arms back (hands clasped behind
+  her) now tenses the traps and rhomboids. `author.py --preview` writes `muscle_body_geo_back.png` too. Shader bundle rebuilt.
+
 0.11.17 (irregular abs; a second subdivision level on her lower body):
 - The abs were a symmetrical grid of equal blocks. Real abdominals are uneven: the two sides' tendinous intersections sit at
   different heights (here her right ~6-8 mm higher), each one curves and slopes its own way, the linea alba wanders a little, the

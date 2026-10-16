@@ -277,7 +277,9 @@ namespace SfMorph
                 // 0.11.13: pecs push the arm forward / across and bear weight on the hands; traps lift and brace the shoulders (arms raised,
                 // propping her up, an arched or held trunk)
                 else if (n.StartsWith("pecs")) t = Mathf.Max(Mathf.Max(Sm(15f, 60f, ArmSwing[s]) * (1f - 0.5f * Sm(100f, 150f, Elev[s])), 0.8f * ArmLoad[s]), 0.3f * absT);
-                else if (n == "traps") t = Mathf.Max(Mathf.Max(0.8f * Sm(80f, 150f, elevMax), 0.7f * Mathf.Max(ArmLoad[0], ArmLoad[1])), 0.6f * backT);
+                // 0.11.18: arms pulled back (hands clasped behind her) squeeze the shoulder blades together: traps and rhomboids
+                else if (n == "traps") t = Mathf.Max(Mathf.Max(0.8f * Sm(80f, 150f, elevMax), 0.7f * Mathf.Max(ArmLoad[0], ArmLoad[1])),
+                                                     Mathf.Max(0.6f * backT, Sm(10f, 40f, -Mathf.Min(ArmSwing[0], ArmSwing[1]))));
                 else if (n.StartsWith("forearms")) t = Mathf.Max(Mathf.Max(0.6f * Sm(30f, 110f, Elbow[s]), Sm(15f, 50f, Wrist[s])), 0.8f * ArmLoad[s]);
                 else t = 0f;
                 tension[k] = Mathf.Clamp01(t);
