@@ -536,7 +536,7 @@ namespace SfMorph
 
         // Soft zones: helpers bound; over ~1 s the springs integrated the frame time (0.11.48: equal substeps adding up to each frame, SimClock)
         // and no simulation time was dropped (only a frame over 0.1 s may drop some).
-        static int _sf0; static long _ss0; static double _sd0, _sx0, _st0;
+        static int _sf0, _cuts0; static long _ss0; static double _sd0, _sx0, _st0;
         static string Soft(Plugin p, Body b, float t)
         {
             Character her;
@@ -545,7 +545,7 @@ namespace SfMorph
             if (!p.Physics.Value) return Skip("soft zones are off (Physics tab)");
             var z = her.Soft;
             if (z == null || z.HelperCount == 0) return Fail("no helper bound (" + (z != null ? z.Status : "no soft zones") + ")");
-            if (_phase == 0) { _sf0 = z.SimFrames; _ss0 = z.SimSteps; _sd0 = z.SimDt; _sx0 = z.SimDropped; _st0 = z.SimTime; z.SimMaxSteps = 0; _phase = 1; return null; }
+            if (_phase == 0) { _sf0 = z.SimFrames; _ss0 = z.SimSteps; _sd0 = z.SimDt; _sx0 = z.SimDropped; _st0 = z.SimTime; z.SimMaxSteps = 0; z.SimMaxJump = 0f; _cuts0 = z.SimCuts; _phase = 1; return null; }
             if (t < 1f) return null;
             int frames = z.SimFrames - _sf0;
             if (frames <= 0) return Fail(z.HelperCount + " helpers but Simulate did not run in 1 s (physics on? her soft zones built?)");
@@ -553,11 +553,14 @@ namespace SfMorph
             double dt = z.SimDt - _sd0, dropped = z.SimDropped - _sx0, sim = z.SimTime - _st0;
             float fps = (float)(frames / Math.Max(1e-4, dt));
             string nums = z.HelperCount + " helpers; " + frames + " frames at " + F(fps, "0") + " fps, " + F((float)steps / frames, "0.0") + " steps / frame (most " + z.SimMaxSteps + ", cap " +
-                          SoftZones.MaxSteps + "), simulated " + F((float)sim, "0.000") + " of " + F((float)dt, "0.000") + " s, dropped " + F((float)dropped, "0.000") + " s";
+                          SoftZones.MaxSteps + "), biggest per-frame skin jump " + F(z.SimMaxJump * 1000f, "0.0") + " mm, cuts " + (z.SimCuts - _cuts0) + ", simulated " + F((float)sim, "0.000") + " of " + F((float)dt, "0.000") + " s, dropped " + F((float)dropped, "0.000") + " s";
             if (dropped > 1e-4)
                 return Fail(nums + ": a hitch (a frame over 0.1 s) dropped it; run again");
             if (Math.Abs(sim + dropped - dt) > 1e-3 * dt + 1e-4)
                 return Fail(nums + ": the springs' time does not add up to the frame time (SimClock substeps broken)");
+            // 0.11.49: a soft point jumping 4 cm between two frames without a cut is a pop (the 0.11.47 stutter modelled at 7-12 mm on hitches)
+            if (z.SimMaxJump > 0.04f && z.SimCuts == _cuts0)
+                return Fail(nums + ": a soft point jumped over 4 cm in one frame (run it again while she holds still; if it repeats, the soft-zone clock pops)");
             return Pass(nums);
         }
 

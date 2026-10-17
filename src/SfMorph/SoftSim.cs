@@ -47,6 +47,8 @@ namespace SfMorph
         // 0.11.48 clock stats for the 30 s "Soft zones clock" line (frames, substeps, long frames, cuts, clamp hits, the biggest skin jump)
         int _ckFrames, _ckSteps, _ckStepsMax, _ckLong, _ckCuts, _ckClampHits, _ckHelperSteps;
         float _ckJump, _ckNext;
+        // 0.11.49 for Smoke.Soft: the biggest per-frame change of one soft point (m) and the cuts, since the smoke test reset them
+        public float SimMaxJump; public int SimCuts;
 
         // ---- the capsules this frame ----
 
@@ -424,7 +426,7 @@ namespace SfMorph
                     // quick thigh in a dance passes at 23 fps or in a 100 ms frame: the skin popped back to rest)
                     if (SimClock.Jumped(d2, 0.2f, TeleportSpeed, dtRaw))
                     {
-                        if (!h.Asleep || (h.Disp - sag).sqrMagnitude > 0f) { h.Disp = sag; h.Vel = Vector3.zero; h.Asleep = false; _ckCuts++; }
+                        if (!h.Asleep || (h.Disp - sag).sqrMagnitude > 0f) { h.Disp = sag; h.Vel = Vector3.zero; h.Asleep = false; _ckCuts++; SimCuts++; }
                     }
                     // 0.11.48: spread over the substeps (a moving target), not one jump before them: with the springs' time it then is the same at any frame rate
                     else if (inert > 0f && d2 > 1e-10f) { h.Lag = d * (inert * lagScale); h.Asleep = false; }
@@ -629,6 +631,7 @@ namespace SfMorph
                 var h = _helpers[i];
                 float j = (h.Disp - h.PrevOut).sqrMagnitude;
                 if (j > _ckJump) _ckJump = j;
+                if (j > SimMaxJump * SimMaxJump) SimMaxJump = Mathf.Sqrt(j);
                 h.PrevOut = h.Disp;
             }
             Report();

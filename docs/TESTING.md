@@ -98,6 +98,12 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.49 (soft-zone smoke test)
+
+Debug tab -> Soft zones and hands -> **Smoke: Soft zones (1 s)**, once while she stands still and once while she dances or walks:
+`Smoke: soft-zones PASS (... steps / frame ..., biggest per-frame skin jump N mm, cuts 0, simulated X of X s, dropped 0.000 s)`. Healthy:
+a few mm standing, under ~15 mm dancing at 23 fps, cuts 0, simulated = real time. FAIL `jumped over 4 cm` = a pop: send the log.
+
 ## 0.11.48 (jiggle stutter, frame pacing)
 
 Copy `SfMorph.dll`. Log: `SF Body Morphs 0.11.48`. Before handing over: `sh tools/timing/check.sh` passes (lint 0, harness PASS).

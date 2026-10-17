@@ -44,6 +44,10 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.49 (soft-zone smoke test reads the jiggle's steadiness):
+- Debug tab, **Smoke: Soft zones (1 s)** now also prints the biggest per-frame jump of one soft point and the cuts in that second,
+  and fails when a point jumps over 4 cm between two frames without a cut (a pop). Nothing else changed.
+
 0.11.48 (her jiggle no longer stutters in dances and walks):
 - In dance and locomotion animations her soft zones (breasts, glutes, thighs, belly) stuttered, and the game alone was smooth. Cause:
   the soft zones' springs ran on a fixed 1/120 s clock that dropped what didn't fit (at 23 fps a quarter of every frame, 4 steps
