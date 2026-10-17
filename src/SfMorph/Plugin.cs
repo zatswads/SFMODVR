@@ -37,6 +37,8 @@ namespace SfMorph
         internal ConfigEntry<bool> WrinkOn, WrinkFace, WrinkNeck, WrinkBody;
         internal ConfigEntry<float> WrinkStrength, WrinkThreshold, WrinkAttack, WrinkRelease, WrinkCullDistance, WrinkCavity;
         internal ConfigEntry<int> WrinkDebug, WrinkResolution;
+        internal ConfigEntry<bool> WrinkCurveDrive;   // 0.11.47
+        internal ConfigEntry<float> WrinkCurveGain;
         // 0.10.0 muscle definition (a layer of the wrinkle sheets)
         internal ConfigEntry<bool> MuscleOn, MuscleCore, MuscleBack, MuscleLegs, MuscleArms;
         internal ConfigEntry<float> MuscleFitness, MuscleGain, MuscleStrength, MuscleShade, MuscleAttack, MuscleRelease;
@@ -177,6 +179,12 @@ namespace SfMorph
             WrinkResolution = Config.Bind("Wrinkles", "Resolution", 0, new ConfigDescription("Wrinkle texture size: 0 the skin texture's size (at most 4096), 1 at most 2048, 2 at most 1024.", new AcceptableValueRange<int>(0, 2)));
             WrinkCavity = Config.Bind("Wrinkles", "Cavity", 0.3f, new ConfigDescription("Crease shade: how much darker her skin colour is at the bottom of a line (0 off, 1 strong). Her skin's subsurface scattering blurs normal-map detail, most of all on her face; the darker crease stays visible.", new AcceptableValueRange<float>(0f, 1f)));
             WrinkCullDistance = Config.Bind("Wrinkles", "CullDistance", 3f, new ConfigDescription("No wrinkle updates while her head is farther than this from your headset (metres).", new AcceptableValueRange<float>(0.5f, 20f)));
+            // 0.11.47 curve-driven face wrinkles (read by Wrinkles.UpdateActs through WrinkleSettings' statics)
+            WrinkCurveDrive = Config.Bind("Wrinkles", "CurveDrive", true, "Face and neck lines also follow what her face is told to do (the lip sync's mouth / brow / nose curves, and an estimate per face-clip mood: smile, pain, pleasure, surprise...), not only how far her skin compresses. Expressions she holds keep their lines.");
+            WrinkCurveGain = Config.Bind("Wrinkles", "CurveGain", 1f, new ConfigDescription("How strongly those curves fade the lines in (0 off, 2 double).", new AcceptableValueRange<float>(0f, 2f)));
+            WrinkleSettings.CurveDrive = WrinkCurveDrive.Value; WrinkleSettings.CurveGain = WrinkCurveGain.Value;
+            WrinkCurveDrive.SettingChanged += (o, e) => WrinkleSettings.CurveDrive = WrinkCurveDrive.Value;
+            WrinkCurveGain.SettingChanged += (o, e) => WrinkleSettings.CurveGain = WrinkCurveGain.Value;
             MuscleOn = Config.Bind("Muscles", "On", false, "Muscle definition: authored muscle relief (abs, obliques, serratus, ribcage, back, lats, glutes, thighs, calves, shoulders, arms) in her skin's normal map, a faint resting tone everywhere and more where her pose tenses a muscle (shares the wrinkles' textures and shader bundle).");
             MuscleFitness = Config.Bind("Muscles", "Fitness", 0.3f, new ConfigDescription("Resting tone: how defined her muscles are when relaxed (0 none, 1 fully).", new AcceptableValueRange<float>(0f, 1f)));
             MuscleGain = Config.Bind("Muscles", "TensionGain", 1f, new ConfigDescription("How much her pose adds on top (a crunch for the abs, a squat for the thighs and glutes, a bent elbow for the biceps, tiptoes for the calves; 0 = resting tone only, 2 = full definition at half the tension).", new AcceptableValueRange<float>(0f, 2f)));

@@ -922,6 +922,13 @@ namespace SfMorph
             string cavOff = why ?? (_body.Wrink != null && !_body.Wrink.HasCavity ? "off: the shader bundle is older than this DLL (install dist/sfmorph_shaders)" : null);
             float cv = Slider("Crease shade", _p.WrinkCavity.Value, 0f, 1f, "0.00", 0.3f, cavOff);
             if (Mathf.Abs(cv - _p.WrinkCavity.Value) > 0.0001f) _p.WrinkCavity.Value = cv;
+            // 0.11.47: curve-driven face lines (lip sync curves, face-clip moods)
+            GUI.enabled = sliderOff == null;
+            bool cdr = GUILayout.Toggle(_p.WrinkCurveDrive.Value, " Expression curves: face lines follow her lip sync and face-clip moods too");
+            GUI.enabled = true;
+            if (sliderOff == null && cdr != _p.WrinkCurveDrive.Value) _p.WrinkCurveDrive.Value = cdr;
+            float cgn = Slider("Curve gain", _p.WrinkCurveGain.Value, 0f, 2f, "0.00", 1f, why ?? (_p.WrinkCurveDrive.Value ? null : "off: expression curves are off"));
+            if (Mathf.Abs(cgn - _p.WrinkCurveGain.Value) > 0.0001f) _p.WrinkCurveGain.Value = cgn;
             GUI.enabled = sliderOff == null;
             GUILayout.BeginHorizontal();
             bool face = GUILayout.Toggle(_p.WrinkFace.Value, " Face", GUILayout.Width(90));

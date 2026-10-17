@@ -795,6 +795,7 @@ namespace SfMorph
             if (_sT >= att + _sHold) _sRel = true;
             if (env <= 0f) { _sOn = false; return; }
             float w = Mathf.Clamp01(env * _sW * scale);
+            FaceCurves.Mood(Surprise, w);   // 0.11.47
             for (int i = 0; i < _sBones.Length; i++)
             {
                 var t = _face[_sBones[i]];
@@ -817,6 +818,7 @@ namespace SfMorph
             if (env <= 0f) { _cur = null; _curMood = -1; _rel = false; return; }
             float w = Mathf.Clamp01(env * _w * scale);
             if (w <= 0f) return;
+            FaceCurves.Mood(_curMood, w);   // 0.11.47: the mood's estimated curves drive the face wrinkles
             var tr = _cur;
             float len = tr.Ci.Len;
             float ct = tr.Ci.Loop && len > 0.05f ? _t % len : Mathf.Min(_t, len);
