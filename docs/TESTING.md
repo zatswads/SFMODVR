@@ -98,6 +98,14 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.37 (glute fat physics, broad upper body)
+
+Install `dist/SfMorph.dll` (no bundle change).
+- Chubby on, Glutes up to 20-30 mm: slap or grab her glutes, or watch his thrusts. They should wobble slower and wider, sink further
+  and settle more slowly than at Glutes 0. Chubby -100 %: firmer.
+- Skin tab, Muscles: Broad upper body 0 -> 1.25. Shoulders go out, the arms and neck get thicker, and the lats / shoulders / upper
+  chest fill out (with the muscles on) so her back makes a V from behind. The Body tab's Athletic upper body moves with it (one value).
+
 ## 0.11.36 (neck lines)
 
 Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log: `SF Body Morphs 0.11.36`. Wrinkles on with Neck on, Debug -> Wrinkle

@@ -44,6 +44,16 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.37 (chubby glutes move like the breasts; a broad upper body in the Muscles section):
+- Chubby glutes now also change her glute physics, the way breast tissue behaves (user). More glute fat makes the glute soft zones
+  softer (slower, wider jiggle), lets them give further under a hand or his body, and lets them keep wobbling longer. The belly and
+  thigh zones follow their own fat the same way; slimmer (Chubby below 0) is firmer. The fat itself already rides on those soft zones
+  and dents deeper. The Glutes slider is in the Chubby section of the Skin tab.
+- Broad upper body in the Skin tab's Muscles section (user: no way to make her upper torso look broader there). It is the Body tab's
+  Athletic upper body (one value, saved with her look), now broader (shoulders 1.4 -> 1.8 cm out, ribcage x1.05). With the muscles
+  on, it also keeps her lats, deltoids, traps and upper chest filled out at rest (up to 70 % of their tensed shape) for a V-taper
+  without flexing.
+
 0.11.36 (neck lines across her whole neck, not two mirrored strokes):
 - Her neck creases showed as two short, mirrored lines slanting down from under her jaw (headset 17 Oct). The front of her neck on
   the body texture is shared by two meshes: her throat and the small piece under her chin. The maps were made on the under-chin
