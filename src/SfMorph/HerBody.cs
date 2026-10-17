@@ -15,7 +15,7 @@ namespace SfMorph
         {
             if (Ok && frameDt > 1e-4f)
             {
-                var raw = (p - P) / frameDt; float m2 = raw.sqrMagnitude; if (m2 > maxV * maxV) raw *= maxV / Mathf.Sqrt(m2); V = Vector3.Lerp(V, raw, 0.5f);
+                var raw = (p - P) / frameDt; float m2 = raw.sqrMagnitude; if (m2 > maxV * maxV) raw *= maxV / Mathf.Sqrt(m2); V = Vector3.Lerp(V, raw, 0.5f);   // timing-lint: ok per-sample low-pass of the physics hands tuned at 23-40 fps; dt-based would change the hands
                 // angular velocity from the shortest rotation Q -> q (world axis), low-passed like V and clamped
                 Quaternion dq = q * Quaternion.Inverse(Q);
                 if (dq.w < 0f) { dq.x = -dq.x; dq.y = -dq.y; dq.z = -dq.z; dq.w = -dq.w; }
@@ -24,7 +24,7 @@ namespace SfMorph
                 if (ang > 180f) ang -= 360f;
                 Vector3 w = float.IsNaN(ax.x) || float.IsInfinity(ax.x) || ang < 1e-3f ? Vector3.zero : ax * (ang * Mathf.Deg2Rad / frameDt);
                 float wm = w.magnitude; if (wm > MaxW) w *= MaxW / wm;
-                W = Vector3.Lerp(W, w, 0.5f);
+                W = Vector3.Lerp(W, w, 0.5f);   // timing-lint: ok same as V above
             }
             else { V = Vector3.zero; W = Vector3.zero; }
             P = p; Q = q; T = now; Ok = true;

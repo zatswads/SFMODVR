@@ -15,15 +15,17 @@ namespace SfMorph
     // contacts change.
     internal partial class SoftZones
     {
-        const float Step = 1f / 120f;                  // fixed substep: the springs behave the same at any frame rate
-        // 0.11.47 [Physics] SoftMaxSteps (Body sets it every frame): was a constant 4, so below 30 fps the rest of every frame's time was
-        // dropped by the hitch rule in Simulate (at 23 fps a quarter of it: the jiggle ran slow). 8 keeps all of it down to 15 fps.
+        // 0.11.48: equal substeps of at most Step adding up to the frame (SimClock), at most MaxSteps (then longer ones): the springs advance by
+        // exactly the frame time at any frame rate. Up to 0.11.47 a fixed 1/120 s accumulator dropped the rest of a frame past MaxSteps (a
+        // quarter of every frame at 23 fps with 4) and alternated 2 and 3 steps on even frames at 41 fps: the jiggle juddered with the frame rate.
+        // MaxSteps is [Physics] SoftMaxSteps (0.11.47, Body sets it every frame): past it the substeps get longer, no time is dropped.
+        const float Step = 1f / 120f;
         public static int MaxSteps = 8;
         // 0.11.47 smoke test (Smoke.cs): frames simulated, their summed (raw) dt, 1/120 s steps taken, the most in one frame, the time the
         // hitch rule dropped (s); counters only, read as differences over the test
         public int SimFrames, SimMaxSteps;
         public long SimSteps;
-        public double SimDt, SimDropped;
+        public double SimDt, SimDropped, SimTime;   // 0.11.48 SimTime: the time the springs integrated (sum of the substeps)
         public int HelperCount { get { return _helpers.Count; } }
         // 0.7.7: the reach of a capsule is its radius plus this. The points sit ON the skin (SoftZones picks skin vertices), so a capsule
         // dents exactly when its surface reaches the skin; the 0.7.6 PointRadius 12 mm + Margin 8 mm made every hand dent from 2 cm away,
@@ -42,7 +44,11 @@ namespace SfMorph
         float[] _zBulge;               // per zone: how much of a push its other points get (0.25 at Performance; less with more points)
         float[] _zSag;                 // 0.7.3 per zone: how much gravity pulls it (x limit x gravity): breast 1, belly 0.5, glute 0.6, thigh 0.3
         Vector3[] _zSagV;              // per zone, this frame: the world-space sag (down * _zSag * limit * gravity)
-        float _acc;                    // fixed-step accumulator
+        // 0.11.48 clock stats for the 30 s "Soft zones clock" line (frames, substeps, long frames, cuts, clamp hits, the biggest skin jump)
+        int _ckFrames, _ckSteps, _ckStepsMax, _ckLong, _ckCuts, _ckClampHits, _ckHelperSteps;
+        float _ckJump, _ckNext;
+        // 0.11.49 for Smoke.Soft: the biggest per-frame change of one soft point (m) and the cuts, since the smoke test reset them
+        public float SimMaxJump; public int SimCuts;
 
         // ---- the capsules this frame ----
 
@@ -118,7 +124,7 @@ namespace SfMorph
             for (int i = 0; i < _srcLastImpact.Length; i++) _srcLastImpact[i] = -10f;
             ImpactCount = 0;
             _bL2W = new Matrix4x4[_bones.Count]; _bW2L = new Matrix4x4[_bones.Count]; _bOk = new bool[_bones.Count];
-            _acc = 0f; _capVersion = -1; _nContacts = 0; _sig = -1; _stamp = 0; _peak = 0f;
+            _capVersion = -1; _nContacts = 0; _sig = -1; _stamp = 0; _peak = 0f;
         }
 
         void SimReset()
@@ -270,7 +276,9 @@ namespace SfMorph
             if (nh == 0 || _bL2W == null) { if (_dbgOn) DebugOff(); if (Contacts.Length > 0) Contacts = ""; return; }
             if (!(dt > 1e-5f)) return;   // paused
             SimFrames++; SimDt += dt;    // 0.11.47 smoke test counters (Smoke.cs)
-            if (dt > 0.1f) dt = 0.1f;
+            float dtRaw = dt;
+            if (dt > SimClock.MaxFrame) { dt = SimClock.MaxFrame; _ckLong++; SimDropped += dtRaw - dt; }   // 0.11.48: only a frame over 0.1 s drops time now
+            float lagScale = dt / dtRaw;   // a long frame (hitch) lags by the share of its motion the sim runs, not by all of it
             softness = Mathf.Clamp01(softness); spring = Mathf.Clamp01(spring);
             float k = Mathf.Lerp(400f, 120f, softness);
             float zeta = Mathf.Lerp(1f, 0.45f, spring);
@@ -409,37 +417,52 @@ namespace SfMorph
                     // asleep means resting at its equilibrium: follow a Sag that drifted less than 0.1 mm, wake for a bigger change (pose change)
                     if ((h.Disp - sag).sqrMagnitude < 1e-8f) h.Disp = sag; else h.Asleep = false;
                 }
+                h.Lag = Vector3.zero;
                 if (h.HasPrev)
                 {
                     var d = r - h.PrevRest;
                     float d2 = d.sqrMagnitude;
-                    if (d2 > 0.04f)   // moved 20 cm in a frame: an animation cut or teleport, not motion to lag behind
+                    // a cut or teleport, not motion to lag behind: 20 cm, or faster than TeleportSpeed for this frame (0.11.48: was a flat 20 cm, which a
+                    // quick thigh in a dance passes at 23 fps or in a 100 ms frame: the skin popped back to rest)
+                    if (SimClock.Jumped(d2, 0.2f, TeleportSpeed, dtRaw))
                     {
-                        if (!h.Asleep || (h.Disp - sag).sqrMagnitude > 0f) { h.Disp = sag; h.Vel = Vector3.zero; h.Asleep = false; }
+                        if (!h.Asleep || (h.Disp - sag).sqrMagnitude > 0f) { h.Disp = sag; h.Vel = Vector3.zero; h.Asleep = false; _ckCuts++; SimCuts++; }
                     }
-                    else if (inert > 0f && d2 > 1e-10f) { h.Disp -= d * inert; h.Asleep = false; }
+                    // 0.11.48: spread over the substeps (a moving target), not one jump before them: with the springs' time it then is the same at any frame rate
+                    else if (inert > 0f && d2 > 1e-10f) { h.Lag = d * (inert * lagScale); h.Asleep = false; }
                 }
                 h.PrevRest = r; h.HasPrev = true;
             }
 
-            // 3: the springs, in fixed substeps
-            _acc += dt;
-            int steps = 0;
-            while (_acc >= Step && steps < MaxSteps)
-            {
+            // 3: the springs, in equal substeps adding up to dt (SimClock); the lag a share per substep; the skin's limits inside each substep,
+            // with the velocity into the limit taken out (0.11.48: clamped once per frame with the velocity kept, a swing knocked at its ends)
+            int steps = SimClock.Substeps(dt, Step, MaxSteps);
+            float hs = dt / steps, share = 1f / steps;
+            for (int sub = 0; sub < steps; sub++)
                 for (int i = 0; i < nh; i++)
                 {
                     var h = _helpers[i];
                     if (h.Asleep) continue;
                     int zi = h.ZoneIdx;
-                    h.Vel += ((h.Disp - h.Sag) * -_zK[zi] - h.Vel * _zDamp[zi]) * Step;
-                    h.Disp += h.Vel * Step;
+                    h.Disp -= h.Lag * share;
+                    h.Vel += ((h.Disp - h.Sag) * -_zK[zi] - h.Vel * _zDamp[zi]) * hs;
+                    h.Disp += h.Vel * hs;
+                    Vector3 before = h.Disp;
+                    Clamp(h, _zLim[zi]);
+                    Vector3 corr = h.Disp - before;
+                    float c2 = corr.sqrMagnitude;
+                    if (c2 > 1e-12f)
+                    {
+                        Vector3 cd = corr / Mathf.Sqrt(c2);
+                        float vin = Vector3.Dot(h.Vel, cd);
+                        if (vin < 0f) h.Vel -= cd * vin;
+                        _ckClampHits++;
+                    }
+                    _ckHelperSteps++;
                 }
-                _acc -= Step; steps++;
-            }
-            SimSteps += steps;
+            _ckFrames++; _ckSteps += steps; if (steps > _ckStepsMax) _ckStepsMax = steps;
+            SimSteps += steps; SimTime += hs * steps;
             if (steps > SimMaxSteps) SimMaxSteps = steps;
-            if (_acc > Step) { SimDropped += _acc; _acc = 0f; }   // fell behind (hitch, or below 120 / MaxSteps fps): drop the rest rather than spiral
 
             // 4: contacts, the skin point is pushed out of every capsule that reaches it
             for (int i = 0; i < nh; i++)
@@ -603,8 +626,32 @@ namespace SfMorph
                 h.S.localPosition = _bW2L[h.BoneIdx].MultiplyPoint3x4(h.R + h.Disp);
             }
 
+            for (int i = 0; i < nh; i++)
+            {
+                var h = _helpers[i];
+                float j = (h.Disp - h.PrevOut).sqrMagnitude;
+                if (j > _ckJump) _ckJump = j;
+                if (j > SimMaxJump * SimMaxJump) SimMaxJump = Mathf.Sqrt(j);
+                h.PrevOut = h.Disp;
+            }
             Report();
+            ClockLog();
             if (debug) DebugDraw(nc); else if (_dbgOn) DebugOff();
+        }
+
+        // 0.11.48: every 30 s while the soft zones run, how their clock went (TESTING.md: "Soft zones clock"). Substeps follow the frame time
+        // (about 6 at 23 fps, 3 at 41, 1-2 at 90); "long" frames were over 0.1 s (time clamped); cuts are helpers snapped back to rest by a
+        // jump; clamp is the share of helper substeps that met the skin's limit; jump is the biggest change of one point between two frames.
+        void ClockLog()
+        {
+            float now = Time.unscaledTime;
+            if (_ckNext == 0f) { _ckNext = now + 30f; return; }
+            if (now < _ckNext || _ckFrames == 0) return;
+            _ckNext = now + 30f;
+            Plugin.Log.LogInfo("Soft zones clock last 30 s: " + _ckFrames + " frames, substeps avg " + ((float)_ckSteps / _ckFrames).ToString("0.0") + " max " + _ckStepsMax
+                + ", long frames " + _ckLong + ", cuts " + _ckCuts + ", clamp " + (_ckHelperSteps > 0 ? 100f * _ckClampHits / _ckHelperSteps : 0f).ToString("0.0")
+                + " %, biggest per-frame jump " + (Mathf.Sqrt(_ckJump) * 1000f).ToString("0.0") + " mm");
+            _ckFrames = _ckSteps = _ckStepsMax = _ckLong = _ckCuts = _ckClampHits = _ckHelperSteps = 0; _ckJump = 0f;
         }
 
         // 0.8.0: a capsule touching a helper at `approach` m/s (along the skin's inward normal) is an impact when it is a fresh contact: its source was

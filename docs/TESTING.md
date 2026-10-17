@@ -98,6 +98,23 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.49 (soft-zone smoke test)
+
+Debug tab -> Soft zones and hands -> **Smoke: Soft zones (1 s)**, once while she stands still and once while she dances or walks:
+`Smoke: soft-zones PASS (... steps / frame ..., biggest per-frame skin jump N mm, cuts 0, simulated X of X s, dropped 0.000 s)`. Healthy:
+a few mm standing, under ~15 mm dancing at 23 fps, cuts 0, simulated = real time. FAIL `jumped over 4 cm` = a pop: send the log.
+
+## 0.11.48 (jiggle stutter, frame pacing)
+
+Copy `SfMorph.dll`. Log: `SF Body Morphs 0.11.48`. Before handing over: `sh tools/timing/check.sh` passes (lint 0, harness PASS).
+In the headset: (1) a dance or walk animation with soft zones on, Springiness as you like: the breasts / glutes move smoothly, no
+per-frame shiver against her body; compare Springiness 0 (no lag) once; (2) Debug tab -> Soft zones and hands -> **Smoke: Frame timing**: `Smoke: frame-timing PASS
+(clock 120 fps 0.11x, 90 fps 0.07x, 41 fps 0.11x, 23 fps uneven 0.10x ...)`; (3) after 30 s, `Soft zones clock last 30 s: ... substeps
+avg ~ frame ms / 8.3, long frames 0-few, cuts 0 (outside scene changes), clamp a few %, biggest per-frame jump under ~15 mm`; (4)
+the `Character 'Reika'` block has `animator ... Normal` or `AnimatePhysics` (report which); (5) `python tools/timing/perf_report.py <log>`.
+Red flags: `cuts` growing while she just dances, `Overlap: reset on ... jumped` without a scene cut, substeps max at SoftMaxSteps
+every window (very low fps).
+
 ## 0.11.47 (correctives, muscle lengths, curve wrinkles, body creases, Delta Mush, presets, smoke tests)
 
 Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log: `SF Body Morphs 0.11.47`. First: Debug tab -> Smoke tests -> Run all

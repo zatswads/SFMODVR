@@ -172,7 +172,7 @@ namespace SfMorph
                 sb.Append("\n  DynamicBone on ").Append(db.name).Append(" root=").Append(root != null ? root.name : "-")
                   .Append(her != null && root != null && root.IsChildOf(her) ? " (hers)" : "")
                   .Append(" enabled=").Append(((Behaviour)db).enabled)
-                  .Append(" rate=").Append(Get(db, "m_UpdateRate")).Append(" damp=").Append(Get(db, "m_Damping")).Append(" elast=").Append(Get(db, "m_Elasticity"))
+                  .Append(" rate=").Append(Get(db, "m_UpdateRate")).Append(" mode=").Append(Get(db, "m_UpdateMode")).Append(" damp=").Append(Get(db, "m_Damping")).Append(" elast=").Append(Get(db, "m_Elasticity"))
                   .Append(" stiff=").Append(Get(db, "m_Stiffness")).Append(" inert=").Append(Get(db, "m_Inert")).Append(" radius=").Append(Get(db, "m_Radius"))
                   .Append(" colliders=").Append(cols != null ? cols.Count : 0);
                 if (cols != null) foreach (var c in cols) { var cc = c as Component; if (cc != null) sb.Append(' ').Append(cc.name); }
@@ -233,6 +233,8 @@ namespace SfMorph
             public float Total;          // how much skin it carries (vertex weight sum)
             // simulation (SoftSim.cs): world space
             public Vector3 Disp, Vel, PrevRest, R, N, Push;
+            public Vector3 PrevOut;   // 0.11.48: last frame's Disp (the clock line's biggest per-frame jump)
+            public Vector3 Lag;   // 0.11.48: this frame's lag behind the bone (inert x its motion), applied a share per substep
             public Vector3 Sag;          // 0.7.3: the spring's equilibrium offset from R (world): gravity's pull on the zone, zero without gravity
             public bool Touched, Asleep = true, HasPrev, Bulged;
             public int LastCap;

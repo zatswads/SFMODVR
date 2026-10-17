@@ -2442,9 +2442,9 @@ namespace SfMorph
                 var create = tClip.GetMethod("Create", new[] { typeof(string), typeof(int), typeof(int), typeof(int), typeof(bool) });
                 var setData = tClip.GetMethod("SetData", new[] { typeof(float[]), typeof(int) });
                 if (create == null || setData == null) { D("test tone: AudioClip.Create / SetData not found"); return; }
-                _dTone = create.Invoke(null, new object[] { "SfDiagTone", n, 1, rate, false }) as UnityEngine.Object;
+                _dTone = create.Invoke(null, new object[] { "SfDiagTone", n, 1, rate, false }) as UnityEngine.Object;   // timing-lint: ok diagnostic tone, on demand
                 if (_dTone == null) { D("test tone: AudioClip.Create returned nothing"); return; }
-                object ok = setData.Invoke(_dTone, new object[] { data, 0 });
+                object ok = setData.Invoke(_dTone, new object[] { data, 0 });   // timing-lint: ok diagnostic tone, on demand
                 D("test tone created: SfDiagTone, " + n + " samples at " + rate + " Hz (0.4 s, 660 Hz, mono, not streaming), SetData " + Sv(ok) + ", loadState " + LoadState(_dTone));
             }
             if (which == 1)
@@ -2627,7 +2627,7 @@ namespace SfMorph
             if (!InSexMode) return;
             if (_now - _lastFeed < 3f && _now >= _lastFeed) return;
             _lastFeed = _now;
-            try { _miDesirePlus.Invoke(_gauge, new object[] { "plus" }); FeedCount++; }
+            try { _miDesirePlus.Invoke(_gauge, new object[] { "plus" }); FeedCount++; }   // timing-lint: ok at most every 3 s
             catch (Exception e) { LogOnce("feed:" + e.GetType().Name, "ReikaDesirePlus failed: " + (e.InnerException ?? e).Message); }
         }
 

@@ -170,7 +170,7 @@ namespace SfMorph
             {
                 try
                 {
-                    var dev = _xrGetAt.Invoke(null, new object[] { Enum.ToObject(_xrNode, h.Left ? 4 : 5) });
+                    var dev = _xrGetAt.Invoke(null, new object[] { Enum.ToObject(_xrNode, h.Left ? 4 : 5) });   // timing-lint: ok Resolve runs every 2 s
                     var valid = dev.GetType().GetProperty("isValid").GetValue(dev, null);
                     if (valid is bool && (bool)valid)
                     {

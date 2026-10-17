@@ -44,6 +44,28 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.49 (soft-zone smoke test reads the jiggle's steadiness):
+- Debug tab, **Smoke: Soft zones (1 s)** now also prints the biggest per-frame jump of one soft point and the cuts in that second,
+  and fails when a point jumps over 4 cm between two frames without a cut (a pop). Nothing else changed.
+
+0.11.48 (her jiggle no longer stutters in dances and walks):
+- In dance and locomotion animations her soft zones (breasts, glutes, thighs, belly) stuttered, and the game alone was smooth. Cause:
+  the soft zones' springs ran on a fixed 1/120 s clock that dropped what didn't fit (at 23 fps a quarter of every frame, 4 steps
+  max; 0.11.47's 8 steps kept the time but the count still alternated, 2, 3, 2, 3 at 41 fps), while her lag behind her moving body
+  was added as one jump per frame whose size followed the real frame time. Each frame the skin jumped against her body by a different
+  amount, worst in fast motion. The skin's limits were applied once a frame with the velocity kept, so a big swing knocked at its ends.
+  Now the springs take equal substeps that add up to exactly the frame time, the lag is spread over them, the limits act inside each
+  substep and take out the velocity into the limit. The offline model: the per-frame skin error at uneven 23 fps halves and no time
+  is lost (`tools/timing`).
+- A quick thigh or a 100 ms frame made the skin snap back to rest ("moved 20 cm in a frame" counted as a teleport); her secondary
+  motion (Overlap) reset the same way at 0.3 m / 60 deg. Both tests now also need a speed (8 m/s, 1500 deg/s for Overlap) for the frame.
+- New log lines: `Soft zones clock last 30 s` (substeps, long frames, cuts, how often the skin met its limit, the biggest per-frame
+  jump) and her Animator's update mode in the `Character '...'` block (AnimatePhysics would move her pose in 20 ms steps).
+  Debug tab, Soft zones and hands: **Smoke: Frame timing** (`Smoke: frame-timing PASS|FAIL`); the Soft zones smoke test now checks that the springs integrated exactly the frame time.
+- Checks so it doesn't come back: `sh tools/timing/check.sh` runs a lint for frame-rate-dependent code and per-frame garbage and the
+  offline clock harness (90 / 72 / 41 / 23 fps and uneven frames against a 4 kHz reference). `tools/timing/perf_report.py <log>`
+  turns a log's timing lines into one table with a verdict. SF Neural Rendering VR 0.31.1 (separate repo) removed its per-frame garbage.
+
 0.11.47 (muscles, folds, wrinkles and correctives from a research pass; quality presets; smoke tests):
 - Research behind it: Unreal 5.8's ML Deformer sample and engine (Pose Driver RBF, Local Neural Morph bone masks, Chaos Flesh muscle
   activation, MetaHuman wrinkle-map blending), the pose-driver docs, Unity Delta Mush and MyoSuite muscle-path models, and the user's

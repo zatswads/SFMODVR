@@ -255,7 +255,7 @@ namespace SfMorph
             for (int i = 0; i < named.Length && best == null; i++)
                 if (named[i] != null && named[i].isActiveAndEnabled && named[i].stereoEnabled) { best = named[i]; how = src[i] + " (stereo)"; }
             if (best == null)
-                foreach (var c in Camera.allCameras)
+                foreach (var c in Camera.allCameras)   // timing-lint: ok VrCamera re-searches at most every 2 s
                     if (c != null && c.stereoEnabled) { best = c; how = "the stereo camera"; break; }
             for (int i = 0; i < named.Length && best == null; i++)
                 if (named[i] != null && named[i].isActiveAndEnabled) { best = named[i]; how = src[i] + " (not stereo: no headset?)"; }

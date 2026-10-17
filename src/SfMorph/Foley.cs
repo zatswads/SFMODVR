@@ -118,9 +118,9 @@ namespace SfMorph
         bool Add(int c, string name, float[] s, int rate)
         {
             if (s == null || s.Length < 16) return false;
-            var clip = _create.Invoke(null, new object[] { name, s.Length, 1, rate, false }) as UnityEngine.Object;
+            var clip = _create.Invoke(null, new object[] { name, s.Length, 1, rate, false }) as UnityEngine.Object;   // timing-lint: ok clip built once at load
             if (clip == null) return false;
-            _setData.Invoke(clip, new object[] { s, 0 });
+            _setData.Invoke(clip, new object[] { s, 0 });   // timing-lint: ok clip built once at load
             clip.hideFlags = HideFlags.DontUnloadUnusedAsset;
             _sets[c].Clips.Add(clip); _sets[c].Len.Add(s.Length / (float)rate);
             return true;
@@ -544,9 +544,9 @@ namespace SfMorph
             len = 0f;
             float[] s; int rate, lead; string why;
             if (!SkinFoley.ReadWav(path, 12f, true, out s, out rate, out lead, out why)) { Plugin.Log.LogWarning("Voice pack: skipped " + Path.GetFileName(path) + " (" + why + ")"); return null; }
-            clip = _create.Invoke(null, new object[] { "SfVoice_" + Path.GetFileNameWithoutExtension(path), s.Length, 1, rate, false }) as UnityEngine.Object;
+            clip = _create.Invoke(null, new object[] { "SfVoice_" + Path.GetFileNameWithoutExtension(path), s.Length, 1, rate, false }) as UnityEngine.Object;   // timing-lint: ok clip built once at load
             if (clip == null) return null;
-            _setData.Invoke(clip, new object[] { s, 0 });
+            _setData.Invoke(clip, new object[] { s, 0 });   // timing-lint: ok clip built once at load
             clip.hideFlags = HideFlags.DontUnloadUnusedAsset;
             len = s.Length / (float)rate;
             _clip[path] = clip; _lenOf[path] = len; _lru.AddFirst(path);

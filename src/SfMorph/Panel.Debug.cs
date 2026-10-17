@@ -55,7 +55,7 @@ namespace SfMorph
             GUILayout.Space(4);
             if (DebugSection("Avatar", "The avatar's joint correctives, its auto clavicle and its own wrinkle / muscle sheets (Characters tab -> Avatars).")) AvatarSection();
             GUILayout.Space(4);
-            if (DebugSection("Soft zones and hands", "The soft points' springs and the physics hands.")) { SmokeRow(Smoke.TSoft); SmokeRow(Smoke.THands); }
+            if (DebugSection("Soft zones and hands", "The soft points' springs and the physics hands.")) { SmokeRow(Smoke.TSoft); SmokeRow(Smoke.THands); SmokeRow(Smoke.TTiming); }
             GUILayout.Space(4);
             if (DebugSection("Skin marks", "Hand prints and slap redness (frozen: only checked for being alive).")) SmokeRow(Smoke.TMarks);
             GUILayout.Space(4);

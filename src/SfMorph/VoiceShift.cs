@@ -44,7 +44,7 @@ namespace SfMorph
             for (int c = 0; c < channels; c++)
             {
                 float g = em > 1e-12 ? (float)System.Math.Sqrt(_ec[c] / em) : _g[c];
-                _g[c] += (Mathf.Clamp(g, 0f, 4f) - _g[c]) * 0.2f;
+                _g[c] += (Mathf.Clamp(g, 0f, 4f) - _g[c]) * 0.2f;   // timing-lint: ok audio thread, once per fixed-size DSP block
             }
             for (int i = 0; i < n; i++)
             {

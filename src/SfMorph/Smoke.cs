@@ -19,18 +19,18 @@ namespace SfMorph
         public static readonly string[] Ids =
         {
             "shaders", "gpu-contact", "cull", "delta-mush", "wrinkles", "curve-wrinkles", "muscles", "correctives", "quality", "lip-sync",
-            "soft-zones", "physics-hands", "skin-marks", "avatar-correctives", "avatar-clavicle", "avatar-wrinkles",
+            "soft-zones", "physics-hands", "skin-marks", "frame-timing", "avatar-correctives", "avatar-clavicle", "avatar-wrinkles",
         };
         public static readonly string[] Labels =
         {
             "Shader bundle and kernels", "GPU contact (1 s dent)", "Contact cull", "Delta Mush", "Wrinkles (regions, a re-blend)",
             "Curve-driven wrinkles (1 s)", "Muscles (lengths)", "Pose correctives", "Quality presets", "Lip sync", "Soft zones (1 s)",
-            "Physics hands", "Skin marks (alive)", "Avatar joint correctives", "Avatar auto clavicle", "Avatar wrinkles / muscles",
+            "Physics hands", "Skin marks (alive)", "Frame timing (clock self-test)", "Avatar joint correctives", "Avatar auto clavicle", "Avatar wrinkles / muscles",
         };
         public static readonly string[] Buttons = Prefixed("Smoke: ");
         static string[] Prefixed(string pre) { var r = new string[Labels.Length]; for (int i = 0; i < r.Length; i++) r[i] = pre + Labels[i]; return r; }
         public const int TShaders = 0, TGpu = 1, TCull = 2, TMush = 3, TWrinkles = 4, TCurve = 5, TMuscles = 6, TCorrectives = 7, TQuality = 8,
-                         TLip = 9, TSoft = 10, THands = 11, TMarks = 12, TAvJcm = 13, TAvClav = 14, TAvWrink = 15;
+                         TLip = 9, TSoft = 10, THands = 11, TMarks = 12, TTiming = 13, TAvJcm = 14, TAvClav = 15, TAvWrink = 16;
         public static readonly int Count = Ids.Length;
         // the last result of each test this session ("" = not run): "PASS (...)" / "FAIL (...)" / "SKIP (...)"
         public static readonly string[] Results = NewResults();
@@ -131,6 +131,7 @@ namespace SfMorph
                 case TLip: return Lip(p, b);
                 case TSoft: return Soft(p, b, t);
                 case THands: return Hands(p);
+                case TTiming: return Timing(p);
                 case TAvJcm: return AvatarJcmT(p, b, t);
                 case TAvClav: return AvatarClavT(p, b);
                 case TAvWrink: return AvatarWrinkT(p, b);
@@ -597,8 +598,9 @@ namespace SfMorph
             return Pass(syn + "; " + set);
         }
 
-        // Soft zones: helpers bound; over ~1 s the 1/120 s steps per frame match the frame time and no simulation time is dropped.
-        static int _sf0; static long _ss0; static double _sd0, _sx0;
+        // Soft zones: helpers bound; over ~1 s the springs integrated the frame time (0.11.48: equal substeps adding up to each frame, SimClock)
+        // and no simulation time was dropped (only a frame over 0.1 s may drop some).
+        static int _sf0, _cuts0; static long _ss0; static double _sd0, _sx0, _st0;
         static string Soft(Plugin p, Body b, float t)
         {
             Character her;
@@ -607,17 +609,22 @@ namespace SfMorph
             if (!p.Physics.Value) return Skip("soft zones are off (Physics tab)");
             var z = her.Soft;
             if (z == null || z.HelperCount == 0) return Fail("no helper bound (" + (z != null ? z.Status : "no soft zones") + ")");
-            if (_phase == 0) { _sf0 = z.SimFrames; _ss0 = z.SimSteps; _sd0 = z.SimDt; _sx0 = z.SimDropped; z.SimMaxSteps = 0; _phase = 1; return null; }
+            if (_phase == 0) { _sf0 = z.SimFrames; _ss0 = z.SimSteps; _sd0 = z.SimDt; _sx0 = z.SimDropped; _st0 = z.SimTime; z.SimMaxSteps = 0; z.SimMaxJump = 0f; _cuts0 = z.SimCuts; _phase = 1; return null; }
             if (t < 1f) return null;
             int frames = z.SimFrames - _sf0;
             if (frames <= 0) return Fail(z.HelperCount + " helpers but Simulate did not run in 1 s (physics on? her soft zones built?)");
             long steps = z.SimSteps - _ss0;
-            double dt = z.SimDt - _sd0, dropped = z.SimDropped - _sx0;
+            double dt = z.SimDt - _sd0, dropped = z.SimDropped - _sx0, sim = z.SimTime - _st0;
             float fps = (float)(frames / Math.Max(1e-4, dt));
             string nums = z.HelperCount + " helpers; " + frames + " frames at " + F(fps, "0") + " fps, " + F((float)steps / frames, "0.0") + " steps / frame (most " + z.SimMaxSteps + ", cap " +
-                          SoftZones.MaxSteps + "), simulated " + F((float)(steps / 120.0), "0.000") + " of " + F((float)dt, "0.000") + " s, dropped " + F((float)dropped, "0.000") + " s";
+                          SoftZones.MaxSteps + "), biggest per-frame skin jump " + F(z.SimMaxJump * 1000f, "0.0") + " mm, cuts " + (z.SimCuts - _cuts0) + ", simulated " + F((float)sim, "0.000") + " of " + F((float)dt, "0.000") + " s, dropped " + F((float)dropped, "0.000") + " s";
             if (dropped > 1e-4)
-                return Fail(nums + (fps < 120f / SoftZones.MaxSteps ? ": below " + F(120f / SoftZones.MaxSteps, "0") + " fps the cap drops time: raise [Physics] SoftMaxSteps" : ": a hitch (a frame over the cap) dropped it; run again"));
+                return Fail(nums + ": a hitch (a frame over 0.1 s) dropped it; run again");
+            if (Math.Abs(sim + dropped - dt) > 1e-3 * dt + 1e-4)
+                return Fail(nums + ": the springs' time does not add up to the frame time (SimClock substeps broken)");
+            // 0.11.49: a soft point jumping 4 cm between two frames without a cut is a pop (the 0.11.47 stutter modelled at 7-12 mm on hitches)
+            if (z.SimMaxJump > 0.04f && z.SimCuts == _cuts0)
+                return Fail(nums + ": a soft point jumped over 4 cm in one frame (run it again while she holds still; if it repeats, the soft-zone clock pops)");
             return Pass(nums);
         }
 
@@ -633,6 +640,20 @@ namespace SfMorph
         }
 
         // Skin marks are frozen (docs/LESSONS.md): only whether they are alive and their orientation self-test settled.
+        // 0.11.48 frame timing: the soft-zone clock's self-test (SimClock.SelfTest, the same code tools/timing's harness checks offline: the
+        // springs move the same at 90, 41 and uneven 23 fps and advance by exactly the frame time) and the Perf line's frame phase markers.
+        static string Timing(Plugin p)
+        {
+            string rep;
+            bool clock = SimClock.SelfTest(out rep);
+            bool marks = !p.PerfLog.Value || Perf.LoopOk;
+            string nums = "clock " + rep + ", now " + (Time.unscaledDeltaTime > 0f ? F(1f / Time.unscaledDeltaTime, "0") : "-") + " fps, soft-zone steps cap " + SoftZones.MaxSteps
+                          + (p.PerfLog.Value ? ", phase markers " + (Perf.LoopOk ? "in the PlayerLoop" : "missing") : ", PerfLog off");
+            if (!clock) return Fail(nums + ": the clock depends on the frame rate (see tools/timing)");
+            if (!marks) return Fail(nums + ": the Perf line has no frame phases");
+            return Pass(nums);
+        }
+
         static string Marks(Plugin p, Body b)
         {
             Character her;

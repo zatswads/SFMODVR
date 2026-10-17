@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.11.47";
+        public const string Version = "0.11.49";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -101,7 +101,7 @@ namespace SfMorph
             // 0.11.47: default Balanced (was Fidelity since 0.11.21): Fidelity subdivides her body meshes, about 4x the vertices for every GPU
             // contact and Delta Mush pass, the costliest single setting at ~23 fps
             Quality = Config.Bind("Physics", "Quality", 1, new ConfigDescription("Soft points: 0 Performance (few points), 1 Balanced (dense points), 2 Fidelity (dense points + smoothed, subdivided body mesh: about 4x her body's vertices for every GPU contact and Delta Mush pass, the costliest setting). A change rebuilds her soft zones (a 1-3 s hitch).", new AcceptableValueRange<int>(0, 2)));
-            SoftMaxSteps = Config.Bind("Physics", "SoftMaxSteps", 8, new ConfigDescription("Soft zones: at most this many 1/120 s spring steps per frame. Below 120 / this fps the rest of the frame's simulation time is dropped and the jiggle runs slow (4, the old limit, lost a quarter of it at 23 fps; 8 keeps all of it down to 15 fps). Each step costs a little CPU per soft point.", new AcceptableValueRange<int>(4, 16)));
+            SoftMaxSteps = Config.Bind("Physics", "SoftMaxSteps", 8, new ConfigDescription("Soft zones: at most this many spring steps per frame (each at most 1/120 s; the steps always add up to the frame time). Below 120 / this fps each step gets longer instead (0.11.48; up to 0.11.47 the rest of the frame was dropped and the jiggle ran slow). More steps: a little more CPU per soft point, a little smoother at very low fps.", new AcceptableValueRange<int>(4, 16)));
             ContactCullDistance = Config.Bind("Physics", "ContactCullDistance", 3f, new ConfigDescription("GPU contact: her meshes farther than this from your headset (m), or out of every camera's view (their shadows count as in view), skip their dents, bends, muscles and Delta Mush until they are near / seen again; a hand pressing them or a slap still runs (0 = only the view test).", new AcceptableValueRange<float>(0f, 20f)));
             SelfHitHold = Config.Bind("Physics", "SelfHitHold", 30, new ConfigDescription("GPU contact: frames her own limbs or his body keep the full dent chain running after a probe found them pressing (its readback arrives 1-3 frames late). Lower = less GPU time when they barely touch; too low and such a dent can flicker.", new AcceptableValueRange<int>(10, 120)));
             OverlapAmount = Config.Bind("Motion", "Overlap", 0.3f, new ConfigDescription("Secondary motion: her limbs, head and spine trail the animation a little (0 off).", new AcceptableValueRange<float>(0f, 1f)));

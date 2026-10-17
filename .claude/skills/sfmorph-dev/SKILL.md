@@ -29,7 +29,7 @@ every wrap-up so the time and the mark stay current.
    comments that explain why, greyed controls with an `off: reason`.
 4. **Build**: `REFS=<refs> sh build.sh`. Missing DLLs → ask the user (list in HANDOFF → Build; never commit them).
    Check `strings -el dist/SfMorph.dll | grep <version>`.
-5. **Release**: bump `Plugin.Version`, README changelog (symptom → cause → fix), commit with the trailer, push `main`.
+5. **Release**: a change to a per-frame system passes `sh tools/timing/check.sh` first (skill `sfmorph-timing`); bump `Plugin.Version`, README changelog (symptom → cause → fix), commit with the trailer, push `main`.
 6. **Reply**: what was wrong and why, what changed, what to check, and say plainly it was built but not run in game.
 
 ## Face, lip sync and voice packs (lessons from 0.9.9-0.11.45)
