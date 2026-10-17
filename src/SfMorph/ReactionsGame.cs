@@ -1474,7 +1474,7 @@ namespace SfMorph
 
         // 0.9.1: a pack line (bank 0 nipple, 1 pussy, 2 anal, 3 public at level 1-3; falls back to the nearest level, then public) or a state
         // line (VoicePack.SInvite..SOuch) on the moan source, without the "moan" trigger (the mouth follows the audio, Reactions.FaceStep).
-        public bool PackLine(int bank, int lvl, out string what)
+        public bool PackLine(int bank, int lvl, out string what, bool stopDirty = true)
         {
             what = "";
             if (!Found || !Pack.Loaded) return false;
@@ -1482,10 +1482,10 @@ namespace SfMorph
             var clip = Pack.PickLine(bank, lvl, out len, out gb, out gl);
             if (clip == null) return false;
             what = VoicePack.LineBanks[gb] + " Lv" + gl + " '" + clip.name + "'";
-            return PlayPack(clip, len, 1f, true, false, true);
+            return PlayPack(clip, len, 1f, stopDirty, false, true);
         }
 
-        public bool PackState(int s, out string what)
+        public bool PackState(int s, out string what, bool stopDirty = true)
         {
             what = "";
             if (!Found || !Pack.Loaded) return false;
@@ -1493,7 +1493,7 @@ namespace SfMorph
             var clip = Pack.PickState(s, out len);
             if (clip == null) return false;
             what = VoicePack.StateLines[s] + " '" + clip.name + "'";
-            return PlayPack(clip, len, 1f, true, false, true);
+            return PlayPack(clip, len, 1f, stopDirty, false, true);
         }
 
         // How loud the pack voice on the moan source is now (RMS of its last 1024 output samples), -1 when no pack clip is sounding. For the jaw.
@@ -1818,7 +1818,7 @@ namespace SfMorph
         readonly float[] _muteBase = new float[MuteN], _muteLast = new float[MuteN];
         readonly bool[] _muted = new bool[MuteN];
         readonly UnityEngine.Object[] _muteClip = new UnityEngine.Object[MuteN];
-        readonly bool[] _muteOurs = new bool[MuteN];
+        readonly bool[] _muteOurs = new bool[MuteN], _muteLet = new bool[MuteN];
         public int MutedNow;
         public bool Muting;                 // the mute is on this frame (Reactions: busy flags of muted game clips are ignored)
         public bool MuteDialogue = true;    // [Voice] MuteGameDialogue
@@ -1834,35 +1834,87 @@ namespace SfMorph
             if (!on && !any) { MutedNow = 0; return; }
             if (!Found || _pVolume == null || _pClip == null) return;
             MutedNow = 0;
-            int fresh = -1; string freshName = null;
             for (int i = 0; i < MuteN; i++)
             {
                 var src = i == 0 ? _srcMoan : i == 1 ? _srcDirty : i == 2 ? _srcVoice : i == 3 ? _srcSexFacial : _srcDialogue;
-                string started = MuteOne(i, src, on && (i != 4 || MuteDialogue));
-                if (started != null && i != 1 && i != 4 && fresh < 0) { fresh = i; freshName = started; }
+                // 0.11.35: the voice source is left alone while a Timeline the pack can't fill plays on it (story, or a scene whose lines
+                // the pack lacks: the game's own voice is better than silence)
+                string started = MuteOne(i, src, on && !(i == 2 && _sceneVoiceFree));
+                if (on && started != null) StandIn(i, started);
             }
-            if (on && fresh >= 0) StandIn(fresh, freshName);
         }
 
-        // A game voice clip just started on a muted source: a pack clip of the same kind on the moan source instead, unless one of ours still
-        // sounds (her own voice wins) or the last stand-in was under 1.5 s ago (the game's sex voice fires every stroke).
+        // 0.11.35: what the pack plays for a game clip (user: every muted game line should get a pack line). kind 0 = nothing fits (the game's
+        // clip plays, not muted), 1 = a voice category (cat; breath: a breath one-shot), 2 = a line of bank / level, 3 = a state line.
+        // Dirty talk (IL: DirtyTalk_Library, <field>_<Eng|JP>_Lv<n>_<i>): reikaNipple -> nipple, reikaPussy / pussySex* -> pussy,
+        // reikaAnal / analSex -> anal, everything else (public, handJob, tittyFuck, footJob, penisMassage, urethraMassage, playerNipple) ->
+        // public, invite* -> invite, request* -> request. Voice / moan / sex-facial: SexVoice (Sex_openMouth_* by her desire and the
+        // stroke speed, Sex_closeMouth_* / Exhale_* breaths, Lick_* / Suck_* muffled breaths, GentleKiss_* / TongueKiss_* calm breaths),
+        // Feeling_enter_N / Feeling_loop_N_* by level, Moan_N by her desire. The dialogue source plays nothing in this build (its only
+        // caller is dead code): left alone.
+        int Classify(int src, string name, out int cat, out bool breath, out int bank, out int lvl, out int state)
+        {
+            cat = -1; breath = false; bank = 3; lvl = 2; state = -1;
+            if (string.IsNullOrEmpty(name) || src == 4) return 0;
+            string n = name.ToLowerInvariant();
+            if (src == 1)
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(n, @"_lv(\d)");
+                if (m.Success) lvl = Mathf.Clamp(m.Groups[1].Value[0] - '0', 1, 3);
+                if (n.StartsWith("invite", StringComparison.Ordinal)) { state = VoicePack.SInvite; return Pack.HasState(state) ? 3 : 0; }
+                if (n.StartsWith("request", StringComparison.Ordinal)) { state = VoicePack.SRequest; return Pack.HasState(state) ? 3 : 0; }
+                bank = n.StartsWith("reikanipple", StringComparison.Ordinal) ? 0 : n.Contains("pussy") ? 1 : n.Contains("anal") ? 2 : 3;
+                return Pack.HasLines ? 2 : 0;
+            }
+            int byDesire = Desire >= 66f ? VoicePack.MoanHigh : Desire >= 33f || Desire < 0f ? VoicePack.MoanMid : VoicePack.MoanLow;
+            if (n.Contains("exhale") || n.Contains("closemouth") || n.Contains("breath") || n.StartsWith("lick", StringComparison.Ordinal) || n.StartsWith("suck", StringComparison.Ordinal))
+            { breath = true; cat = n.Contains("_slow") && !n.StartsWith("lick", StringComparison.Ordinal) && !n.StartsWith("suck", StringComparison.Ordinal) ? VoicePack.BreathCalm : VoicePack.BreathHeavy; }
+            else if (n.Contains("kiss")) { breath = true; cat = VoicePack.BreathCalm; }
+            else if (n.Contains("feeling_enter_3") || n.Contains("orgasm") || n.Contains("climax") || n.Contains("cum")) cat = VoicePack.Climax;
+            else if (n.StartsWith("feeling_", StringComparison.Ordinal))
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(n, @"feeling_(?:enter|loop)_(\d)");
+                int l = m.Success ? m.Groups[1].Value[0] - '0' : 2;
+                cat = l <= 0 ? VoicePack.MoanLow : l == 1 ? VoicePack.MoanMid : VoicePack.MoanHigh;
+            }
+            else if (n.StartsWith("sex", StringComparison.Ordinal))
+            {
+                cat = byDesire;
+                if (n.Contains("_fast") && cat < VoicePack.MoanHigh) cat++;
+                else if (n.Contains("_slow") && cat > VoicePack.MoanLow) cat--;
+            }
+            else if (n.Contains("moan")) cat = byDesire;
+            else return 0;
+            if (breath) return Pack.Has(VoicePack.BreathCalm) || Pack.Has(VoicePack.BreathHeavy) ? 1 : 0;
+            return Pack.Has(VoicePack.MoanLow) || Pack.Has(VoicePack.MoanMid) || Pack.Has(VoicePack.MoanHigh) || Pack.Has(VoicePack.Climax) ? 1 : 0;
+        }
+
+        // A game voice clip just started on a muted source: a pack clip of the same kind on the moan source instead (Classify), unless one of
+        // ours still sounds (her own voice wins). Moans and breaths at most every 1.5 s (the game's sex voice fires every stroke); a dirty-talk
+        // line is answered by a line whenever the voice is free (the game spaces them 3-10 s), without stopping the game's dirty talk (its
+        // muted clip runs on, so the game doesn't start the next line at once).
         void StandIn(int src, string name)
         {
-            if (!Pack.Loaded || OwnVoicePlaying || _now - _standInAt < 1.5f) return;
-            string n = name.ToLowerInvariant();
-            int cat;
-            bool breath = false;
-            if (n.Contains("exhale") || n.Contains("closemouth") || n.Contains("breath")) { cat = VoicePack.BreathHeavy; breath = true; }
-            else if (n.Contains("feeling_enter_3") || n.Contains("orgasm") || n.Contains("climax") || n.Contains("cum")) cat = VoicePack.Climax;
-            else if (n.Contains("feeling")) cat = VoicePack.MoanHigh;
-            else if (n.StartsWith("sex", StringComparison.Ordinal)) cat = Desire >= 66f ? VoicePack.MoanHigh : Desire >= 33f ? VoicePack.MoanMid : VoicePack.MoanLow;
-            else if (n.Contains("moan")) cat = VoicePack.MoanMid;
-            else return;
-            bool ok = breath ? PackBreath(true) : PackVoice(cat, 1f, false);
+            if (!Pack.Loaded || OwnVoicePlaying) return;
+            int cat, bank, lvl, st; bool breath;
+            int kind = Classify(src, name, out cat, out breath, out bank, out lvl, out st);
+            if (kind == 0) return;
+            bool ok; string what;
+            if (kind >= 2)
+            {
+                if (_packClip && Playing(_srcMoan) && !MoanTail) return;
+                ok = kind == 2 ? PackLine(bank, lvl, out what, false) : PackState(st, out what, false);
+            }
+            else
+            {
+                if (_now - _standInAt < 1.5f) return;
+                ok = breath ? PackBreath(cat == VoicePack.BreathHeavy) : PackVoice(cat, 1f, false);
+                what = VoicePack.Folders[cat];
+            }
             if (!ok) return;
             _standInAt = _now; _standIns++;
             StandInNote = "pack stand-in #" + _standIns + " for the game's " + name;
-            if (_standIns <= 10 || _standIns % 20 == 0) Log("voice: " + StandInNote + " (" + VoicePack.Folders[cat] + ")");
+            if (_standIns <= 20 || _standIns % 20 == 0) Log("voice: " + StandInNote + " (" + what + ")");
             MuteOne(0, _srcMoan, true);   // our clip is on the moan source now: its volume back this frame
         }
 
@@ -1873,7 +1925,11 @@ namespace SfMorph
         // AudioSource.clip). While such a director plays, the pack fills the scene on the moan source: climax = request lines and climax
         // sounds in turn, creampie = request lines and high moans, condom = invite lines and moans, clean / finish = afterglow lines and
         // breaths; each next clip 0.3-0.8 s after the last ends, nothing new in the last 1.5 s of the scene.
-        static readonly string[] SceneKinds = { "climax", "creampie", "condom", "clean", "finish" };
+        static readonly string[] SceneKinds = { "climax", "creampie", "condom", "clean", "finish", "tease" };
+        // 0.11.35: per scene the state line it speaks and what goes between the lines (-1 = a breath); tease / finish by the director's
+        // good / normal / bad (tease bad: "not in the mood" -> guard, finish bad: "the worst" -> guard). No such lines in the pack (Rebecca,
+        // Amy, a pack without guard lines): the game's own scene voice plays instead (_sceneVoiceFree), and so does the story.
+        int _sceneState, _sceneCat; bool _sceneVoiceFree;
         Type _tCam; UnityEngine.Object _cam; FieldInfo _fCamDir; PropertyInfo _pDirState, _pDirTime, _pDirDur;
         float _camNextFind = -10f, _sceneNext;
         Behaviour _sceneDir; int _sceneKind = -1, _sceneStep, _sceneClips;
@@ -1918,10 +1974,23 @@ namespace SfMorph
                     string n = dir.gameObject.name.ToLowerInvariant();
                     int kind = -1;
                     for (int k = 0; k < SceneKinds.Length; k++) if (n.Contains(SceneKinds[k])) { kind = k; break; }
-                    if (kind == 4 && n.Contains("loop")) kind = -1;   // the finish loops have no voice
+                    if ((kind == 4 || kind == 5) && !n.Contains("enter")) kind = -1;   // the finish / tease loops have no voice
+                    bool story = n == "opening" || n.StartsWith("chapter_", StringComparison.Ordinal);
+                    bool bad = n.Contains("bad") || n.Contains("_bed_");   // "Bed" is the game's spelling of Bad in the Bathroom set
                     _sceneDir = dir; _sceneKind = kind; _sceneStep = 0; _sceneClips = 0; _sceneNext = _now + 0.3f;
+                    _sceneState = kind <= 1 ? VoicePack.SRequest : kind == 2 ? VoicePack.SInvite : kind == 3 ? VoicePack.SAfterglow
+                                : bad ? VoicePack.SGuard : kind == 4 ? VoicePack.SAfterglow : VoicePack.SInvite;
+                    _sceneCat = kind == 0 ? VoicePack.Climax : kind == 1 ? VoicePack.MoanHigh : kind == 2 ? VoicePack.MoanMid
+                              : kind == 5 && !bad && n.Contains("good") ? VoicePack.MoanMid : -1;
+                    if (story) { _sceneVoiceFree = true; _sceneKind = -1; Log("voice: story scene '" + dir.gameObject.name + "': the game's own voice (the pack has no story lines)"); return; }
                     if (kind < 0) return;
-                    SceneNote = "filling the game's " + SceneKinds[kind] + " scene '" + dir.gameObject.name + "' (" + dur.ToString("0.0") + " s) with the pack";
+                    if (!Pack.HasState(_sceneState))
+                    {
+                        _sceneVoiceFree = true; _sceneKind = -1;
+                        Log("voice: " + SceneKinds[kind] + " scene '" + dir.gameObject.name + "': the pack has no " + VoicePack.StateLines[_sceneState] + " lines, the game's own voice plays");
+                        return;
+                    }
+                    SceneNote = "filling the game's " + SceneKinds[kind] + " scene '" + dir.gameObject.name + "' (" + dur.ToString("0.0") + " s) with the pack (" + VoicePack.StateLines[_sceneState] + " lines)";
                     Log("voice: " + SceneNote);
                 }
                 if (_sceneKind < 0 || _now < _sceneNext || t > dur - 1.5) return;
@@ -1930,14 +1999,13 @@ namespace SfMorph
                 bool line = (_sceneStep & 1) == 0;
                 string what = "";
                 bool ok = false;
-                int st = _sceneKind <= 1 ? VoicePack.SRequest : _sceneKind == 2 ? VoicePack.SInvite : VoicePack.SAfterglow;
-                if (line) ok = PackState(st, out what);
+                if (line) ok = PackState(_sceneState, out what);
                 if (!ok)
                 {
-                    if (_sceneKind >= 3) { ok = PackBreath(true); what = "breath"; }
+                    if (_sceneCat < 0) { ok = PackBreath(_sceneKind != 3 && _sceneKind != 4 || _sceneStep < 4); what = "breath"; }
                     else
                     {
-                        int c = _sceneKind == 0 ? (_sceneStep % 4 == 1 ? VoicePack.MoanHigh : VoicePack.Climax) : _sceneKind == 1 ? VoicePack.MoanHigh : VoicePack.MoanMid;
+                        int c = _sceneKind == 0 && _sceneStep % 4 == 1 ? VoicePack.MoanHigh : _sceneCat;
                         ok = PackVoice(c, 1f, false, false); what = VoicePack.Folders[c];
                     }
                 }
@@ -1952,6 +2020,7 @@ namespace SfMorph
 
         void SceneEnd(string why)
         {
+            _sceneVoiceFree = false;
             if (_sceneDir == null) return;
             if (_sceneKind >= 0 && why != null) Log("voice: scene over (" + why + "), " + _sceneClips + " pack clips played");
             _sceneDir = null; _sceneKind = -1; SceneNote = "";
@@ -1975,9 +2044,13 @@ namespace SfMorph
                     {
                         _muteClip[i] = clip;
                         _muteOurs[i] = clip != null && clip.name.StartsWith("SfVoice_", StringComparison.Ordinal);   // once per new clip
+                        // 0.11.35: a game clip the pack has nothing for (a pack without lines and a dirty-talk line, story dialogue, an
+                        // unknown clip) is not muted: the game's voice is better than silence
+                        int c0, c1, c2, c3; bool b0;
+                        _muteLet[i] = clip != null && !_muteOurs[i] && Classify(i, clip.name, out c0, out b0, out c1, out c2, out c3) == 0;
                     }
                     // 0.11.12: a pack breath is a one-shot over whatever clip the moan source still holds: never mute it
-                    ours = clip != null && _muteOurs[i] || (i == 0 && _now < _packBreathEnd);
+                    ours = clip != null && (_muteOurs[i] || _muteLet[i]) || (i == 0 && _now < _packBreathEnd);
                     bool play = Playing(src);
                     if (play && !ours && clip != null && (newClip || !_mutePlay[i])) started = clip.name;
                     _mutePlay[i] = play;

@@ -95,6 +95,7 @@ namespace SfMorph
 
         // 0.9.9 lip sync: the mouth bones (jaw, lips, cheeks, then tongue / teeth), their neutral local pose (from the bind poses), their
         // parent's frame in the head's frame, and the mouth poses the survey saw (seeds for the ARKit map)
+        Vector3 _upBind;
         int[] _lip; Vector3[] _nP; Quaternion[] _nQ; bool[] _hasN; Matrix4x4[] _parH; float[] _mmUnit;
         sealed class LipSample { public string Clip; public Vector3[] P; public Quaternion[] R; public bool[] HasP, HasR; }
         readonly List<LipSample> _lipSamples = new List<LipSample>();
@@ -952,6 +953,7 @@ namespace SfMorph
             lip.Sort((a, c) => { int d = Order(_face[a].name).CompareTo(Order(_face[c].name)); return d != 0 ? d : string.CompareOrdinal(_face[a].name, _face[c].name); });
             _lip = lip.ToArray();
             int nl = _lip.Length;
+            _upBind = headBind ? H.MultiplyVector(Vector3.up).normalized : Vector3.zero;   // the mesh's up in the head's frame (0.11.35)
             _nP = new Vector3[nl]; _nQ = new Quaternion[nl]; _hasN = new bool[nl]; _parH = new Matrix4x4[nl]; _mmUnit = new float[nl];
             var faceOf = new Dictionary<Transform, int>();
             for (int b = 0; b < nf; b++) faceOf[_face[b]] = b;
@@ -1109,7 +1111,7 @@ namespace SfMorph
             {
                 string n = _face[_lip[i]].name.ToLowerInvariant();
                 side[i] = n.Contains("left") || n.EndsWith("_l") ? 1 : n.Contains("right") || n.EndsWith("_r") ? -1 : 0;
-                bool tongue = n.Contains("tongue") || n.Contains("teeth") || n.Contains("tooth");
+                bool tongue = n.Contains("tongue") || n.Contains("teeth") || n.Contains("tooth") || n.Contains("liquid") || n.Contains("chain");
                 cls[i] = n.Contains("jaw") ? 0 : tongue ? 5 : n.Contains("lip") ? (n.Contains("upper") ? 1 : n.Contains("lower") ? 2 : side[i] != 0 ? 3 : 5)
                        : n.Contains("cheek") ? 4 : 5;
                 if (cls[i] == 0 && (jaw < 0 || _lip[i] == _jaw)) jaw = i;
@@ -1121,12 +1123,43 @@ namespace SfMorph
             if (cL < 0 || cR < 0 || upC < 0 || loC < 0) { report = "her lip bones were not recognised by name (corners, upper / lower centre)"; return 0; }
             Func<int, Vector3> N = i => _parH[i].MultiplyPoint3x4(_nP[i]);
             Vector3 left = (N(cL) - N(cR)).normalized;
-            Vector3 up0 = N(upC) - N(loC);
-            Vector3 upv = (up0 - Vector3.Dot(up0, left) * left).normalized;
-            Vector3 fwd = Vector3.Cross(left, upv).normalized;
             Vector3 mid = 0.25f * (N(cL) + N(cR) + N(upC) + N(loC));
-            if (Vector3.Dot(fwd, mid) < 0f) fwd = -fwd;   // the mouth is in front of the head bone's origin
-            if (left.sqrMagnitude < 0.5f || upv.sqrMagnitude < 0.5f) { report = "her neutral lip corners / lips coincide"; return 0; }
+            if (left.sqrMagnitude < 0.5f) { report = "her neutral lip corners coincide"; return 0; }
+            // 0.11.35 (user: lower mouth and teeth still wrong): 0.11.11 took "up" from the upper minus the lower lip centre, which on her
+            // closed mouth (inner lip bones nearly on top of each other) pointed mostly forward / back: mouthRollLower (meant up and back)
+            // pulled the lower lip down off her teeth, mouthShrugLower pushed it forward. Up is now the model's up at bind time, kept only
+            // if it agrees with where opening the jaw takes the lower lip (down); else up is across the jaw's hinge-to-mouth line, away
+            // from that opening; last, the old lip difference.
+            Vector3 open = Vector3.zero, hinge = Vector3.zero;
+            if (jaw >= 0 && _jawDeg >= 2f)
+            {
+                Vector3 piv = N(jaw), p0 = N(loC);
+                Vector3 rh0 = (_parH[jaw].rotation * _nQ[jaw]) * LipSync.Log(_jawD);
+                open = LipSync.Exp(rh0) * (p0 - piv) + piv - p0;
+                open -= Vector3.Dot(open, left) * left;
+                hinge = mid - piv; hinge -= Vector3.Dot(hinge, left) * left;
+            }
+            Vector3 upv = Vector3.zero; string upFrom = "";
+            if (_upBind.sqrMagnitude > 0.5f)
+            {
+                Vector3 u = _upBind - Vector3.Dot(_upBind, left) * left;
+                if (u.sqrMagnitude > 0.25f && (open.sqrMagnitude < 1e-12f || Vector3.Dot(u.normalized, -open.normalized) > 0.5f)) { upv = u.normalized; upFrom = "the model's up"; }
+            }
+            if (upv.sqrMagnitude < 0.5f && open.sqrMagnitude > 1e-12f && hinge.sqrMagnitude > 1e-12f)
+            {
+                upv = Vector3.Cross(hinge, left).normalized;
+                if (Vector3.Dot(upv, open) > 0f) upv = -upv;
+                upFrom = "the jaw";
+            }
+            if (upv.sqrMagnitude < 0.5f)
+            {
+                Vector3 up0 = N(upC) - N(loC);
+                upv = (up0 - Vector3.Dot(up0, left) * left).normalized;
+                upFrom = "the lips";
+            }
+            if (upv.sqrMagnitude < 0.5f) { report = "no up direction for her mouth"; return 0; }
+            Vector3 fwd = Vector3.Cross(left, upv).normalized;
+            if (Vector3.Dot(fwd, hinge.sqrMagnitude > 1e-12f ? hinge : mid) < 0f) fwd = -fwd;   // the mouth is in front of the hinge / head origin
             float mmH = _head.TransformVector(Vector3.right).magnitude * 1000f;
             float width = (N(cL) - N(cR)).magnitude * mmH;
             float sc = Mathf.Clamp(width / 45f, 0.6f, 1.6f);   // the moves below are for a 45 mm wide mouth
@@ -1252,7 +1285,7 @@ namespace SfMorph
                 sb.Append(sb.Length > 0 ? ", " : "").Append(nm);
             }
             if (done > 0) LipSync.Changed();
-            report = done == 0 ? "nothing to build" : "built " + done + " shapes for a " + width.ToString("0") + " mm mouth" + (jt != null && _jawDeg >= 2f ? " (jaw up to " + Mathf.Min(_jawDeg, 25f).ToString("0") + " deg)" : " (no jaw turn: the lower lips drop)") + ": " + sb;
+            report = done == 0 ? "nothing to build" : "built " + done + " shapes for a " + width.ToString("0") + " mm mouth (up from " + upFrom + ")" + (jt != null && _jawDeg >= 2f ? " (jaw up to " + Mathf.Min(_jawDeg, 25f).ToString("0") + " deg)" : " (no jaw turn: the lower lips drop)") + ": " + sb;
             L("lip map " + report);
             return done;
         }

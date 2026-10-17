@@ -358,17 +358,13 @@ namespace SfMorph
             GUI.enabled = true;
             GUILayout.EndHorizontal();
             var vp = ReactionsGame.Pack;
-            // 0.11.7: the game's own moans and dirty talk silent while a pack is on
-            bool mute = _p.VoiceMuteGame.Value;
-            GUI.enabled = whoOff == null && pk.Length > 0;
-            bool tm = GUILayout.Toggle(mute, " Mute the game's own voice while the pack is on (moans, sex voice, dirty talk; the pack moans in their place)");
-            GUI.enabled = whoOff == null && pk.Length > 0 && mute;
-            bool tdl = GUILayout.Toggle(_p.VoiceMuteDialogue.Value, "    ...and its dialogue voice (off: story dialogue stays audible)");
-            GUI.enabled = true;
-            if (whoOff == null && pk.Length > 0 && tm != mute) _p.VoiceMuteGame.Value = tm;
-            if (whoOff == null && pk.Length > 0 && mute && tdl != _p.VoiceMuteDialogue.Value) _p.VoiceMuteDialogue.Value = tdl;
-            if (pk.Length == 0) GUILayout.Label("    off: no voice pack chosen", _off);
-            else if (mute) GUILayout.Label("    " + (react.GameVoiceMuted > 0 ? "muting " + react.GameVoiceMuted + " of the game's voice sources now" : "nothing of the game's playing now (needs Reactions on)") + (react.StandInNote.Length > 0 ? "; last " + react.StandInNote : ""), _hint);
+            // 0.11.35 (user: the pack replaces anyway): no mute switch: a pack stands in for every game voice clip it has a fitting clip for
+            // (moans, breaths, dirty-talk lines, the climax / creampie / tease / finish scenes); where it has none the game's voice plays
+            if (pk.Length == 0) GUILayout.Label("    the game's own voice (no pack chosen)", _hint);
+            else GUILayout.Label("    The pack replaces her game voice wherever it has a fitting clip (moans, breaths, dirty talk, climax / creampie / tease / finish scenes); "
+                + "where it has none (no lines in the pack, story scenes) her game voice plays. "
+                + (react.GameVoiceMuted > 0 ? "Muting " + react.GameVoiceMuted + " game source(s) now" : "Nothing of the game's playing now (needs Reactions on)")
+                + (react.StandInNote.Length > 0 ? "; last " + react.StandInNote : ""), _hint);
             if (pk.Length > 0) GUILayout.Label(vp.Name == pk && vp.Summary.Length > 0 ? (vp.Loaded ? "" : "off: ") + vp.Summary : "loads within a second (in the game scene)", vp.Name == pk && !vp.Loaded && vp.Summary.Length > 0 ? _off : _hint);
             GUILayout.Label("A voice pack replaces her reaction moans, breaths, slap exertions and climax; a pack with lines also speaks for the touched area (with Lines on, no sex mode needed), guards, asks for more and talks in the afterglow. Her jaw follows the pack's audio (needs Face clips). The game's own lines and feeling sounds stay off while a pack is on.", _hint);
             string vfs = react.VoiceFxStatus;

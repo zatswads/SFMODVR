@@ -334,7 +334,8 @@ namespace SfMorph
         public const int SInvite = 0, SRequest = 1, SAfterglow = 2, SGuard = 3, SOuch = 4;
         const int Cache = 64;
 
-        sealed class Cat { public string[] Files = new string[0]; public readonly int[] Recent = { -1, -1, -1, -1, -1, -1 }; }
+        // 0.11.35: a shuffled deck per folder (user: the same few lines over and over): every file plays once before any repeats
+        sealed class Cat { public string[] Files = new string[0]; public int[] Deck; public int Pos, Last = -1; }
         readonly Cat[] _cats = new Cat[NC];
         readonly Cat[] _lines = new Cat[4 * 3];
         readonly Cat[] _state = new Cat[5];
@@ -472,13 +473,18 @@ namespace SfMorph
             len = 0f;
             int n = c.Files.Length;
             if (n == 0) return null;
-            int hold = Math.Min(c.Recent.Length, n - 1);
             for (int tries = 0; tries < 4; tries++)
             {
-                int idx = -1;
-                for (int t = 0; t < 12 && idx < 0; t++) { int k = _rng.Next(n); if (Array.IndexOf(c.Recent, k, 0, hold) < 0) idx = k; }
-                if (idx < 0) idx = _rng.Next(n);
-                Array.Copy(c.Recent, 0, c.Recent, 1, c.Recent.Length - 1); c.Recent[0] = idx;
+                if (c.Deck == null || c.Deck.Length != n || c.Pos >= n)
+                {
+                    // a new round in a new order; its first clip is not the one that just played
+                    if (c.Deck == null || c.Deck.Length != n) { c.Deck = new int[n]; for (int i = 0; i < n; i++) c.Deck[i] = i; }
+                    for (int i = n - 1; i > 0; i--) { int j = _rng.Next(i + 1); int t = c.Deck[i]; c.Deck[i] = c.Deck[j]; c.Deck[j] = t; }
+                    if (n > 1 && c.Deck[0] == c.Last) { int j = 1 + _rng.Next(n - 1); int t = c.Deck[0]; c.Deck[0] = c.Deck[j]; c.Deck[j] = t; }
+                    c.Pos = 0;
+                }
+                int idx = c.Deck[c.Pos++];
+                c.Last = idx;
                 var clip = Get(c.Files[idx], out len);
                 if (clip != null) return clip;          // an unreadable file: try another
             }
