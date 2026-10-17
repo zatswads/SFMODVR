@@ -92,7 +92,7 @@ namespace SfMorph
             // The muscles' fuller deltoids / traps and the neck muscles come with the sculpt ([Muscles], Skin tab).
             new Detail { Id = "upperBuild", Group = "Torso", Label = "Athletic upper body", Op = Op.Blend, Min = 0f, Max = 1.25f,
                          Drives = new[] { "shoulderWidth", "upperarms", "armLength", "forearms", "forearmLength", "neck", "neckLength", "ribcageWidth" },
-                         DriveAt = new[] { 1.4f, 1.14f, 1f / 1.14f, 1.08f, 1f / 1.08f, 1.14f, 1f / 1.14f, 1.03f } },
+                         DriveAt = new[] { 1.8f, 1.14f, 1f / 1.14f, 1.08f, 1f / 1.08f, 1.14f, 1f / 1.14f, 1.05f } },   // 0.11.37: broader (shoulders 1.4 -> 1.8, ribcage 1.03 -> 1.05)
 
             new Detail { Id = "upperarms", Group = "Arms", Label = "Upper arm size", Op = Op.Size, Part = "upperarms", Words = new[] { "upperarm", "uparm", "shldr" }, Not = new[] { "twist" }, Min = 0.6f, Max = 1.6f, Keep = true },
             new Detail { Id = "armLength", Group = "Arms", Label = "Upper arm length", Op = Op.Length, Part = "upperarms", Min = 0.85f, Max = 1.2f },
@@ -771,6 +771,7 @@ namespace SfMorph
             s.FoldAmount = _p.SkinFolds.Value; s.ElbowFoldMm = _p.FoldElbowMm.Value; s.KneeFoldMm = _p.FoldKneeMm.Value; s.HipFoldMm = _p.FoldHipMm.Value;   // 0.11.31
             s.Chubby = _p.Chubby.Value;
             for (int i = 0; i < ContactSettings.FatAreas && i < _p.ChubbyArea.Length; i++) s.FatMm[i] = _p.ChubbyArea[i].Value;
+            for (int i = 0; i < ContactSettings.FatAreas; i++) Tissue.AreaFatMm[i] = _p.GpuContactOn.Value ? s.FatMm[i] * s.Chubby : 0f;   // 0.11.37 soft-zone physics
             s.BendAmount = _p.BendBulge.Value; s.BicepsMm = _p.BendBicepsMm.Value; s.KneeMm = _p.BendKneeMm.Value; s.CalfMm = _p.BendCalfMm.Value;
             s.HipMm = _p.BendHipMm.Value; s.BellyFoldMm = _p.BendBellyFoldMm.Value; s.WaistRollMm = _p.BendWaistRollMm.Value;
             s.Flex = _p.MuscleFlexAmt.Value; s.CoreMm = _p.MuscleCoreMm.Value; s.BackMm = _p.MuscleBackMm.Value; s.LegsMm = _p.MuscleLegsMm.Value; s.ArmsMm = _p.MuscleArmsMm.Value; s.Obliques = _p.MuscleObliques.Value;

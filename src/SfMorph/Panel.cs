@@ -982,6 +982,9 @@ namespace SfMorph
             if (Mathf.Abs(am - _p.MuscleArmsMm.Value) > 0.0001f) _p.MuscleArmsMm.Value = am;
             float lm = Slider("Legs", _p.MuscleLegsMm.Value, 0f, 20f, "0.0", 4f, awhy ?? (_p.MuscleLegs.Value ? null : "off: Legs is off"), " mm");
             if (Mathf.Abs(lm - _p.MuscleLegsMm.Value) > 0.0001f) _p.MuscleLegsMm.Value = lm;
+            // 0.11.37 (user: no broad upper torso setting here): the Body tab's Athletic upper body (bones: shoulders out, thicker arms and
+            // neck, a wider ribcage) plus, with the muscles on, the lats / deltoids / traps / pecs filled out at rest (the V-taper)
+            BroadUpperRow(c, sliderOff);
             float fm = Slider("Firmness", _p.MuscleFirmness.Value, 0f, 0.9f, "0.00", 0.5f, why);
             if (Mathf.Abs(fm - _p.MuscleFirmness.Value) > 0.0001f) _p.MuscleFirmness.Value = fm;
             if (off != null) GUILayout.Label("off: " + off, _off);
@@ -998,6 +1001,25 @@ namespace SfMorph
                             "shape; mm x Flex eases toward 10 mm so a high setting stays muscle, not a lump). Obliques: the pads over her hip bones and the waist's sides as a share of Core (relief and bulge), so the abs can be raised alone. The relief above stays the fine detail. Firmness: a tensed muscle dents less under a hand and the physics hands meet more resistance there. Flex test: " +
                             "each area at full (at least 3 mm) for 2 s over whatever she is doing, whatever her pose's tension; the log says how far " +
                             "and on how many vertices each one went.", _hint);
+        }
+
+        void BroadUpperRow(Character c, string sliderOff)
+        {
+            Detail d = null;
+            foreach (var x in Detail.All) if (x.Id == "upperBuild") { d = x; break; }
+            if (d == null || c == null || c.Look == null) return;
+            float v;
+            if (!c.Look.Regions.TryGetValue(d.Id, out v)) v = d.Neutral;
+            string off;
+            c.Off.TryGetValue(d.Id, out off);
+            float nv = Slider("Broad upper body", v, d.Min, d.Max, "0.00", d.Neutral, off == null ? null : "off: " + off);
+            if (nv != v)
+            {
+                if (Mathf.Abs(nv - d.Neutral) < 0.005f) c.Look.Regions.Remove(d.Id); else c.Look.Regions[d.Id] = nv;
+                _body.Touch(c);
+            }
+            GUILayout.Label("    Broader shoulders and back, thicker arms and neck (the Body tab's Athletic upper body, saved with her look); with muscles on, " +
+                            "her lats, deltoids, traps and upper chest stay filled out at rest for the V-taper.", _hint);
         }
 
         // 0.11.31 chubby: soft fat by area on the GPU skin (like the muscle shape, the other way)
@@ -1017,6 +1039,8 @@ namespace SfMorph
                 float a = Slider("    " + Plugin.ChubbyNames[i].ToLowerInvariant(), _p.ChubbyArea[i].Value, 0f, 40f, "0", (float)_p.ChubbyArea[i].DefaultValue, awhy, " mm");
                 if (Mathf.Abs(a - _p.ChubbyArea[i].Value) > 0.001f) _p.ChubbyArea[i].Value = a;
             }
+            GUILayout.Label("Glutes: fuller and also softer in her physics, like the breasts (they wobble more, give further under a hand or his body); " +
+                            "belly and thighs too, with their own fat.", _hint);
             GUILayout.Label("Soft fat where she puts it on: belly (the pooch under the navel, a softer upper belly), waist (love handles), back " +
                             "(the bra line, the lower back), glutes, thighs (saddlebags, inner thighs), arms (the backs of the upper arms), calves, face (fuller cheeks, a double chin, a softer neck). mm = " +
                             "the area's fullest spot at 100 %. Fat hides the muscle shape under it, dents deeper under a hand, ripples more, and makes " +

@@ -44,6 +44,53 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.38 (avatar: her own genitals):
+- The avatar's own crotch did not work with the game (user, headset): a translucent, untextured piece that did not match her genital
+  customisation or move with the game's sex animations. Now the game's own genital meshes stay on: her pussy patch (vulva and anus,
+  every type the customisation swaps), pubic hair and the internal meshes, bound to her bones as always, so the swaps and the
+  animations work. The avatar's crotch is cut out where the patch sits and its skin around it (within 3 cm, fading out to 8 cm) is
+  laid onto her body surface, so the patch's rim and the pubic hair sit on it as on her (checked offline: from below the patch shows
+  exactly as on her own body, framed by the avatar's thighs). The patch is tinted to the avatar's skin: its own _SkinColor scaled by
+  the avatar's skin colour around it over hers (a per-renderer property block: her shared body material, the game's skin colour
+  setting and the brightness slider still apply).
+- Her renderers the avatar does not replace stay drawn: clothes, toys, props, internal meshes (before, all of her was hidden); only
+  her skin, nipples, face, eyes, lashes, brows, mouth and tears (and hair when Keep her hair is off) are hidden.
+
+0.11.37 (chubby glutes move like the breasts; a broad upper body in the Muscles section):
+- Chubby glutes now also change her glute physics, the way breast tissue behaves (user). More glute fat makes the glute soft zones
+  softer (slower, wider jiggle), lets them give further under a hand or his body, and lets them keep wobbling longer. The belly and
+  thigh zones follow their own fat the same way; slimmer (Chubby below 0) is firmer. The fat itself already rides on those soft zones
+  and dents deeper. The Glutes slider is in the Chubby section of the Skin tab.
+- Broad upper body in the Skin tab's Muscles section (user: no way to make her upper torso look broader there). It is the Body tab's
+  Athletic upper body (one value, saved with her look), now broader (shoulders 1.4 -> 1.8 cm out, ribcage x1.05). With the muscles
+  on, it also keeps her lats, deltoids, traps and upper chest filled out at rest (up to 70 % of their tensed shape) for a V-taper
+  without flexing.
+
+0.11.36 (neck lines across her whole neck, not two mirrored strokes):
+- Her neck creases showed as two short, mirrored lines slanting down from under her jaw (headset 17 Oct). The front of her neck on
+  the body texture is shared by two meshes: her throat and the small piece under her chin. The maps were made on the under-chin
+  piece there, where the lines don't reach, so each line was blank in the middle and only its two side ends showed.
+- The body maps are now made on her throat, and the neck has three soft creases running across the whole front: uneven, slightly
+  wavy, each at its own height, depth and reach to either side (not mirrored), the middle one strongest, the top one short and faint.
+  Same driver as before: they fade in when she looks down or tucks her chin. Shader bundle rebuilt.
+
+0.11.35 (chubby on whole limbs and the torso; the lower body's bends back; no red smears from his body):
+- Her lower body had no bend bulges, knee or groin folds and no chubby since 0.11.31 (log: "no frame (no toes or breasts to tell
+  her front)"). Her toes are on the foot mesh, so 0.11.31's front check found nothing there. It now uses the leg's front skin helper
+  (in front of the hip) or the butt skin helper (behind it). That also explains why Chubby hardly changed her body: the belly's
+  lower half, the glutes and the thighs are on the lower body.
+- Chubby covers whole limbs and the whole torso (user: it only inflated the upper arm and barely showed on the body).
+  - Arms: the upper arm and the forearm as one, tapering to the wrist, softest at the back of the upper arm.
+  - Thighs: down to the knee, sharing it with the calves so there is no step there.
+  - Calves: fade out before her foot mesh starts.
+  - Torso: belly, waist and back are each a soft layer over their side of the torso with the deposits on it.
+  - Area defaults are a little fuller (belly 14, waist 12, back 8, glutes 14, thighs 14, arms 10, calves 7 mm); your saved values
+    stay.
+- Dark red smears across her groin and upper thighs in sex scenes (user's screenshot): his pelvis and thighs press deep into her
+  there and move fast while he thrusts, so they reddened and printed a band like a slapping hand. His body now stays under the
+  redness threshold and shades / prints at half strength; hands and slaps are unchanged.
+- Shader bundle rebuilt: install dist/sfmorph_shaders too.
+
 0.11.34 (GPU resets, crashes and freezes since 17 Oct):
 - Symptom (user, three runs on 17 Oct with 0.11.30 / 0.11.33): the NVIDIA driver reset the GPU (System log nvlddmkm 153) and the game
   froze or crashed ("d3d11: failed to create buffer ... 0x887A0005", device removed).

@@ -352,7 +352,7 @@ void Depth(uint3 id : SV_DispatchThreadID)
         if (mw > 0.0 && cap > 1e-6)
         {
             float sh = Press(s, cap);
-            fo = max(fo, float2(saturate(sh / cap) * mw, sh));
+            fo = max(fo, float2(saturate(sh / cap) * mw, sh * saturate(mw / 0.4)));   // 0.11.35: a light mark weight (his body, 0.2) shades and prints half
         }
     }
     _FieldOut[v] = depth > 0.0 && cap > 1e-6 ? Press(depth, cap) : 0.0;

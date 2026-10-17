@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.11.35";
+        public const string Version = "0.11.39";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -114,8 +114,8 @@ namespace SfMorph
             FoldKneeMm = Config.Bind("Physics", "FoldKneeMm", 5f, new ConfigDescription("Back-of-the-knee fold depth at a fully bent knee (mm, before SkinFolds).", new AcceptableValueRange<float>(0f, 15f)));
             FoldHipMm = Config.Bind("Physics", "FoldHipMm", 5f, new ConfigDescription("Groin fold depth with the hip drawn up (sitting; mm, before SkinFolds).", new AcceptableValueRange<float>(0f, 15f)));
             Chubby = Config.Bind("Chubby", "Chubby", 0f, new ConfigDescription("GPU contact: soft fat on her body, the way the muscle shape makes her look muscular: the areas below x this (0 off). Fat hides the muscles under it, dents deeper, ripples more, and makes the belly / waist rolls and the folds beside her joints fuller. Below 0 she is slimmer in the same areas.", new AcceptableValueRange<float>(-1f, 2f)));
-            float[] fatDef = { 12f, 10f, 6f, 12f, 12f, 8f, 5f, 6f };
-            string[] fatDesc = { "the lower belly's pooch and a softer upper belly", "love handles over the hip bones", "the bra-line bulge and the lower back", "fuller, rounder glutes", "saddlebags and the inner thighs", "the backs of the upper arms", "the calves all round", "fuller cheeks, a double chin and a softer neck" };
+            float[] fatDef = { 14f, 12f, 8f, 14f, 14f, 10f, 7f, 6f };
+            string[] fatDesc = { "the lower belly's pooch and a softer upper belly", "love handles over the hip bones", "the bra-line bulge and the lower back", "fuller, rounder glutes", "saddlebags and the inner thighs", "the whole arm, most at the backs of the upper arms", "the calves all round", "fuller cheeks, a double chin and a softer neck" };
             BuildStrength = Config.Bind("Chubby", "BuildStrength", 1f / 3f, new ConfigDescription("Skin tab build triangle: the last pick's Strength weight (the dot; sets nothing by itself).", new AcceptableValueRange<float>(0f, 1f)));
             BuildFat = Config.Bind("Chubby", "BuildFat", 1f / 3f, new ConfigDescription("Skin tab build triangle: the last pick's Fat weight (Skinny = 1 - Strength - Fat).", new AcceptableValueRange<float>(0f, 1f)));
             ChubbyArea = new ConfigEntry<float>[ChubbyNames.Length];

@@ -153,6 +153,7 @@ namespace SfMorph
         GraphicsBuffer _musDummy4, _musDummy1;   // bound while a renderer has no muscles (_MusOn 0: never read)
         readonly Vector4[] _musAmp = new Vector4[8], _musAct = new Vector4[8];
         float _musMax;                        // this frame's largest bulge (m); 0 = no muscle geometry
+        float _upperBuild;                    // 0.11.37: her look's Athletic / Broad upper body value (0..1.25)
         bool _musLive;
         public string FlexNote = "";          // why the muscle bulge is not drawn ("" = it is, or nothing baked yet)
         public bool MuscleKernels { get { return _muscleK && _v2Kernels && !_v2Failed; } }
@@ -170,6 +171,7 @@ namespace SfMorph
         readonly uint[] _wcMask = new uint[MaxCaps];
         readonly bool[] _wcV2Only = new bool[MaxCaps];
         readonly float[] _wcW = new float[MaxCaps];   // 0.9.4 mark weight (0 = her own limb)
+        const float PartnerMark = 0.2f;              // 0.11.35: the partner's body (pelvis, thighs): below the shader's MarkKnee (0.25), so no redness
         // 0.9.4: per foreign capsule its centre last frame and its smoothed speed relative to her pelvis (the mark weight)
         struct CapVel { public Vector3 P; public float Spd; public int Frame; }
         readonly Dictionary<long, CapVel> _capVel = new Dictionary<long, CapVel>();
@@ -816,6 +818,8 @@ namespace SfMorph
         {
             string test = MuscleFlex.TestArea();
             if (test != _testArea) LogTest(test);
+            float ub;
+            _upperBuild = _her != null && _her.Look != null && _her.Look.Regions.TryGetValue("upperBuild", out ub) ? ub : 0f;
             _musLive = _mmap != null && (test != null || MuscleFlex.Live);
             for (int i = 0; i < 8; i++) { _musAmp[i] = Vector4.zero; _musAct[i] = Vector4.zero; }
             if (!_musLive) return 0f;
@@ -829,6 +833,15 @@ namespace SfMorph
                 if (FlexGroup(L, k) == "obliques") mm *= test != null ? Mathf.Max(0f, _set.Obliques) : MusclePose.ObliquesFactor(_set.Obliques, L.Side[k]);   // 0.11.20
                 if (L.MuscleName[k] == "ribcage") mm = 0f;   // bone showing through, not a muscle belly: relief only, never pushed out
                 float act = test != null ? (a == test ? 1f : 0f) : MuscleFlex.Act[k];
+                // 0.11.37 (user: a broader upper torso): Athletic / Broad upper body keeps the lats, deltoids, traps and pecs filled out at
+                // rest (up to 70 % of their tensed shape), so the V-taper shows without flexing
+                if (test == null && _upperBuild > 0f)
+                {
+                    string mn = L.MuscleName[k];
+                    if (mn.StartsWith("lats", StringComparison.Ordinal) || mn.StartsWith("deltoids", StringComparison.Ordinal)
+                        || mn.StartsWith("traps", StringComparison.Ordinal) || mn.StartsWith("pecs", StringComparison.Ordinal))
+                        act = Mathf.Max(act, 0.7f * Mathf.Clamp01(_upperBuild));
+                }
                 float amp = act * FlexMm(Mathf.Max(0f, mm) * flex) * 0.001f;
                 _musAmp[k >> 2][k & 3] = amp;
                 _musAct[k >> 2][k & 3] = act;
@@ -1053,6 +1066,10 @@ namespace SfMorph
                         else if (cv.Frame == fr) spd = cv.Spd;
                         _capVel[key] = new CapVel { P = mid, Spd = spd, Frame = fr };
                         w = Mathf.Clamp(0.4f + 1.5f * spd, 0.4f, 1.5f);   // resting 0.4 (only a firm squeeze marks, slowly), 0.4 m/s 1.0, from 0.73 m/s 1.5
+                        // 0.11.35 (user: dark red smears across her groin and upper thighs): his pelvis and thighs are broad capsules his animations push
+                        // deep into her and move fast while he thrusts, so they reddened and printed a band along her groin like a slapping hand would.
+                        // A body against a body is not a hand: under the redness knee (no redness), half the pressed shade and print (the shader)
+                        if (isBody) w = PartnerMark;
                     }
                     // her own hand: the capsule (22 mm) is about twice a palm's half-thickness; a hand hanging at her side would dimple the thigh by a cm
                     float rad = kind == "hand" ? c.Radius * 0.6f : c.Radius;

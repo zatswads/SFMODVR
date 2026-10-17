@@ -19,7 +19,7 @@ using UnityEngine;
 public static class AvatarDriveTest
 {
     static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
-    static readonly string[] HerMeshes = { "reika_upperBody_normal", "reika_lowerBody_normal", "reika_foot", "reika_neck", "reika_face_a" };
+    static readonly string[] HerMeshes = { "reika_upperBody_normal", "reika_lowerBody_normal", "reika_foot", "reika_neck", "reika_face_a", "pussy_typeC_normal", "pubicHair_typeD_normal" };
 
     static string Arg(string name, string def = null)
     {
@@ -131,6 +131,7 @@ public static class AvatarDriveTest
         var go2 = GameObject.Find("SfAvatar " + avatar);
         var rends = go2.GetComponentsInChildren<SkinnedMeshRenderer>(true);
         var main = rends.OrderByDescending(r => r.sharedMesh.vertexCount).First();
+        int mainOff = 0; foreach (var r in rends) { if (r == main) break; mainOff += r.sharedMesh.vertexCount; }   // main's vertices in the baked list
         if (rends.Any(r => r.bones.Any(b => b == null))) { Fail("an avatar mesh has a missing bone"); return; }
         float[] restEdges = null, herRest = null;
 
@@ -173,7 +174,7 @@ public static class AvatarDriveTest
             // on her curves: each of her body vertices (upper / lower body) to the nearest avatar vertex
             var grid = new Dictionary<long, List<Vector3>>();
             long Key(Vector3 p) { return ((long)Mathf.FloorToInt(p.x / 0.03f) + 100000 << 40) ^ ((long)Mathf.FloorToInt(p.y / 0.03f) + 100000 << 20) ^ ((long)Mathf.FloorToInt(p.z / 0.03f) + 100000); }
-            foreach (var p in av.Take(main.sharedMesh.vertexCount)) { var k = Key(p); if (!grid.TryGetValue(k, out var l)) grid[k] = l = new List<Vector3>(); l.Add(p); }
+            foreach (var p in av.Skip(mainOff).Take(main.sharedMesh.vertexCount)) { var k = Key(p); if (!grid.TryGetValue(k, out var l)) grid[k] = l = new List<Vector3>(); l.Add(p); }
             var gaps = new List<float>();
             int herBodyVerts = her.Where(r => r.name.Contains("Body")).Sum(r => r.sharedMesh.vertexCount);
             foreach (var p in hb.Take(herBodyVerts))
@@ -186,9 +187,27 @@ public static class AvatarDriveTest
             }
             gaps.Sort();
             float med = gaps[gaps.Count / 2], p95 = gaps[(int)(gaps.Count * 0.95f)];
+            // her genital patch against the avatar: how far its vertices are from the avatar's skin (the rim must meet it)
+            string patchNote = "";
+            var pr = her.FirstOrDefault(r => r.name.StartsWith("pussy"));
+            if (pr != null)
+            {
+                int off = 0; foreach (var r in her) { if (r == pr) break; off += r.sharedMesh.vertexCount; }
+                var pd = new List<float>();
+                for (int i = 0; i < pr.sharedMesh.vertexCount; i++)
+                {
+                    var p = hb[off + i]; float bd = 0.05f * 0.05f;
+                    int cx = Mathf.FloorToInt(p.x / 0.03f), cy = Mathf.FloorToInt(p.y / 0.03f), cz = Mathf.FloorToInt(p.z / 0.03f);
+                    for (int x = cx - 2; x <= cx + 2; x++) for (int y = cy - 2; y <= cy + 2; y++) for (int z = cz - 2; z <= cz + 2; z++)
+                        { long k = ((long)x + 100000 << 40) ^ ((long)y + 100000 << 20) ^ ((long)z + 100000); if (grid.TryGetValue(k, out var l)) foreach (var q in l) { float d = (q - p).sqrMagnitude; if (d < bd) bd = d; } }
+                    pd.Add(Mathf.Sqrt(bd));
+                }
+                pd.Sort();
+                patchNote = "; her genital patch to the avatar's skin median " + (pd[pd.Count / 2] * 1000f).ToString("0.0", Inv) + " mm, 90 % " + (pd[(int)(pd.Count * 0.9f)] * 1000f).ToString("0.0", Inv) + " mm";
+            }
             worstGap = Mathf.Max(worstGap, p95);
             // soles: lowest avatar vertex vs her foot mesh's lowest
-            float avLow = av.Take(main.sharedMesh.vertexCount).Min(p => p.y);
+            float avLow = av.Skip(mainOff).Take(main.sharedMesh.vertexCount).Min(p => p.y);
             float herLow = herFoot != null ? Bake(new[] { herFoot }, root).Min(p => p.y) : float.NaN;
             worstSole = Mathf.Max(worstSole, Mathf.Abs(avLow - herLow));
             // stretch against the avatar's bind frame
@@ -218,7 +237,7 @@ public static class AvatarDriveTest
             report.Append("frame ").Append(fi).Append(" (").Append(label).Append("): her body to the avatar's skin median ").Append((med * 1000f).ToString("0.0", Inv))
                   .Append(" mm, 95 % ").Append((p95 * 1000f).ToString("0.0", Inv)).Append(" mm; lowest point avatar ").Append((avLow * 1000f).ToString("0", Inv))
                   .Append(" mm / her foot ").Append((herLow * 1000f).ToString("0", Inv)).Append(" mm; skin edges x").Append(p01.ToString("0.00", Inv))
-                  .Append(" (0.1 %) .. x").Append(p99.ToString("0.00", Inv)).Append(" (99.9 %) of the bind frame (her upper body x").Append(h01.ToString("0.00", Inv)).Append(" .. x").Append(h99.ToString("0.00", Inv)).Append(")\n");
+                  .Append(" (0.1 %) .. x").Append(p99.ToString("0.00", Inv)).Append(" (99.9 %) of the bind frame (her upper body x").Append(h01.ToString("0.00", Inv)).Append(" .. x").Append(h99.ToString("0.00", Inv)).Append(")").Append(patchNote).Append("\n");
             WriteObj(Path.Combine(outDir, "frame_" + fi.ToString("00") + ".obj"), rends, av);
             WriteObj(Path.Combine(outDir, "frame_" + fi.ToString("00") + "_her.obj"), her.ToArray(), hb);
             fi++;

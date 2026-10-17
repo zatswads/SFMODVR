@@ -98,6 +98,38 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.38 (avatar: her own genitals)
+
+Log, in the `Avatar RKS Krista 9: ...` line: `crotch: N vertices laid onto her skin, M triangles cut where her genital meshes sit, tint r g
+b (...)` (no tint = her colour maps could not be read). Headset: (1) the game's vulva / anus on the avatar, no gap or step at its rim,
+pubic hair on the mons, nothing translucent; (2) its tone close to the avatar's skin around it (Skin brightness changes both); (3) the
+customisation's genital types swap on the avatar; the sex animations open and move it; (4) her clothes and toys show on the avatar
+(they are fitted to her, so some clipping is expected); (5) None: all back.
+
+## 0.11.37 (glute fat physics, broad upper body)
+
+Install `dist/SfMorph.dll` (no bundle change).
+- Chubby on, Glutes up to 20-30 mm: slap or grab her glutes, or watch his thrusts. They should wobble slower and wider, sink further
+  and settle more slowly than at Glutes 0. Chubby -100 %: firmer.
+- Skin tab, Muscles: Broad upper body 0 -> 1.25. Shoulders go out, the arms and neck get thicker, and the lats / shoulders / upper
+  chest fill out (with the muscles on) so her back makes a V from behind. The Body tab's Athletic upper body moves with it (one value).
+
+## 0.11.36 (neck lines)
+
+Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log: `SF Body Morphs 0.11.36`. Wrinkles on with Neck on, Debug -> Wrinkle
+test (or chin down): 2-3 soft lines run across the whole front of her neck, uneven and not mirrored; no diagonal strokes under the
+jaw; nothing new under her chin when her head is up. Debug Regions: the neck colour covers the front of the neck in one piece.
+
+## 0.11.35 (chubby whole limbs, lower-body frame, partner marks)
+
+Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log: the `baked reika_lowerBody...` line has `bend N verts`, `folds N verts`
+and `chubby N verts` again (no `no frame`).
+- Chubby test (Debug tab): arms = the whole arm to the wrist; thighs = the whole thigh into the knee with no step; belly / waist / back
+  round the whole torso side, the deposits leading.
+- Kneel / squat: the back-of-knee bulges and folds are back.
+- Sex scene with his body against her groin for a minute: no dark red bands. A faint pressed shade is expected. If red bands still
+  appear, switch Skin marks off: gone = marks (tell me), still there = something else (send a screenshot with the Debug views).
+
 ## 0.11.34 (GPU resets: worker-thread bake, buffer guards)
 
 Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Then:

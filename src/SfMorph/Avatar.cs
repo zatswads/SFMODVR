@@ -521,12 +521,23 @@ namespace SfMorph
 
                 // 3. her body skin for the weights: her body meshes at her bind pose, in her root's space
                 var near = new SkinGrid(0.03f);
+                // her genital patch (the pussy_type* meshes, vulva and anus in one, all variants: they share their rest shape within
+                // 1 cm), her pubic hair, and her body surface around them: the avatar's crotch is cut out where the patch sits and the
+                // skin around it is laid onto hers, so the game's own genital meshes, their swaps and animations fit it
+                var patch = new PointGrid(0.02f); var pubic = new PointGrid(0.02f); var herSurf = new PointGrid(0.02f);
                 var herW2L = HerRoot.worldToLocalMatrix;
                 string herMeshes = "";
                 foreach (var r in HerRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true))
                 {
-                    if (r == null || r.sharedMesh == null || VrHands.UnderSf(r.transform) || !r.gameObject.activeInHierarchy) continue;
+                    if (r == null || r.sharedMesh == null || VrHands.UnderSf(r.transform)) continue;
                     var nm = r.name.ToLowerInvariant();
+                    if (IsPatch(nm) || nm.Contains("pubichair"))
+                    {
+                        var dg = MeshData.Read(r.sharedMesh, out var gerr);
+                        if (dg != null && dg.Pos != null) (IsPatch(nm) ? patch : pubic).Add(dg, herW2L * r.transform.localToWorldMatrix);
+                        continue;
+                    }
+                    if (!r.gameObject.activeInHierarchy) continue;
                     if (!(nm.Contains("upperbody") || nm.Contains("lowerbody") || nm.Contains("foot") || nm.Contains("neck"))) continue;
                     if (!r.sharedMaterials.Any(m => m != null && m.shader != null && m.shader.name.Contains("Skin"))) continue;
                     var d = MeshData.Read(r.sharedMesh, out var err);
@@ -540,6 +551,7 @@ namespace SfMorph
                         real[b] = t;
                     }
                     near.Add(d, real, herW2L * r.transform.localToWorldMatrix, HerRegion);
+                    if (nm.Contains("lowerbody") || nm.Contains("upperbody")) herSurf.Add(d, herW2L * r.transform.localToWorldMatrix);
                     herMeshes += (herMeshes.Length > 0 ? ", " : "") + r.name + " " + d.Pos.Length;
                 }
                 if (near.Count == 0) return "none of her body meshes could be read (upperBody / lowerBody / foot / neck)";
@@ -640,13 +652,34 @@ namespace SfMorph
                 int fromHer = 0, fromMap = 0, far = 0, verts = 0;
                 var built = new List<KeyValuePair<SkinnedMeshRenderer, Mesh>>();
                 var acc = new Dictionary<Transform, float>(); var hacc = new Dictionary<Transform, float>();
+                int snapped = 0, cutTris = 0;
+                var ringUv = new List<Vector2>(); Texture ringTex = null;
                 foreach (var ps in pass)
                 {
                     var r = ps.R; var src3 = r.sharedMesh; int nv = ps.P.Length;
                     var nv3 = new Vector3[nv]; var nbw = new BoneWeight[nv];
+                    var inside = new bool[nv]; var snapW = new float[nv];
                     for (int vi = 0; vi < nv; vi++)
                     {
                         var q = rbf.Apply(ps.P[vi]);
+                        // the crotch: a vertex nearer her genital patch than her skin is cut out; the rest within 3 cm of the patch or her
+                        // pubic hair is laid fully onto her body surface (the tangent plane of her nearest skin vertex), fading out to 8 cm
+                        if (patch.Count > 0)
+                        {
+                            float dP = patch.Dist(q, 0.1f), dH = pubic.Count > 0 ? pubic.Dist(q, 0.1f) : 1f, dR = Mathf.Min(dP, dH);
+                            // inside: nearer her patch than her skin, as fitted (laid onto her skin first, the skin over her vulva would
+                            // land on her inner thighs' edge and cover it)
+                            if (dP < 0.04f && dP < herSurf.Dist(q, 0.1f)) inside[vi] = true;
+                            else if (dR < 0.08f && herSurf.Nearest(q, 0.08f, out int si, out float sd))
+                            {
+                                float sw = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.03f, 0.08f, dR));
+                                var sp = herSurf.P[si]; var sn = herSurf.N[si];
+                                q = Vector3.Lerp(q, q - Vector3.Dot(q - sp, sn) * sn, sw);
+                                if (ps.N != null) ps.N[vi] = Vector3.Lerp(ps.N[vi], sn, sw).normalized;
+                                snapW[vi] = sw;
+                                if (sw > 0f) snapped++;
+                            }
+                        }
                         nv3[vi] = q;
                         // weights: the share on head / hand / foot bones by the bone map, the rest her own (the nearest skin of the
                         // regions it covers); no such skin within 4 cm: all by the bone map. Shares keep the seams at the neck, wrists
@@ -691,7 +724,30 @@ namespace SfMorph
                         string surf = s < mats.Length && mats[s] != null ? mats[s].name : "";
                         string role = _surfRole.TryGetValue(surf, out var ro) ? ro : "skin";
                         bool leftOut = role == "cornea" || role == "tear" || ((role == "lashes" || role == "brows") && !lit);   // see-through overlays: not in this version
-                        mesh.SetIndices(leftOut ? new int[0] : src3.GetIndices(s), src3.GetTopology(s), s, false);
+                        var ind = leftOut ? new int[0] : src3.GetIndices(s);
+                        if (!leftOut && src3.GetTopology(s) == MeshTopology.Triangles && inside.Any(x => x))
+                        {
+                            var keep = new List<int>(ind.Length);
+                            for (int t = 0; t + 2 < ind.Length; t += 3)
+                            {
+                                if (inside[ind[t]] || inside[ind[t + 1]] || inside[ind[t + 2]]) { cutTris++; continue; }
+                                keep.Add(ind[t]); keep.Add(ind[t + 1]); keep.Add(ind[t + 2]);
+                            }
+                            ind = keep.ToArray();
+                        }
+                        mesh.SetIndices(ind, src3.GetTopology(s), s, false);
+                        // the skin just around the patch, for the patch's tint: its colour map at those vertices
+                        if (!leftOut && role == "skin" && ringTex == null)
+                        {
+                            var uv0 = src3.uv;
+                            var tex = _surfTex.TryGetValue(surf, out var tx) ? Tex(tx, "albedo") : null;
+                            if (tex != null && uv0 != null && uv0.Length == nv)
+                            {
+                                var ring = new List<Vector2>();
+                                foreach (var vi in ind.Distinct()) if (snapW[vi] > 0.5f && !inside[vi]) ring.Add(uv0[vi]);
+                                if (ring.Count > 20) { ringTex = tex; ringUv = ring; }
+                            }
+                        }
                     }
                     _meshes.Add(mesh);
                     built.Add(new KeyValuePair<SkinnedMeshRenderer, Mesh>(r, mesh));
@@ -722,15 +778,33 @@ namespace SfMorph
                     _rends.Add(sr);
                     _origMats.Add(kv.Key.sharedMaterials);
                 }
+                // the patch's tint: its _SkinColor scaled so her skin around it (her colour map x _SkinColor) comes out at the avatar's
+                // skin around it; set per renderer (a property block), so her shared body material and the game's skin colour stay
+                string tintNote = "no tint (no colour maps)";
+                if (ringTex != null && _herSkin != null && _herSkin.HasProperty("_ColorMap") && _herSkin.GetTexture("_ColorMap") != null)
+                {
+                    var herUv = herSurf.UvNear(patch, 0.03f);
+                    var a = MeanAt(ringTex, ringUv);
+                    var h = MeanAt(_herSkin.GetTexture("_ColorMap"), herUv);
+                    var ht = _herSkin.HasProperty("_SkinColor") ? _herSkin.GetColor("_SkinColor") : Color.white;
+                    if (h.r > 1e-3f && h.g > 1e-3f && h.b > 1e-3f && herUv.Count > 20)
+                    {
+                        _patchRatio = new Color(Mathf.Clamp(a.r / (h.r * ht.r), 0.3f, 3f), Mathf.Clamp(a.g / (h.g * ht.g), 0.3f, 3f), Mathf.Clamp(a.b / (h.b * ht.b), 0.3f, 3f), 1f);
+                        tintNote = "tint " + _patchRatio.r.ToString("0.00", CultureInfo.InvariantCulture) + " " + _patchRatio.g.ToString("0.00", CultureInfo.InvariantCulture) + " " +
+                                   _patchRatio.b.ToString("0.00", CultureInfo.InvariantCulture) + " (avatar skin around it " + ringUv.Count + " vertices, hers " + herUv.Count + ")";
+                    }
+                }
                 Materials(MaterialRoute.Value, Brightness.Value);
                 Hide(KeepHair.Value);
+                string crotch = patch.Count > 0 ? "crotch: " + snapped + " vertices laid onto her skin, " + cutTris + " triangles cut where her genital meshes sit, " + tintNote
+                                                : "crotch: no genital mesh of hers found (nothing cut)";
 
                 Summary = Name + ": " + best.Id + " rig, " + mapped + " bones mapped, fitted to her " + joints + " joints (moved up to " +
                           (moveMax * 100f).ToString("0.0", CultureInfo.InvariantCulture) + " cm), " + _rends.Count + " meshes on " + _herBones.Length + " of her bones";
                 Plugin.Log.LogInfo("Avatar " + Summary + "; " + verts + " vertices: " + fromHer + " with her skin weights (head, hand and foot shares by the bone map), " + fromMap + " by the bone map alone (" + far +
                                    " of them farther than 4 cm from her skin); x" + scale.ToString("0.000", CultureInfo.InvariantCulture) + ", facing turned " +
                                    yaw.ToString("0.#", CultureInfo.InvariantCulture) + " deg, fit residual " + (fitErr * 1000f).ToString("0.0", CultureInfo.InvariantCulture) +
-                                   " mm, soles before the fit " + (soles.Length > 0 ? soles : "-") + "; her meshes " + herMeshes + "; her skin material " + (_herSkin != null ? _herSkin.name : "not found") + "; " + _hidden.Count +
+                                   " mm, soles before the fit " + (soles.Length > 0 ? soles : "-") + "; " + crotch + "; her meshes " + herMeshes + "; her skin material " + (_herSkin != null ? _herSkin.name : "not found") + "; " + _hidden.Count +
                                    " of her renderers hidden");
                 return null;
             }
@@ -828,7 +902,20 @@ namespace SfMorph
                 return best;
             }
 
-            // ---- her renderers off (hair optionally kept), given back exactly ----
+            // ---- what the avatar replaces: her skin, face parts and (optionally) hair; given back exactly ----
+            // Kept: her genital patch (tinted), pubic hair, the internal meshes, clothes, toys and props.
+            static bool IsPatch(string lowerName) { return lowerName.Contains("pussy"); }
+
+            static bool Replaced(Renderer r, string n)
+            {
+                if (IsPatch(n) || n.Contains("pubichair") || n.Contains("semen") || n.Contains("uterus") || n.Contains("rectum")) return false;
+                if (n.StartsWith("reika_face", StringComparison.Ordinal)) return true;
+                foreach (var k in new[] { "sclera", "iris", "eye_glow", "eyeglow", "eyelash", "eyebrow", "tears", "uppermouth", "lowermouth", "teeth", "tongue" })
+                    if (n.Contains(k) && n.StartsWith("reika", StringComparison.Ordinal)) return true;
+                foreach (var m in r.sharedMaterials) if (m != null && m.shader != null && m.shader.name.Contains("Skin")) return true;   // her body skin, nipples
+                return false;
+            }
+
             public void Hide(bool keepHair)
             {
                 Hair = keepHair;
@@ -838,7 +925,9 @@ namespace SfMorph
                     if (r == null || VrHands.UnderSf(r.transform)) continue;
                     var n = r.name.ToLowerInvariant();
                     bool hair = n.Contains("hair") && !n.Contains("pubic");
-                    if (hair && keepHair)
+                    bool hide = hair ? !keepHair : Replaced(r, n);
+                    if (IsPatch(n)) Tint(r);
+                    if (!hide)
                     {
                         if (_hidden.TryGetValue(r, out var was)) { r.forceRenderingOff = was; _hidden.Remove(r); }
                         continue;
@@ -847,6 +936,44 @@ namespace SfMorph
                     _hidden[r] = r.forceRenderingOff;
                     r.forceRenderingOff = true;
                 }
+            }
+
+            // her genital patch in the avatar's skin tone: _SkinColor of its own material x the measured ratio x brightness
+            Color _patchRatio = Color.white;
+            readonly HashSet<Renderer> _tinted = new HashSet<Renderer>();
+            MaterialPropertyBlock _mpb;
+            static readonly int _idSkinColor = Shader.PropertyToID("_SkinColor");
+
+            void Tint(Renderer r)
+            {
+                var m = r.sharedMaterial;
+                if (m == null || !m.HasProperty(_idSkinColor)) return;
+                if (_mpb == null) _mpb = new MaterialPropertyBlock();
+                var c = m.GetColor(_idSkinColor);
+                float b = Bright > 0f ? Bright : 1f;
+                r.GetPropertyBlock(_mpb);
+                _mpb.SetColor(_idSkinColor, new Color(c.r * _patchRatio.r * b, c.g * _patchRatio.g * b, c.b * _patchRatio.b * b, c.a));
+                r.SetPropertyBlock(_mpb);
+                _tinted.Add(r);
+            }
+
+            // the mean colour of a texture at some UVs (linear): a small copy on the GPU, read back once at load
+            static Color MeanAt(Texture tex, List<Vector2> uvs)
+            {
+                if (tex == null || uvs == null || uvs.Count == 0) return Color.black;
+                var rt = RenderTexture.GetTemporary(256, 256, 0, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
+                Graphics.Blit(tex, rt);
+                var prev = RenderTexture.active;
+                RenderTexture.active = rt;
+                var t = new Texture2D(256, 256, TextureFormat.RGBAHalf, false, true);
+                t.ReadPixels(new Rect(0, 0, 256, 256), 0, 0);
+                t.Apply(false);
+                RenderTexture.active = prev;
+                RenderTexture.ReleaseTemporary(rt);
+                Color s = Color.black;
+                foreach (var uv in uvs) s += t.GetPixelBilinear(uv.x - Mathf.Floor(uv.x), uv.y - Mathf.Floor(uv.y));
+                Kill(t);
+                return s / uvs.Count;
             }
 
             // ---- materials: from the game's own loaded shaders ----
@@ -922,6 +1049,7 @@ namespace SfMorph
             public void SetBrightness(float b)
             {
                 Bright = b;
+                foreach (var r in _tinted) if (r != null) Tint(r);
                 foreach (var kv in _tint)
                 {
                     if (kv.Key == null) continue;
@@ -1017,12 +1145,82 @@ namespace SfMorph
             {
                 foreach (var kv in _hidden) if (kv.Key != null) kv.Key.forceRenderingOff = kv.Value;
                 _hidden.Clear();
+                foreach (var r in _tinted) if (r != null) r.SetPropertyBlock(null);
+                _tinted.Clear();
                 Kill(Go);
                 foreach (var m in _made) Kill(m);
                 _made.Clear(); _tint.Clear();
                 foreach (var m in _meshes) Kill(m);
                 _meshes.Clear();
                 if (_bundle != null) { _bundle.Unload(true); _bundle = null; }
+            }
+        }
+
+        // points of her meshes in her root's space (positions, normals, UVs) on a grid: distances and nearest points
+        class PointGrid
+        {
+            readonly float _cell;
+            readonly Dictionary<long, List<int>> _grid = new Dictionary<long, List<int>>();
+            public readonly List<Vector3> P = new List<Vector3>(), N = new List<Vector3>();
+            public readonly List<Vector2> Uv = new List<Vector2>();
+            public int Count { get { return P.Count; } }
+
+            public PointGrid(float cell) { _cell = cell; }
+
+            long Key(int x, int y, int z) { return ((long)(x + 100000) << 40) ^ ((long)(y + 100000) << 20) ^ (long)(z + 100000); }
+
+            public void Add(MeshData d, Matrix4x4 toRoot)
+            {
+                var nrm = d.Nrm != null && d.Nrm.Length == d.Pos.Length ? d.Nrm : Normals(d);
+                for (int i = 0; i < d.Pos.Length; i++)
+                {
+                    var p = toRoot.MultiplyPoint3x4(d.Pos[i]);
+                    long key = Key(Mathf.FloorToInt(p.x / _cell), Mathf.FloorToInt(p.y / _cell), Mathf.FloorToInt(p.z / _cell));
+                    if (!_grid.TryGetValue(key, out var l)) _grid[key] = l = new List<int>();
+                    l.Add(P.Count);
+                    P.Add(p);
+                    var n = toRoot.MultiplyVector(nrm[i]);
+                    N.Add(n.sqrMagnitude > 1e-12f ? n.normalized : Vector3.up);
+                    Uv.Add(d.Uv != null && i < d.Uv.Length ? d.Uv[i] : Vector2.zero);
+                }
+            }
+
+            static Vector3[] Normals(MeshData d)
+            {
+                var n = new Vector3[d.Pos.Length];
+                foreach (var t in d.Sub)
+                    for (int i = 0; i + 2 < t.Length; i += 3)
+                    {
+                        var f = Vector3.Cross(d.Pos[t[i + 1]] - d.Pos[t[i]], d.Pos[t[i + 2]] - d.Pos[t[i]]);
+                        n[t[i]] += f; n[t[i + 1]] += f; n[t[i + 2]] += f;
+                    }
+                return n;
+            }
+
+            public bool Nearest(Vector3 q, float max, out int best, out float dist)
+            {
+                int cx = Mathf.FloorToInt(q.x / _cell), cy = Mathf.FloorToInt(q.y / _cell), cz = Mathf.FloorToInt(q.z / _cell);
+                int r = Mathf.CeilToInt(max / _cell);
+                best = -1; float bd = max * max;
+                for (int x = cx - r; x <= cx + r; x++)
+                    for (int y = cy - r; y <= cy + r; y++)
+                        for (int z = cz - r; z <= cz + r; z++)
+                        {
+                            if (!_grid.TryGetValue(Key(x, y, z), out var l)) continue;
+                            foreach (var i in l) { float dd = (P[i] - q).sqrMagnitude; if (dd < bd) { bd = dd; best = i; } }
+                        }
+                dist = best >= 0 ? Mathf.Sqrt(bd) : max;
+                return best >= 0;
+            }
+
+            public float Dist(Vector3 q, float max) { Nearest(q, max, out _, out float d); return d; }
+
+            // UVs of the points within max of another set (her skin around her genital patch)
+            public List<Vector2> UvNear(PointGrid other, float max)
+            {
+                var l = new List<Vector2>();
+                for (int i = 0; i < P.Count; i++) if (other.Dist(P[i], max) < max) l.Add(Uv[i]);
+                return l;
             }
         }
 

@@ -631,7 +631,15 @@ namespace SfMorph
                 Vector3? nip = bp("Left_Nipple") ?? bp("Left_LowerBreast"), chest = bp("Chest_M");
                 if (toe.HasValue && ankle.HasValue) { if (Vector3.Dot(toe.Value - ankle.Value, fwd) < 0f) fwd = -fwd; }
                 else if (nip.HasValue && chest.HasValue) { if (Vector3.Dot(nip.Value - chest.Value, fwd) < 0f) fwd = -fwd; }   // 0.11.31: the breasts are in front
-                else { f.Note = "no frame (no toes or breasts to tell her front)"; return f; }
+                else
+                {
+                    // 0.11.35 (log: 'no frame (no toes or breasts ...)': 0.11.31 left her lower body without bends, folds and chubby): the leg's
+                    // front skin helper lies in front of the hip, the butt skin helper behind it
+                    Vector3? lf = bp("LegFrontSkin_L"), bs = bp("ButtSkin_L"), hip = bp("Hip_L");
+                    if (lf.HasValue && hip.HasValue) { if (Vector3.Dot(lf.Value - hip.Value, fwd) < 0f) fwd = -fwd; }
+                    else if (bs.HasValue && hip.HasValue) { if (Vector3.Dot(bs.Value - hip.Value, fwd) > 0f) fwd = -fwd; }
+                    else f.Note = "front unchecked";
+                }
                 if (shoulders) f.Note = "frame from the shoulders";
                 f.Left = left; f.Up = up; f.Fwd = fwd; f.RootP = rootP; f.Ok = true;
                 return f;
@@ -802,11 +810,11 @@ namespace SfMorph
             if (!fr.Ok && !hf.Ok) { note = ""; return 0; }
             const int A = ContactSettings.FatAreas;
             var per = new int[A];
-            var hip = new Vector3?[2]; var kn = new Vector3?[2]; var an = new Vector3?[2]; var sh = new Vector3?[2]; var el = new Vector3?[2];
+            var hip = new Vector3?[2]; var kn = new Vector3?[2]; var an = new Vector3?[2]; var sh = new Vector3?[2]; var el = new Vector3?[2]; var wr = new Vector3?[2];
             for (int k = 0; k < 2; k++)
             {
                 string sd = k == 0 ? "_L" : "_R";
-                hip[k] = bp("Hip" + sd); kn[k] = bp("Knee" + sd); an[k] = bp("Ankle" + sd); sh[k] = bp("Shoulder" + sd); el[k] = bp("Elbow" + sd);
+                hip[k] = bp("Hip" + sd); kn[k] = bp("Knee" + sd); an[k] = bp("Ankle" + sd); sh[k] = bp("Shoulder" + sd); el[k] = bp("Elbow" + sd); wr[k] = bp("Wrist" + sd);
                 if (!an[k].HasValue && hip[k].HasValue && kn[k].HasValue) an[k] = kn[k].Value + (kn[k].Value - hip[k].Value) * 0.95f;
             }
             var w = new float[A];
@@ -852,16 +860,18 @@ namespace SfMorph
                 bool trunk = c == ClsPelvis || c == ClsSpine || c == ClsChest || c == ClsBelly || c == ClsScapula || c == ClsButt || c == ClsButt + 1;
                 if (trunk)
                 {
-                    // belly: the pooch under the navel, a softer upper belly
-                    float front = Sm(0.0f, 0.55f, fF);
-                    w[0] = front * Mathf.Max(G(y, 0.05f, 0.055f) * G(x, 0f, 0.085f), 0.55f * G(y, 0.15f, 0.045f) * G(x, 0f, 0.075f));
-                    // love handles: the flanks over the hip bones, a little toward the back
-                    float flank = Sm(0.3f, 0.8f, Mathf.Abs(fL)) * (0.75f + 0.25f * Sm(-0.4f, 0.3f, -fF));
-                    w[1] = flank * G(y, 0.15f, 0.045f);
-                    // back: the bra-line bulge under the shoulder blades (on the sides of the back) and the lower back
-                    float back = Sm(0.1f, 0.6f, -fF);
-                    w[2] = Mathf.Max(G(y, 0.33f, 0.035f) * Sm(0.2f, 0.8f, -fF + 0.6f * Mathf.Abs(fL)) * (0.6f + 0.4f * Sm(0.04f, 0.10f, Mathf.Abs(x))),
-                                     0.6f * back * G(y, 0.09f, 0.045f));
+                    // 0.11.35 (user: the body hardly changes): each area is a soft layer over its whole side of the torso with the deposits on it,
+                    // so the trunk rounds out everywhere and the deposits lead (front / side / back weights overlap, so the layer is continuous)
+                    float front = Sm(-0.1f, 0.5f, fF), back = Sm(-0.1f, 0.5f, -fF), flank = Sm(0.25f, 0.75f, Mathf.Abs(fL));
+                    // belly: the pooch under the navel and a softer upper belly, on a layer from the pubis to under the breasts
+                    float vB = Sm(-0.07f, 0.0f, y) * Sm(0.27f, 0.19f, y);
+                    w[0] = front * Mathf.Max(0.4f * vB, Mathf.Max(G(y, 0.05f, 0.06f) * G(x, 0f, 0.11f), 0.6f * G(y, 0.15f, 0.05f) * G(x, 0f, 0.09f)));
+                    // waist: love handles over the hip bones, a little toward the back, on a layer up the flanks
+                    float vW = Sm(-0.02f, 0.05f, y) * Sm(0.32f, 0.24f, y);
+                    w[1] = flank * Mathf.Max(0.4f * vW, G(y, 0.15f, 0.05f)) * (0.8f + 0.2f * Sm(-0.4f, 0.3f, -fF));
+                    // back: the bra-line bulge under the shoulder blades and the lower back, on a layer up the back
+                    float vK = Sm(-0.02f, 0.05f, y) * Sm(0.46f, 0.38f, y);
+                    w[2] = back * Mathf.Max(0.35f * vK, Mathf.Max(G(y, 0.33f, 0.04f) * (0.6f + 0.4f * Sm(0.04f, 0.10f, Mathf.Abs(x))), 0.65f * G(y, 0.09f, 0.05f)));
                     // glutes: round them out (the butt helpers' area and the low back of the pelvis)
                     if (c == ClsButt || c == ClsButt + 1 || (c == ClsPelvis && y < 0.06f)) w[3] = back * (c == ClsPelvis ? Sm(0.06f, -0.04f, y) : 1f);
                 }
@@ -869,21 +879,42 @@ namespace SfMorph
                 {
                     Vector3 lat = fr.Left * (k == 0 ? 1f : -1f);
                     float t;
+                    // 0.11.35 (user: the arms' fat only inflated the upper arm): whole limbs. A layer along the limb, thicker high up, tapering
+                    // to the wrist / toward the foot mesh's seam; the deposits on it; thigh and calf share the knee so it has no step
                     if ((c == ClsThigh + k || c == ClsButt + k || (c == ClsPelvis && Vector3.Dot(p - fr.RootP, lat) > 0f)) && hip[k].HasValue && kn[k].HasValue && Along(p, hip[k].Value, kn[k].Value, out t))
                     {
                         float out_ = Vector3.Dot(n, lat), inner = -out_;
-                        // saddlebags (outer upper thigh) and the inner thigh; the front and back of the thigh a little
+                        // saddlebags (outer upper thigh) and the inner thigh on a layer down to the knee
                         float tw = Mathf.Max(G(t, 0.28f, 0.22f) * Sm(0.1f, 0.7f, out_), 0.85f * G(t, 0.25f, 0.25f) * Sm(0.1f, 0.7f, inner));
-                        tw = Mathf.Max(tw, 0.45f * G(t, 0.4f, 0.3f));
-                        if (c == ClsThigh + k) w[4] = Mathf.Max(w[4], tw);
+                        tw = Mathf.Max(tw, 0.55f * (1f - 0.4f * Sm(0.6f, 1.0f, t)));
+                        if (c == ClsThigh + k)
+                        {
+                            float kk = 0.5f * Sm(0.85f, 1.0f, t);   // toward the knee: half of it the calves' area
+                            w[4] = Mathf.Max(w[4], tw * (1f - kk));
+                            w[6] = Mathf.Max(w[6], tw * kk);
+                            // the fold under the butt fills a little with the glutes
+                            w[3] = Mathf.Max(w[3], 0.6f * G(t, 0.05f, 0.08f) * Sm(0.1f, 0.6f, -fF));
+                        }
                         else w[4] = Mathf.Max(w[4], tw * Sm(-0.05f, 0.05f, t));   // the pelvis / butt only where the thigh starts
-                        // the fold under the butt fills a little with the glutes
-                        if (c == ClsThigh + k) w[3] = Mathf.Max(w[3], 0.6f * G(t, 0.05f, 0.08f) * Sm(0.1f, 0.6f, -fF));
                     }
                     if (c == ClsCalf + k && kn[k].HasValue && an[k].HasValue && Along(p, kn[k].Value, an[k].Value, out t))
-                        w[6] = G(t, 0.3f, 0.25f) * (0.6f + 0.4f * Sm(0f, 0.6f, -fF));
-                    if (c == ClsUpperArm + k && sh[k].HasValue && el[k].HasValue && Along(p, sh[k].Value, el[k].Value, out t))
-                        w[5] = G(t, 0.5f, 0.3f) * (0.35f + 0.65f * Sm(-0.2f, 0.6f, -fF + 0.3f * Vector3.Dot(n, lat)));
+                    {
+                        // all round, more at the back; gone before the lower calf (her foot mesh carries it, without a frame of its own)
+                        float cb = 0.5f * (0.7f + 0.3f * Sm(0f, 0.6f, -fF)) * Sm(0.65f, 0.4f, t);
+                        float kc = 0.5f * Sm(0.12f, 0f, t);    // at the knee: half of it the thighs' area
+                        w[6] = Mathf.Max(w[6], cb * (1f - kc));
+                        w[4] = Mathf.Max(w[4], cb * kc);
+                    }
+                    // arms: upper arm and forearm as one (s 0 shoulder .. 1 elbow .. 2 wrist), the soft back of the upper arm on top
+                    float s = -1f;
+                    if (c == ClsUpperArm + k && sh[k].HasValue && el[k].HasValue && Along(p, sh[k].Value, el[k].Value, out t)) s = Mathf.Clamp(t, 0f, 1f);
+                    else if (c == ClsForearm + k && el[k].HasValue && wr[k].HasValue && Along(p, el[k].Value, wr[k].Value, out t)) s = 1f + Mathf.Clamp(t, 0f, 1f);
+                    if (s >= 0f)
+                    {
+                        float baseA = s < 1f ? Mathf.Lerp(0.75f, 0.6f, s) * Sm(0f, 0.2f, s) : 0.6f * (1f - Sm(0.35f, 0.9f, s - 1f));
+                        float wing = 0.4f * G(s, 0.5f, 0.3f) * Sm(-0.2f, 0.6f, -fF + 0.3f * Vector3.Dot(n, lat));
+                        w[5] = Mathf.Max(w[5], Mathf.Min(1f, baseA + wing));
+                    }
                 }
                 int a0 = -1, a1 = -1;
                 for (int a = 0; a < A; a++)

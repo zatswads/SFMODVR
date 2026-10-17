@@ -275,6 +275,17 @@ namespace SfMorph
                 // 0.11.8: a flexed muscle under the zone (glute, quads / adductors, abs) dents less and pushes back sooner (MuscleFlex)
                 _zK[z] = k * _zKMul[z]; _zLim[z] = limit * _zLimMul[z] * MuscleFlex.SoftFactor(Zones[z].Id);
                 _zDamp[z] = 2f * zeta * Mathf.Sqrt(_zK[z]) * _zDampMul[z];
+                // 0.11.37 (user: chubby glutes should move with collisions and physics like the breasts): the zone's fat (Chubby) makes it
+                // softer (12 mm halves the spring: slower, wider jiggle), lets it give further under a hand or his body (20 mm doubles the
+                // travel) and damps it less (it keeps wobbling); slimmer is firmer
+                float fat = Tissue.ZoneFatMm(Zones[z].Id);
+                if (fat != 0f)
+                {
+                    float soft = Mathf.Clamp(1f + fat / 12f, 0.7f, 3f);
+                    _zK[z] /= soft;
+                    _zLim[z] *= Mathf.Clamp(1f + fat / 20f, 0.75f, 2.5f);
+                    _zDamp[z] = 2f * zeta * Mathf.Sqrt(_zK[z]) * _zDampMul[z] / Mathf.Clamp(1f + fat / 30f, 0.85f, 1.6f);
+                }
                 _zSagV[z] = gravity > 0f ? Vector3.down * (_zSag[z] * _zLim[z] * gravity) : Vector3.zero;
             }
 
