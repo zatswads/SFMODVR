@@ -98,6 +98,20 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.39 (pack answers every game line; lip frame; shuffle)
+
+Install `dist/SfMorph.dll`. Reactions on, a pack with lines (Pixie Dominant / Southern Domme / Scottish Peach / Pixie).
+1. Sex mode with dirty talk on: every few seconds a pack line instead of the game's (log `voice: pack stand-in #N for the game's
+   reikaNipple_DT_Eng_Lv2_3 (nipple Lv2 '...')`, `pussySex_DT_... (pussy LvN ...)`, `inviteSex_DT_... (invite ...)`); never two voices.
+2. Pack Rebecca or Amy (no lines): the game's dirty talk is heard (not muted); moans are still the pack's.
+3. Start of sex: the tease intro has pack invite lines (bad mood: guard lines); climax / creampie / finish as before; a story scene
+   (opening, chapter_*) keeps the game's voice (log `voice: story scene ...`). Rebecca: `... the pack has no request lines, the game's own voice plays`.
+4. The panel shows no mute tick boxes, just what the pack replaces and how many game sources are muted now.
+5. Lip sync: first lip-synced clip logs `lip sync: the mouth poses from an older version were set aside as ...arkit-map-0.11.11.txt`
+   and `lip map built 30 shapes ... (up from the model's up)`. Her lower lip stays over her lower teeth while she talks, rolls in on m / b / p,
+   never drops off the teeth or pushes out; the teeth open with the jaw. If it says "up from the jaw" or "the lips", report it.
+6. Repeats: a pack with 5-13 clips per folder goes through all of them before any comes back.
+
 ## 0.11.38 (avatar: her own genitals)
 
 Log, in the `Avatar RKS Krista 9: ...` line: `crotch: N vertices laid onto her skin, M triangles cut where her genital meshes sit, tint r g

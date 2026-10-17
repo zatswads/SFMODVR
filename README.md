@@ -44,6 +44,27 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.39 (the pack answers every game voice line; lower lip and teeth; fewer repeats):
+- The pack now replaces her game voice wherever it has a fitting clip, whether or not "mute" was ticked (the switch is gone),
+  and the game's own voice plays wherever the pack has nothing (a pack without lines like Rebecca / Amy, story scenes, a
+  scene whose lines the pack lacks). Before, only moans were answered: the game's dirty talk went silent under the mute.
+  - Dirty talk (every 3-10 s in sex): `reikaNipple_DT_..._LvN` -> a nipple line at level N, `reikaPussy` / `pussySex*` ->
+    pussy, `reikaAnal` / `analSex` -> anal, the rest (public, hand / titty / foot jobs, massages) -> public, `invite*` ->
+    invite, `request*` -> request; the game's dirty talk isn't stopped (its muted line runs on), so it doesn't fire the next
+    line at once.
+  - Her sex voice: moans by her desire and the stroke speed (fast one level up, slow one down), breaths for close-mouth /
+    exhale (calm when slow), muffled breaths for licking / sucking, calm breaths for kissing; feeling sounds by their level.
+  - Timeline scenes: the tease intros (good / normal -> invite lines, bad "not in the mood" -> guard lines), finish good /
+    normal -> afterglow, bad -> guard, alongside 0.11.20's climax / creampie / condom / clean. Story scenes keep the game's
+    voice. The log says which (`voice: story scene ...`, `... the pack has no guard lines, the game's own voice plays`).
+- Lower lip and teeth (still wrong in 0.11.34): the mouth frame the poses are built in took "up" from the upper minus the
+  lower inner-lip bone, which on her closed mouth points mostly forward; "roll the lower lip in" pulled it down off her
+  teeth and "shrug" pushed it forward. Up is now the model's up from the bind poses (checked against the way the jaw opens),
+  the drool chain's anchor bones (LiquidChain_lip_*) are no longer moved as lips, and maps from 0.11.11-0.11.38 are set aside
+  as `arkit-map-<version>.txt` and rebuilt (log `lip map built 30 shapes ... (up from the model's up)`).
+- The same few lines over and over: each pack folder now plays as a shuffled deck (every clip once before any repeats, no
+  clip twice in a row across rounds) instead of a random pick that only avoided the last 6.
+
 0.11.38 (avatar: her own genitals):
 - The avatar's own crotch did not work with the game (user, headset): a translucent, untextured piece that did not match her genital
   customisation or move with the game's sex animations. Now the game's own genital meshes stay on: her pussy patch (vulva and anus,

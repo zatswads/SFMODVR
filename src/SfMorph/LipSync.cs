@@ -309,7 +309,7 @@ namespace SfMorph
             backup = "";
             try
             {
-                if (!File.Exists(MapPath) || MapFileVersion.Length == 0 || !VersionBefore(MapFileVersion, "0.11.35")) return false;
+                if (!File.Exists(MapPath) || MapFileVersion.Length == 0 || !VersionBefore(MapFileVersion, "0.11.39")) return false;
                 backup = Path.Combine(Store.Dir, "arkit-map-" + MapFileVersion + ".txt");
                 if (File.Exists(backup)) File.Delete(backup);
                 File.Move(MapPath, backup);

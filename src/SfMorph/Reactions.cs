@@ -848,7 +848,7 @@ namespace SfMorph
             LipSync.LoadMap(false);
             // 0.11.7: no arkit-map.txt yet (the user's PC in 0.11.4): seed the poses from her face clips once and save them, so the curves move
             // her lips out of the box instead of nothing but the loudness jaw; the editor refines them
-            // 0.11.11: a map from before 0.11.11 holds whole clip frames (curled lower lip, 7 shapes); 0.11.35: one from 0.11.11-0.11.34 was built in a
+            // 0.11.11: a map from before 0.11.11 holds whole clip frames (curled lower lip, 7 shapes); 0.11.35: one from 0.11.11-0.11.38 was built in a
             // mouth frame whose up pointed forward (lower lip pulled off her teeth): set aside and rebuilt
             string oldMap = "";
             if (!_autoSeeded && _s.LipSync && LipSync.RetireOldMap(out oldMap))
