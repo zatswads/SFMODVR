@@ -151,8 +151,8 @@ namespace SfMorph
             internal HeadFrame Hf;
             internal bool HasHer;
             internal Matrix4x4[] SkinM;
-            internal MuscleMap Mm;
-            internal bool[] SubOnSheet;
+            internal MuscleMap Mm;               // the first sheet's (its table: every layout lists the same muscles)
+            internal MuscleMap[] SubMaps;        // 0.11.48: per submesh its sheet's maps (null = not on a muscle sheet)
             internal int MushShapes;
             internal long PrepMs;
             public volatile bool Done;
@@ -168,14 +168,14 @@ namespace SfMorph
         }
 
         // Main thread: the Unity side of the bake. null + error = no bake for this renderer.
-        public static Job Prepare(SkinnedMeshRenderer r, float[] zone, Character her, MuscleMap mm, float mushRadius, out string error)
+        public static Job Prepare(SkinnedMeshRenderer r, float[] zone, Character her, Func<string, MuscleMap> mm, float mushRadius, out string error)
         {
             error = null;
             try { return PrepareInner(r, zone, her, mm, mushRadius, out error); }
             catch (Exception e) { error = e.GetType().Name + ": " + e.Message; return null; }
         }
 
-        static Job PrepareInner(SkinnedMeshRenderer r, float[] zone, Character her, MuscleMap mm, float mushRadius, out string error)
+        static Job PrepareInner(SkinnedMeshRenderer r, float[] zone, Character her, Func<string, MuscleMap> mm, float mushRadius, out string error)
         {
             error = null;
             var sw = Stopwatch.StartNew();
@@ -208,7 +208,7 @@ namespace SfMorph
             if (uv != null && uv.Length != V) uv = null;
             if (zone != null && zone.Length != V) { error = "zone length " + zone.Length + " != vertex count " + V; return null; }
             var bones = r.bones;
-            var j = new Job { R = r, M = m, V = V, P = P, N = N, Uv = uv, W = W, Subs = subs, Zone = zone, HasHer = her != null, Mm = mm, MushRadius = mushRadius };
+            var j = new Job { R = r, M = m, V = V, P = P, N = N, Uv = uv, W = W, Subs = subs, Zone = zone, HasHer = her != null, MushRadius = mushRadius };
             // units: metres per mesh unit (the mesh's bind space may not be metres)
             j.Mpu = MetresPerUnit(bones, bind, W);
             // her frame in this mesh's bind space (left / up / forward, root) and her head's (the face / neck fat)
@@ -229,13 +229,22 @@ namespace SfMorph
             var bm = new Matrix4x4[bones.Length];
             for (int i = 0; i < bones.Length; i++) bm[i] = bones[i] != null && i < bind.Length ? bones[i].localToWorldMatrix * bind[i] : Matrix4x4.zero;
             j.SkinM = bm;
-            // muscles: the body-atlas submeshes (Wrinkles' class 3: her body / skin materials; the foot's own texture is not the body atlas)
+            // muscles: the body-atlas submeshes (Wrinkles' class 3: her body / skin materials; the foot's own texture is not the body atlas).
+            // 0.11.48: an avatar's skin submeshes each on their own figure sheet (Avatar.LayoutOf: Genesis 9's g9body / g9arms / g9legs /
+            // g9head, tools/muscles/author.py --avatar); 0.11.42-0.11.47 left the avatar out (her maps are on her UV layout)
             if (mm != null && uv != null)
             {
                 var mats = r.sharedMaterials;
-                j.SubOnSheet = new bool[subs.Count];
+                bool av = Avatar.Owns(r);
+                j.SubMaps = new MuscleMap[subs.Count];
                 for (int si = 0; si < subs.Count && si < mats.Length; si++)
-                    j.SubOnSheet[si] = mats[si] != null && !Avatar.Owns(r) && Wrinkles.Classify(mats[si], r) == 3 && (mats[si].name ?? "").IndexOf("foot", StringComparison.OrdinalIgnoreCase) < 0;
+                {
+                    var mt = mats[si];
+                    if (mt == null) continue;
+                    if (av) { var ln = Avatar.LayoutOf(mt); if (ln != null) j.SubMaps[si] = mm(ln); }
+                    else if (Wrinkles.Classify(mt, r) == 3 && (mt.name ?? "").IndexOf("foot", StringComparison.OrdinalIgnoreCase) < 0) j.SubMaps[si] = mm("body");
+                    if (j.Mm == null) j.Mm = j.SubMaps[si];
+                }
             }
             // 0.11.28 Delta Mush: the rest shape is her current one (the character and slider blendshapes, never the pose correctives)
             if (mushRadius > 0f && j.Fr.Bp != null)
@@ -473,7 +482,7 @@ namespace SfMorph
             float[] belly = null;
             int musN = 0;
             string musNote = "";
-            if (jb.Mm != null && uv != null) musN = BakeMuscles(jb.SubOnSheet, jb.Mm, P, uv, subs, canon, adjOff, adjV, cls, mpu, out mus, out belly, out musNote);
+            if (jb.Mm != null && uv != null) musN = BakeMuscles(jb.SubMaps, jb.Mm, P, uv, subs, canon, adjOff, adjV, cls, mpu, out mus, out belly, out musNote);
             Lap("muscles");
 
             // 9. 0.11.28 Delta Mush at the joints (body skin meshes): the rest shape is her current one (the character and slider blendshapes,
@@ -1013,7 +1022,7 @@ namespace SfMorph
         // smoothing passes (the region is point-sampled at ~1 cm: ids step from texel to texel). A mesh's open border (the waist cut between
         // her upper and lower body) is not an edge: the bulge carries across it. Hands, feet, head, breasts and genitals carry none (0.11.23:
         // the neck does: the neck muscles and the traps' neck part; a neck vertex without a muscle texel under it stays at 0).
-        static int BakeMuscles(bool[] sheet, MuscleMap mm, Vector3[] P, Vector2[] uv, List<int[]> subs, uint[] canon, uint[] adjOff, uint[] adjV,
+        static int BakeMuscles(MuscleMap[] sheet, MuscleMap mm, Vector3[] P, Vector2[] uv, List<int[]> subs, uint[] canon, uint[] adjOff, uint[] adjV,
                                uint[] cls, float mpu, out Vector4[] mus, out float[] belly, out string note)
         {
             int V = P.Length;
@@ -1026,15 +1035,27 @@ namespace SfMorph
             // the body-atlas submeshes (Prepare: Wrinkles' class 3, her body / skin materials, not the foot's own texture)
             var onSheet = new bool[V];
             var uvOn = new bool[V];   // this copy's UV is on the body atlas
+            var mapOf = new MuscleMap[V];   // 0.11.48: each copy's sheet (an avatar has several: Genesis 9's body, arms, legs)
             int subsOn = 0;
             for (int si = 0; si < subs.Count && sheet != null && si < sheet.Length; si++)
             {
-                if (!sheet[si]) continue;
+                if (sheet[si] == null || sheet[si].Region == null || sheet[si].Layer == null) continue;
                 subsOn++;
                 var tr = subs[si];
-                for (int i = 0; i < tr.Length; i++) { onSheet[canon[tr[i]]] = true; uvOn[tr[i]] = true; }
+                for (int i = 0; i < tr.Length; i++) { onSheet[canon[tr[i]]] = true; uvOn[tr[i]] = true; mapOf[tr[i]] = sheet[si]; }
             }
             if (subsOn == 0) { note = "muscles: not on the body sheet"; return 0; }
+            // one peak per muscle over all sheets (a muscle crossing two sheets, the deltoid from the avatar's body onto its arm, must not step)
+            float[] peak = null;
+            if (mm.Peak != null)
+            {
+                peak = (float[])mm.Peak.Clone();
+                var seenM = new HashSet<MuscleMap>();
+                foreach (var sm in sheet)
+                    if (sm != null && sm.Peak != null && seenM.Add(sm))
+                        for (int k = 0; k < peak.Length && k < sm.Peak.Length; k++) peak[k] = Mathf.Max(peak[k], sm.Peak[k]);
+            }
+            var bestMap = new MuscleMap[V];
             // 1. the dominant muscle per canonical vertex (0 = none), its pair and share
             // 0.11.12 (user: seams in the bulge): every welded copy's UV is tried and the texel with the most coverage wins, and a texel the
             // author's dilation filled (an island's edge: coverage 0 but a copied id) counts. Before, a vertex on a UV seam often read only the
@@ -1049,13 +1070,15 @@ namespace SfMorph
                 if (!onSheet[cv] || !uvOn[v]) continue;
                 uint c = cls[cv];
                 if (c == ClsHead || c == ClsHand || c == ClsHand + 1 || c == ClsFoot || c == ClsFoot + 1 || c == ClsBreast || c == ClsBreast + 1 || c == ClsGenital) continue;
-                Vector2 t = uv[v];
+                var vm = mapOf[v];
+                if (vm == null) continue;
+                Vector2 t = WrinkleLayout.InTile(uv[v]);   // 0.11.48: an avatar sheet's UDIM tile off
                 if (!(t.x >= 0f && t.x <= 1f && t.y >= 0f && t.y <= 1f)) continue;
-                int px = Mathf.Clamp((int)(t.x * mm.RW), 0, mm.RW - 1), py = Mathf.Clamp((int)(t.y * mm.RH), 0, mm.RH - 1);
-                var q = mm.Region[py * mm.RW + px];
+                int px = Mathf.Clamp((int)(t.x * vm.RW), 0, vm.RW - 1), py = Mathf.Clamp((int)(t.y * vm.RH), 0, vm.RH - 1);
+                var q = vm.Region[py * vm.RW + px];
                 int i1 = q.r, i2 = q.g;
                 if (i1 < 1 || i1 > L.Count || i1 > MuscleFlex.Max || q.a <= bestA[cv]) continue;
-                bestA[cv] = q.a; bestUv[cv] = t;
+                bestA[cv] = q.a; bestUv[cv] = t; bestMap[cv] = vm;
                 float sh = q.b / 255f;
                 if (i2 < 1 || i2 > L.Count || i2 > MuscleFlex.Max) { i2 = 0; sh = 1f; }
                 dom[cv] = sh >= 0.5f || i2 == 0 ? i1 : i2;
@@ -1078,21 +1101,22 @@ namespace SfMorph
                         for (uint k2 = adjOff[v]; k2 < adjOff[v + 1]; k2++) if (dom[adjV[k2]] == d) cnt++;
                         if (cnt > bestN) { bestN = cnt; best = (int)adjV[k]; }
                     }
-                    if (n > 0 && bestN * 3 >= n * 2) { dom[v] = dom[best]; mus[v] = mus[best]; bestA[v] = 0; }
+                    if (n > 0 && bestN * 3 >= n * 2) { dom[v] = dom[best]; mus[v] = mus[best]; bestA[v] = 0; bestMap[v] = bestMap[best]; bestUv[v] = bestUv[best]; }
                 }
             // 0.11.12 (user: the muscles should approach a sculpted athletic body): with the authored height map the belly weight is the
             // sculpt itself, height / the muscle's peak: separate abdominal bellies with the linea alba and the tendinous lines between them,
             // the serratus fingers, the quad teardrop, the calf heads, grooves going in (negative) as the muscle tenses. The uniform
             // geodesic pillow below stays for a bundle without the map.
-            if (mm.Height != null && mm.Peak != null)
+            if (mm.Height != null && peak != null)
             {
                 int nh = 0;
                 var bh = new float[V];
                 for (int v = 0; v < V; v++)
                 {
                     if (dom[v] == 0) continue;
+                    var hm = bestMap[v] != null && bestMap[v].Height != null ? bestMap[v] : mm;
                     nh++;
-                    bh[v] = Mathf.Clamp(mm.HeightAt(bestUv[v]) / mm.Peak[dom[v] - 1], -0.8f, 1.25f);
+                    bh[v] = Mathf.Clamp(hm.HeightAt(bestUv[v]) / peak[dom[v] - 1], -0.8f, 1.25f);
                 }
                 if (nh == 0) { note = "muscles: none under her UVs"; return 0; }
                 // one light pass (the map is ~1 cm per 5 texels: bilinear already; this only takes the texel stair off coarse meshes)
@@ -1143,11 +1167,12 @@ namespace SfMorph
                 float d = dist[v] == float.MaxValue ? ramp : dist[v];   // a muscle island with no edge on this mesh (cut by its border): full
                 float x = Mathf.Clamp01(d / ramp);
                 float g = 1f;
-                if (mm.Detail != null && mm.DW > 0 && mm.DH > 0)
+                var dm = bestMap[v] ?? mm;
+                if (dm.Detail != null && dm.DW > 0 && dm.DH > 0)
                 {
-                    Vector2 t = uv[v];
-                    int px = Mathf.Clamp((int)(t.x * mm.DW), 0, mm.DW - 1), py = Mathf.Clamp((int)(t.y * mm.DH), 0, mm.DH - 1);
-                    g = 1f - 0.7f * (mm.Detail[py * mm.DW + px].b / 255f);
+                    Vector2 t = WrinkleLayout.InTile(uv[v]);
+                    int px = Mathf.Clamp((int)(t.x * dm.DW), 0, dm.DW - 1), py = Mathf.Clamp((int)(t.y * dm.DH), 0, dm.DH - 1);
+                    g = 1f - 0.7f * (dm.Detail[py * dm.DW + px].b / 255f);
                 }
                 b0[v] = x * x * (3f - 2f * x) * g;
             }

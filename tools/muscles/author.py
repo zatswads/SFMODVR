@@ -27,6 +27,7 @@ Reference look: a VaM preset with Torso Fitness 0.26, Body Tone 0.71, Back Defin
 torso / limbs normal map (linea alba, the upper abs' intersections, serratus lines, the iliac V, knee and calf detail).
 
 Usage:  python tools/muscles/author.py [export dir] [--preview]
+        python tools/muscles/author.py --avatar=<drive_test export> [--figure=g9] [--preview]   (0.11.48: an avatar figure's sheets)
         (default: the newest export under <game>\\BepInEx\\config\\SfMorphs\\export; output into the shader bundle project)
 Needs numpy only. --preview writes her colour map with the muscles drawn on and front / back / side renders of her bind-pose body lit
 with the muscle relief (rest tone and full tension) into tools/muscles/preview (gitignored).
@@ -559,7 +560,7 @@ def evaluate(surf, X, N, t, segs, regions, prims, excl, log, overlays=()):
     return dict(G=G, H=H, sx=sx, sy=sy, shade=np.clip(shade, 0, 1), id1=order[:, 0], id2=order[:, 1], w1=w1, w2=w2, tot=tot, member=member)
 
 
-def build(name, surf, sk, n, nreg, log, preview_dir=None, colour=None, overlays=()):
+def build(name, surf, sk, n, nreg, log, preview_dir=None, colour=None, overlays=(), nav_surf=None):
     log('%s: %d triangles, rasterising %dx%d' % (name, len(surf.f), n, n))
     tri, bary = surf.raster(n)
     cov = tri >= 0
@@ -571,7 +572,7 @@ def build(name, surf, sk, n, nreg, log, preview_dir=None, colour=None, overlays=
     log('%s: %.1f%% of the texels on her skin' % (name, 100.0 * cov.mean()))
     P = lambda b: np.asarray(sk[b]['pos'], np.float64)  # noqa: E731
     segs0 = {'torso': Seg('torso', P('Root_M'), P('Neck_M'), 0.1, 'L')}
-    nav = find_navel(surf, segs0, log)
+    nav = find_navel(nav_surf if nav_surf is not None else surf, segs0, log)   # 0.11.48: an avatar sheet without the belly: the whole body
     segs, regions, prims = muscles(sk, nav, log)
     excl = []
     for side in ('Left', 'Right'):
@@ -786,6 +787,72 @@ def splat(X, c, ax, az, H=900):
 # ---------------------------------------------------------------- main
 
 
+# ---------------------------------------------------------------- avatars (0.11.48)
+
+
+def merge_table(path, new_blocks, header):
+    """muscle_layouts.txt with the layouts authored now replaced or added and every other layout kept."""
+    blocks, order = {}, []
+    if os.path.isfile(path):
+        cur = None
+        for l in open(path, encoding='utf-8').read().splitlines():
+            if l.startswith('layout '):
+                cur = l.split()[1]
+                order.append(cur)
+                blocks[cur] = [l]
+            elif cur is not None and l.strip():
+                blocks[cur].append(l)
+    for name, lines_ in new_blocks:
+        if name not in blocks:
+            order.append(name)
+        blocks[name] = lines_
+    with open(path, 'w', newline='\n') as f:
+        f.write('\n'.join(header + [l for name in order for l in blocks[name]]) + '\n')
+
+
+def avatar_main(d, figure, preview, log):
+    """Muscle maps for an avatar base figure's UV sheets (wrinkles author's AVATAR_SHEETS) from the avatar mesh rebuilt on her skeleton
+    (tools/avatar/drive_test.ps1's export): the muscles sit on her bones as on her, each sheet rasterised on its own (tile taken off);
+    her genital overlay (kept in avatar mode) from her newest export fades the relief as on her."""
+    meshes, sk, missing = sfio.read_game_export(d)
+    m = max(meshes, key=lambda x: len(x.v))
+    sheets = wr.AVATAR_SHEETS[figure]
+    parts = {}
+    for lname, surface, face in sheets:
+        r = wr.avatar_parts(m, surface)
+        if r is not None:
+            parts[lname] = r[0]
+            log('%s: surface %s, UV tile (%d, %d) taken off' % (lname, surface, r[1][0], r[1][1]))
+    full = wr.Surf([pp for l in parts for pp in parts[l]])
+    overlays = []
+    try:
+        hd = sfio.newest_subdir(GAME_EXPORT)
+        for hm in sfio.read_game_export(hd)[0]:
+            nm = hm.name.replace(' (SfSoft)', '')
+            if nm.startswith('pussy_') and hm.active:
+                overlays.append((nm, np.asarray(hm.v, np.float64)))
+        log('overlays from her export %s: %s' % (os.path.basename(hd), ', '.join(o[0] for o in overlays) or 'none'))
+    except Exception as e:  # noqa: BLE001
+        log('her export not read (%s): no overlay fade' % e)
+    blocks = []
+    for lname, surface, face in sheets:
+        if lname not in parts:
+            continue
+        n, nreg = 2048, 1024
+        det, reg, hgt, regions = build(lname, wr.Surf(parts[lname]), sk, n, nreg, log, PREVIEW if preview else None, None, overlays, nav_surf=full)
+        wr.write_png(os.path.join(OUT, 'muscle_%s_detail.png' % lname), wr.to_u8(det))
+        wr.write_png(os.path.join(OUT, 'muscle_%s_region.png' % lname), reg)
+        wr.write_png(os.path.join(OUT, 'muscle_%s_height.png' % lname), hgt)
+        bl = ['layout %s %d %d %.3f %.3f' % (lname, n, nreg, SLOPE_MAX, HEIGHT_MAX)]
+        for k, (rn, ra, rs) in enumerate(regions):
+            bl.append('muscle %d %s %s %s' % (k + 1, rn, ra, rs))
+        blocks.append((lname, bl))
+    header = ['# SF Body Morphs muscle layouts (tools/muscles/author.py). layout <name> <detail size> <region size> <slope max> <height max m>; then',
+              '# muscle <index from 1> <name> <area core|back|legs|arms> <side L|R|C>',
+              '# body: her export; %s*: avatar export %s' % (figure, os.path.basename(os.path.normpath(d)))]
+    merge_table(os.path.join(OUT, 'muscle_layouts.txt'), blocks, header)
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     preview = '--preview' in sys.argv
@@ -795,6 +862,15 @@ def main():
     def log(m):
         print(m)
         lines.append(m)
+    # 0.11.48: --avatar=<export of the avatar mesh on her skeleton> [--figure=g9]
+    av = [a[9:] for a in sys.argv[1:] if a.startswith('--avatar=')]
+    if av:
+        fig = ([a[9:] for a in sys.argv[1:] if a.startswith('--figure=')] or ['g9'])[0]
+        log('avatar export: ' + av[0])
+        avatar_main(av[0], fig, preview, log)
+        with open(os.path.join(HERE, 'author_%s.log' % fig), 'w', newline='\n') as f:
+            f.write('\n'.join(lines) + '\n')
+        return
     log('export: ' + d)
     meshes, sk, missing = sfio.read_game_export(d)
     by = {m.name.replace(' (SfSoft)', ''): m for m in meshes}
@@ -828,14 +904,14 @@ def main():
     wr.write_png(os.path.join(OUT, 'muscle_body_detail.png'), wr.to_u8(det))
     wr.write_png(os.path.join(OUT, 'muscle_body_region.png'), reg)
     wr.write_png(os.path.join(OUT, 'muscle_body_height.png'), hgt)
-    table = ['# SF Body Morphs muscle layouts (tools/muscles/author.py). layout <name> <detail size> <region size> <slope max> <height max m>; then',
-             '# muscle <index from 1> <name> <area core|back|legs|arms> <side L|R|C>',
-             '# export ' + os.path.basename(d),
-             'layout body %d %d %.3f %.3f' % (n, nreg, SLOPE_MAX, HEIGHT_MAX)]
+    bl = ['layout body %d %d %.3f %.3f' % (n, nreg, SLOPE_MAX, HEIGHT_MAX)]
     for k, (rn, ra, rs) in enumerate(regions):
-        table.append('muscle %d %s %s %s' % (k + 1, rn, ra, rs))
-    with open(os.path.join(OUT, 'muscle_layouts.txt'), 'w', newline='\n') as f:
-        f.write('\n'.join(table) + '\n')
+        bl.append('muscle %d %s %s %s' % (k + 1, rn, ra, rs))
+    # 0.11.48: the avatar layouts (--avatar) stay in the table
+    merge_table(os.path.join(OUT, 'muscle_layouts.txt'), [('body', bl)],
+                ['# SF Body Morphs muscle layouts (tools/muscles/author.py). layout <name> <detail size> <region size> <slope max> <height max m>; then',
+                 '# muscle <index from 1> <name> <area core|back|legs|arms> <side L|R|C>',
+                 '# export ' + os.path.basename(d)])
     with open(os.path.join(HERE, 'author.log'), 'w', newline='\n') as f:
         f.write('\n'.join(lines) + '\n')
 

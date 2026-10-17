@@ -25,6 +25,8 @@ $copied = Join-Path $proj "Assets\Editor\DriveTest\Copied"
 New-Item -ItemType Directory -Force $copied | Out-Null
 Copy-Item -Force (Join-Path $PSScriptRoot "..\..\src\SfMorph\Avatar.cs") $copied
 Copy-Item -Force (Join-Path $PSScriptRoot "..\..\src\SfMorph\MeshData.cs") $copied
+Copy-Item -Force (Join-Path $PSScriptRoot "..\..\src\SfMorph\AvatarJcm.cs") $copied
+Copy-Item -Force (Join-Path $PSScriptRoot "..\..\src\SfMorph\PoseDriver.cs") $copied
 
 # 1. the character into the project
 if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
@@ -79,4 +81,7 @@ Run-Unity "AvatarBundle.Verify" @("-bundle", $bundle) (Join-Path $env:TEMP "sfav
 New-Item -ItemType Directory -Force $Out | Out-Null
 Copy-Item -Force $bundle $Out
 Copy-Item -Force (Join-Path $build "avatar.txt") $Out
+# the joint correctives' drivers (tools/sources/daz_correctives.py), read by Avatar.cs at load
+if (Test-Path -LiteralPath "$Fbx.correctives.txt") { Copy-Item -Force -LiteralPath "$Fbx.correctives.txt" (Join-Path $Out "correctives.txt"); "correctives -> " + (Join-Path $Out "correctives.txt") }
+elseif (Test-Path (Join-Path $Out "correctives.txt")) { Remove-Item -Force (Join-Path $Out "correctives.txt") }
 "avatar -> " + (Join-Path $Out $bundleName) + " (" + [math]::Round((Get-Item $bundle).Length / 1MB, 1) + " MB)"

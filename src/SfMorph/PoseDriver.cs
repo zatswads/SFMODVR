@@ -242,7 +242,8 @@ namespace SfMorph
             }
             if (!_built) { Status = "off: " + _buildFail; return; }
 
-            bool on = On.Value;
+            // 0.11.48: on for an avatar too ([Avatar] AutoClavicle): the avatar is skinned to her bones, so her Scapula's offset lifts its collar
+            bool on = On.Value || Avatar.ClavicleOn;
             float target = on ? 1f : 0f;
             _fade = dt > 0f ? Mathf.MoveTowards(_fade, target, dt / FadeTime) : target;
             float amt = Mathf.Clamp01(ClavicleAmount.Value) * _fade;
@@ -284,7 +285,7 @@ namespace SfMorph
                 sd.TSh.Write(shN.normalized);
             }
             Frame = Time.frameCount;
-            Status = on ? (_sides[0] != null && _sides[1] != null ? "on: both shoulders" : "on: one shoulder (see the log)") : _fade > 0f ? "fading out" : "";
+            Status = on ? (_sides[0] != null && _sides[1] != null ? "on: both shoulders" : "on: one shoulder (see the log)") + (!On.Value ? " (for the avatar)" : "") : _fade > 0f ? "fading out" : "";
             if (_logNow || (Debug.Value && Time.unscaledTime >= _nextLog))
             {
                 _nextLog = Time.unscaledTime + 10f;

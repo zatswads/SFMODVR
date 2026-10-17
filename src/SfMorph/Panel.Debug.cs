@@ -53,6 +53,8 @@ namespace SfMorph
             GUILayout.Space(4);
             if (DebugSection("Pose correctives", "Her clavicles following her arms (Physics tab -> Pose correctives): the RBF drivers.")) CorrectiveSection();
             GUILayout.Space(4);
+            if (DebugSection("Avatar", "The avatar's joint correctives, its auto clavicle and its own wrinkle / muscle sheets (Characters tab -> Avatars).")) AvatarSection();
+            GUILayout.Space(4);
             if (DebugSection("Soft zones and hands", "The soft points' springs and the physics hands.")) { SmokeRow(Smoke.TSoft); SmokeRow(Smoke.THands); }
             GUILayout.Space(4);
             if (DebugSection("Skin marks", "Hand prints and slap redness (frozen: only checked for being alive).")) SmokeRow(Smoke.TMarks);
@@ -181,6 +183,17 @@ namespace SfMorph
             GUILayout.Label(PoseDriver.On.Value ? (PoseDriver.Status.Length > 0 ? PoseDriver.Status : "on") : "off ([Correctives] On); the drivers are still built and evaluated", _hint);
             GUILayout.EndHorizontal();
             SmokeRow(Smoke.TCorrectives);
+        }
+
+        // 0.11.48: the avatar's correctives (the strongest one now), clavicle and sheets
+        void AvatarSection()
+        {
+            var j = Avatar.Jcm;
+            GUILayout.Label(!Avatar.On ? "no avatar drawn" : j == null ? "joint correctives off: " + Avatar.JcmNote
+                            : "joint correctives: " + j.Shapes + " shapes, now " + (j.Peak > 0.01f ? j.PeakName + " " + j.Peak.ToString("0.00") : "none above 0.01"), _hint);
+            SmokeRow(Smoke.TAvJcm);
+            SmokeRow(Smoke.TAvClav);
+            SmokeRow(Smoke.TAvWrink);
         }
 
         // 0.11.26: one test per actuator (0.8 for 0.5 s), a slap pulse, a rub buzz, strokes; they play with Haptics off too

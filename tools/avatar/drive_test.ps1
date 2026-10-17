@@ -18,10 +18,15 @@ $copied = Join-Path $proj "Assets\Editor\DriveTest\Copied"
 New-Item -ItemType Directory -Force $copied | Out-Null
 Copy-Item -Force (Join-Path $PSScriptRoot "..\..\src\SfMorph\Avatar.cs") $copied
 Copy-Item -Force (Join-Path $PSScriptRoot "..\..\src\SfMorph\MeshData.cs") $copied
+Copy-Item -Force (Join-Path $PSScriptRoot "..\..\src\SfMorph\AvatarJcm.cs") $copied
+Copy-Item -Force (Join-Path $PSScriptRoot "..\..\src\SfMorph\PoseDriver.cs") $copied
 $log = Join-Path $env:TEMP "sfavatar_drive.log"
 & $Unity -batchmode -quit -nographics -projectPath $proj -executeMethod AvatarDriveTest.Run -export $Export -pose $Pose -store $Store `
     -avatar $Avatar -out $Out -frames "$Frames" -logFile $log | Out-Null
 $code = $LASTEXITCODE
 Select-String -Path $log -Pattern "SfAvatarTest|error CS" | ForEach-Object { $_.Line }
-if ($code -ne 0 -or (Select-String -Path $log -Pattern "SfAvatarTest FAILED|error CS" -Quiet)) { throw "drive test failed (exit $code, log: $log)" }
+# a compile error logged by the first import pass (before the copied files are in) is followed by a clean recompile: only a run that
+# did not finish counts
+$ok = Select-String -Path $log -Pattern "SfAvatarTest OK" -Quiet
+if ($code -ne 0 -or (Select-String -Path $log -Pattern "SfAvatarTest FAILED" -Quiet) -or (-not $ok -and (Select-String -Path $log -Pattern "error CS" -Quiet))) { throw "drive test failed (exit $code, log: $log)" }
 "results: $Out"

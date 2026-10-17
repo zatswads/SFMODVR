@@ -158,8 +158,10 @@ namespace SfMorph
         public int MushVerts { get { return _mushVerts; } }
         public string MushNote = "";          // why Delta Mush does nothing ("" = it runs, or nothing is baked yet)
         bool _muscleK;                        // 0.11.8 bundle: Depth / Compose read the muscle bulge and firmness (MuscleFlex marker kernel)
-        ContactBake.MuscleMap _mmap;          // the muscle maps read back once (the first bake that wants them)
+        ContactBake.MuscleMap _mmap;          // the muscle maps read back once (the first bake that wants them); the activations' table
         bool _mmapTried;
+        // 0.11.48: every layout's maps by name (her 'body'; an avatar's sheets, e.g. g9body / g9arms / g9legs / g9head), null = none
+        readonly Dictionary<string, ContactBake.MuscleMap> _mmaps = new Dictionary<string, ContactBake.MuscleMap>();
         GraphicsBuffer _musDummy4, _musDummy1;   // bound while a renderer has no muscles (_MusOn 0: never read)
         readonly Vector4[] _musAmp = new Vector4[8], _musAct = new Vector4[8];
         float _musMax;                        // this frame's largest bulge (m); 0 = no muscle geometry
@@ -614,7 +616,7 @@ namespace SfMorph
             s.MushTried = mushR > 0f;
             s.MushR = mushR;
             s.Job = null;
-            var job = ContactBake.Prepare(s.R, zone, _her, s.Extra && !s.Limb ? null : MuscleMapFor(), mushR, out err);
+            var job = ContactBake.Prepare(s.R, zone, _her, s.Extra && !s.Limb ? null : (Func<string, ContactBake.MuscleMap>)MuscleMapFor, mushR, out err);
             if (job == null)
             {
                 Plugin.Log.LogWarning("GPU contact: renderer " + s.Name + ": v2 bake failed (" + err + "): v1 imprint for it");
@@ -755,9 +757,13 @@ namespace SfMorph
         // 0.11.8: the body layout's muscle maps (the same muscle_layouts / textures as Wrinkles, read from the bundle on our own so the bake
         // doesn't depend on the wrinkle system being loaded), read back to the CPU once. The textures aren't CPU-readable (and the detail is
         // BC7): a blit into a linear RT and ReadPixels. null (said once) = no muscle geometry.
-        ContactBake.MuscleMap MuscleMapFor()
+        ContactBake.MuscleMap MuscleMapFor() { return MuscleMapFor("body"); }
+
+        // 0.11.48: by layout name; the first one read is also the activations' table (every layout lists the same muscles in the same order)
+        ContactBake.MuscleMap MuscleMapFor(string layout)
         {
-            if (_mmapTried) return _mmap;
+            if (_mmaps.TryGetValue(layout, out var have)) return have;
+            _mmaps[layout] = null;
             _mmapTried = true;
             if (!_muscleK) return null;
             try
@@ -766,8 +772,8 @@ namespace SfMorph
                 if (table == null) { FlexNote = "no muscle layout in the shader bundle"; Plugin.Log.LogInfo("GPU contact: " + FlexNote); return null; }
                 var notes = new List<string>();
                 MuscleLayer L = null;
-                foreach (var l in MuscleLayer.Parse(table.text, n => ShaderBundle.Load<Texture2D>(n), notes)) if (l.Name == "body") L = l;
-                if (L == null) { FlexNote = "no body muscle layout in the shader bundle"; Plugin.Log.LogInfo("GPU contact: " + FlexNote); return null; }
+                foreach (var l in MuscleLayer.Parse(table.text, n => ShaderBundle.Load<Texture2D>(n), notes)) if (l.Name == layout) L = l;
+                if (L == null) { FlexNote = "no " + layout + " muscle layout in the shader bundle"; Plugin.Log.LogInfo("GPU contact: " + FlexNote); return null; }
                 var m = new ContactBake.MuscleMap { Layer = L };
                 m.Region = ReadBack(L.Region, out m.RW, out m.RH);
                 m.Detail = ReadBack(L.Detail, out m.DW, out m.DH);
@@ -796,12 +802,26 @@ namespace SfMorph
                 }
                 else if (hp != null) Plugin.Log.LogWarning("GPU contact: muscle height map " + m.HW + "x" + m.HH + " is not the region map's size: the belly falloff is used");
                 if (m.Region == null) { FlexNote = "muscle map unreadable"; Plugin.Log.LogWarning("GPU contact: " + FlexNote); return null; }
-                Plugin.Log.LogInfo("GPU contact: muscle maps read back (" + L.Count + " muscles, region " + m.RW + "x" + m.RH + ", detail " + m.DW + "x" + m.DH
+                Plugin.Log.LogInfo("GPU contact: " + layout + " muscle maps read back (" + L.Count + " muscles, region " + m.RW + "x" + m.RH + ", detail " + m.DW + "x" + m.DH
                                    + (m.Height != null ? ", sculpted height " + m.HW + "x" + m.HH : ", no height map: belly falloff") + ")");
-                _mmap = m;
+                _mmaps[layout] = m;
+                if (_mmap == null || layout == "body") _mmap = m;
                 return m;
             }
             catch (Exception e) { FlexNote = "muscle maps failed (" + e.Message + ")"; Plugin.Log.LogWarning("GPU contact: " + FlexNote); return null; }
+        }
+
+        // 0.11.48 smoke test: which of these layouts' muscle maps were read back for the bake (muscle geometry on the avatar's sheets)
+        internal string MuscleMapsNote(string[] layouts)
+        {
+            var sb = new StringBuilder("muscle geometry maps:");
+            foreach (var n in layouts)
+            {
+                ContactBake.MuscleMap m;
+                sb.Append(' ').Append(n).Append(_mmaps.TryGetValue(n, out m) ? (m != null ? " read" : " missing") : " not asked yet");
+            }
+            if (FlexNote.Length > 0) sb.Append(" (").Append(FlexNote).Append(')');
+            return sb.ToString();
         }
 
         // 0.11.20: the group a muscle's bulge is normalised in: its area, the obliques apart
@@ -2224,7 +2244,7 @@ namespace SfMorph
             if (_capBuf != null) { _capBuf.Release(); _capBuf = null; }
             if (_waveBuf != null) { _waveBuf.Release(); _waveBuf = null; }
             Rel(ref _musDummy4); Rel(ref _musDummy1);
-            _mmap = null; _mmapTried = false;
+            _mmap = null; _mmapTried = false; _mmaps.Clear();
             _cs = null;
             if (_bundleHeld) { _bundleHeld = false; ShaderBundle.Release(); }
         }

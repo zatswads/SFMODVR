@@ -389,6 +389,7 @@ namespace SfMorph
         // The layout is carried by the shape names, so it survives SoftZones/Subdiv extending the same Mesh object.
         public const string BodyShape = "SfMorph body", FaceShape = "SfMorph face", SingleShape = "SfMorph single";
         const string PlusPrefix = "SfMorph slider+ ", MinusPrefix = "SfMorph slider- ", JcmPrefix = "SfMorph jcm ";
+        public const string AvatarJcmPrefix = "SfAvatar jcm ";
         class LayoutInfo { public int Count; public bool Split; public List<ShapeInfo> Shapes; }
         static readonly Dictionary<Mesh, LayoutInfo> _layouts = new Dictionary<Mesh, LayoutInfo>();
         static readonly List<ShapeInfo> NoShapes = new List<ShapeInfo>();
@@ -403,6 +404,8 @@ namespace SfMorph
             for (int i = 0; i < n; i++)
             {
                 var name = m.GetBlendShapeName(i);
+                // 0.11.48: the avatar's joint correctives (Avatar.cs / AvatarJcm.cs) follow the pose like ours: never a rest shape
+                if (name != null && name.StartsWith(AvatarJcmPrefix)) { li.Shapes.Add(new ShapeInfo(i, ShapeKind.Jcm, name.Substring(AvatarJcmPrefix.Length))); continue; }
                 if (name == null || !name.StartsWith("SfMorph ")) { li.Shapes = NoShapes; break; }   // not one of ours (the game's own shapes)
                 if (name == BodyShape) { li.Split = true; li.Shapes.Add(new ShapeInfo(i, ShapeKind.Body, "")); }
                 else if (name == SingleShape) li.Shapes.Add(new ShapeInfo(i, ShapeKind.Body, ""));

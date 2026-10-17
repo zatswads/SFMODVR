@@ -1,19 +1,23 @@
 // DAZ Studio script: load a DAZ character (a character preset .duf, or a scene) and export it as an FBX for the
 // SF Body Morphs pipeline (tools/sources/humanoid.py). Run by run.ps1 -Daz <file.duf>, or by hand:
 //
-//   DAZStudio.exe -scriptArg "<character .duf>" -scriptArg "<out .fbx>" "<this script>"
+//   DAZStudio.exe -scriptArg "<character .duf>" -scriptArg "<out .fbx>" [-scriptArg keep] [-scriptArg morphs] "<this script>"
 //
 // What it does: clears the scene, opens the .duf (a Genesis 8 / 9 character preset carries its own figure node), sets the
 // figure to Base resolution (no SubD: the pipeline reads the base mesh), hides clothing / hair / props, exports the figure
 // to FBX with its textures collected next to it, writes "<out>.status.txt" (OK or the error) and, unless a third argument
 // "keep" is given, quits DAZ Studio. It touches nothing but the scene it loads and the output folder.
+// "morphs" (avatar bundles, tools/avatar): the figure's joint correctives (Genesis 9 body_cbs_*, Genesis 3 / 8 pJCM*) are exported as
+// blend shapes instead of being dropped, everything else dialled in is baked as before; their names go to "<out>.morphs.txt". The
+// drivers are not in the FBX: tools/sources/daz_correctives.py reads them from the figure's .dsf files.
 (function () {
 	"use strict";
 
 	var aArgs = App.scriptArgs;
 	var sIn = aArgs.length > 0 ? aArgs[0] : "";
 	var sOut = aArgs.length > 1 ? aArgs[1] : "";
-	var bKeep = aArgs.length > 2 && aArgs[2] === "keep";
+	var bKeep = false, bMorphs = false;
+	for (var ai = 2; ai < aArgs.length; ai++) { if (aArgs[ai] === "keep") bKeep = true; else if (aArgs[ai] === "morphs") bMorphs = true; }
 
 	function status(sText) {
 		print("[SfMorph export] " + sText);
@@ -92,7 +96,21 @@
 		oSettings.setBoolValue("doLights", false);
 		oSettings.setBoolValue("doCameras", false);
 		oSettings.setBoolValue("doAnims", false);
-		oSettings.setBoolValue("doMorphs", false);             // the shape as dialled in is baked into the mesh
+		// the shape as dialled in is baked into the mesh; with "morphs" the joint correctives are exported as blend shapes. Rules:
+		// '<morph name>\n<action>' pairs, action 0 bake, 1 export, 2 ignore (the order DAZ's own bridges use), "Anything" = the rest
+		var aJcm = [];
+		if (bMorphs) {
+			var oObj = oFig.getObject();
+			var reJcm = /^(body_cbs_|pJCM)/;   // joint correctives only (facs_cbs_* follow face morphs, not joints)
+			for (var mi2 = 0; oObj && mi2 < oObj.getNumModifiers(); mi2++) {
+				var oMod = oObj.getModifier(mi2);
+				if (oMod && oMod.inherits("DzMorph") && reJcm.test(oMod.getName())) aJcm.push(oMod.getName());
+			}
+			var oList = new DzFile(sOut + ".morphs.txt");
+			if (oList.open(DzFile.WriteOnly)) { oList.write("# joint correctives exported as blend shapes\n" + aJcm.join("\n") + "\n"); oList.close(); }
+		}
+		oSettings.setBoolValue("doMorphs", aJcm.length > 0);
+		if (aJcm.length > 0) oSettings.setStringValue("rules", aJcm.join("\n1\n") + "\n1\nAnything\n0");
 		oSettings.setBoolValue("doEmbed", false);
 		oSettings.setBoolValue("doCopyTextures", true);        // textures next to the FBX
 		oSettings.setBoolValue("doDiffuseOpacity", false);
@@ -107,7 +125,7 @@
 		if (!oDir.exists()) oDir.mkpath(oDir.absolutePath());
 		var nErr = oExporter.writeFile(sOut, oSettings);
 		if (nErr !== 0 && nErr !== undefined && nErr !== true) { status("FAIL FBX export error " + nErr); finish(); return; }
-		status("OK " + oFig.getLabel() + " -> " + sOut + " (" + nHidden + " other nodes hidden, base resolution " + (oLod ? "set" : "unknown") + ")");
+		status("OK " + oFig.getLabel() + " -> " + sOut + " (" + nHidden + " other nodes hidden, base resolution " + (oLod ? "set" : "unknown") + (bMorphs ? ", " + aJcm.length + " correctives as blend shapes" : "") + ")");
 	} catch (e) {
 		status("FAIL " + e);
 	}

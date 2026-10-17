@@ -20,9 +20,13 @@ skin carry no region, so nothing wrinkles there.
 
 Usage:  python tools/wrinkles/author.py [export dir] [--preview]
         (default: the newest export under <game>\\BepInEx\\config\\SfMorphs\\export; output into the shader bundle project)
+        python tools/wrinkles/author.py --avatar=<drive_test export> [--figure=g9] [--preview]
+        (0.11.48: an avatar base figure's sheets, Genesis 9's g9head / g9body / g9arms / g9legs, from the avatar mesh rebuilt on her
+        skeleton that tools/avatar/drive_test.ps1 writes to <out>\\export; the other layouts in wrinkle_layouts.txt are kept)
 Needs numpy only. --preview also writes her colour maps with the creases and regions drawn on, next to the outputs, as *_preview.png
 (not part of the bundle: tools/wrinkles/preview/).
 """
+import copy
 import math
 import os
 import struct
@@ -1354,6 +1358,126 @@ def body_creases(surf, sk, log):
 # ---------------------------------------------------------------- main
 
 
+
+# ---------------------------------------------------------------- avatars (0.11.48)
+
+# The UV sheets of an avatar base figure: (layout name, surface name in the avatar export, face sheet). Every character of a figure
+# shares its UVs, so one set of layouts serves them all. Genesis 9 keeps its skin in UDIM tiles (Head 0, Body 1, Legs 2, Arms 3): each
+# sheet is its own texture, so the tile offset comes off (frac) and the plugin does the same at runtime.
+AVATAR_SHEETS = {
+    'g9': [('g9head', 'Head', True), ('g9body', 'Body', False), ('g9arms', 'Arms', False), ('g9legs', 'Legs', False)],
+}
+
+
+def avatar_parts(m, surface):
+    """The triangles of one surface of the avatar export with its UVs moved into 0..1 (the UDIM tile of its triangles taken off)."""
+    for gi, g in enumerate(m.groups):
+        if g != surface:
+            continue
+        f = m.faces[m.face_group == gi]
+        if not len(f):
+            return None
+        tile = np.floor(np.median(m.uv[f.reshape(-1)], axis=0))
+        uv = m.uv - tile[None, :]
+        return [(m.v, uv, f)], tile
+    return None
+
+
+def shifted(prims, k0):
+    """Copies of creases / bunches with their region index moved by k0 (the body's regions after the face's on a head sheet)."""
+    out = []
+    for p in prims:
+        q = copy.copy(p)
+        q.region = p.region + k0
+        out.append(q)
+    return out
+
+
+def merge_table(path, new_blocks, header):
+    """wrinkle_layouts.txt with the layouts authored now replaced or added and every other layout kept as it was."""
+    blocks, order = {}, []
+    if os.path.isfile(path):
+        cur = None
+        for l in open(path, encoding='utf-8').read().splitlines():
+            if l.startswith('layout '):
+                cur = l.split()[1]
+                order.append(cur)
+                blocks[cur] = [l]
+            elif cur is not None and l.strip():
+                blocks[cur].append(l)
+    for name, lines_ in new_blocks:
+        if name not in blocks:
+            order.append(name)
+        blocks[name] = lines_
+    with open(path, 'w', newline='\n') as f:
+        f.write('\n'.join(header + [l for name in order for l in blocks[name]]) + '\n')
+
+
+def avatar_main(d, figure, preview, log):
+    """Wrinkle layouts for an avatar base figure from tools/avatar/drive_test.ps1's export of the avatar mesh rebuilt onto her
+    skeleton (her bind pose, her bones): the creases are placed in 3D exactly as on her (her face and limb bones, ray cast onto the
+    avatar's skin: the body creases on the whole body, the face creases on the head), then each UV sheet is rasterised on its own."""
+    meshes, sk, missing = sfio.read_game_export(d)
+    if not meshes:
+        log('avatar export %s: no mesh' % d)
+        sys.exit(1)
+    m = max(meshes, key=lambda x: len(x.v))
+    sheets = AVATAR_SHEETS[figure]
+    log('avatar %s: %s, %d vertices, surfaces %s' % (figure, m.name, len(m.v), ', '.join(m.groups)))
+    parts, tiles = {}, {}
+    for lname, surface, face in sheets:
+        r = avatar_parts(m, surface)
+        if r is None:
+            log('%s: no surface %s in the export; skipped' % (lname, surface))
+            continue
+        parts[lname], tiles[lname] = r
+        log('%s: surface %s, UV tile (%d, %d) taken off' % (lname, surface, tiles[lname][0], tiles[lname][1]))
+    full = Surf([p for l in parts for p in parts[l]])
+    bc, bregs, brad, bexcl = body_creases(full, sk, log)
+    bc = add_micro(bc, full, bregs, 0.0011, log)
+    blocks = []
+    for lname, surface, face in sheets:
+        if lname not in parts:
+            continue
+        surf = Surf(parts[lname])
+        prims, regions, rad, excl = bc, list(bregs), {k: brad.get(k, 0.01) for k in range(len(bregs))}, list(bexcl)
+        if face:
+            fc, fregs, frad, fexcl = face_creases(surf, sk, log)
+            fc = add_micro(fc, surf, fregs, 0.00045, log, scale=0.8)
+            nf = len(fregs)
+            prims = fc + shifted(bc, nf)
+            regions = list(fregs) + list(bregs)
+            rad = {k: frad.get(k, 0.01) for k in range(nf)}
+            rad.update({k + nf: brad.get(k, 0.01) for k in range(len(bregs))})
+            excl = list(fexcl) + list(bexcl)
+        if len(regions) > 32:
+            log('%s: %d regions, more than the plugin takes (32): skipped' % (lname, len(regions)))
+            continue
+        n, nreg = 2048, 1024
+        det, reg, cov, cav, idx, best, wbest = build_sum(lname, surf, prims, regions, n, nreg, rad, log, excl)
+        write_png(os.path.join(OUT, 'wrinkle_%s_detail.png' % lname), to_u8(det))
+        write_png(os.path.join(OUT, 'wrinkle_%s_region.png' % lname), reg)
+        bl = ['layout %s %d %d' % (lname, n, nreg)]
+        for k, (rn, rc, rg) in enumerate(regions):
+            bl.append('region %d %s %s %.3f' % (k + 1, rn, rc, rg))
+        blocks.append((lname, bl))
+        if preview:
+            os.makedirs(PREVIEW, exist_ok=True)
+            img = np.full((n * n, 3), 128.0)
+            hue = np.array([[1, .2, .2], [.2, 1, .2], [.2, .4, 1], [1, 1, .2], [1, .2, 1], [.2, 1, 1], [1, .6, .2], [.6, .2, 1]])
+            a = (0.35 * (wbest > 0.02))[:, None]
+            img[idx] = img[idx] * (1 - a) + hue[best % len(hue)] * 255 * a
+            img[idx] = img[idx] * (1 - 0.85 * np.clip(cav, 0, 1)[:, None])
+            write_png(os.path.join(PREVIEW, 'wrinkle_%s_preview.png' % lname), np.clip(img.reshape(n, n, 3), 0, 255).astype(np.uint8))
+            if face:
+                face_renders(regions, None, n, PREVIEW, log)
+    header = ['# SF Body Morphs wrinkle layouts (tools/wrinkles/author.py). layout <name> <detail size> <region size>; then',
+              '# region <index from 1> <name> <class face|neck|body> <compression range>',
+              '# face / body: her export; %s*: avatar export %s' % (figure, os.path.basename(os.path.normpath(d)))]
+    merge_table(os.path.join(OUT, 'wrinkle_layouts.txt'), blocks, header)
+    return blocks
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     preview = '--preview' in sys.argv
@@ -1363,6 +1487,15 @@ def main():
     def log(m):
         print(m)
         lines.append(m)
+    # 0.11.48: --avatar=<export of the avatar mesh on her skeleton> [--figure=g9]: the avatar's UV sheets instead of hers
+    av = [a[9:] for a in sys.argv[1:] if a.startswith('--avatar=')]
+    if av:
+        fig = ([a[9:] for a in sys.argv[1:] if a.startswith('--figure=')] or ['g9'])[0]
+        log('avatar export: ' + av[0])
+        avatar_main(av[0], fig, preview, log)
+        with open(os.path.join(HERE, 'author_%s.log' % fig), 'w', newline='\n') as f:
+            f.write('\n'.join(lines) + '\n')
+        return
     log('export: ' + d)
     meshes, sk, missing = sfio.read_game_export(d)
     by = {}
@@ -1437,8 +1570,15 @@ def main():
                 face_renders(regions, col, n, PREVIEW, log)
     if only:
         return
-    with open(os.path.join(OUT, 'wrinkle_layouts.txt'), 'w', newline='\n') as f:
-        f.write('\n'.join(table) + '\n')
+    # 0.11.48: the avatar layouts (--avatar) stay in the table
+    hdr = [l for l in table if l.startswith('#')]
+    blocks = []
+    for l in table:
+        if l.startswith('layout '):
+            blocks.append((l.split()[1], [l]))
+        elif not l.startswith('#') and blocks:
+            blocks[-1][1].append(l)
+    merge_table(os.path.join(OUT, 'wrinkle_layouts.txt'), blocks, hdr)
     with open(os.path.join(HERE, 'author.log'), 'w', newline='\n') as f:
         f.write('\n'.join(lines) + '\n')
 

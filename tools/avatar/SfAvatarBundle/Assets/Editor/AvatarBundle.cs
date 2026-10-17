@@ -527,6 +527,37 @@ public class AvatarImport : AssetPostprocessor
         mi.materialLocation = ModelImporterMaterialLocation.InPrefab;
     }
 
+    // Blend shapes that move nothing are dropped (0.11.48): DAZ's FBX export with the joint correctives writes every corrective onto
+    // every follower figure (eyes, lashes, brows, tear, mouth) and a shape pack's empty adjustment of each, 233 shapes per mesh, mostly
+    // zero (the bundle grew from 161 to 436 MB). Tangent deltas are dropped too (the plugin rebuilds the meshes without them).
+    void OnPostprocessModel(GameObject g)
+    {
+        if (!assetPath.StartsWith("Assets/Avatars/")) return;
+        foreach (var r in g.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        {
+            var m = r.sharedMesh;
+            if (m == null || m.blendShapeCount == 0) continue;
+            int n = m.vertexCount, total = m.blendShapeCount;
+            var keep = new List<KeyValuePair<string, List<KeyValuePair<float, Vector3[][]>>>>();
+            for (int s = 0; s < total; s++)
+            {
+                var frames = new List<KeyValuePair<float, Vector3[][]>>();
+                float mx = 0f;
+                for (int f = 0; f < m.GetBlendShapeFrameCount(s); f++)
+                {
+                    var dv = new Vector3[n]; var dn = new Vector3[n];
+                    m.GetBlendShapeFrameVertices(s, f, dv, dn, null);
+                    foreach (var d in dv) mx = Mathf.Max(mx, d.sqrMagnitude);
+                    frames.Add(new KeyValuePair<float, Vector3[][]>(m.GetBlendShapeFrameWeight(s, f), new[] { dv, dn }));
+                }
+                if (mx > 1e-10f) keep.Add(new KeyValuePair<string, List<KeyValuePair<float, Vector3[][]>>>(m.GetBlendShapeName(s), frames));   // > 0.01 mm
+            }
+            m.ClearBlendShapes();
+            foreach (var k in keep) foreach (var f in k.Value) m.AddBlendShapeFrame(k.Key, f.Key, f.Value[0], f.Value[1], null);
+            Debug.Log("SfAvatar: blend shapes of " + m.name + ": kept " + keep.Count + " of " + total + " (the others move nothing)");
+        }
+    }
+
     void OnPreprocessMaterialDescription(MaterialDescription d, Material m, AnimationClip[] clips)
     {
         if (!assetPath.StartsWith("Assets/Avatars/")) return;

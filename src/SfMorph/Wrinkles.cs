@@ -582,6 +582,34 @@ namespace SfMorph
             return a;
         }
 
+        // 0.11.48 smoke test: the avatar's sheets on its figure's layouts. Returns the number of problems (layouts missing from the
+        // bundle, renderers whose bake failed, e.g. 'not on the layout'), the note says which; -1 = none of the layouts is used yet.
+        internal int AvatarSheets(string[] layouts, out string note)
+        {
+            var sb = new StringBuilder();
+            int bad = 0, sheets = 0, baked = 0, failed = 0, muscles = 0;
+            foreach (var n in layouts)
+            {
+                bool w = LayoutFor(n) != null, m = MuscleFor(n) != null;
+                if (!w && !m) { bad++; sb.Append(sb.Length > 0 ? ", " : "").Append(n).Append(" not in the bundle"); }
+            }
+            foreach (var sh in _sheets)
+            {
+                string ln = sh.Layout != null ? sh.Layout.Name : sh.Muscle != null ? sh.Muscle.Name : null;
+                if (ln == null || Array.IndexOf(layouts, ln) < 0) continue;
+                sheets++;
+                if (sh.Muscle != null) muscles++;
+                foreach (var rd in sh.Rends)
+                {
+                    if (rd.State == 1) baked++;
+                    else if (rd.State == -1) { failed++; bad++; sb.Append(sb.Length > 0 ? ", " : "").Append(rd.Name).Append(": ").Append(rd.LastError); }
+                }
+            }
+            note = sheets + " avatar sheets (" + string.Join(" ", layouts) + "), " + muscles + " with muscles, " + baked + " renderers baked, " + failed + " failed" + (sb.Length > 0 ? ": " + sb : "");
+            if (sheets == 0 && bad == 0) { note = "no avatar sheet built yet (wrinkles / muscles take a few seconds after the avatar loads; Skin tab on?)"; return -1; }
+            return bad;
+        }
+
         // The crease shade (albedo pass) is there (always with a 0.9.0 bundle; the load refuses older ones).
         public bool HasCavity { get { return _albedoPass; } }
         // 0.10.0: the bundle carries the muscle layer (maps + shader)
@@ -1204,14 +1232,14 @@ namespace SfMorph
             return null;
         }
 
-        Sheet GetSheet(Material mat, bool face)
+        Sheet GetSheet(Material mat, bool face, string layout = null)
         {
             for (int i = 0; i < _sheets.Count; i++) if (_sheets[i].Mat == mat) return _sheets[i];
             var sh = new Sheet { Mat = mat, Name = mat.name.Replace(" (Instance)", "").Trim(), Face = face };
             var cap = sh;
             sh.OnSums = req => SumsDone(cap, req);
-            sh.Layout = LayoutFor(face);
-            sh.Muscle = MuscleFor(face);
+            sh.Layout = LayoutFor(layout ?? (face ? "face" : "body"));
+            sh.Muscle = MuscleFor(layout ?? (face ? "face" : "body"));
             foreach (var p in NormalProps) if (mat.HasProperty(p)) { sh.Prop = p; break; }
             // the albedo: the first of the usual names holding a real texture (ours or SkinMarks' copy count), else the first that exists
             foreach (var p in AlbedoProps)
@@ -1229,7 +1257,7 @@ namespace SfMorph
             else if (sh.Layout == null)
             {
                 sh.Skip = true;
-                if (_logged.Add("nolayout|" + sh.Name)) Plugin.Log.LogWarning("Wrinkles: material '" + sh.Name + "': no authored " + (face ? "face" : "body") + " wrinkle layout in the bundle; skipped");
+                if (_logged.Add("nolayout|" + sh.Name)) Plugin.Log.LogWarning("Wrinkles: material '" + sh.Name + "': no authored " + (layout ?? (face ? "face" : "body")) + " wrinkle layout in the bundle; skipped");
             }
             _sheets.Add(sh);
             return sh;
@@ -1237,17 +1265,15 @@ namespace SfMorph
 
         // The authored layout of a face sheet ("face") or any other skin sheet ("body"); whether a renderer's UVs really are on it is
         // checked per renderer by the bake (coverage).
-        WrinkleLayout LayoutFor(bool face)
+        WrinkleLayout LayoutFor(string want)
         {
-            string want = face ? "face" : "body";
             for (int i = 0; i < _layouts.Count; i++) if (_layouts[i].Name == want) return _layouts[i];
             return null;
         }
 
         // 0.10.0: the muscle layer of a sheet's layout (the face has none)
-        MuscleLayer MuscleFor(bool face)
+        MuscleLayer MuscleFor(string want)
         {
-            string want = face ? "face" : "body";
             for (int i = 0; i < _muscleLayers.Count; i++) if (_muscleLayers[i].Name == want) return _muscleLayers[i];
             return null;
         }
@@ -1274,13 +1300,24 @@ namespace SfMorph
                         Plugin.Log.LogInfo("Wrinkles: renderer '" + r.name + "' mesh '" + r.sharedMesh.name + "' slot " + sub + " material '" + mat.name + "' -> "
                             + (region == 1 ? "face" : region == 2 ? "neck" : region == 3 ? "body" : "not skin (skipped)"));
                     if (region == 0 || !Wanted(region, s)) continue;
-                    if (Avatar.Owns(r)) continue;   // 0.11.42: her wrinkle / muscle maps are on her UV layout, not the avatar's (its own layout: to author)
+                    // 0.11.42-0.11.47 skipped the avatar (her maps are on her UV layout). 0.11.48: its figure's own layouts (Genesis 9:
+                    // g9head / g9body / g9arms / g9legs, one per UV sheet, tools/wrinkles/author.py --avatar); a figure without them stays out
+                    string avLayout = null;
+                    if (Avatar.Owns(r))
+                    {
+                        avLayout = Avatar.LayoutOf(mat);
+                        if (avLayout == null || (LayoutFor(avLayout) == null && MuscleFor(avLayout) == null))
+                        {
+                            if (_logged.Add("avnolayout|" + mat.name)) Plugin.Log.LogInfo("Wrinkles: avatar material '" + mat.name + "' has no authored layout" + (avLayout != null ? " ('" + avLayout + "' not in the bundle)" : " (its figure has none)") + ": no wrinkles / muscles on it");
+                            continue;
+                        }
+                    }
                     var rd = FindRend(r, sub);
                     if (rd == null || rd.Mat != mat)
                     {
                         if (rd != null) RemoveRend(rd);
                         rd = new Rend { R = r, Sub = sub, Region = region, Name = r.name + (mats.Length > 1 ? "#" + sub : ""), Mat = mat };
-                        var sh = GetSheet(mat, region == 1);
+                        var sh = GetSheet(mat, region == 1, avLayout);
                         if (sh.Skip) continue;              // no normal map property: no renderer for it
                         rd.S = sh;
                         sh.Rends.Add(rd);
@@ -1368,12 +1405,20 @@ namespace SfMorph
             if (m == null || snap == null) return false;
             int n = Mathf.Min(snap.Length, m.blendShapeCount);
             bool moved = false;
+            var layout = MorphState.ShapeLayout(m);   // 0.11.48: joint correctives follow the pose (the avatar's change every frame): no re-bake
             for (int k = 0; k < n; k++)
             {
+                if (IsJcm(layout, k)) continue;
                 float w = r.R.GetBlendShapeWeight(k);
                 if (Mathf.Abs(w - snap[k]) > 0.5f) { moved = true; break; }   // Unity's 0-100 scale
             }
             return moved;
+        }
+
+        internal static bool IsJcm(List<ShapeInfo> layout, int k)
+        {
+            for (int q = 0; q < layout.Count; q++) if (layout[q].Index == k) return layout[q].Kind == ShapeKind.Jcm;
+            return false;
         }
 
         void SnapBlendshapes(Rend r)

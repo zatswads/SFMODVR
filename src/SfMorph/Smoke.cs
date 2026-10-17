@@ -19,18 +19,18 @@ namespace SfMorph
         public static readonly string[] Ids =
         {
             "shaders", "gpu-contact", "cull", "delta-mush", "wrinkles", "curve-wrinkles", "muscles", "correctives", "quality", "lip-sync",
-            "soft-zones", "physics-hands", "skin-marks",
+            "soft-zones", "physics-hands", "skin-marks", "avatar-correctives", "avatar-clavicle", "avatar-wrinkles",
         };
         public static readonly string[] Labels =
         {
             "Shader bundle and kernels", "GPU contact (1 s dent)", "Contact cull", "Delta Mush", "Wrinkles (regions, a re-blend)",
             "Curve-driven wrinkles (1 s)", "Muscles (lengths)", "Pose correctives", "Quality presets", "Lip sync", "Soft zones (1 s)",
-            "Physics hands", "Skin marks (alive)",
+            "Physics hands", "Skin marks (alive)", "Avatar joint correctives", "Avatar auto clavicle", "Avatar wrinkles / muscles",
         };
         public static readonly string[] Buttons = Prefixed("Smoke: ");
         static string[] Prefixed(string pre) { var r = new string[Labels.Length]; for (int i = 0; i < r.Length; i++) r[i] = pre + Labels[i]; return r; }
         public const int TShaders = 0, TGpu = 1, TCull = 2, TMush = 3, TWrinkles = 4, TCurve = 5, TMuscles = 6, TCorrectives = 7, TQuality = 8,
-                         TLip = 9, TSoft = 10, THands = 11, TMarks = 12;
+                         TLip = 9, TSoft = 10, THands = 11, TMarks = 12, TAvJcm = 13, TAvClav = 14, TAvWrink = 15;
         public static readonly int Count = Ids.Length;
         // the last result of each test this session ("" = not run): "PASS (...)" / "FAIL (...)" / "SKIP (...)"
         public static readonly string[] Results = NewResults();
@@ -131,6 +131,9 @@ namespace SfMorph
                 case TLip: return Lip(p, b);
                 case TSoft: return Soft(p, b, t);
                 case THands: return Hands(p);
+                case TAvJcm: return AvatarJcmT(p, b, t);
+                case TAvClav: return AvatarClavT(p, b);
+                case TAvWrink: return AvatarWrinkT(p, b);
                 default: return Marks(p, b);
             }
         }
@@ -140,6 +143,67 @@ namespace SfMorph
         {
             if (i == TWrinkles) WrinkleTest.Unforce();
             if (i == TCurve) FaceCurves.ClearInjected();
+        }
+
+        // ---- 0.11.48 avatar tests ----
+
+        static int _jcmFrames0;
+
+        // The avatar's joint correctives: the table and the meshes' shapes bound, the evaluator's own maths (Euler round trip in every
+        // rotation order the figure uses, the DAZ -> her axes fit), the frame-loop step running (frames counted over 0.3 s), and the
+        // strongest corrective now. Read-only.
+        static string AvatarJcmT(Plugin p, Body b, float t)
+        {
+            if (!Avatar.On) return Skip("no avatar is drawn (Characters tab -> Avatars)");
+            var j = Avatar.Jcm;
+            if (j == null) return Avatar.JcmNote.StartsWith("no correctives.txt", StringComparison.Ordinal) ? Skip(Avatar.JcmNote) : Fail(Avatar.JcmNote);
+            if (_phase == 0)
+            {
+                string why;
+                if (!j.SelfTest(out why)) return Fail(why);
+                if (!Avatar.CorrectivesInLoop) return Fail("the frame-loop step before skinning is not installed (log: 'Avatar correctives:')");
+                _jcmFrames0 = j.Frames;
+                _phase = 1;
+                return null;
+            }
+            if (t < 0.3f) return null;
+            int stepped = j.Frames - _jcmFrames0;
+            float amt = Avatar.Correctives.Value;
+            if (amt > 0f && stepped < 3) return Fail("the correctives were evaluated " + stepped + " times in 0.3 s (the step is not running)");
+            string why2;
+            j.SelfTest(out why2);
+            return Pass(j.Shapes + " shapes driven, " + stepped + " evaluations in 0.3 s, amount " + F(amt, "0.00") + "; " + why2 + "; now " +
+                        (j.Peak > 0.01f ? j.PeakName + " " + F(j.Peak, "0.00") : "none above 0.01") + "; " + Avatar.JcmNote);
+        }
+
+        // PoseDriver's clavicle correction for the avatar ([Avatar] AutoClavicle): built for her, running this frame, and on.
+        static string AvatarClavT(Plugin p, Body b)
+        {
+            if (!Avatar.On) return Skip("no avatar is drawn (Characters tab -> Avatars)");
+            if (!Avatar.AutoClavicle.Value) return Skip("[Avatar] AutoClavicle is off");
+            var dl = PoseDriver.Drivers[PoseDriver.Left]; var dr = PoseDriver.Drivers[PoseDriver.Right];
+            if (dl == null && dr == null) return Fail("the clavicle drivers are not built: " + PoseDriver.Status);
+            if (PoseDriver.Frame < 0 || Time.frameCount - PoseDriver.Frame > 5) return Fail("the pose correctives did not run this frame (Apply changes off? " + PoseDriver.Status + ")");
+            if (!PoseDriver.Status.StartsWith("on", StringComparison.Ordinal)) return Fail("status '" + PoseDriver.Status + "' (should be on for the avatar)");
+            var o0 = PoseDriver.ScapulaOffsetDeg[0]; var o1 = PoseDriver.ScapulaOffsetDeg[1];
+            return Pass(PoseDriver.Status + "; arms L elev " + F(PoseDriver.ShoulderElevation[0], "0") + " deg -> scapula " + o0.ToString("0.0") + ", R elev " +
+                        F(PoseDriver.ShoulderElevation[1], "0") + " deg -> " + o1.ToString("0.0") + " (raise her arms: the elevation offset grows past 30 deg)");
+        }
+
+        // Wrinkles and muscles on the avatar's own UV sheets (Genesis 9: g9head / g9body / g9arms / g9legs): the layouts in the bundle,
+        // each skin sheet built and its triangles on the layout (coverage), the muscle geometry's maps read back.
+        static string AvatarWrinkT(Plugin p, Body b)
+        {
+            if (!Avatar.On) return Skip("no avatar is drawn (Characters tab -> Avatars)");
+            var want = Avatar.Layouts;
+            if (want.Length == 0) return Skip("this avatar's figure has no authored layouts (Genesis 9 only)");
+            if (b.Wrink == null) return p.WrinkOn.Value || p.MuscleOn.Value ? Fail("wrinkles / muscles on but not loaded: " + b.WrinkleStatus) : Skip("wrinkles and muscles are off (Skin tab)");
+            string note;
+            int bad = b.Wrink.AvatarSheets(want, out note);
+            string gpu = b.Gpu != null ? b.Gpu.MuscleMapsNote(want) : "GPU contact off (no muscle geometry)";
+            if (bad < 0) return Fail(note + "; " + gpu);
+            if (bad > 0) return Fail(note + "; " + gpu);
+            return Pass(note + "; " + gpu);
         }
 
         // ---- helpers ----
@@ -440,7 +504,7 @@ namespace SfMorph
                     else sb.Append(", axes ok (up . neck ").Append(F(up, "0.00")).Append(')');
                 }
             }
-            bool on = PoseDriver.On.Value;
+            bool on = PoseDriver.On.Value || Avatar.ClavicleOn;   // 0.11.48: on for an avatar too
             if (bad == null && !on)
             {
                 var o0 = PoseDriver.ScapulaOffsetDeg[0]; var o1 = PoseDriver.ScapulaOffsetDeg[1];

@@ -38,6 +38,8 @@ namespace SfMorph
     internal class Character
     {
         public Transform Root;
+        public Dictionary<string, Transform> Bones = new Dictionary<string, Transform>();   // PoseDriver (0.11.48 auto clavicle)
+        public Dictionary<Transform, Matrix4x4> Bind = new Dictionary<Transform, Matrix4x4>();
         public bool Female = true, IsPlayer;
         public LookStub Look = new LookStub();
     }

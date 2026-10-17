@@ -1,15 +1,15 @@
 ManifestFileVersion: 0
-CRC: 1663382780
+CRC: 2814253166
 Hashes:
   AssetFileHash:
     serializedVersion: 2
-    Hash: c41de0def2a7f1c8d1aba6bf4e7bf4d5
+    Hash: 97460c930972bc4c12b4d8e9f4fced43
   TypeTreeHash:
     serializedVersion: 2
     Hash: a1a0eb92eb8f8182a449d567974cdb4a
   IncrementalBuildHash:
     serializedVersion: 2
-    Hash: c41de0def2a7f1c8d1aba6bf4e7bf4d5
+    Hash: 97460c930972bc4c12b4d8e9f4fced43
 HashAppended: 0
 ClassTypes:
 - Class: 28
@@ -22,17 +22,37 @@ ClassTypes:
   Script: {instanceID: 0}
 SerializeReferenceClassIdentifiers: []
 Assets:
+- Assets/SfMorph/Muscles/muscle_g9head_height.png
 - Assets/SfMorph/Shaders/SkinMarks.shader
+- Assets/SfMorph/Wrinkles/wrinkle_g9arms_region.png
+- Assets/SfMorph/Wrinkles/wrinkle_g9head_detail.png
+- Assets/SfMorph/Wrinkles/wrinkle_g9arms_detail.png
+- Assets/SfMorph/Wrinkles/wrinkle_g9legs_detail.png
+- Assets/SfMorph/Muscles/muscle_g9head_detail.png
+- Assets/SfMorph/Wrinkles/wrinkle_g9head_region.png
 - Assets/SfMorph/Wrinkles/wrinkle_body_detail.png
+- Assets/SfMorph/Muscles/muscle_g9arms_detail.png
+- Assets/SfMorph/Wrinkles/wrinkle_g9legs_region.png
 - Assets/SfMorph/Muscles/muscle_body_region.png
+- Assets/SfMorph/Muscles/muscle_g9legs_region.png
+- Assets/SfMorph/Muscles/muscle_g9arms_region.png
+- Assets/SfMorph/Muscles/muscle_g9body_detail.png
 - Assets/SfMorph/Wrinkles/wrinkle_layouts.txt
 - Assets/SfMorph/Muscles/muscle_body_detail.png
+- Assets/SfMorph/Muscles/muscle_g9body_height.png
 - Assets/SfMorph/Wrinkles/wrinkle_body_region.png
+- Assets/SfMorph/Muscles/muscle_g9head_region.png
+- Assets/SfMorph/Muscles/muscle_g9body_region.png
 - Assets/SfMorph/Shaders/SoftDeform.compute
 - Assets/SfMorph/Wrinkles/wrinkle_face_detail.png
 - Assets/SfMorph/Muscles/muscle_layouts.txt
+- Assets/SfMorph/Muscles/muscle_g9arms_height.png
+- Assets/SfMorph/Wrinkles/wrinkle_g9body_region.png
+- Assets/SfMorph/Muscles/muscle_g9legs_height.png
 - Assets/SfMorph/Shaders/WrinkleRaster.shader
 - Assets/SfMorph/Muscles/muscle_body_height.png
+- Assets/SfMorph/Muscles/muscle_g9legs_detail.png
 - Assets/SfMorph/Shaders/Wrinkles.compute
 - Assets/SfMorph/Wrinkles/wrinkle_face_region.png
+- Assets/SfMorph/Wrinkles/wrinkle_g9body_detail.png
 Dependencies: []

@@ -13,8 +13,8 @@ namespace SfMorph
             GUILayout.Space(10);
             GUILayout.Label("Avatars", _bold);
             GUILayout.Label("A character's own mesh and skin (tools/avatar/build.ps1) drawn instead of her, fitted onto her skeleton: her animation, IK, " +
-                            "breast physics, hair and the Body / Bones sliders move it like her own body. Her soft zones, dents, marks, wrinkles and muscles stay " +
-                            "on her hidden body for now. Folder: " + Avatar.Root, _hint);
+                            "breast physics, hair and the Body / Bones sliders move it like her own body; its own joint correctives follow her pose, and a " +
+                            "Genesis 9 avatar gets wrinkles and muscles on its own UV layout. Folder: " + Avatar.Root, _hint);
             // read once: the same controls in the Layout pass and the click pass
             var all = Avatar.Entries;
             string cur = (Avatar.Pick.Value ?? "").Trim(), status = Avatar.Status;
@@ -22,6 +22,8 @@ namespace SfMorph
             int shader = Mathf.Clamp(Avatar.MaterialRoute.Value, 0, 1);
             float bright = Avatar.Brightness.Value;
             bool hair = Avatar.KeepHair.Value;
+            float jcm = Avatar.Correctives.Value;
+            bool clav = Avatar.AutoClavicle.Value;
 
             const int cols = 3;
             const float card = 150f;
@@ -50,12 +52,21 @@ namespace SfMorph
             GUILayout.EndHorizontal();
             float nb = Slider("Skin brightness", bright, 0.5f, 1.5f, "0.00", 1f);
             bool nh = GUILayout.Toggle(hair, " Keep her hair (the avatar has none of its own unless its export included hair)");
+            // 0.11.48 the avatar's joint correctives (AvatarJcm.cs) and the auto clavicle (PoseDriver for the avatar)
+            bool hasJcm = Avatar.Jcm != null;
+            GUI.enabled = hasJcm || !Avatar.On;
+            float nj = Slider("Joint correctives", jcm, 0f, 1.5f, "0.00", 1f);
+            GUI.enabled = true;
+            if (Avatar.On) GUILayout.Label(hasJcm ? Avatar.JcmNote : "off: " + Avatar.JcmNote, hasJcm ? _hint : _off);
+            bool nc = GUILayout.Toggle(clav, " Auto clavicle (her shoulders rise and come forward with her arms, so the avatar's shoulders don't collapse)");
 
             if (pickNone && cur.Length > 0) Avatar.Pick.Value = "";
             if (pick != null && pick != cur) Avatar.Pick.Value = pick;
             if (nsh != shader) Avatar.MaterialRoute.Value = nsh;
             if (Mathf.Abs(nb - bright) > 0.0001f) Avatar.Brightness.Value = nb;
             if (nh != hair) Avatar.KeepHair.Value = nh;
+            if (Mathf.Abs(nj - jcm) > 0.0001f) Avatar.Correctives.Value = nj;
+            if (nc != clav) Avatar.AutoClavicle.Value = nc;
         }
     }
 }

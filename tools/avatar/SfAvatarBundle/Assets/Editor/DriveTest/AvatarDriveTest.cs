@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 
@@ -57,6 +58,21 @@ public static class AvatarDriveTest
             if (!bones.TryGetValue(r[1], out var p)) { p = new GameObject(r[1]).transform; p.SetParent(root, false); bones[r[1]] = p; }
             bones[r[0]].SetParent(p, false);
         }
+        // 0.11.48: a parent skeleton.txt does not list (her face bones' 'Facial' group, the leg skin helpers' 'LegFront_L' ...) hangs
+        // under the listed bone nearest its children, so a turned neck carries her face rig (under the root it stayed put and a posed
+        // head tore the avatar's face off its skull in the deep-pose test)
+        var listed = new HashSet<string>(rows.Select(r => r[0]));
+        if (bones.TryGetValue("Root_M", out var anchor))
+            for (int pass = 0; pass < 4; pass++)   // a group can only hang under a bone that already hangs under her pelvis
+                foreach (var grp in rows.Select(r => r[1]).Distinct().Where(n => !listed.Contains(n) && bones.ContainsKey(n)).ToList())
+                {
+                    if (bones[grp].IsChildOf(anchor) || anchor.IsChildOf(bones[grp])) continue;
+                    var kids = rows.Where(r => r[1] == grp).Select(r => V(r[2])).ToList();
+                    if (kids.Count == 0) continue;
+                    var c = kids.Aggregate(Vector3.zero, (a, b) => a + b) / kids.Count;
+                    var host = rows.Where(r => bones[r[0]].IsChildOf(anchor) && !bones[r[0]].IsChildOf(bones[grp])).OrderBy(r => (V(r[2]) - c).sqrMagnitude).FirstOrDefault();
+                    if (host != null) bones[grp].SetParent(bones[host[0]], false);
+                }
         int Depth(Transform t) { int d = 0; for (var x = t; x != null; x = x.parent) d++; return d; }
         var byDepth = rows.OrderBy(r => Depth(bones[r[0]])).ToList();
         foreach (var r in byDepth) bones[r[0]].SetPositionAndRotation(V(r[2]), Q(r[3]));
@@ -124,7 +140,10 @@ public static class AvatarDriveTest
         SfMorph.Avatar.Pick.Value = avatar;
         SfMorph.Avatar.Rescan();
         var body = new SfMorph.Body();
-        body.Found.Add(new SfMorph.Character { Root = root });
+        var herChar = new SfMorph.Character { Root = root };
+        foreach (var kv in bones) { herChar.Bones[kv.Key] = kv.Value; herChar.Bind[kv.Value] = kv.Value.worldToLocalMatrix * root.localToWorldMatrix; }
+        body.Found.Add(herChar);
+        SfMorph.PoseDriver.Bind(cfg);
         SfMorph.Avatar.Tick(body);
         if (!SfMorph.Avatar.On) { Fail("the avatar did not load: " + SfMorph.Avatar.Status); return; }
         Debug.Log("SfAvatarTest: loaded: " + SfMorph.Avatar.Status);
@@ -133,6 +152,10 @@ public static class AvatarDriveTest
         var main = rends.OrderByDescending(r => r.sharedMesh.vertexCount).First();
         int mainOff = 0; foreach (var r in rends) { if (r == main) break; mainOff += r.sharedMesh.vertexCount; }   // main's vertices in the baked list
         if (rends.Any(r => r.bones.Any(b => b == null))) { Fail("an avatar mesh has a missing bone"); return; }
+        Debug.Log("SfAvatarTest: correctives: " + SfMorph.Avatar.JcmNote);
+        // 0.11.48: the avatar mesh at her bind pose as an export folder (meshes.txt, obj with UVs and one group per surface, skin, her
+        // skeleton) for tools/wrinkles/author.py and tools/muscles/author.py
+        WriteExport(Path.Combine(outDir, "export"), main, Path.Combine(export, "skeleton.txt"));
         float[] restEdges = null, herRest = null;
 
         Debug.Log("SfAvatarTest: reading the recording");
@@ -242,6 +265,8 @@ public static class AvatarDriveTest
             WriteObj(Path.Combine(outDir, "frame_" + fi.ToString("00") + "_her.obj"), her.ToArray(), hb);
             fi++;
         }
+        foreach (var kv in bindPose) kv.Key.SetPositionAndRotation(kv.Value.GetColumn(3), kv.Value.rotation);
+        report.Append(DeepPoses(outDir, root, bones, bindPose, main, herChar));
         File.WriteAllText(Path.Combine(outDir, "drive_test.txt"), "# SfAvatarTest: src/SfMorph/Avatar.cs on " + Path.GetFileName(pose) + ", avatar " + avatar + "\n" + report);
         foreach (var l in report.ToString().Split('\n').Where(x => x.Length > 0)) Debug.Log("SfAvatarTest: " + l);
         body.Found.Clear();
@@ -252,6 +277,120 @@ public static class AvatarDriveTest
         if (!shown || SfMorph.Avatar.On) { Fail("not given back"); return; }
         Debug.Log("SfAvatarTest: worst 95 % gap " + (worstGap * 1000f).ToString("0.0", Inv) + " mm, worst sole difference " + (worstSole * 1000f).ToString("0.0", Inv) + " mm");
         Debug.Log("SfAvatarTest OK");
+    }
+
+    // ---- 0.11.48: deep poses with the avatar's correctives and the auto clavicle on / off ----------------------------------------
+    // Each pose is set on her skeleton from her bind pose by turning one segment at a time onto a target direction (FromToRotation at
+    // the joint, so no twist), then baked three ways: A = 0.11.47 (no correctives, no clavicle), B = correctives only, C = both.
+    static string DeepPoses(string outDir, Transform root, Dictionary<string, Transform> bones, List<KeyValuePair<Transform, Matrix4x4>> bindPose,
+                            SkinnedMeshRenderer main, SfMorph.Character her)
+    {
+        var sb = new StringBuilder("# deep poses: A no correctives / no clavicle (0.11.47), B correctives, C correctives + auto clavicle\n");
+        Transform B(string n) { return bones.TryGetValue(n, out var t) ? t : null; }
+        Vector3 P(string n) { return root.InverseTransformPoint(B(n).position); }
+        Vector3 up = (P("Neck_M") - P("Root_M")).normalized, left = (P("Hip_L") - P("Hip_R")); left = (left - Vector3.Dot(left, up) * up).normalized;
+        Vector3 fwd = Vector3.Cross(up, left).normalized;
+        if (Vector3.Dot(P("Toes_L") - P("Ankle_L"), fwd) < 0f) fwd = -fwd;
+        void Aim(string bone, string child, Vector3 dir)
+        {
+            var b = B(bone); var c = B(child);
+            if (b == null || c == null) return;
+            var cur = root.TransformDirection(P(child) - P(bone));
+            b.rotation = Quaternion.FromToRotation(cur, root.TransformDirection(dir.normalized)) * b.rotation;
+        }
+        Vector3 Arm(float elev, float plane, float side) { float e = elev * Mathf.Deg2Rad, p = plane * Mathf.Deg2Rad; var h = left * side * Mathf.Cos(p) + fwd * Mathf.Sin(p); return -up * Mathf.Cos(e) + h * Mathf.Sin(e); }
+        Vector3 Sag(float a) { a *= Mathf.Deg2Rad; return -up * Mathf.Cos(a) + fwd * Mathf.Sin(a); }   // from straight down (0) toward forward
+        Vector3 Bend(string bone, string child, Vector3 toward, float deg)
+        {
+            var u = (P(child) - P(bone)).normalized; var pp = (toward - Vector3.Dot(toward, u) * u).normalized;
+            return u * Mathf.Cos(deg * Mathf.Deg2Rad) + pp * Mathf.Sin(deg * Mathf.Deg2Rad);
+        }
+        float c80 = Mathf.Cos(80 * Mathf.Deg2Rad), s80 = Mathf.Sin(80 * Mathf.Deg2Rad), c40 = Mathf.Cos(40 * Mathf.Deg2Rad), s40 = Mathf.Sin(40 * Mathf.Deg2Rad);
+        var poses = new List<KeyValuePair<string, Action>>
+        {
+            new KeyValuePair<string, Action>("arms_up_150", () => { Aim("Shoulder_L", "Elbow_L", Arm(150, 0, 1)); Aim("Shoulder_R", "Elbow_R", Arm(150, 0, -1)); }),
+            new KeyValuePair<string, Action>("arms_forward_90", () => { Aim("Shoulder_L", "Elbow_L", Arm(90, 90, 1)); Aim("Shoulder_R", "Elbow_R", Arm(90, 90, -1)); }),
+            new KeyValuePair<string, Action>("arms_across_90", () => { Aim("Shoulder_L", "Elbow_L", Arm(90, 135, 1)); Aim("Shoulder_R", "Elbow_R", Arm(90, 135, -1)); }),
+            new KeyValuePair<string, Action>("arms_down_side", () => { Aim("Shoulder_L", "Elbow_L", Arm(5, 0, 1)); Aim("Shoulder_R", "Elbow_R", Arm(5, 0, -1)); }),
+            new KeyValuePair<string, Action>("squat_hip115_knee130", () => { foreach (var s in new[] { "_L", "_R" }) { Aim("Hip" + s, "Knee" + s, Sag(115)); Aim("Knee" + s, "Ankle" + s, Sag(115 - 130)); } }),
+            new KeyValuePair<string, Action>("legs_apart_80", () => { Aim("Hip_L", "Knee_L", -up * c80 + left * s80); Aim("Hip_R", "Knee_R", -up * c80 - left * s80); }),
+            new KeyValuePair<string, Action>("kneel_knee150", () => { foreach (var s in new[] { "_L", "_R" }) { Aim("Hip" + s, "Knee" + s, Sag(80)); Aim("Knee" + s, "Ankle" + s, Sag(80 - 150)); } }),
+            new KeyValuePair<string, Action>("neck_down_40", () => { Aim("Neck_M", "Head_M", up * c40 + fwd * s40); }),
+            new KeyValuePair<string, Action>("elbow_135_wrist_70", () => { foreach (var s in new[] { "_L", "_R" }) { Aim("Elbow" + s, "Wrist" + s, Bend("Elbow" + s, "Wrist" + s, fwd, 135)); Aim("Wrist" + s, "MiddleFinger1" + s, Bend("Wrist" + s, "MiddleFinger1" + s, fwd, 70)); } }),
+        };
+        var restE = Edges(main);
+        foreach (var pz in poses)
+        {
+            var bakes = new List<Vector3>[3];
+            var notes = new string[3];
+            for (int v = 0; v < 3; v++)
+            {
+                foreach (var kv in bindPose) kv.Key.SetPositionAndRotation(kv.Value.GetColumn(3), kv.Value.rotation);
+                pz.Value();
+                SfMorph.Avatar.Correctives.Value = v == 0 ? 0f : 1f;
+                SfMorph.Avatar.AutoClavicle.Value = v == 2;
+                SfMorph.PoseDriver.On.Value = false;
+                SfMorph.PoseDriver.Step(her, 1f); SfMorph.PoseDriver.Step(her, 1f);
+                SfMorph.Avatar.StepCorrectives();
+                var j = SfMorph.Avatar.Jcm;
+                notes[v] = j != null ? j.Summary(0.05f) : "no correctives";
+                if (v == 2) { var o = SfMorph.PoseDriver.ScapulaOffsetDeg; notes[v] += "; scapula L elev " + o[0].x.ToString("0.0", Inv) + " prot " + o[0].y.ToString("0.0", Inv) + ", R elev " + o[1].x.ToString("0.0", Inv); }
+                bakes[v] = Bake(new[] { main }, root);
+                var e = Edges(main);
+                var ratio = e.Select((len, i) => restE[i] > 1e-5f ? len / restE[i] : 1f).OrderBy(x => x).ToArray();
+                notes[v] += "; edges x" + ratio[(int)(ratio.Length * 0.001f)].ToString("0.00", Inv) + " .. x" + ratio[(int)(ratio.Length * 0.999f)].ToString("0.00", Inv);
+                WriteObj(Path.Combine(outDir, "deep_" + pz.Key + "_" + "ABC"[v] + ".obj"), new[] { main }, bakes[v]);
+            }
+            float dB = 0f, dC = 0f;
+            for (int i = 0; i < bakes[0].Count; i++) { dB = Mathf.Max(dB, (bakes[1][i] - bakes[0][i]).magnitude); dC = Mathf.Max(dC, (bakes[2][i] - bakes[0][i]).magnitude); }
+            sb.Append(pz.Key).Append(": correctives move the skin up to ").Append((dB * 1000f).ToString("0", Inv)).Append(" mm, with the clavicle ").Append((dC * 1000f).ToString("0", Inv)).Append(" mm\n")
+              .Append("  A ").Append(notes[0]).Append("\n  B ").Append(notes[1]).Append("\n  C ").Append(notes[2]).Append("\n");
+        }
+        foreach (var kv in bindPose) kv.Key.SetPositionAndRotation(kv.Value.GetColumn(3), kv.Value.rotation);
+        SfMorph.Avatar.Correctives.Value = 1f; SfMorph.Avatar.AutoClavicle.Value = true;
+        SfMorph.PoseDriver.Release();
+        SfMorph.Avatar.StepCorrectives();
+        return sb.ToString();
+    }
+
+    // the avatar's main mesh at her bind pose as a game-style export (sfio.read_game_export): one group per surface
+    static void WriteExport(string dir, SkinnedMeshRenderer r, string skeleton)
+    {
+        Directory.CreateDirectory(dir);
+        var m = r.sharedMesh;
+        string name = "avatar_" + Regex.Replace(m.name.Replace(" (on her)", ""), "[^A-Za-z0-9]+", "_").Trim('_');
+        var v = m.vertices; var uv = m.uv; var mats = r.sharedMaterials;
+        var sb = new StringBuilder("# " + m.name + " at her bind pose, her root's space\n");
+        foreach (var p in v) sb.Append("v ").Append(p.x.ToString(Inv)).Append(' ').Append(p.y.ToString(Inv)).Append(' ').Append(p.z.ToString(Inv)).Append('\n');
+        foreach (var t in uv) sb.Append("vt ").Append(t.x.ToString(Inv)).Append(' ').Append(t.y.ToString(Inv)).Append('\n');
+        var names = new List<string>();
+        for (int s = 0; s < m.subMeshCount; s++)
+        {
+            string g = s < mats.Length && mats[s] != null ? mats[s].name : "sub" + s;
+            if (g.StartsWith("SfAvatar ")) g = g.Substring(9);
+            g = Regex.Replace(g, "\\s+", "_");
+            names.Add(g);
+            sb.Append("g ").Append(g).Append('\n');
+            var t = m.GetTriangles(s);
+            for (int i = 0; i < t.Length; i += 3) sb.Append("f ").Append(t[i] + 1).Append('/').Append(t[i] + 1).Append(' ').Append(t[i + 1] + 1).Append('/').Append(t[i + 1] + 1).Append(' ').Append(t[i + 2] + 1).Append('/').Append(t[i + 2] + 1).Append('\n');
+        }
+        File.WriteAllText(Path.Combine(dir, name + ".obj"), sb.ToString());
+        var sk = new StringBuilder("# bones\nbones " + r.bones.Length + "\n");
+        var bp = m.bindposes;
+        for (int b = 0; b < r.bones.Length; b++)
+        {
+            sk.Append(b).Append(' ').Append(r.bones[b].name);
+            for (int k = 0; k < 16; k++) sk.Append(' ').Append(bp[b][k / 4, k % 4].ToString(Inv));
+            sk.Append('\n');
+        }
+        var bw = m.boneWeights;
+        sk.Append("weights ").Append(bw.Length).Append('\n');
+        foreach (var w in bw) sk.Append(w.boneIndex0).Append(' ').Append(w.weight0.ToString(Inv)).Append(' ').Append(w.boneIndex1).Append(' ').Append(w.weight1.ToString(Inv)).Append(' ')
+                                .Append(w.boneIndex2).Append(' ').Append(w.weight2.ToString(Inv)).Append(' ').Append(w.boneIndex3).Append(' ').Append(w.weight3.ToString(Inv)).Append('\n');
+        File.WriteAllText(Path.Combine(dir, name + ".skin.txt"), sk.ToString());
+        File.WriteAllText(Path.Combine(dir, "meshes.txt"), "# mesh\trenderer\tvertices\tsubmeshes\tmaterials\tread from\n" + name + "\t" + r.name + "\t" + v.Length + "\t" + m.subMeshCount + "\t" + string.Join(";", names) + ";\tCPU\n");
+        File.Copy(skeleton, Path.Combine(dir, "skeleton.txt"), true);
+        Debug.Log("SfAvatarTest: export " + dir + ": " + name + " " + v.Length + " vertices, surfaces " + string.Join(", ", names));
     }
 
     // every renderer baked into her root's space, vertices in renderer order

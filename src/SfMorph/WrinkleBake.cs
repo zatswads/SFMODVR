@@ -22,11 +22,20 @@ namespace SfMorph
 
         public int Count { get { return RegionName.Count; } }
 
-        // texel of uv (nearest, clamped)
+        // texel of uv (nearest, clamped). 0.11.48: a UV in another UDIM tile (an avatar's sheets: Genesis 9's Body is tile 1, Legs 2,
+        // Arms 3, each its own texture) reads this sheet's layout at its place inside the tile, as the material samples its texture
         public Color32 At(Vector2 uv)
         {
+            uv = InTile(uv);
             int x = Mathf.Clamp((int)(uv.x * W), 0, W - 1), y = Mathf.Clamp((int)(uv.y * H), 0, H - 1);
             return Px[y * W + x];
+        }
+
+        public static Vector2 InTile(Vector2 uv)
+        {
+            if (uv.x < 0f || uv.x > 1f) uv.x -= Mathf.Floor(uv.x);
+            if (uv.y < 0f || uv.y > 1f) uv.y -= Mathf.Floor(uv.y);
+            return uv;
         }
 
         // Parses wrinkle_layouts.txt and finds each layout's two textures through load(name); bad lines are skipped with a note.
@@ -293,8 +302,10 @@ namespace SfMorph
             if (shapes > 0)
             {
                 Vector3[] dv0 = null, dv1 = null;
+                var layout = MorphState.ShapeLayout(m);   // 0.11.48: the neutral leaves the joint correctives out (they follow the pose)
                 for (int k = 0; k < shapes; k++)
                 {
+                    if (Wrinkles.IsJcm(layout, k)) continue;
                     float w = r.GetBlendShapeWeight(k);
                     if (Mathf.Abs(w) < 1e-3f) continue;
                     int fc = m.GetBlendShapeFrameCount(k);

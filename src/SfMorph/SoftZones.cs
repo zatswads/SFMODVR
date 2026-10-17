@@ -358,7 +358,8 @@ namespace SfMorph
         {
             foreach (var kv in _rs)
                 if (kv.Key != null && kv.Value.Used && kv.Value.Base != null && kv.Value.Base.blendShapeCount > 0)
-                    return IsMorphClone(kv.Key.sharedMesh) && MorphState.ShapeLayout(kv.Key.sharedMesh).Count > 0 ? MorphState.NonJcmSum(kv.Key) : kv.Key.GetBlendShapeWeight(0) / 100f;
+                    // (0.11.48: any mesh with our shape names, the avatar's correctives too: those follow the pose, never the rest shape)
+                    return MorphState.ShapeLayout(kv.Key.sharedMesh).Count > 0 ? MorphState.NonJcmSum(kv.Key) : kv.Key.GetBlendShapeWeight(0) / 100f;
             return 0f;
         }
 

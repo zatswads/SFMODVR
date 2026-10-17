@@ -1,4 +1,4 @@
-<#
+﻿<#
 SF Avatar Import: any character source -> an avatar for SF Body Morphs' avatar replacement mode (docs/SOURCES.md), in one go.
 Double-click "SF Avatar Import.cmd" (next to this script) for the window, or run it without a window:
 
@@ -353,7 +353,8 @@ function Invoke-Daz($cfg, [string]$duf) {
     Remove-Item "$fbx.status.txt" -ErrorAction SilentlyContinue
     Write-Host "DAZ Studio exports $([IO.Path]::GetFileName($duf)) (it opens, exports and closes) ..."
     $dsa = (Resolve-Path (Join-Path $here '..\sources\daz_export.dsa')).Path
-    $proc = Start-Process -FilePath $cfg.Daz -ArgumentList @('-scriptArg', "`"$duf`"", '-scriptArg', "`"$fbx`"", "`"$dsa`"") -PassThru
+    # "morphs": the figure's joint correctives come along as blend shapes (Avatar.cs drives them by DAZ's own formulas)
+    $proc = Start-Process -FilePath $cfg.Daz -ArgumentList @('-scriptArg', "`"$duf`"", '-scriptArg', "`"$fbx`"", '-scriptArg', 'morphs', "`"$dsa`"") -PassThru
     $t0 = Get-Date
     while (-not $proc.HasExited -and -not (Test-Path "$fbx.status.txt") -and ((Get-Date) - $t0).TotalMinutes -lt 10) { Start-Sleep -Seconds 2 }
     if (-not (Test-Path "$fbx.status.txt")) { throw 'DAZ Studio did not finish in 10 minutes (a dialog is probably open in its window: missing files, login)' }
@@ -362,6 +363,13 @@ function Invoke-Daz($cfg, [string]$duf) {
     $st = (Get-Content "$fbx.status.txt" -Raw).Trim()
     Write-Host "  DAZ: $st"
     if (-not $st.StartsWith('OK') -or -not (Test-Path $fbx)) { throw "the DAZ export failed: $st" }
+    # the correctives' drivers (DAZ's formulas in the figure's .dsf files) -> <fbx>.correctives.txt, which build.ps1 ships with the bundle
+    if (Test-Path "$fbx.morphs.txt") {
+        $bpy = Get-ChildItem (Split-Path $cfg.Blender) -Recurse -Filter python.exe -Depth 3 -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '\\python\\bin\\' } | Select-Object -First 1
+        if ($bpy) {
+            & $bpy.FullName (Join-Path $here '..\sources\daz_correctives.py') "$fbx.morphs.txt" "$fbx.correctives.txt" 2>&1 | ForEach-Object { Write-Host "  $_" }
+        } else { Write-Host "  no Python next to Blender: joint correctives exported without drivers (they stay off)" }
+    }
     return $fbx
 }
 

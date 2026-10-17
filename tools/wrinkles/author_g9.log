@@ -1,0 +1,810 @@
+avatar export: C:/Users/rings/AppData/Local/Temp/claude/C--Users-rings-Claude-Projects-Modding-SFMODVR--claude-worktrees-elated-cannon-2dfc96/8bb14319-f4eb-4c52-8f4c-0fd5d26b0197/scratchpad/drive/export
+avatar g9: avatar_Genesis9_Shape, 27586 vertices, surfaces Fingernails, Toenails, Legs, Mouth_Cavity, Arms, Head, Body
+g9head: surface Head, UV tile (0, 0) taken off
+g9body: surface Body, UV tile (1, 0) taken off
+g9arms: surface Arms, UV tile (3, 0) taken off
+g9legs: surface Legs, UV tile (2, 0) taken off
+belly: navel at y 1.006
+body: 54 creases in 17 regions
+micro lines: 190 around 54 folds
+face: 34 folds and 28 bunches in 14 regions
+micro lines: 130 around 34 folds
+g9head: 10932 triangles, rasterising 2048x2048
+g9head: 78.3% of the texels on her skin
+  g9head primitive 192 (elbow_in_L): no texels near it
+  g9head primitive 193 (elbow_in_L): no texels near it
+  g9head primitive 194 (elbow_back_L): no texels near it
+  g9head primitive 195 (elbow_back_L): no texels near it
+  g9head primitive 196 (elbow_back_L): no texels near it
+  g9head primitive 197 (knee_back_L): no texels near it
+  g9head primitive 198 (knee_back_L): no texels near it
+  g9head primitive 199 (hipfold_L): no texels near it
+  g9head primitive 200 (hipfold_L): no texels near it
+  g9head primitive 201 (hipfold_L): no texels near it
+  g9head primitive 202 (hipfold_L): no texels near it
+  g9head primitive 203 (hipfold_L): no texels near it
+  g9head primitive 204 (hipfold_L): no texels near it
+  g9head primitive 205 (armpit_L): no texels near it
+  g9head primitive 206 (armpit_L): no texels near it
+  g9head primitive 207 (armpit_L): no texels near it
+  g9head primitive 208 (elbow_in_R): no texels near it
+  g9head primitive 209 (elbow_in_R): no texels near it
+  g9head primitive 210 (elbow_back_R): no texels near it
+  g9head primitive 211 (elbow_back_R): no texels near it
+  g9head primitive 212 (elbow_back_R): no texels near it
+  g9head primitive 213 (knee_back_R): no texels near it
+  g9head primitive 214 (knee_back_R): no texels near it
+  g9head primitive 215 (hipfold_R): no texels near it
+  g9head primitive 216 (hipfold_R): no texels near it
+  g9head primitive 217 (hipfold_R): no texels near it
+  g9head primitive 218 (hipfold_R): no texels near it
+  g9head primitive 219 (hipfold_R): no texels near it
+  g9head primitive 220 (armpit_R): no texels near it
+  g9head primitive 221 (armpit_R): no texels near it
+  g9head primitive 222 (armpit_R): no texels near it
+  g9head primitive 226 (belly): no texels near it
+  g9head primitive 227 (belly): no texels near it
+  g9head primitive 228 (flank_L): no texels near it
+  g9head primitive 229 (flank_L): no texels near it
+  g9head primitive 230 (flank_L): no texels near it
+  g9head primitive 231 (flank_L): no texels near it
+  g9head primitive 232 (sidewaist_L): no texels near it
+  g9head primitive 233 (sidewaist_L): no texels near it
+  g9head primitive 234 (sidewaist_L): no texels near it
+  g9head primitive 235 (flank_R): no texels near it
+  g9head primitive 236 (flank_R): no texels near it
+  g9head primitive 237 (flank_R): no texels near it
+  g9head primitive 238 (flank_R): no texels near it
+  g9head primitive 239 (flank_R): no texels near it
+  g9head primitive 240 (sidewaist_R): no texels near it
+  g9head primitive 241 (sidewaist_R): no texels near it
+  g9head primitive 242 (sidewaist_R): no texels near it
+  g9head primitive 243 (sidewaist_R): no texels near it
+  g9head primitive 244 (upperbelly): no texels near it
+  g9head primitive 245 (upperbelly): no texels near it
+  g9head primitive 246 (elbow_in_L): no texels near it
+  g9head primitive 247 (elbow_in_L): no texels near it
+  g9head primitive 248 (elbow_in_L): no texels near it
+  g9head primitive 249 (elbow_in_L): no texels near it
+  g9head primitive 250 (elbow_in_L): no texels near it
+  g9head primitive 251 (elbow_in_L): no texels near it
+  g9head primitive 252 (elbow_in_L): no texels near it
+  g9head primitive 253 (elbow_in_L): no texels near it
+  g9head primitive 254 (elbow_in_L): no texels near it
+  g9head primitive 255 (elbow_in_L): no texels near it
+  g9head primitive 256 (elbow_back_L): no texels near it
+  g9head primitive 257 (elbow_back_L): no texels near it
+  g9head primitive 258 (elbow_back_L): no texels near it
+  g9head primitive 259 (elbow_back_L): no texels near it
+  g9head primitive 260 (elbow_back_L): no texels near it
+  g9head primitive 261 (elbow_back_L): no texels near it
+  g9head primitive 262 (elbow_back_L): no texels near it
+  g9head primitive 263 (elbow_back_L): no texels near it
+  g9head primitive 264 (elbow_back_L): no texels near it
+  g9head primitive 265 (elbow_back_L): no texels near it
+  g9head primitive 266 (elbow_back_L): no texels near it
+  g9head primitive 267 (elbow_back_L): no texels near it
+  g9head primitive 268 (elbow_back_L): no texels near it
+  g9head primitive 269 (elbow_back_L): no texels near it
+  g9head primitive 270 (elbow_back_L): no texels near it
+  g9head primitive 271 (knee_back_L): no texels near it
+  g9head primitive 272 (knee_back_L): no texels near it
+  g9head primitive 273 (knee_back_L): no texels near it
+  g9head primitive 274 (knee_back_L): no texels near it
+  g9head primitive 275 (knee_back_L): no texels near it
+  g9head primitive 276 (knee_back_L): no texels near it
+  g9head primitive 277 (knee_back_L): no texels near it
+  g9head primitive 278 (knee_back_L): no texels near it
+  g9head primitive 279 (knee_back_L): no texels near it
+  g9head primitive 280 (knee_back_L): no texels near it
+  g9head primitive 281 (hipfold_L): no texels near it
+  g9head primitive 282 (hipfold_L): no texels near it
+  g9head primitive 283 (hipfold_L): no texels near it
+  g9head primitive 284 (hipfold_L): no texels near it
+  g9head primitive 285 (hipfold_L): no texels near it
+  g9head primitive 286 (hipfold_L): no texels near it
+  g9head primitive 287 (hipfold_L): no texels near it
+  g9head primitive 288 (armpit_L): no texels near it
+  g9head primitive 289 (armpit_L): no texels near it
+  g9head primitive 290 (armpit_L): no texels near it
+  g9head primitive 291 (armpit_L): no texels near it
+  g9head primitive 292 (armpit_L): no texels near it
+  g9head primitive 293 (armpit_L): no texels near it
+  g9head primitive 294 (armpit_L): no texels near it
+  g9head primitive 295 (armpit_L): no texels near it
+  g9head primitive 296 (armpit_L): no texels near it
+  g9head primitive 297 (armpit_L): no texels near it
+  g9head primitive 298 (armpit_L): no texels near it
+  g9head primitive 299 (armpit_L): no texels near it
+  g9head primitive 300 (armpit_L): no texels near it
+  g9head primitive 301 (armpit_L): no texels near it
+  g9head primitive 302 (armpit_L): no texels near it
+  g9head primitive 303 (elbow_in_R): no texels near it
+  g9head primitive 304 (elbow_in_R): no texels near it
+  g9head primitive 305 (elbow_in_R): no texels near it
+  g9head primitive 306 (elbow_in_R): no texels near it
+  g9head primitive 307 (elbow_in_R): no texels near it
+  g9head primitive 308 (elbow_in_R): no texels near it
+  g9head primitive 309 (elbow_in_R): no texels near it
+  g9head primitive 310 (elbow_in_R): no texels near it
+  g9head primitive 311 (elbow_in_R): no texels near it
+  g9head primitive 312 (elbow_in_R): no texels near it
+  g9head primitive 313 (elbow_back_R): no texels near it
+  g9head primitive 314 (elbow_back_R): no texels near it
+  g9head primitive 315 (elbow_back_R): no texels near it
+  g9head primitive 316 (elbow_back_R): no texels near it
+  g9head primitive 317 (elbow_back_R): no texels near it
+  g9head primitive 318 (elbow_back_R): no texels near it
+  g9head primitive 319 (elbow_back_R): no texels near it
+  g9head primitive 320 (elbow_back_R): no texels near it
+  g9head primitive 321 (elbow_back_R): no texels near it
+  g9head primitive 322 (elbow_back_R): no texels near it
+  g9head primitive 323 (elbow_back_R): no texels near it
+  g9head primitive 324 (elbow_back_R): no texels near it
+  g9head primitive 325 (elbow_back_R): no texels near it
+  g9head primitive 326 (elbow_back_R): no texels near it
+  g9head primitive 327 (elbow_back_R): no texels near it
+  g9head primitive 328 (knee_back_R): no texels near it
+  g9head primitive 329 (knee_back_R): no texels near it
+  g9head primitive 330 (knee_back_R): no texels near it
+  g9head primitive 331 (knee_back_R): no texels near it
+  g9head primitive 332 (knee_back_R): no texels near it
+  g9head primitive 333 (knee_back_R): no texels near it
+  g9head primitive 334 (knee_back_R): no texels near it
+  g9head primitive 335 (knee_back_R): no texels near it
+  g9head primitive 336 (knee_back_R): no texels near it
+  g9head primitive 337 (knee_back_R): no texels near it
+  g9head primitive 338 (hipfold_R): no texels near it
+  g9head primitive 339 (hipfold_R): no texels near it
+  g9head primitive 340 (hipfold_R): no texels near it
+  g9head primitive 341 (hipfold_R): no texels near it
+  g9head primitive 342 (hipfold_R): no texels near it
+  g9head primitive 343 (hipfold_R): no texels near it
+  g9head primitive 344 (armpit_R): no texels near it
+  g9head primitive 345 (armpit_R): no texels near it
+  g9head primitive 346 (armpit_R): no texels near it
+  g9head primitive 347 (armpit_R): no texels near it
+  g9head primitive 348 (armpit_R): no texels near it
+  g9head primitive 349 (armpit_R): no texels near it
+  g9head primitive 350 (armpit_R): no texels near it
+  g9head primitive 351 (armpit_R): no texels near it
+  g9head primitive 352 (armpit_R): no texels near it
+  g9head primitive 353 (armpit_R): no texels near it
+  g9head primitive 354 (armpit_R): no texels near it
+  g9head primitive 355 (armpit_R): no texels near it
+  g9head primitive 356 (armpit_R): no texels near it
+  g9head primitive 357 (armpit_R): no texels near it
+  g9head primitive 358 (armpit_R): no texels near it
+  g9head primitive 374 (belly): no texels near it
+  g9head primitive 375 (belly): no texels near it
+  g9head primitive 376 (belly): no texels near it
+  g9head primitive 377 (belly): no texels near it
+  g9head primitive 378 (belly): no texels near it
+  g9head primitive 379 (belly): no texels near it
+  g9head primitive 380 (belly): no texels near it
+  g9head primitive 381 (belly): no texels near it
+  g9head primitive 382 (belly): no texels near it
+  g9head primitive 383 (belly): no texels near it
+  g9head primitive 384 (flank_L): no texels near it
+  g9head primitive 385 (flank_L): no texels near it
+  g9head primitive 386 (flank_L): no texels near it
+  g9head primitive 387 (flank_L): no texels near it
+  g9head primitive 388 (flank_L): no texels near it
+  g9head primitive 389 (flank_L): no texels near it
+  g9head primitive 390 (flank_L): no texels near it
+  g9head primitive 391 (flank_L): no texels near it
+  g9head primitive 392 (flank_L): no texels near it
+  g9head primitive 393 (flank_L): no texels near it
+  g9head primitive 394 (sidewaist_L): no texels near it
+  g9head primitive 395 (sidewaist_L): no texels near it
+  g9head primitive 396 (sidewaist_L): no texels near it
+  g9head primitive 397 (sidewaist_L): no texels near it
+  g9head primitive 398 (sidewaist_L): no texels near it
+  g9head primitive 399 (sidewaist_L): no texels near it
+  g9head primitive 400 (sidewaist_L): no texels near it
+  g9head primitive 401 (sidewaist_L): no texels near it
+  g9head primitive 402 (sidewaist_L): no texels near it
+  g9head primitive 403 (sidewaist_L): no texels near it
+  g9head primitive 404 (sidewaist_L): no texels near it
+  g9head primitive 405 (sidewaist_L): no texels near it
+  g9head primitive 406 (sidewaist_L): no texels near it
+  g9head primitive 407 (sidewaist_L): no texels near it
+  g9head primitive 408 (flank_R): no texels near it
+  g9head primitive 409 (flank_R): no texels near it
+  g9head primitive 410 (flank_R): no texels near it
+  g9head primitive 411 (flank_R): no texels near it
+  g9head primitive 412 (flank_R): no texels near it
+  g9head primitive 413 (flank_R): no texels near it
+  g9head primitive 414 (flank_R): no texels near it
+  g9head primitive 415 (flank_R): no texels near it
+  g9head primitive 416 (flank_R): no texels near it
+  g9head primitive 417 (flank_R): no texels near it
+  g9head primitive 418 (sidewaist_R): no texels near it
+  g9head primitive 419 (sidewaist_R): no texels near it
+  g9head primitive 420 (sidewaist_R): no texels near it
+  g9head primitive 421 (sidewaist_R): no texels near it
+  g9head primitive 422 (sidewaist_R): no texels near it
+  g9head primitive 423 (sidewaist_R): no texels near it
+  g9head primitive 424 (sidewaist_R): no texels near it
+  g9head primitive 425 (sidewaist_R): no texels near it
+  g9head primitive 426 (sidewaist_R): no texels near it
+  g9head primitive 427 (sidewaist_R): no texels near it
+  g9head primitive 428 (sidewaist_R): no texels near it
+  g9head primitive 429 (sidewaist_R): no texels near it
+  g9head primitive 430 (sidewaist_R): no texels near it
+  g9head primitive 431 (sidewaist_R): no texels near it
+  g9head primitive 432 (sidewaist_R): no texels near it
+  g9head primitive 433 (sidewaist_R): no texels near it
+  g9head primitive 434 (sidewaist_R): no texels near it
+  g9head primitive 435 (sidewaist_R): no texels near it
+g9head: relief -0.53 to 1.35 mm, slope max 0.51 (encoded up to 1.5)
+  region  1 glabella         face range 0.04:  56397 texels, relief up to 0.55 mm, cut at its edge 0.06 mm
+  region  2 forehead_L       face range 0.03:  63140 texels, relief up to 0.40 mm, cut at its edge 0.24 mm
+  region  3 crowsfeet_L      face range 0.03:  59961 texels, relief up to 0.50 mm, cut at its edge 0.26 mm
+  region  4 undereye_L       face range 0.03:  13263 texels, relief up to 0.54 mm, cut at its edge 0.28 mm
+  region  5 nasolabial_L     face range 0.03: 118942 texels, relief up to 1.00 mm, cut at its edge 0.13 mm
+  region  6 nose_L           face range 0.03:  25350 texels, relief up to 0.32 mm, cut at its edge 0.18 mm
+  region  7 mouthcorner_L    face range 0.03:  28750 texels, relief up to 0.40 mm, cut at its edge 0.21 mm
+  region  8 forehead_R       face range 0.03:  63096 texels, relief up to 0.37 mm, cut at its edge 0.24 mm
+  region  9 crowsfeet_R      face range 0.03:  64425 texels, relief up to 0.50 mm, cut at its edge 0.24 mm
+  region 10 undereye_R       face range 0.03:  12562 texels, relief up to 0.51 mm, cut at its edge 0.37 mm
+  region 11 nasolabial_R     face range 0.03: 124321 texels, relief up to 1.00 mm, cut at its edge 0.21 mm
+  region 12 nose_R           face range 0.03:  26689 texels, relief up to 0.34 mm, cut at its edge 0.17 mm
+  region 13 mouthcorner_R    face range 0.03:  26713 texels, relief up to 0.40 mm, cut at its edge 0.17 mm
+  region 14 chin             face range 0.03:  74270 texels, relief up to 0.50 mm, cut at its edge 0.01 mm
+  region 15 elbow_in_L       body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 16 elbow_back_L     body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 17 knee_back_L      body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 18 hipfold_L        body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 19 armpit_L         body range 0.25:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 20 elbow_in_R       body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 21 elbow_back_R     body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 22 knee_back_R      body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 23 hipfold_R        body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 24 armpit_R         body range 0.25:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 25 neck             neck range 0.03: 369133 texels, relief up to 0.49 mm, cut at its edge 0.00 mm
+  region 26 belly            body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 27 flank_L          body range 0.12:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 28 sidewaist_L      body range 0.10:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 29 flank_R          body range 0.12:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 30 sidewaist_R      body range 0.10:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 31 upperbelly       body range 0.15:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+face renders: C:\Users\rings\Claude\Projects\Modding\SFMODVR\.claude\worktrees\elated-cannon-2dfc96\tools\wrinkles\preview\wrinkle_face_expressions.png (neutral, brows up, frown, squint, smile, nose scrunch, frown lips); close-ups (neutral | expression, light from above her left): wrinkle_face_closeups.png
+g9body: 7071 triangles, rasterising 2048x2048
+g9body: 63.5% of the texels on her skin
+  g9body primitive 0 (elbow_in_L): no texels near it
+  g9body primitive 1 (elbow_in_L): no texels near it
+  g9body primitive 2 (elbow_back_L): no texels near it
+  g9body primitive 3 (elbow_back_L): no texels near it
+  g9body primitive 4 (elbow_back_L): no texels near it
+  g9body primitive 5 (knee_back_L): no texels near it
+  g9body primitive 6 (knee_back_L): no texels near it
+  g9body primitive 16 (elbow_in_R): no texels near it
+  g9body primitive 17 (elbow_in_R): no texels near it
+  g9body primitive 18 (elbow_back_R): no texels near it
+  g9body primitive 19 (elbow_back_R): no texels near it
+  g9body primitive 20 (elbow_back_R): no texels near it
+  g9body primitive 21 (knee_back_R): no texels near it
+  g9body primitive 22 (knee_back_R): no texels near it
+  g9body primitive 32 (neck): no texels near it
+  g9body primitive 33 (neck): no texels near it
+  g9body primitive 54 (elbow_in_L): no texels near it
+  g9body primitive 55 (elbow_in_L): no texels near it
+  g9body primitive 56 (elbow_in_L): no texels near it
+  g9body primitive 57 (elbow_in_L): no texels near it
+  g9body primitive 58 (elbow_in_L): no texels near it
+  g9body primitive 59 (elbow_in_L): no texels near it
+  g9body primitive 60 (elbow_in_L): no texels near it
+  g9body primitive 61 (elbow_in_L): no texels near it
+  g9body primitive 62 (elbow_in_L): no texels near it
+  g9body primitive 63 (elbow_in_L): no texels near it
+  g9body primitive 64 (elbow_back_L): no texels near it
+  g9body primitive 65 (elbow_back_L): no texels near it
+  g9body primitive 66 (elbow_back_L): no texels near it
+  g9body primitive 67 (elbow_back_L): no texels near it
+  g9body primitive 68 (elbow_back_L): no texels near it
+  g9body primitive 69 (elbow_back_L): no texels near it
+  g9body primitive 70 (elbow_back_L): no texels near it
+  g9body primitive 71 (elbow_back_L): no texels near it
+  g9body primitive 72 (elbow_back_L): no texels near it
+  g9body primitive 73 (elbow_back_L): no texels near it
+  g9body primitive 74 (elbow_back_L): no texels near it
+  g9body primitive 75 (elbow_back_L): no texels near it
+  g9body primitive 76 (elbow_back_L): no texels near it
+  g9body primitive 77 (elbow_back_L): no texels near it
+  g9body primitive 78 (elbow_back_L): no texels near it
+  g9body primitive 79 (knee_back_L): no texels near it
+  g9body primitive 80 (knee_back_L): no texels near it
+  g9body primitive 81 (knee_back_L): no texels near it
+  g9body primitive 82 (knee_back_L): no texels near it
+  g9body primitive 83 (knee_back_L): no texels near it
+  g9body primitive 84 (knee_back_L): no texels near it
+  g9body primitive 85 (knee_back_L): no texels near it
+  g9body primitive 86 (knee_back_L): no texels near it
+  g9body primitive 87 (knee_back_L): no texels near it
+  g9body primitive 88 (knee_back_L): no texels near it
+  g9body primitive 111 (elbow_in_R): no texels near it
+  g9body primitive 112 (elbow_in_R): no texels near it
+  g9body primitive 113 (elbow_in_R): no texels near it
+  g9body primitive 114 (elbow_in_R): no texels near it
+  g9body primitive 115 (elbow_in_R): no texels near it
+  g9body primitive 116 (elbow_in_R): no texels near it
+  g9body primitive 117 (elbow_in_R): no texels near it
+  g9body primitive 118 (elbow_in_R): no texels near it
+  g9body primitive 119 (elbow_in_R): no texels near it
+  g9body primitive 120 (elbow_in_R): no texels near it
+  g9body primitive 121 (elbow_back_R): no texels near it
+  g9body primitive 122 (elbow_back_R): no texels near it
+  g9body primitive 123 (elbow_back_R): no texels near it
+  g9body primitive 124 (elbow_back_R): no texels near it
+  g9body primitive 125 (elbow_back_R): no texels near it
+  g9body primitive 126 (elbow_back_R): no texels near it
+  g9body primitive 127 (elbow_back_R): no texels near it
+  g9body primitive 128 (elbow_back_R): no texels near it
+  g9body primitive 129 (elbow_back_R): no texels near it
+  g9body primitive 130 (elbow_back_R): no texels near it
+  g9body primitive 131 (elbow_back_R): no texels near it
+  g9body primitive 132 (elbow_back_R): no texels near it
+  g9body primitive 133 (elbow_back_R): no texels near it
+  g9body primitive 134 (elbow_back_R): no texels near it
+  g9body primitive 135 (elbow_back_R): no texels near it
+  g9body primitive 136 (knee_back_R): no texels near it
+  g9body primitive 137 (knee_back_R): no texels near it
+  g9body primitive 138 (knee_back_R): no texels near it
+  g9body primitive 139 (knee_back_R): no texels near it
+  g9body primitive 140 (knee_back_R): no texels near it
+  g9body primitive 141 (knee_back_R): no texels near it
+  g9body primitive 142 (knee_back_R): no texels near it
+  g9body primitive 143 (knee_back_R): no texels near it
+  g9body primitive 144 (knee_back_R): no texels near it
+  g9body primitive 145 (knee_back_R): no texels near it
+  g9body primitive 167 (neck): no texels near it
+  g9body primitive 168 (neck): no texels near it
+  g9body primitive 169 (neck): no texels near it
+  g9body primitive 170 (neck): no texels near it
+  g9body primitive 171 (neck): no texels near it
+  g9body primitive 172 (neck): no texels near it
+  g9body primitive 173 (neck): no texels near it
+  g9body primitive 174 (neck): no texels near it
+  g9body primitive 175 (neck): no texels near it
+  g9body primitive 176 (neck): no texels near it
+  g9body primitive 177 (neck): no texels near it
+  g9body primitive 178 (neck): no texels near it
+  g9body primitive 179 (neck): no texels near it
+  g9body primitive 180 (neck): no texels near it
+  g9body primitive 181 (neck): no texels near it
+g9body: relief -1.49 to 0.86 mm, slope max 0.68 (encoded up to 1.5)
+  region  1 elbow_in_L       body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  2 elbow_back_L     body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  3 knee_back_L      body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  4 hipfold_L        body range 0.20: 140891 texels, relief up to 0.96 mm, cut at its edge 0.00 mm
+  region  5 armpit_L         body range 0.25:  38461 texels, relief up to 0.49 mm, cut at its edge 0.00 mm
+  region  6 elbow_in_R       body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  7 elbow_back_R     body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  8 knee_back_R      body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  9 hipfold_R        body range 0.20: 133556 texels, relief up to 0.91 mm, cut at its edge 0.00 mm
+  region 10 armpit_R         body range 0.25:  38470 texels, relief up to 0.46 mm, cut at its edge 0.00 mm
+  region 11 neck             neck range 0.03:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 12 belly            body range 0.20: 188760 texels, relief up to 0.96 mm, cut at its edge 0.08 mm
+  region 13 flank_L          body range 0.12: 134024 texels, relief up to 1.08 mm, cut at its edge 0.00 mm
+  region 14 sidewaist_L      body range 0.10:  40074 texels, relief up to 0.78 mm, cut at its edge 0.10 mm
+  region 15 flank_R          body range 0.12: 142475 texels, relief up to 1.00 mm, cut at its edge 0.00 mm
+  region 16 sidewaist_R      body range 0.10:  42243 texels, relief up to 0.75 mm, cut at its edge 0.21 mm
+  region 17 upperbelly       body range 0.15:  52161 texels, relief up to 0.38 mm, cut at its edge 0.13 mm
+g9arms: 15416 triangles, rasterising 2048x2048
+g9arms: 45.5% of the texels on her skin
+  g9arms primitive 5 (knee_back_L): no texels near it
+  g9arms primitive 6 (knee_back_L): no texels near it
+  g9arms primitive 7 (hipfold_L): no texels near it
+  g9arms primitive 8 (hipfold_L): no texels near it
+  g9arms primitive 9 (hipfold_L): no texels near it
+  g9arms primitive 10 (hipfold_L): no texels near it
+  g9arms primitive 11 (hipfold_L): no texels near it
+  g9arms primitive 12 (hipfold_L): no texels near it
+  g9arms primitive 21 (knee_back_R): no texels near it
+  g9arms primitive 22 (knee_back_R): no texels near it
+  g9arms primitive 23 (hipfold_R): no texels near it
+  g9arms primitive 24 (hipfold_R): no texels near it
+  g9arms primitive 25 (hipfold_R): no texels near it
+  g9arms primitive 26 (hipfold_R): no texels near it
+  g9arms primitive 27 (hipfold_R): no texels near it
+  g9arms primitive 31 (neck): no texels near it
+  g9arms primitive 32 (neck): no texels near it
+  g9arms primitive 33 (neck): no texels near it
+  g9arms primitive 34 (belly): no texels near it
+  g9arms primitive 35 (belly): no texels near it
+  g9arms primitive 36 (flank_L): no texels near it
+  g9arms primitive 37 (flank_L): no texels near it
+  g9arms primitive 38 (flank_L): no texels near it
+  g9arms primitive 39 (flank_L): no texels near it
+  g9arms primitive 40 (sidewaist_L): no texels near it
+  g9arms primitive 41 (sidewaist_L): no texels near it
+  g9arms primitive 42 (sidewaist_L): no texels near it
+  g9arms primitive 43 (flank_R): no texels near it
+  g9arms primitive 44 (flank_R): no texels near it
+  g9arms primitive 45 (flank_R): no texels near it
+  g9arms primitive 46 (flank_R): no texels near it
+  g9arms primitive 47 (flank_R): no texels near it
+  g9arms primitive 48 (sidewaist_R): no texels near it
+  g9arms primitive 49 (sidewaist_R): no texels near it
+  g9arms primitive 50 (sidewaist_R): no texels near it
+  g9arms primitive 51 (sidewaist_R): no texels near it
+  g9arms primitive 52 (upperbelly): no texels near it
+  g9arms primitive 53 (upperbelly): no texels near it
+  g9arms primitive 79 (knee_back_L): no texels near it
+  g9arms primitive 80 (knee_back_L): no texels near it
+  g9arms primitive 81 (knee_back_L): no texels near it
+  g9arms primitive 82 (knee_back_L): no texels near it
+  g9arms primitive 83 (knee_back_L): no texels near it
+  g9arms primitive 84 (knee_back_L): no texels near it
+  g9arms primitive 85 (knee_back_L): no texels near it
+  g9arms primitive 86 (knee_back_L): no texels near it
+  g9arms primitive 87 (knee_back_L): no texels near it
+  g9arms primitive 88 (knee_back_L): no texels near it
+  g9arms primitive 89 (hipfold_L): no texels near it
+  g9arms primitive 90 (hipfold_L): no texels near it
+  g9arms primitive 91 (hipfold_L): no texels near it
+  g9arms primitive 92 (hipfold_L): no texels near it
+  g9arms primitive 93 (hipfold_L): no texels near it
+  g9arms primitive 94 (hipfold_L): no texels near it
+  g9arms primitive 95 (hipfold_L): no texels near it
+  g9arms primitive 97 (armpit_L): no texels near it
+  g9arms primitive 98 (armpit_L): no texels near it
+  g9arms primitive 99 (armpit_L): no texels near it
+  g9arms primitive 100 (armpit_L): no texels near it
+  g9arms primitive 104 (armpit_L): no texels near it
+  g9arms primitive 105 (armpit_L): no texels near it
+  g9arms primitive 136 (knee_back_R): no texels near it
+  g9arms primitive 137 (knee_back_R): no texels near it
+  g9arms primitive 138 (knee_back_R): no texels near it
+  g9arms primitive 139 (knee_back_R): no texels near it
+  g9arms primitive 140 (knee_back_R): no texels near it
+  g9arms primitive 141 (knee_back_R): no texels near it
+  g9arms primitive 142 (knee_back_R): no texels near it
+  g9arms primitive 143 (knee_back_R): no texels near it
+  g9arms primitive 144 (knee_back_R): no texels near it
+  g9arms primitive 145 (knee_back_R): no texels near it
+  g9arms primitive 146 (hipfold_R): no texels near it
+  g9arms primitive 147 (hipfold_R): no texels near it
+  g9arms primitive 148 (hipfold_R): no texels near it
+  g9arms primitive 149 (hipfold_R): no texels near it
+  g9arms primitive 150 (hipfold_R): no texels near it
+  g9arms primitive 151 (hipfold_R): no texels near it
+  g9arms primitive 152 (armpit_R): no texels near it
+  g9arms primitive 154 (armpit_R): no texels near it
+  g9arms primitive 155 (armpit_R): no texels near it
+  g9arms primitive 156 (armpit_R): no texels near it
+  g9arms primitive 159 (armpit_R): no texels near it
+  g9arms primitive 160 (armpit_R): no texels near it
+  g9arms primitive 161 (armpit_R): no texels near it
+  g9arms primitive 167 (neck): no texels near it
+  g9arms primitive 168 (neck): no texels near it
+  g9arms primitive 169 (neck): no texels near it
+  g9arms primitive 170 (neck): no texels near it
+  g9arms primitive 171 (neck): no texels near it
+  g9arms primitive 172 (neck): no texels near it
+  g9arms primitive 173 (neck): no texels near it
+  g9arms primitive 174 (neck): no texels near it
+  g9arms primitive 175 (neck): no texels near it
+  g9arms primitive 176 (neck): no texels near it
+  g9arms primitive 177 (neck): no texels near it
+  g9arms primitive 178 (neck): no texels near it
+  g9arms primitive 179 (neck): no texels near it
+  g9arms primitive 180 (neck): no texels near it
+  g9arms primitive 181 (neck): no texels near it
+  g9arms primitive 182 (belly): no texels near it
+  g9arms primitive 183 (belly): no texels near it
+  g9arms primitive 184 (belly): no texels near it
+  g9arms primitive 185 (belly): no texels near it
+  g9arms primitive 186 (belly): no texels near it
+  g9arms primitive 187 (belly): no texels near it
+  g9arms primitive 188 (belly): no texels near it
+  g9arms primitive 189 (belly): no texels near it
+  g9arms primitive 190 (belly): no texels near it
+  g9arms primitive 191 (belly): no texels near it
+  g9arms primitive 192 (flank_L): no texels near it
+  g9arms primitive 193 (flank_L): no texels near it
+  g9arms primitive 194 (flank_L): no texels near it
+  g9arms primitive 195 (flank_L): no texels near it
+  g9arms primitive 196 (flank_L): no texels near it
+  g9arms primitive 197 (flank_L): no texels near it
+  g9arms primitive 198 (flank_L): no texels near it
+  g9arms primitive 199 (flank_L): no texels near it
+  g9arms primitive 200 (flank_L): no texels near it
+  g9arms primitive 201 (flank_L): no texels near it
+  g9arms primitive 202 (sidewaist_L): no texels near it
+  g9arms primitive 203 (sidewaist_L): no texels near it
+  g9arms primitive 204 (sidewaist_L): no texels near it
+  g9arms primitive 205 (sidewaist_L): no texels near it
+  g9arms primitive 206 (sidewaist_L): no texels near it
+  g9arms primitive 207 (sidewaist_L): no texels near it
+  g9arms primitive 208 (sidewaist_L): no texels near it
+  g9arms primitive 209 (sidewaist_L): no texels near it
+  g9arms primitive 210 (sidewaist_L): no texels near it
+  g9arms primitive 211 (sidewaist_L): no texels near it
+  g9arms primitive 212 (sidewaist_L): no texels near it
+  g9arms primitive 213 (sidewaist_L): no texels near it
+  g9arms primitive 214 (sidewaist_L): no texels near it
+  g9arms primitive 215 (sidewaist_L): no texels near it
+  g9arms primitive 216 (flank_R): no texels near it
+  g9arms primitive 217 (flank_R): no texels near it
+  g9arms primitive 218 (flank_R): no texels near it
+  g9arms primitive 219 (flank_R): no texels near it
+  g9arms primitive 220 (flank_R): no texels near it
+  g9arms primitive 221 (flank_R): no texels near it
+  g9arms primitive 222 (flank_R): no texels near it
+  g9arms primitive 223 (flank_R): no texels near it
+  g9arms primitive 224 (flank_R): no texels near it
+  g9arms primitive 225 (flank_R): no texels near it
+  g9arms primitive 226 (sidewaist_R): no texels near it
+  g9arms primitive 227 (sidewaist_R): no texels near it
+  g9arms primitive 228 (sidewaist_R): no texels near it
+  g9arms primitive 229 (sidewaist_R): no texels near it
+  g9arms primitive 230 (sidewaist_R): no texels near it
+  g9arms primitive 231 (sidewaist_R): no texels near it
+  g9arms primitive 232 (sidewaist_R): no texels near it
+  g9arms primitive 233 (sidewaist_R): no texels near it
+  g9arms primitive 234 (sidewaist_R): no texels near it
+  g9arms primitive 235 (sidewaist_R): no texels near it
+  g9arms primitive 236 (sidewaist_R): no texels near it
+  g9arms primitive 237 (sidewaist_R): no texels near it
+  g9arms primitive 238 (sidewaist_R): no texels near it
+  g9arms primitive 239 (sidewaist_R): no texels near it
+  g9arms primitive 240 (sidewaist_R): no texels near it
+  g9arms primitive 241 (sidewaist_R): no texels near it
+  g9arms primitive 242 (sidewaist_R): no texels near it
+  g9arms primitive 243 (sidewaist_R): no texels near it
+g9arms: relief -1.09 to 0.22 mm, slope max 0.83 (encoded up to 1.5)
+  region  1 elbow_in_L       body range 0.20:  54643 texels, relief up to 0.78 mm, cut at its edge 0.00 mm
+  region  2 elbow_back_L     body range 0.20:  31399 texels, relief up to 0.39 mm, cut at its edge 0.00 mm
+  region  3 knee_back_L      body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  4 hipfold_L        body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  5 armpit_L         body range 0.25:  25662 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  6 elbow_in_R       body range 0.20:  55007 texels, relief up to 0.78 mm, cut at its edge 0.00 mm
+  region  7 elbow_back_R     body range 0.20:  32483 texels, relief up to 0.39 mm, cut at its edge 0.00 mm
+  region  8 knee_back_R      body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  9 hipfold_R        body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 10 armpit_R         body range 0.25:  25648 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 11 neck             neck range 0.03:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 12 belly            body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 13 flank_L          body range 0.12:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 14 sidewaist_L      body range 0.10:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 15 flank_R          body range 0.12:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 16 sidewaist_R      body range 0.10:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 17 upperbelly       body range 0.15:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+g9legs: 12772 triangles, rasterising 2048x2048
+g9legs: 61.5% of the texels on her skin
+  g9legs primitive 0 (elbow_in_L): no texels near it
+  g9legs primitive 1 (elbow_in_L): no texels near it
+  g9legs primitive 2 (elbow_back_L): no texels near it
+  g9legs primitive 3 (elbow_back_L): no texels near it
+  g9legs primitive 4 (elbow_back_L): no texels near it
+  g9legs primitive 9 (hipfold_L): no texels near it
+  g9legs primitive 10 (hipfold_L): no texels near it
+  g9legs primitive 11 (hipfold_L): no texels near it
+  g9legs primitive 12 (hipfold_L): no texels near it
+  g9legs primitive 13 (armpit_L): no texels near it
+  g9legs primitive 14 (armpit_L): no texels near it
+  g9legs primitive 15 (armpit_L): no texels near it
+  g9legs primitive 16 (elbow_in_R): no texels near it
+  g9legs primitive 17 (elbow_in_R): no texels near it
+  g9legs primitive 18 (elbow_back_R): no texels near it
+  g9legs primitive 19 (elbow_back_R): no texels near it
+  g9legs primitive 20 (elbow_back_R): no texels near it
+  g9legs primitive 25 (hipfold_R): no texels near it
+  g9legs primitive 26 (hipfold_R): no texels near it
+  g9legs primitive 27 (hipfold_R): no texels near it
+  g9legs primitive 28 (armpit_R): no texels near it
+  g9legs primitive 29 (armpit_R): no texels near it
+  g9legs primitive 30 (armpit_R): no texels near it
+  g9legs primitive 31 (neck): no texels near it
+  g9legs primitive 32 (neck): no texels near it
+  g9legs primitive 33 (neck): no texels near it
+  g9legs primitive 34 (belly): no texels near it
+  g9legs primitive 35 (belly): no texels near it
+  g9legs primitive 36 (flank_L): no texels near it
+  g9legs primitive 37 (flank_L): no texels near it
+  g9legs primitive 38 (flank_L): no texels near it
+  g9legs primitive 39 (flank_L): no texels near it
+  g9legs primitive 40 (sidewaist_L): no texels near it
+  g9legs primitive 41 (sidewaist_L): no texels near it
+  g9legs primitive 42 (sidewaist_L): no texels near it
+  g9legs primitive 43 (flank_R): no texels near it
+  g9legs primitive 44 (flank_R): no texels near it
+  g9legs primitive 45 (flank_R): no texels near it
+  g9legs primitive 46 (flank_R): no texels near it
+  g9legs primitive 47 (flank_R): no texels near it
+  g9legs primitive 48 (sidewaist_R): no texels near it
+  g9legs primitive 49 (sidewaist_R): no texels near it
+  g9legs primitive 50 (sidewaist_R): no texels near it
+  g9legs primitive 51 (sidewaist_R): no texels near it
+  g9legs primitive 52 (upperbelly): no texels near it
+  g9legs primitive 53 (upperbelly): no texels near it
+  g9legs primitive 54 (elbow_in_L): no texels near it
+  g9legs primitive 55 (elbow_in_L): no texels near it
+  g9legs primitive 56 (elbow_in_L): no texels near it
+  g9legs primitive 57 (elbow_in_L): no texels near it
+  g9legs primitive 58 (elbow_in_L): no texels near it
+  g9legs primitive 59 (elbow_in_L): no texels near it
+  g9legs primitive 60 (elbow_in_L): no texels near it
+  g9legs primitive 61 (elbow_in_L): no texels near it
+  g9legs primitive 62 (elbow_in_L): no texels near it
+  g9legs primitive 63 (elbow_in_L): no texels near it
+  g9legs primitive 64 (elbow_back_L): no texels near it
+  g9legs primitive 65 (elbow_back_L): no texels near it
+  g9legs primitive 66 (elbow_back_L): no texels near it
+  g9legs primitive 67 (elbow_back_L): no texels near it
+  g9legs primitive 68 (elbow_back_L): no texels near it
+  g9legs primitive 69 (elbow_back_L): no texels near it
+  g9legs primitive 70 (elbow_back_L): no texels near it
+  g9legs primitive 71 (elbow_back_L): no texels near it
+  g9legs primitive 72 (elbow_back_L): no texels near it
+  g9legs primitive 73 (elbow_back_L): no texels near it
+  g9legs primitive 74 (elbow_back_L): no texels near it
+  g9legs primitive 75 (elbow_back_L): no texels near it
+  g9legs primitive 76 (elbow_back_L): no texels near it
+  g9legs primitive 77 (elbow_back_L): no texels near it
+  g9legs primitive 78 (elbow_back_L): no texels near it
+  g9legs primitive 89 (hipfold_L): no texels near it
+  g9legs primitive 90 (hipfold_L): no texels near it
+  g9legs primitive 91 (hipfold_L): no texels near it
+  g9legs primitive 92 (hipfold_L): no texels near it
+  g9legs primitive 93 (hipfold_L): no texels near it
+  g9legs primitive 94 (hipfold_L): no texels near it
+  g9legs primitive 95 (hipfold_L): no texels near it
+  g9legs primitive 96 (armpit_L): no texels near it
+  g9legs primitive 97 (armpit_L): no texels near it
+  g9legs primitive 98 (armpit_L): no texels near it
+  g9legs primitive 99 (armpit_L): no texels near it
+  g9legs primitive 100 (armpit_L): no texels near it
+  g9legs primitive 101 (armpit_L): no texels near it
+  g9legs primitive 102 (armpit_L): no texels near it
+  g9legs primitive 103 (armpit_L): no texels near it
+  g9legs primitive 104 (armpit_L): no texels near it
+  g9legs primitive 105 (armpit_L): no texels near it
+  g9legs primitive 106 (armpit_L): no texels near it
+  g9legs primitive 107 (armpit_L): no texels near it
+  g9legs primitive 108 (armpit_L): no texels near it
+  g9legs primitive 109 (armpit_L): no texels near it
+  g9legs primitive 110 (armpit_L): no texels near it
+  g9legs primitive 111 (elbow_in_R): no texels near it
+  g9legs primitive 112 (elbow_in_R): no texels near it
+  g9legs primitive 113 (elbow_in_R): no texels near it
+  g9legs primitive 114 (elbow_in_R): no texels near it
+  g9legs primitive 115 (elbow_in_R): no texels near it
+  g9legs primitive 116 (elbow_in_R): no texels near it
+  g9legs primitive 117 (elbow_in_R): no texels near it
+  g9legs primitive 118 (elbow_in_R): no texels near it
+  g9legs primitive 119 (elbow_in_R): no texels near it
+  g9legs primitive 120 (elbow_in_R): no texels near it
+  g9legs primitive 121 (elbow_back_R): no texels near it
+  g9legs primitive 122 (elbow_back_R): no texels near it
+  g9legs primitive 123 (elbow_back_R): no texels near it
+  g9legs primitive 124 (elbow_back_R): no texels near it
+  g9legs primitive 125 (elbow_back_R): no texels near it
+  g9legs primitive 126 (elbow_back_R): no texels near it
+  g9legs primitive 127 (elbow_back_R): no texels near it
+  g9legs primitive 128 (elbow_back_R): no texels near it
+  g9legs primitive 129 (elbow_back_R): no texels near it
+  g9legs primitive 130 (elbow_back_R): no texels near it
+  g9legs primitive 131 (elbow_back_R): no texels near it
+  g9legs primitive 132 (elbow_back_R): no texels near it
+  g9legs primitive 133 (elbow_back_R): no texels near it
+  g9legs primitive 134 (elbow_back_R): no texels near it
+  g9legs primitive 135 (elbow_back_R): no texels near it
+  g9legs primitive 146 (hipfold_R): no texels near it
+  g9legs primitive 147 (hipfold_R): no texels near it
+  g9legs primitive 148 (hipfold_R): no texels near it
+  g9legs primitive 149 (hipfold_R): no texels near it
+  g9legs primitive 150 (hipfold_R): no texels near it
+  g9legs primitive 151 (hipfold_R): no texels near it
+  g9legs primitive 152 (armpit_R): no texels near it
+  g9legs primitive 153 (armpit_R): no texels near it
+  g9legs primitive 154 (armpit_R): no texels near it
+  g9legs primitive 155 (armpit_R): no texels near it
+  g9legs primitive 156 (armpit_R): no texels near it
+  g9legs primitive 157 (armpit_R): no texels near it
+  g9legs primitive 158 (armpit_R): no texels near it
+  g9legs primitive 159 (armpit_R): no texels near it
+  g9legs primitive 160 (armpit_R): no texels near it
+  g9legs primitive 161 (armpit_R): no texels near it
+  g9legs primitive 162 (armpit_R): no texels near it
+  g9legs primitive 163 (armpit_R): no texels near it
+  g9legs primitive 164 (armpit_R): no texels near it
+  g9legs primitive 165 (armpit_R): no texels near it
+  g9legs primitive 166 (armpit_R): no texels near it
+  g9legs primitive 167 (neck): no texels near it
+  g9legs primitive 168 (neck): no texels near it
+  g9legs primitive 169 (neck): no texels near it
+  g9legs primitive 170 (neck): no texels near it
+  g9legs primitive 171 (neck): no texels near it
+  g9legs primitive 172 (neck): no texels near it
+  g9legs primitive 173 (neck): no texels near it
+  g9legs primitive 174 (neck): no texels near it
+  g9legs primitive 175 (neck): no texels near it
+  g9legs primitive 176 (neck): no texels near it
+  g9legs primitive 177 (neck): no texels near it
+  g9legs primitive 178 (neck): no texels near it
+  g9legs primitive 179 (neck): no texels near it
+  g9legs primitive 180 (neck): no texels near it
+  g9legs primitive 181 (neck): no texels near it
+  g9legs primitive 182 (belly): no texels near it
+  g9legs primitive 183 (belly): no texels near it
+  g9legs primitive 184 (belly): no texels near it
+  g9legs primitive 185 (belly): no texels near it
+  g9legs primitive 186 (belly): no texels near it
+  g9legs primitive 187 (belly): no texels near it
+  g9legs primitive 188 (belly): no texels near it
+  g9legs primitive 189 (belly): no texels near it
+  g9legs primitive 190 (belly): no texels near it
+  g9legs primitive 191 (belly): no texels near it
+  g9legs primitive 192 (flank_L): no texels near it
+  g9legs primitive 193 (flank_L): no texels near it
+  g9legs primitive 194 (flank_L): no texels near it
+  g9legs primitive 195 (flank_L): no texels near it
+  g9legs primitive 196 (flank_L): no texels near it
+  g9legs primitive 197 (flank_L): no texels near it
+  g9legs primitive 198 (flank_L): no texels near it
+  g9legs primitive 199 (flank_L): no texels near it
+  g9legs primitive 200 (flank_L): no texels near it
+  g9legs primitive 201 (flank_L): no texels near it
+  g9legs primitive 202 (sidewaist_L): no texels near it
+  g9legs primitive 203 (sidewaist_L): no texels near it
+  g9legs primitive 204 (sidewaist_L): no texels near it
+  g9legs primitive 205 (sidewaist_L): no texels near it
+  g9legs primitive 206 (sidewaist_L): no texels near it
+  g9legs primitive 207 (sidewaist_L): no texels near it
+  g9legs primitive 208 (sidewaist_L): no texels near it
+  g9legs primitive 209 (sidewaist_L): no texels near it
+  g9legs primitive 210 (sidewaist_L): no texels near it
+  g9legs primitive 211 (sidewaist_L): no texels near it
+  g9legs primitive 212 (sidewaist_L): no texels near it
+  g9legs primitive 213 (sidewaist_L): no texels near it
+  g9legs primitive 214 (sidewaist_L): no texels near it
+  g9legs primitive 215 (sidewaist_L): no texels near it
+  g9legs primitive 216 (flank_R): no texels near it
+  g9legs primitive 217 (flank_R): no texels near it
+  g9legs primitive 218 (flank_R): no texels near it
+  g9legs primitive 219 (flank_R): no texels near it
+  g9legs primitive 220 (flank_R): no texels near it
+  g9legs primitive 221 (flank_R): no texels near it
+  g9legs primitive 222 (flank_R): no texels near it
+  g9legs primitive 223 (flank_R): no texels near it
+  g9legs primitive 224 (flank_R): no texels near it
+  g9legs primitive 225 (flank_R): no texels near it
+  g9legs primitive 226 (sidewaist_R): no texels near it
+  g9legs primitive 227 (sidewaist_R): no texels near it
+  g9legs primitive 228 (sidewaist_R): no texels near it
+  g9legs primitive 229 (sidewaist_R): no texels near it
+  g9legs primitive 230 (sidewaist_R): no texels near it
+  g9legs primitive 231 (sidewaist_R): no texels near it
+  g9legs primitive 232 (sidewaist_R): no texels near it
+  g9legs primitive 233 (sidewaist_R): no texels near it
+  g9legs primitive 234 (sidewaist_R): no texels near it
+  g9legs primitive 235 (sidewaist_R): no texels near it
+  g9legs primitive 236 (sidewaist_R): no texels near it
+  g9legs primitive 237 (sidewaist_R): no texels near it
+  g9legs primitive 238 (sidewaist_R): no texels near it
+  g9legs primitive 239 (sidewaist_R): no texels near it
+  g9legs primitive 240 (sidewaist_R): no texels near it
+  g9legs primitive 241 (sidewaist_R): no texels near it
+  g9legs primitive 242 (sidewaist_R): no texels near it
+  g9legs primitive 243 (sidewaist_R): no texels near it
+g9legs: relief -1.10 to 0.22 mm, slope max 0.82 (encoded up to 1.5)
+  region  1 elbow_in_L       body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  2 elbow_back_L     body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  3 knee_back_L      body range 0.20:  72594 texels, relief up to 0.86 mm, cut at its edge 0.00 mm
+  region  4 hipfold_L        body range 0.20:    395 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  5 armpit_L         body range 0.25:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  6 elbow_in_R       body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  7 elbow_back_R     body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region  8 knee_back_R      body range 0.20:  74201 texels, relief up to 0.87 mm, cut at its edge 0.00 mm
+  region  9 hipfold_R        body range 0.20:    389 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 10 armpit_R         body range 0.25:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 11 neck             neck range 0.03:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 12 belly            body range 0.20:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 13 flank_L          body range 0.12:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 14 sidewaist_L      body range 0.10:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 15 flank_R          body range 0.12:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 16 sidewaist_R      body range 0.10:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm
+  region 17 upperbelly       body range 0.15:      0 texels, relief up to 0.00 mm, cut at its edge 0.00 mm

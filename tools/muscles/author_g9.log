@@ -1,0 +1,502 @@
+avatar export: C:/Users/rings/AppData/Local/Temp/claude/C--Users-rings-Claude-Projects-Modding-SFMODVR--claude-worktrees-elated-cannon-2dfc96/8bb14319-f4eb-4c52-8f4c-0fd5d26b0197/scratchpad/drive/export
+g9head: surface Head, UV tile (0, 0) taken off
+g9body: surface Body, UV tile (1, 0) taken off
+g9arms: surface Arms, UV tile (3, 0) taken off
+g9legs: surface Legs, UV tile (2, 0) taken off
+overlays from her export Reika-20261016-175648: pussy_typeC_normal
+g9head: 10932 triangles, rasterising 2048x2048
+g9head: 78.3% of the texels on her skin
+navel: s 0.150 m above Root_M (y 1.001), 5.4 mm deep
+muscles: 137 primitives in 32 regions (navel at s 0.150 m above Root_M)
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  obliques_L: a belly on torso reaches no texel
+  obliques_L: a belly on torso reaches no texel
+  obliques_L: a groove on torso reaches no texel
+  serratus_L: a belly on torso reaches no texel
+  serratus_L: a belly on torso reaches no texel
+  serratus_L: a belly on torso reaches no texel
+  serratus_L: a belly on torso reaches no texel
+  obliques_R: a belly on torso reaches no texel
+  obliques_R: a belly on torso reaches no texel
+  obliques_R: a groove on torso reaches no texel
+  serratus_R: a belly on torso reaches no texel
+  serratus_R: a belly on torso reaches no texel
+  serratus_R: a belly on torso reaches no texel
+  serratus_R: a belly on torso reaches no texel
+  ribcage: a groove on torso reaches no texel
+  ribcage: a groove on torso reaches no texel
+  ribcage: a groove on torso reaches no texel
+  back: a belly on back reaches no texel
+  back: a belly on back reaches no texel
+  back: a bulge at s 0.05 phi 163 on back reaches no texel
+  back: a belly on back reaches no texel
+  back: a belly on back reaches no texel
+  back: a bulge at s 0.05 phi 197 on back reaches no texel
+  lats_L: a belly on back reaches no texel
+  lats_L: a belly on back reaches no texel
+  lats_L: a groove on back reaches no texel
+  lats_L: a groove on back reaches no texel
+  lats_R: a belly on back reaches no texel
+  lats_R: a belly on back reaches no texel
+  lats_R: a groove on back reaches no texel
+  lats_R: a groove on back reaches no texel
+  glutes_L: a bulge at s -0.06 phi 108 on torso reaches no texel
+  glutes_L: a belly on torso reaches no texel
+  glutes_L: a belly on torso reaches no texel
+  glutes_L: a groove on thighL reaches no texel
+  quads_L: a belly on thighL reaches no texel
+  quads_L: a belly on thighL reaches no texel
+  quads_L: a belly on thighL reaches no texel
+  quads_L: a groove on thighL reaches no texel
+  quads_L: a belly on thighL reaches no texel
+  hams_L: a belly on thighL reaches no texel
+  hams_L: a belly on thighL reaches no texel
+  hams_L: a groove on thighL reaches no texel
+  adductors_L: a belly on thighL reaches no texel
+  adductors_L: a groove on thighL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a groove on shinL reaches no texel
+  calves_L: a groove on shinL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a groove on shinL reaches no texel
+  glutes_R: a bulge at s -0.06 phi -108 on torso reaches no texel
+  glutes_R: a belly on torso reaches no texel
+  glutes_R: a belly on torso reaches no texel
+  glutes_R: a groove on thighR reaches no texel
+  quads_R: a belly on thighR reaches no texel
+  quads_R: a belly on thighR reaches no texel
+  quads_R: a belly on thighR reaches no texel
+  quads_R: a groove on thighR reaches no texel
+  quads_R: a belly on thighR reaches no texel
+  hams_R: a belly on thighR reaches no texel
+  hams_R: a belly on thighR reaches no texel
+  hams_R: a groove on thighR reaches no texel
+  adductors_R: a belly on thighR reaches no texel
+  adductors_R: a groove on thighR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a groove on shinR reaches no texel
+  calves_R: a groove on shinR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a groove on shinR reaches no texel
+  deltoids_L: a belly on upperarmL reaches no texel
+  deltoids_L: a belly on upperarmL reaches no texel
+  deltoids_L: a belly on upperarmL reaches no texel
+  biceps_L: a belly on upperarmL reaches no texel
+  biceps_L: a belly on upperarmL reaches no texel
+  triceps_L: a belly on upperarmL reaches no texel
+  triceps_L: a belly on upperarmL reaches no texel
+  triceps_L: a groove on upperarmL reaches no texel
+  forearms_L: a belly on forearmL reaches no texel
+  forearms_L: a belly on forearmL reaches no texel
+  forearms_L: a belly on forearmL reaches no texel
+  deltoids_R: a belly on upperarmR reaches no texel
+  deltoids_R: a belly on upperarmR reaches no texel
+  deltoids_R: a belly on upperarmR reaches no texel
+  biceps_R: a belly on upperarmR reaches no texel
+  biceps_R: a belly on upperarmR reaches no texel
+  triceps_R: a belly on upperarmR reaches no texel
+  triceps_R: a belly on upperarmR reaches no texel
+  triceps_R: a groove on upperarmR reaches no texel
+  forearms_R: a belly on forearmR reaches no texel
+  forearms_R: a belly on forearmR reaches no texel
+  forearms_R: a belly on forearmR reaches no texel
+g9head: slope max 0.405 (encoded up to 0.60), groove shade max 0.40
+g9head: height -2.00 to 4.60 mm (encoded +-16 mm)
+  muscle  1 abs           core C:       0 texels, height up to 0.0 mm
+  muscle  2 obliques_L    core L:       0 texels, height up to 0.0 mm
+  muscle  3 serratus_L    core L:       0 texels, height up to 0.0 mm
+  muscle  4 obliques_R    core R:       0 texels, height up to 0.0 mm
+  muscle  5 serratus_R    core R:       0 texels, height up to 0.0 mm
+  muscle  6 ribcage       core C:       0 texels, height up to 0.0 mm
+  muscle  7 back          back C:    2140 texels, height up to 0.1 mm
+  muscle  8 lats_L        back L:       0 texels, height up to 0.0 mm
+  muscle  9 lats_R        back R:       0 texels, height up to 0.0 mm
+  muscle 10 glutes_L      legs L:       0 texels, height up to 0.0 mm
+  muscle 11 quads_L       legs L:       0 texels, height up to 0.0 mm
+  muscle 12 hams_L        legs L:       0 texels, height up to 0.0 mm
+  muscle 13 adductors_L   legs L:       0 texels, height up to 0.0 mm
+  muscle 14 calves_L      legs L:       0 texels, height up to 0.0 mm
+  muscle 15 glutes_R      legs R:       0 texels, height up to 0.0 mm
+  muscle 16 quads_R       legs R:       0 texels, height up to 0.0 mm
+  muscle 17 hams_R        legs R:       0 texels, height up to 0.0 mm
+  muscle 18 adductors_R   legs R:       0 texels, height up to 0.0 mm
+  muscle 19 calves_R      legs R:       0 texels, height up to 0.0 mm
+  muscle 20 deltoids_L    arms L:       0 texels, height up to 0.0 mm
+  muscle 21 biceps_L      arms L:       0 texels, height up to 0.0 mm
+  muscle 22 triceps_L     arms L:       0 texels, height up to 0.0 mm
+  muscle 23 forearms_L    arms L:       0 texels, height up to 0.0 mm
+  muscle 24 deltoids_R    arms R:       0 texels, height up to 0.0 mm
+  muscle 25 biceps_R      arms R:       0 texels, height up to 0.0 mm
+  muscle 26 triceps_R     arms R:       0 texels, height up to 0.0 mm
+  muscle 27 forearms_R    arms R:       0 texels, height up to 0.0 mm
+  muscle 28 pecs_L        arms L:       0 texels, height up to 0.0 mm
+  muscle 29 pecs_R        arms R:       0 texels, height up to 0.0 mm
+  muscle 30 traps         back C:  538530 texels, height up to 4.6 mm
+  muscle 31 neck_L        back L:   97033 texels, height up to 2.4 mm
+  muscle 32 neck_R        back R:   83366 texels, height up to 2.4 mm
+preview: C:\Users\rings\Claude\Projects\Modding\SFMODVR\.claude\worktrees\elated-cannon-2dfc96\tools\muscles\preview
+g9body: 7071 triangles, rasterising 2048x2048
+g9body: 63.5% of the texels on her skin
+navel: s 0.150 m above Root_M (y 1.001), 5.4 mm deep
+muscles: 137 primitives in 32 regions (navel at s 0.150 m above Root_M)
+overlay pussy_typeC_normal: relief faded on 133106 texels (none within 4 mm, full beyond 35 mm)
+  quads_L: a belly on thighL reaches no texel
+  quads_L: a belly on thighL reaches no texel
+  hams_L: a groove on thighL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a groove on shinL reaches no texel
+  calves_L: a groove on shinL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a groove on shinL reaches no texel
+  quads_R: a belly on thighR reaches no texel
+  quads_R: a belly on thighR reaches no texel
+  hams_R: a groove on thighR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a groove on shinR reaches no texel
+  calves_R: a groove on shinR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a groove on shinR reaches no texel
+  biceps_L: a belly on upperarmL reaches no texel
+  forearms_L: a belly on forearmL reaches no texel
+  forearms_L: a belly on forearmL reaches no texel
+  forearms_L: a belly on forearmL reaches no texel
+  biceps_R: a belly on upperarmR reaches no texel
+  forearms_R: a belly on forearmR reaches no texel
+  forearms_R: a belly on forearmR reaches no texel
+  forearms_R: a belly on forearmR reaches no texel
+g9body: slope max 0.305 (encoded up to 0.60), groove shade max 1.00
+g9body: height -2.60 to 6.80 mm (encoded +-16 mm)
+  muscle  1 abs           core C:  185555 texels, height up to 2.7 mm
+  muscle  2 obliques_L    core L:  158107 texels, height up to 6.8 mm
+  muscle  3 serratus_L    core L:   14392 texels, height up to 1.7 mm
+  muscle  4 obliques_R    core R:  158141 texels, height up to 6.8 mm
+  muscle  5 serratus_R    core R:   14407 texels, height up to 1.7 mm
+  muscle  6 ribcage       core C:   46454 texels, height up to 0.4 mm
+  muscle  7 back          back C:  227421 texels, height up to 3.3 mm
+  muscle  8 lats_L        back L:  244654 texels, height up to 4.4 mm
+  muscle  9 lats_R        back R:  244655 texels, height up to 4.4 mm
+  muscle 10 glutes_L      legs L:  132169 texels, height up to 3.3 mm
+  muscle 11 quads_L       legs L:   22066 texels, height up to 3.3 mm
+  muscle 12 hams_L        legs L:    7438 texels, height up to 3.3 mm
+  muscle 13 adductors_L   legs L:    7574 texels, height up to 0.3 mm
+  muscle 14 calves_L      legs L:       0 texels, height up to 0.0 mm
+  muscle 15 glutes_R      legs R:  133346 texels, height up to 3.3 mm
+  muscle 16 quads_R       legs R:   22063 texels, height up to 3.3 mm
+  muscle 17 hams_R        legs R:    7455 texels, height up to 3.3 mm
+  muscle 18 adductors_R   legs R:    7579 texels, height up to 0.3 mm
+  muscle 19 calves_R      legs R:       0 texels, height up to 0.0 mm
+  muscle 20 deltoids_L    arms L:       0 texels, height up to 0.0 mm
+  muscle 21 biceps_L      arms L:       0 texels, height up to 0.0 mm
+  muscle 22 triceps_L     arms L:       0 texels, height up to 0.0 mm
+  muscle 23 forearms_L    arms L:       0 texels, height up to 0.0 mm
+  muscle 24 deltoids_R    arms R:       0 texels, height up to 0.0 mm
+  muscle 25 biceps_R      arms R:       0 texels, height up to 0.0 mm
+  muscle 26 triceps_R     arms R:       0 texels, height up to 0.0 mm
+  muscle 27 forearms_R    arms R:       0 texels, height up to 0.0 mm
+  muscle 28 pecs_L        arms L:   52367 texels, height up to 3.2 mm
+  muscle 29 pecs_R        arms R:   52325 texels, height up to 3.2 mm
+  muscle 30 traps         back C:   90761 texels, height up to 4.6 mm
+  muscle 31 neck_L        back L:     173 texels, height up to -0.0 mm
+  muscle 32 neck_R        back R:       0 texels, height up to 0.0 mm
+preview: C:\Users\rings\Claude\Projects\Modding\SFMODVR\.claude\worktrees\elated-cannon-2dfc96\tools\muscles\preview
+g9arms: 15416 triangles, rasterising 2048x2048
+g9arms: 45.5% of the texels on her skin
+navel: s 0.150 m above Root_M (y 1.001), 5.4 mm deep
+muscles: 137 primitives in 32 regions (navel at s 0.150 m above Root_M)
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  obliques_L: a belly on torso reaches no texel
+  obliques_L: a belly on torso reaches no texel
+  obliques_L: a groove on torso reaches no texel
+  serratus_L: a belly on torso reaches no texel
+  serratus_L: a belly on torso reaches no texel
+  serratus_L: a belly on torso reaches no texel
+  serratus_L: a belly on torso reaches no texel
+  obliques_R: a belly on torso reaches no texel
+  obliques_R: a belly on torso reaches no texel
+  obliques_R: a groove on torso reaches no texel
+  serratus_R: a belly on torso reaches no texel
+  serratus_R: a belly on torso reaches no texel
+  serratus_R: a belly on torso reaches no texel
+  serratus_R: a belly on torso reaches no texel
+  ribcage: a groove on torso reaches no texel
+  ribcage: a groove on torso reaches no texel
+  ribcage: a groove on torso reaches no texel
+  back: a groove on back reaches no texel
+  back: a belly on back reaches no texel
+  back: a belly on back reaches no texel
+  back: a bulge at s 0.05 phi 163 on back reaches no texel
+  back: a belly on back reaches no texel
+  back: a belly on back reaches no texel
+  back: a bulge at s 0.05 phi 197 on back reaches no texel
+  lats_L: a groove on back reaches no texel
+  lats_R: a groove on back reaches no texel
+  glutes_L: a bulge at s -0.06 phi 108 on torso reaches no texel
+  glutes_L: a belly on torso reaches no texel
+  glutes_L: a belly on torso reaches no texel
+  glutes_L: a groove on thighL reaches no texel
+  quads_L: a belly on thighL reaches no texel
+  quads_L: a belly on thighL reaches no texel
+  quads_L: a belly on thighL reaches no texel
+  quads_L: a groove on thighL reaches no texel
+  quads_L: a belly on thighL reaches no texel
+  hams_L: a belly on thighL reaches no texel
+  hams_L: a belly on thighL reaches no texel
+  hams_L: a groove on thighL reaches no texel
+  adductors_L: a belly on thighL reaches no texel
+  adductors_L: a groove on thighL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a groove on shinL reaches no texel
+  calves_L: a groove on shinL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a belly on shinL reaches no texel
+  calves_L: a groove on shinL reaches no texel
+  glutes_R: a bulge at s -0.06 phi -108 on torso reaches no texel
+  glutes_R: a belly on torso reaches no texel
+  glutes_R: a belly on torso reaches no texel
+  glutes_R: a groove on thighR reaches no texel
+  quads_R: a belly on thighR reaches no texel
+  quads_R: a belly on thighR reaches no texel
+  quads_R: a belly on thighR reaches no texel
+  quads_R: a groove on thighR reaches no texel
+  quads_R: a belly on thighR reaches no texel
+  hams_R: a belly on thighR reaches no texel
+  hams_R: a belly on thighR reaches no texel
+  hams_R: a groove on thighR reaches no texel
+  adductors_R: a belly on thighR reaches no texel
+  adductors_R: a groove on thighR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a groove on shinR reaches no texel
+  calves_R: a groove on shinR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a belly on shinR reaches no texel
+  calves_R: a groove on shinR reaches no texel
+  pecs_L: a groove on torso reaches no texel
+  pecs_R: a groove on torso reaches no texel
+  traps: a belly on neck reaches no texel
+  traps: a belly on back reaches no texel
+  traps: a belly on neck reaches no texel
+  traps: a belly on back reaches no texel
+  neck_L: a belly on neck reaches no texel
+  neck_L: a bulge at s -0.03 phi 0 on neck reaches no texel
+  neck_R: a belly on neck reaches no texel
+  neck_R: a bulge at s -0.03 phi 0 on neck reaches no texel
+g9arms: slope max 0.442 (encoded up to 0.60), groove shade max 0.40
+g9arms: height -0.60 to 5.40 mm (encoded +-16 mm)
+  muscle  1 abs           core C:       0 texels, height up to 0.0 mm
+  muscle  2 obliques_L    core L:       0 texels, height up to 0.0 mm
+  muscle  3 serratus_L    core L:       0 texels, height up to 0.0 mm
+  muscle  4 obliques_R    core R:       0 texels, height up to 0.0 mm
+  muscle  5 serratus_R    core R:       0 texels, height up to 0.0 mm
+  muscle  6 ribcage       core C:       0 texels, height up to 0.0 mm
+  muscle  7 back          back C:       0 texels, height up to 0.0 mm
+  muscle  8 lats_L        back L:   43518 texels, height up to 3.7 mm
+  muscle  9 lats_R        back R:   43476 texels, height up to 3.7 mm
+  muscle 10 glutes_L      legs L:       0 texels, height up to 0.0 mm
+  muscle 11 quads_L       legs L:       0 texels, height up to 0.0 mm
+  muscle 12 hams_L        legs L:       0 texels, height up to 0.0 mm
+  muscle 13 adductors_L   legs L:       0 texels, height up to 0.0 mm
+  muscle 14 calves_L      legs L:       0 texels, height up to 0.0 mm
+  muscle 15 glutes_R      legs R:       0 texels, height up to 0.0 mm
+  muscle 16 quads_R       legs R:       0 texels, height up to 0.0 mm
+  muscle 17 hams_R        legs R:       0 texels, height up to 0.0 mm
+  muscle 18 adductors_R   legs R:       0 texels, height up to 0.0 mm
+  muscle 19 calves_R      legs R:       0 texels, height up to 0.0 mm
+  muscle 20 deltoids_L    arms L:   96737 texels, height up to 5.4 mm
+  muscle 21 biceps_L      arms L:   44916 texels, height up to 4.4 mm
+  muscle 22 triceps_L     arms L:   65187 texels, height up to 4.2 mm
+  muscle 23 forearms_L    arms L:   49789 texels, height up to 3.2 mm
+  muscle 24 deltoids_R    arms R:   96775 texels, height up to 5.4 mm
+  muscle 25 biceps_R      arms R:   44875 texels, height up to 4.4 mm
+  muscle 26 triceps_R     arms R:   65165 texels, height up to 4.2 mm
+  muscle 27 forearms_R    arms R:   49785 texels, height up to 3.2 mm
+  muscle 28 pecs_L        arms L:     182 texels, height up to 0.2 mm
+  muscle 29 pecs_R        arms R:     175 texels, height up to 0.2 mm
+  muscle 30 traps         back C:   43274 texels, height up to 4.1 mm
+  muscle 31 neck_L        back L:       0 texels, height up to 0.0 mm
+  muscle 32 neck_R        back R:       0 texels, height up to 0.0 mm
+preview: C:\Users\rings\Claude\Projects\Modding\SFMODVR\.claude\worktrees\elated-cannon-2dfc96\tools\muscles\preview
+g9legs: 12772 triangles, rasterising 2048x2048
+g9legs: 61.5% of the texels on her skin
+navel: s 0.150 m above Root_M (y 1.001), 5.4 mm deep
+muscles: 137 primitives in 32 regions (navel at s 0.150 m above Root_M)
+overlay pussy_typeC_normal: relief faded on 1017 texels (none within 4 mm, full beyond 35 mm)
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a belly on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  abs: a groove on torso reaches no texel
+  obliques_L: a belly on torso reaches no texel
+  obliques_L: a belly on torso reaches no texel
+  serratus_L: a belly on torso reaches no texel
+  serratus_L: a belly on torso reaches no texel
+  serratus_L: a belly on torso reaches no texel
+  serratus_L: a belly on torso reaches no texel
+  obliques_R: a belly on torso reaches no texel
+  obliques_R: a belly on torso reaches no texel
+  serratus_R: a belly on torso reaches no texel
+  serratus_R: a belly on torso reaches no texel
+  serratus_R: a belly on torso reaches no texel
+  serratus_R: a belly on torso reaches no texel
+  ribcage: a groove on torso reaches no texel
+  ribcage: a groove on torso reaches no texel
+  ribcage: a groove on torso reaches no texel
+  back: a groove on back reaches no texel
+  back: a belly on back reaches no texel
+  back: a belly on back reaches no texel
+  back: a bulge at s 0.05 phi 163 on back reaches no texel
+  back: a belly on back reaches no texel
+  back: a belly on back reaches no texel
+  back: a bulge at s 0.05 phi 197 on back reaches no texel
+  lats_L: a belly on back reaches no texel
+  lats_L: a belly on back reaches no texel
+  lats_L: a belly on back reaches no texel
+  lats_L: a groove on back reaches no texel
+  lats_L: a groove on back reaches no texel
+  lats_L: a groove on back reaches no texel
+  lats_R: a belly on back reaches no texel
+  lats_R: a belly on back reaches no texel
+  lats_R: a belly on back reaches no texel
+  lats_R: a groove on back reaches no texel
+  lats_R: a groove on back reaches no texel
+  lats_R: a groove on back reaches no texel
+  glutes_L: a belly on torso reaches no texel
+  glutes_R: a belly on torso reaches no texel
+  deltoids_L: a belly on upperarmL reaches no texel
+  deltoids_L: a belly on upperarmL reaches no texel
+  deltoids_L: a belly on upperarmL reaches no texel
+  biceps_L: a belly on upperarmL reaches no texel
+  biceps_L: a belly on upperarmL reaches no texel
+  triceps_L: a belly on upperarmL reaches no texel
+  triceps_L: a belly on upperarmL reaches no texel
+  triceps_L: a groove on upperarmL reaches no texel
+  forearms_L: a belly on forearmL reaches no texel
+  forearms_L: a belly on forearmL reaches no texel
+  forearms_L: a belly on forearmL reaches no texel
+  deltoids_R: a belly on upperarmR reaches no texel
+  deltoids_R: a belly on upperarmR reaches no texel
+  deltoids_R: a belly on upperarmR reaches no texel
+  biceps_R: a belly on upperarmR reaches no texel
+  biceps_R: a belly on upperarmR reaches no texel
+  triceps_R: a belly on upperarmR reaches no texel
+  triceps_R: a belly on upperarmR reaches no texel
+  triceps_R: a groove on upperarmR reaches no texel
+  forearms_R: a belly on forearmR reaches no texel
+  forearms_R: a belly on forearmR reaches no texel
+  forearms_R: a belly on forearmR reaches no texel
+  pecs_L: a belly on torso reaches no texel
+  pecs_L: a groove on torso reaches no texel
+  pecs_R: a belly on torso reaches no texel
+  pecs_R: a groove on torso reaches no texel
+  traps: a belly on back reaches no texel
+  traps: a belly on neck reaches no texel
+  traps: a belly on back reaches no texel
+  traps: a belly on back reaches no texel
+  traps: a belly on back reaches no texel
+  traps: a belly on neck reaches no texel
+  traps: a belly on back reaches no texel
+  traps: a belly on back reaches no texel
+  neck_L: a belly on neck reaches no texel
+  neck_L: a bulge at s -0.03 phi 0 on neck reaches no texel
+  neck_R: a belly on neck reaches no texel
+  neck_R: a bulge at s -0.03 phi 0 on neck reaches no texel
+g9legs: slope max 0.331 (encoded up to 0.60), groove shade max 0.79
+g9legs: height -2.29 to 6.00 mm (encoded +-16 mm)
+  muscle  1 abs           core C:       0 texels, height up to 0.0 mm
+  muscle  2 obliques_L    core L:       0 texels, height up to 0.0 mm
+  muscle  3 serratus_L    core L:       0 texels, height up to 0.0 mm
+  muscle  4 obliques_R    core R:       0 texels, height up to 0.0 mm
+  muscle  5 serratus_R    core R:       0 texels, height up to 0.0 mm
+  muscle  6 ribcage       core C:       0 texels, height up to 0.0 mm
+  muscle  7 back          back C:       0 texels, height up to 0.0 mm
+  muscle  8 lats_L        back L:       0 texels, height up to 0.0 mm
+  muscle  9 lats_R        back R:       0 texels, height up to 0.0 mm
+  muscle 10 glutes_L      legs L:   49898 texels, height up to 3.1 mm
+  muscle 11 quads_L       legs L:  177974 texels, height up to 4.6 mm
+  muscle 12 hams_L        legs L:  102693 texels, height up to 3.6 mm
+  muscle 13 adductors_L   legs L:   46785 texels, height up to 2.0 mm
+  muscle 14 calves_L      legs L:  206943 texels, height up to 6.0 mm
+  muscle 15 glutes_R      legs R:   49955 texels, height up to 3.1 mm
+  muscle 16 quads_R       legs R:  178021 texels, height up to 4.6 mm
+  muscle 17 hams_R        legs R:  102686 texels, height up to 3.6 mm
+  muscle 18 adductors_R   legs R:   46826 texels, height up to 2.0 mm
+  muscle 19 calves_R      legs R:  206910 texels, height up to 6.0 mm
+  muscle 20 deltoids_L    arms L:       0 texels, height up to 0.0 mm
+  muscle 21 biceps_L      arms L:       0 texels, height up to 0.0 mm
+  muscle 22 triceps_L     arms L:       0 texels, height up to 0.0 mm
+  muscle 23 forearms_L    arms L:       0 texels, height up to 0.0 mm
+  muscle 24 deltoids_R    arms R:       0 texels, height up to 0.0 mm
+  muscle 25 biceps_R      arms R:       0 texels, height up to 0.0 mm
+  muscle 26 triceps_R     arms R:       0 texels, height up to 0.0 mm
+  muscle 27 forearms_R    arms R:       0 texels, height up to 0.0 mm
+  muscle 28 pecs_L        arms L:       0 texels, height up to 0.0 mm
+  muscle 29 pecs_R        arms R:       0 texels, height up to 0.0 mm
+  muscle 30 traps         back C:       0 texels, height up to 0.0 mm
+  muscle 31 neck_L        back L:       0 texels, height up to 0.0 mm
+  muscle 32 neck_R        back R:       0 texels, height up to 0.0 mm
+preview: C:\Users\rings\Claude\Projects\Modding\SFMODVR\.claude\worktrees\elated-cannon-2dfc96\tools\muscles\preview

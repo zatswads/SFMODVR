@@ -6,6 +6,8 @@ using System.Linq;
 using System.Reflection;
 using BepInEx.Configuration;
 using UnityEngine;
+using UnityEngine.LowLevel;
+using UnityEngine.PlayerLoop;
 using UnityEngine.Rendering;
 
 namespace SfMorph
@@ -35,6 +37,8 @@ namespace SfMorph
         public static ConfigEntry<int> MaterialRoute;
         public static ConfigEntry<float> Brightness;
         public static ConfigEntry<bool> KeepHair;
+        public static ConfigEntry<float> Correctives;
+        public static ConfigEntry<bool> AutoClavicle;
 
         public static void Bind(ConfigFile cfg)
         {
@@ -43,6 +47,8 @@ namespace SfMorph
             MaterialRoute = cfg.Bind("Avatar", "SkinShader", 0, new ConfigDescription("Avatar skin shader: 0 a copy of her own skin material (Shader Graphs/Skin: the game's skin shading and subsurface scattering, her makeup / blush layers off) with the avatar's textures, 1 the game's HDRP/Lit with subsurface scattering and her skin's diffusion profile.", new AcceptableValueRange<int>(0, 1)));
             Brightness = cfg.Bind("Avatar", "Brightness", 1f, new ConfigDescription("Avatar skin brightness (multiplies its colour maps).", new AcceptableValueRange<float>(0.5f, 1.5f)));
             KeepHair = cfg.Bind("Avatar", "KeepHair", true, "Keep her hair on while the avatar is drawn (the avatar's head is fitted onto hers, so her hair sits on it).");
+            Correctives = cfg.Bind("Avatar", "Correctives", 1f, new ConfigDescription("The avatar's own joint correctives (DAZ's shapes for the shoulders, elbows, hips, knees, neck and fingers at large angles, driven by DAZ's own formulas from her pose): 1 as DAZ made them, 0 off.", new AcceptableValueRange<float>(0f, 1.5f)));
+            AutoClavicle = cfg.Bind("Avatar", "AutoClavicle", true, "While an avatar is drawn, her clavicles and shoulder blades follow her arms (the pose correctives of the Physics tab, on for the avatar even when they are off for her): the avatar's shoulders rise with raised arms instead of collapsing.");
         }
 
         public static string Root { get { return Path.Combine(Store.Dir, "avatars"); } }
@@ -95,6 +101,63 @@ namespace SfMorph
         internal static bool Owns(Renderer r) { return _rig != null && _rig.Go != null && r != null && r.transform.IsChildOf(_rig.Go.transform); }
         internal static bool Hides(Renderer r) { return _rig != null && r != null && _rig.HidesR(r); }
         internal static Transform HerRoot { get { return _rig != null ? _rig.HerRoot : null; } }
+        // 0.11.48: PoseDriver's clavicle correctives run for the avatar (her Scapula bones move the avatar's collar skin)
+        internal static bool ClavicleOn { get { return _rig != null && AutoClavicle != null && AutoClavicle.Value; } }
+        // 0.11.48 the avatar's joint correctives (AvatarJcm.cs): null without correctives.txt / shapes
+        internal static AvatarJcm Jcm { get { return _rig != null ? _rig.Jcm : null; } }
+        internal static string JcmNote { get { return _rig != null ? _rig.JcmNote : ""; } }
+
+        // Every frame right before Unity skins the meshes (PlayerLoop step; the offline harness calls it itself): her final pose of
+        // this frame -> the correctives' weights.
+        public static void StepCorrectives()
+        {
+            var j = _rig != null ? _rig.Jcm : null;
+            if (j == null) return;
+            try
+            {
+                float a = Correctives != null ? Correctives.Value : 1f;
+                if (a > 0f) j.Step(a); else j.Zero();
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogError("Avatar correctives failed, off until the avatar is loaded again: " + e);
+                try { j.Zero(); } catch { }
+                _rig.Jcm = null;
+            }
+        }
+
+        struct AvatarJcmStep { }
+        static bool _inLoop;
+        internal static bool CorrectivesInLoop { get { return _inLoop; } }
+
+        static void LoopStep(bool on)
+        {
+            if (on == _inLoop) return;
+            try
+            {
+                var root = PlayerLoop.GetCurrentPlayerLoop();
+                var subs = root.subSystemList;
+                if (subs == null) return;
+                for (int i = 0; i < subs.Length; i++)
+                {
+                    if (subs[i].type != typeof(PostLateUpdate) || subs[i].subSystemList == null) continue;
+                    var list = new List<PlayerLoopSystem>(subs[i].subSystemList);
+                    list.RemoveAll(x => x.type == typeof(AvatarJcmStep));
+                    if (on)
+                    {
+                        int at = list.FindIndex(x => x.type == typeof(PostLateUpdate.UpdateAllSkinnedMeshes));
+                        if (at < 0) { Plugin.Log.LogWarning("Avatar correctives: no UpdateAllSkinnedMeshes in the frame loop, correctives off"); return; }
+                        list.Insert(at, new PlayerLoopSystem { type = typeof(AvatarJcmStep), updateDelegate = StepCorrectives });
+                    }
+                    subs[i].subSystemList = list.ToArray();
+                    root.subSystemList = subs;
+                    PlayerLoop.SetPlayerLoop(root);
+                    _inLoop = on;
+                    return;
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Avatar correctives: frame loop step not " + (on ? "added" : "removed") + ": " + e.Message); }
+        }
 
         // Wrinkles' region classes for the avatar's materials: 1 its head skin, 3 the rest of its skin (body, arms, legs), 0 not skin
         internal static int RegionOf(Material m, Renderer r)
@@ -102,6 +165,25 @@ namespace SfMorph
             if (_rig == null || m == null) return 0;
             return _rig.RegionOf(m);
         }
+
+        // 0.11.48: the wrinkle / muscle layout of an avatar skin material: its figure's UV sheet (tools/wrinkles/author.py AVATAR_SHEETS:
+        // one layout per sheet, every character of the figure shares them). null = no authored layout (other figures, non-skin surfaces).
+        static readonly Dictionary<string, Dictionary<string, string>> Sheets = new Dictionary<string, Dictionary<string, string>>
+        {
+            { "g9", new Dictionary<string, string> { { "Head", "g9head" }, { "Body", "g9body" }, { "Arms", "g9arms" }, { "Legs", "g9legs" } } },
+        };
+
+        internal static string LayoutOf(Material m)
+        {
+            if (_rig == null || m == null || _rig.Family == null || _rig.RegionOf(m) == 0) return null;
+            string n = m.name ?? "";
+            if (n.EndsWith(" (Instance)", StringComparison.Ordinal)) n = n.Substring(0, n.Length - 11);
+            if (n.StartsWith("SfAvatar ", StringComparison.Ordinal)) n = n.Substring(9);
+            return Sheets.TryGetValue(_rig.Family, out var t) && t.TryGetValue(n, out var l) ? l : null;
+        }
+
+        // 0.11.48 smoke test / log: the layouts this avatar's skin uses (empty without an avatar or for a figure without layouts)
+        internal static string[] Layouts { get { return _rig != null && _rig.Family != null && Sheets.TryGetValue(_rig.Family, out var t) ? t.Values.ToArray() : new string[0]; } }
 
         // From Runner.Update: loads / unloads by the config; every 2 s her renderers the game added since are hidden too.
         public static void Tick(Body body)
@@ -164,6 +246,7 @@ namespace SfMorph
             }
             _rig = rig;
             Status = rig.Summary;
+            LoopStep(rig.Jcm != null && rig.Jcm.Shapes > 0);
         }
 
         static void Unload(string why)
@@ -171,6 +254,7 @@ namespace SfMorph
             if (_rig == null) return;
             Plugin.Log.LogInfo("Avatar '" + _rig.Name + "' off: " + why);
             var r = _rig; _rig = null;
+            LoopStep(false);
             r.Destroy();
         }
 
@@ -350,6 +434,7 @@ namespace SfMorph
         class Rig
         {
             public string Name, Summary = "";
+            public string Family;   // the rig table it mapped by: g9 / g8 / g2
             public Transform HerRoot;
             public GameObject Go;
             public int Route = -1;
@@ -367,6 +452,9 @@ namespace SfMorph
             readonly Dictionary<string, Color> _surfCol = new Dictionary<string, Color>();
             Material _herSkin;
             Transform[] _herBones;   // the bones the new meshes are bound to
+            JcmTable _jcmTable;
+            public AvatarJcm Jcm;
+            public string JcmNote = "no correctives.txt (an avatar built before 0.11.48, or its source has none)";
 
             internal bool HidesR(Renderer r) { return _hidden.ContainsKey(r); }
 
@@ -393,6 +481,12 @@ namespace SfMorph
                 var prefab = _bundle.LoadAsset<GameObject>(prefabName);
                 if (prefab == null) return "no prefab '" + prefabName + "' in " + e.Bundle;
                 ReadSurfaces(lines);
+                var jp = Path.Combine(e.Dir, "correctives.txt");
+                if (File.Exists(jp))
+                {
+                    _jcmTable = JcmTable.Read(jp, out var jerr);
+                    if (_jcmTable == null) JcmNote = "correctives.txt unreadable (" + jerr + ")";
+                }
                 var tmp = new GameObject("SfAvatarBuild");
                 tmp.transform.SetPositionAndRotation(HerRoot.position, HerRoot.rotation);
                 try { return BuildFrom(prefab, tmp); }
@@ -452,6 +546,7 @@ namespace SfMorph
                 var missA = need.Where(k => !am.ContainsKey(k)).ToList();
                 var missH = need.Where(k => !hm.ContainsKey(k)).ToList();
                 if (missA.Count > 0) return "the avatar's rig (" + best.Id + " table) has no " + string.Join(", ", missA.ToArray());
+                Family = best.Id;
                 if (missH.Count > 0) return "her rig has no " + string.Join(", ", missH.ToArray());
                 var herBind = HerBind();   // her bone -> bone-to-root at her bind pose
                 foreach (var k in need) if (!herBind.ContainsKey(hm[k])) return "no bind pose for her " + hm[k].name;
@@ -577,6 +672,12 @@ namespace SfMorph
                 {
                     if (herOf[i] != null) tgt[i] = new List<KeyValuePair<Transform, float>> { new KeyValuePair<Transform, float>(herOf[i], 1f) };
                     else if (tgt[i] == null) tgt[i] = par[i] >= 0 ? tgt[par[i]] : new List<KeyValuePair<Transform, float>> { new KeyValuePair<Transform, float>(herRootBone, 1f) };
+                }
+                // 0.11.48 the correctives' drivers: each DAZ bone the formulas read, posed from the her bones it was mapped to
+                if (_jcmTable != null)
+                {
+                    var restH = (Vector3[])H.Clone();
+                    Jcm = AvatarJcm.Bind(_jcmTable, nm => avByName.TryGetValue(nm, out var t0) && idx.TryGetValue(t0, out var i0) ? i0 : -1, par, restH, Rb, tgt, herBind, HerRoot);
                 }
                 // body regions (head, torso, upper arm, forearm, hand, thigh, shin, foot per side) for both rigs: an avatar vertex
                 // takes her weights only from her skin of the regions its own weights cover (her hand hangs by her hip in her bind
@@ -798,14 +899,16 @@ namespace SfMorph
                 var acc = new Dictionary<Transform, float>(); var hacc = new Dictionary<Transform, float>();
                 int snapped = 0, cutTris = 0;
                 var ringUv = new List<Vector2>(); Texture ringTex = null;
+                var jcmShapes = new Dictionary<Mesh, List<KeyValuePair<int, string>>>();
                 foreach (var ps in pass)
                 {
                     var r = ps.R; var src3 = r.sharedMesh; int nv = ps.P.Length;
                     var nv3 = new Vector3[nv]; var nbw = new BoneWeight[nv];
-                    var inside = new bool[nv]; var snapW = new float[nv];
+                    var inside = new bool[nv]; var snapW = new float[nv]; var qRaw = new Vector3[nv];
                     for (int vi = 0; vi < nv; vi++)
                     {
                         var q = rbf.Apply(ps.P[vi]);
+                        qRaw[vi] = q;
                         // the crotch: a vertex nearer her genital patch than her skin is cut out; the rest within 3 cm of the patch or her
                         // pubic hair is laid fully onto her body surface (the tangent plane of her nearest skin vertex), fading out to 8 cm
                         if (patch.Count > 0)
@@ -898,6 +1001,48 @@ namespace SfMorph
                             }
                         }
                     }
+                    // 0.11.48 the avatar's joint correctives (exported as blend shapes): each delta carried like its vertex, turned by the
+                    // vertex's own bones into the aligned rest, then through the fit's warp (its local stretch), faded where the crotch is
+                    // laid onto her skin; named 'SfAvatar jcm <corrective>' (MorphState.ShapeLayout: a corrective, never a rest shape)
+                    if (Jcm != null && src3.blendShapeCount > 0)
+                    {
+                        var dv = new Vector3[nv]; var dn = new Vector3[nv];
+                        var keys = new List<KeyValuePair<int, string>>();
+                        for (int sh = 0; sh < src3.blendShapeCount; sh++)
+                        {
+                            string key = Jcm.KeyOf(src3.GetBlendShapeName(sh));
+                            int fc = src3.GetBlendShapeFrameCount(sh);
+                            if (key == null || fc <= 0) continue;
+                            src3.GetBlendShapeFrameVertices(sh, fc - 1, dv, dn, null);
+                            var od = new Vector3[nv]; var on = new Vector3[nv];
+                            float mx = 0f;
+                            var l2wS = r.transform.localToWorldMatrix;
+                            for (int vi = 0; vi < nv; vi++)
+                            {
+                                if (inside[vi] || (dv[vi].sqrMagnitude < 1e-14f && dn[vi].sqrMagnitude < 1e-12f)) continue;
+                                var d = HerRoot.InverseTransformVector(l2wS.MultiplyVector(dv[vi]));
+                                var n0 = HerRoot.InverseTransformDirection(r.transform.TransformDirection(dn[vi]));
+                                var w = ps.W.Length == nv ? ps.W[vi] : new BoneWeight { boneIndex0 = 0, weight0 = 1f };
+                                Vector3 dr = Vector3.zero, nr0 = Vector3.zero; float ws = 0f;
+                                for (int k = 0; k < 4; k++)
+                                {
+                                    int bi = k == 0 ? w.boneIndex0 : k == 1 ? w.boneIndex1 : k == 2 ? w.boneIndex2 : w.boneIndex3;
+                                    float wt = k == 0 ? w.weight0 : k == 1 ? w.weight1 : k == 2 ? w.weight2 : w.weight3;
+                                    if (wt <= 0f || bi < 0 || bi >= ps.BIdx.Length || ps.BIdx[bi] < 0) continue;
+                                    dr += wt * (Rb[ps.BIdx[bi]] * d); nr0 += wt * (Rb[ps.BIdx[bi]] * n0); ws += wt;
+                                }
+                                if (ws > 1e-6f) { dr /= ws; nr0 /= ws; } else { dr = d; nr0 = n0; }
+                                float keep = 1f - snapW[vi];
+                                od[vi] = (rbf.Apply(ps.P[vi] + dr) - qRaw[vi]) * keep;
+                                on[vi] = nr0 * keep;
+                                mx = Mathf.Max(mx, od[vi].sqrMagnitude);
+                            }
+                            if (mx < 1e-10f) continue;   // < 0.01 mm: a shape pack's empty adjustment, or a corrective of a cut part
+                            mesh.AddBlendShapeFrame("SfAvatar jcm " + key, 100f, od, on, null);
+                            keys.Add(new KeyValuePair<int, string>(mesh.blendShapeCount - 1, key));
+                        }
+                        if (keys.Count > 0) jcmShapes[mesh] = keys;
+                    }
                     _meshes.Add(mesh);
                     built.Add(new KeyValuePair<SkinnedMeshRenderer, Mesh>(r, mesh));
                 }
@@ -926,6 +1071,7 @@ namespace SfMorph
                     }
                     _rends.Add(sr);
                     _origMats.Add(kv.Key.sharedMaterials);
+                    if (Jcm != null && jcmShapes.TryGetValue(kv.Value, out var jk)) foreach (var x in jk) Jcm.AddOutput(sr, x.Key, x.Value);
                 }
                 // the patch's tint: its _SkinColor scaled so her skin around it (her colour map x _SkinColor) comes out at the avatar's
                 // skin around it; set per renderer (a property block), so her shared body material and the game's skin colour stay
@@ -945,6 +1091,13 @@ namespace SfMorph
                 }
                 Materials(MaterialRoute.Value, Brightness.Value);
                 Hide(KeepHair.Value);
+                if (Jcm != null)
+                {
+                    int total = 0; foreach (var kv in jcmShapes) total += kv.Value.Count;
+                    JcmNote = Jcm.Shapes > 0 ? total + " joint correctives (" + _jcmTable.Figure + "): " + Jcm.Note
+                                             : "correctives.txt read, but the meshes carry none of its shapes (" + Jcm.Note + ")";
+                    if (Jcm.Shapes == 0) Jcm = null;
+                }
                 string crotch = patch.Count > 0 ? "crotch: " + snapped + " vertices laid onto her skin, " + cutTris + " triangles cut where her genital meshes sit, " + tintNote
                                                 : "crotch: no genital mesh of hers found (nothing cut)";
 
@@ -953,7 +1106,7 @@ namespace SfMorph
                 Plugin.Log.LogInfo("Avatar " + Summary + "; " + verts + " vertices: " + fromHer + " with her skin weights (head, hand and foot shares by the bone map), " + fromMap + " by the bone map alone (" + far +
                                    " of them farther than 4 cm from her skin); x" + scale.ToString("0.000", CultureInfo.InvariantCulture) + ", facing turned " +
                                    yaw.ToString("0.#", CultureInfo.InvariantCulture) + " deg, fit residual " + (fitErr * 1000f).ToString("0.0", CultureInfo.InvariantCulture) +
-                                   " mm, soles before the fit " + (soles.Length > 0 ? soles : "-") + "; " + faceNote + " (" + fromFace + " vertices); " + crotch + "; her meshes " + herMeshes + "; her skin material " + (_herSkin != null ? _herSkin.name : "not found") + "; " + _hidden.Count +
+                                   " mm, soles before the fit " + (soles.Length > 0 ? soles : "-") + "; correctives: " + JcmNote + "; " + faceNote + " (" + fromFace + " vertices); " + crotch + "; her meshes " + herMeshes + "; her skin material " + (_herSkin != null ? _herSkin.name : "not found") + "; " + _hidden.Count +
                                    " of her renderers hidden");
                 return null;
             }
