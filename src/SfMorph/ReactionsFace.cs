@@ -949,7 +949,7 @@ namespace SfMorph
         {
             int nf = _face.Length;
             var lip = new List<int>();
-            for (int b = 0; b < nf; b++) if (_grp[b] == GMouth || _grp[b] == GCheeks) lip.Add(b);
+            for (int b = 0; b < nf; b++) if (_grp[b] == GMouth || _grp[b] == GCheeks || _grp[b] == GBrows) lip.Add(b);   // 0.11.45: + brows
             lip.Sort((a, c) => { int d = Order(_face[a].name).CompareTo(Order(_face[c].name)); return d != 0 ? d : string.CompareOrdinal(_face[a].name, _face[c].name); });
             _lip = lip.ToArray();
             int nl = _lip.Length;
@@ -1022,25 +1022,43 @@ namespace SfMorph
             var ml = new List<int>();
             for (int i = 0; i < nl; i++) if (mapped[i]) ml.Add(i);
             _mapped = ml.ToArray();
-            _accP = new Vector3[nl]; _accR = new Vector3[nl];
+            _accP = new Vector3[nl]; _accR = new Vector3[nl]; _jawP = new Vector3[nl]; _jawR = new Vector3[nl];
         }
 
         // Body.ApplyAll for her, after Step: the mouth from the ARKit weights w (LipSync.K) through the map. fade 0..1 blends from the
         // Animator's mouth of this frame; over 0..1 is how much of the game's mouth is replaced by her neutral mouth under the deltas
         // (0 = the deltas add on the game's mouth). mood 0..1: how much of her face clip's mouth (KeepMood, this frame) goes under the deltas
         // in place of that base. Only bones the map poses are written. False = nothing written (no posed bone).
+        Vector3[] _jawP, _jawR;   // 0.11.45: the jaw-follow part of the lip deltas (outside the limit)
+        public int LipClamped;
         public bool LipStep(float[] w, float fade, float over, float mood)
         {
             if (!LipReady || !(fade > 0.001f) || !_anim.isActiveAndEnabled) return false;
             ResolveMap();
             if (_mapped.Length == 0) return false;
-            foreach (int i in _mapped) { _accP[i] = Vector3.zero; _accR[i] = Vector3.zero; }
+            foreach (int i in _mapped) { _accP[i] = Vector3.zero; _accR[i] = Vector3.zero; _jawP[i] = Vector3.zero; _jawR[i] = Vector3.zero; }
             for (int s = 0; s < LipSync.K; s++)
             {
                 float ws = w[s];
                 if (ws < 1e-4f) continue;
                 var bi = _mapB[s]; var ps = _mapP[s]; var rs = _mapR[s];
-                for (int k = 0; k < bi.Length; k++) { _accP[bi[k]] += ps[k] * ws; _accR[bi[k]] += rs[k] * ws; }
+                // jawOpen and mouthClose (= minus jawOpen's lips) carry the lips round the jaw: kept apart from the limit below
+                bool jawPart = s == LipSync.JawOpen || s == LipSync.MouthClose;
+                var aP = jawPart ? _jawP : _accP; var aR = jawPart ? _jawR : _accR;
+                for (int k = 0; k < bi.Length; k++) { aP[bi[k]] += ps[k] * ws; aR[bi[k]] += rs[k] * ws; }
+            }
+            // 0.11.45: a hard limit on what the shapes other than the jaw may do to one bone together (15 mm, 30 deg): a bad pose or an
+            // extreme curve frame can't throw her lips or brows off her face. The jaw's part (the lips following the jaw, up to ~30 mm
+            // at a wide-open jaw, as rigid as her teeth) is added after it, unlimited, so the lips never part from the teeth.
+            // LipClamped counts the moves held back this frame (the lip probe logs it).
+            LipClamped = 0;
+            foreach (int i in _mapped)
+            {
+                float pm = _accP[i].magnitude * _mmUnit[i];
+                if (pm > 15f) { _accP[i] *= 15f / pm; LipClamped++; }
+                float rm = _accR[i].magnitude;   // degrees
+                if (rm > 30f) { _accR[i] *= 30f / rm; LipClamped++; }
+                _accP[i] += _jawP[i]; _accR[i] += _jawR[i];
             }
             fade = Mathf.Clamp01(fade); over = Mathf.Clamp01(over); mood = Mathf.Clamp01(mood);
             int frame = Time.frameCount;
@@ -1050,7 +1068,8 @@ namespace SfMorph
                 var t = _face[b];
                 if (t == null) continue;
                 Vector3 p; Quaternion q; t.GetLocalPositionAndRotation(out p, out q);
-                float o = _hasN[i] ? over : 0f;
+                // 0.11.45: the brows' deltas go on her expression's brows as they are (no pull to neutral)
+                float o = _hasN[i] && _grp[_lip[i]] != GBrows ? over : 0f;
                 Vector3 bp = Vector3.LerpUnclamped(p, _nP[i], o);
                 Quaternion bq = Quaternion.Slerp(q, _nQ[i], o);
                 // the expression's mouth under the visemes (the mood clip's pose, not the game's moan mouth that `over` takes out)
@@ -1105,7 +1124,8 @@ namespace SfMorph
             if (!LipReady) { report = "her face survey is not done"; return 0; }
             int nl = _lip.Length;
             var side = new int[nl];  // -1 right, 0 centre, 1 left
-            var cls = new int[nl];   // 0 jaw, 1 upper lip, 2 lower lip, 3 corner, 4 cheek, 5 other (tongue, teeth, nose)
+            var cls = new int[nl];   // 0 jaw, 1 upper lip, 2 lower lip, 3 corner, 4 cheek, 5 other (tongue, teeth, nose), 6 brow
+            var brow = new int[nl];
             int jaw = -1, upC = -1, loC = -1, cL = -1, cR = -1;
             for (int i = 0; i < nl; i++)
             {
@@ -1113,7 +1133,9 @@ namespace SfMorph
                 side[i] = n.Contains("left") || n.EndsWith("_l") ? 1 : n.Contains("right") || n.EndsWith("_r") ? -1 : 0;
                 bool tongue = n.Contains("tongue") || n.Contains("teeth") || n.Contains("tooth") || n.Contains("liquid") || n.Contains("chain");
                 cls[i] = n.Contains("jaw") ? 0 : tongue ? 5 : n.Contains("lip") ? (n.Contains("upper") ? 1 : n.Contains("lower") ? 2 : side[i] != 0 ? 3 : 5)
-                       : n.Contains("cheek") ? 4 : 5;
+                       : n.Contains("cheek") ? 4 : n.Contains("brow") ? 6 : 5;
+                // 0.11.45: brow part: 0 inner, 1 middle, 2 outer
+                brow[i] = n.Contains("insite") || n.Contains("inside") || n.Contains("inner") ? 0 : n.Contains("outsite") || n.Contains("outside") || n.Contains("outer") ? 2 : 1;
                 if (cls[i] == 0 && (jaw < 0 || _lip[i] == _jaw)) jaw = i;
                 if (cls[i] == 1 && side[i] == 0 && upC < 0) upC = i;
                 if (cls[i] == 2 && side[i] == 0 && loC < 0) loC = i;
@@ -1158,6 +1180,16 @@ namespace SfMorph
                 upFrom = "the lips";
             }
             if (upv.sqrMagnitude < 0.5f) { report = "no up direction for her mouth"; return 0; }
+            // 0.11.45 self-check of the frame (0.11.11-0.11.38 built every shape in a frame whose up pointed forward): her brows sit
+            // 40-80 mm above her mouth along up, and opening the jaw takes the lower lip down. Either one wrong: build nothing.
+            {
+                float mmChk = _head.TransformVector(Vector3.right).magnitude * 1000f;
+                float bh = 0f; int nb = 0;
+                for (int i = 0; i < nl; i++) if (cls[i] == 6) { bh += Vector3.Dot(N(i) - mid, upv) * mmChk; nb++; }
+                if (nb > 0 && bh / nb < 20f) { report = "mouth frame failed its check: her brows are " + (bh / nb).ToString("0") + " mm above her mouth along 'up' (from " + upFrom + "), expected 40-80; nothing built"; Plugin.Log.LogWarning("Reactions face: lip map " + report); return 0; }
+                if (open.sqrMagnitude > 1e-12f && Vector3.Dot(open, upv) >= 0f) { report = "mouth frame failed its check: opening the jaw moves the lower lip up along 'up' (from " + upFrom + "); nothing built"; Plugin.Log.LogWarning("Reactions face: lip map " + report); return 0; }
+                if (nb > 0) upFrom += ", brows " + (bh / nb).ToString("0") + " mm above the mouth";
+            }
             Vector3 fwd = Vector3.Cross(left, upv).normalized;
             if (Vector3.Dot(fwd, hinge.sqrMagnitude > 1e-12f ? hinge : mid) < 0f) fwd = -fwd;   // the mouth is in front of the hinge / head origin
             float mmH = _head.TransformVector(Vector3.right).magnitude * 1000f;
@@ -1274,6 +1306,21 @@ namespace SfMorph
                             add(i => U(i) && side[i] == 0, i => new Vector3(0f, 1.5f, 0.3f)); break;
                         case "cheekPuff": add(Ch, i => new Vector3(3f * side[i], 0f, 2f)); add(C, i => new Vector3(0.5f * side[i], 0f, 0f)); break;
                         case "cheekSquintLeft": case "cheekSquintRight": add(i => Ch(i) && side[i] == sd, i => new Vector3(0f, 2f, 0f)); break;
+                        // 0.11.45: brows (inner / middle / outer brow bones), in mm in the same frame
+                        case "browInnerUp":
+                            add(i => cls[i] == 6 && brow[i] == 0, i => new Vector3(-0.5f * side[i], 3.5f, 0.3f));
+                            add(i => cls[i] == 6 && brow[i] == 1, i => new Vector3(0f, 1.2f, 0f)); break;
+                        case "browOuterUpLeft": case "browOuterUpRight":
+                            add(i => cls[i] == 6 && side[i] == sd && brow[i] == 2, i => new Vector3(0f, 3.5f, 0f));
+                            add(i => cls[i] == 6 && side[i] == sd && brow[i] == 1, i => new Vector3(0f, 1.8f, 0f)); break;
+                        case "browDownLeft": case "browDownRight":
+                            add(i => cls[i] == 6 && side[i] == sd, i => new Vector3(brow[i] == 0 ? -1.5f * sd : 0f, brow[i] == 0 ? -3f : brow[i] == 1 ? -2.2f : -1.2f, brow[i] == 0 ? 0.6f : 0f)); break;
+                        // 0.11.45: the nose wrinkler without nose bones: the upper lip lifts on that side, the cheek rises, the inner brow dips
+                        case "noseSneerLeft": case "noseSneerRight":
+                            add(i => U(i) && side[i] == sd, i => new Vector3(0f, 2.5f, 0.3f));
+                            add(i => U(i) && side[i] == 0, i => new Vector3(0.3f * sd, 1f, 0f));
+                            add(i => Ch(i) && side[i] == sd, i => new Vector3(0f, 1.5f, 0.3f));
+                            add(i => cls[i] == 6 && side[i] == sd && brow[i] == 0, i => new Vector3(-0.5f * sd, -1f, 0f)); break;
                         default: continue;   // tongueOut: sculpt it
                     }
                     if (acc.Count == 0) continue;

@@ -8,7 +8,7 @@ namespace SfMorph
     {
         public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley, RubSound, MuteGameVoice, MuteDialogue, PackInScenes, PackNonEnglish, LipSync;
         public bool PenSound, PenReact; public float PenVolume;   // 0.11.25
-        public float LipStrength, LipLead, LipOverGame, LipMood;
+        public float LipStrength, LipLead, LipOverGame, LipMood, LipBrows, LipSticky;
         public float Sensitivity, Cooldown, Volume, SkinVolume, BlushGain, VoicePitchVar, LimbPush, LineChance, FaceStrength, VoicePitch, VoiceFormant;
         public string FaceMap = "", VoicePack = "";
         public int VoiceMode, Log;
@@ -25,7 +25,7 @@ namespace SfMorph
             LinesGamePath = p.ReactLinesGamePath.Value;
             Foley = p.ReactFoley.Value; RubSound = p.ReactRubSound.Value; PenSound = p.ReactPenSound.Value; PenReact = p.ReactPenReact.Value; PenVolume = p.ReactPenVolume.Value; VoicePack = p.VoicePackName.Value ?? ""; PackNonEnglish = p.VoiceNonEnglish.Value; VoicePitch = p.VoicePitch.Value; VoiceFormant = p.VoiceFormant.Value;
             FaceClips = p.ReactFaceClips.Value; FaceStrength = p.ReactFaceStrength.Value; FaceMap = p.ReactFaceMap.Value ?? "";
-            LipSync = p.LipSyncOn.Value; LipStrength = p.LipStrength.Value; LipLead = p.LipLead.Value; LipOverGame = p.LipOverGame.Value; LipMood = p.LipMood.Value;
+            LipSync = p.LipSyncOn.Value; LipStrength = p.LipStrength.Value; LipLead = p.LipLead.Value; LipOverGame = p.LipOverGame.Value; LipMood = p.LipMood.Value; LipBrows = p.LipBrows.Value; LipSticky = p.LipSticky.Value;
             PushByTouch = p.HandsPushByTouch.Value;   // the geometric push of other hands: without it and without physics hands nothing is classified
             LimbPush = p.HandsLimbPush.Value;   // the flinch's swing is a push on her limbs: it needs the slider above 0
         }
@@ -853,6 +853,18 @@ namespace SfMorph
             string oldMap = "";
             if (!_autoSeeded && _s.LipSync && LipSync.RetireOldMap(out oldMap))
                 L("lip sync: the mouth poses from an older version were set aside as " + oldMap + " (built in a wrong mouth frame: lower lip off her teeth); building new ones");
+            // 0.11.45: a map from 0.11.39-0.11.44 has no brow / nose-sneer poses: build just those (the rest stays as it is) and save
+            if (!_newShapesChecked && _s.LipSync && LipSync.PosedShapes > 0)
+            {
+                _newShapesChecked = true;
+                if (LipSync.Map[LipSync.BrowFirst].Count == 0)
+                {
+                    string r2;
+                    int n2 = _face.Seed(true, -1, out r2);
+                    if (n2 > 0) LipSync.SaveMap();
+                    L("lip sync: added the brow / nose-sneer poses to the saved mouth poses: " + r2);
+                }
+            }
             if (!_autoSeeded && _s.LipSync && LipSync.PosedShapes == 0 && !System.IO.File.Exists(LipSync.MapPath))
             {
                 _autoSeeded = true;
@@ -911,6 +923,19 @@ namespace SfMorph
                         // jawOpen (0.49 vs 0.16), which pushed her lower lip up past her neutral mouth into a pout
                         // 0.11.12: at most half of it (equal amounts closed the lips completely while the chin dropped: a jaw with no lips)
                         _lipW[LipSync.MouthClose] = Mathf.Min(_lipW[LipSync.MouthClose], 0.5f * _lipW[LipSync.JawOpen]);
+                        // 0.11.45 sticky lips: when her jaw starts to open from closed lips, the lips cling together for ~120 ms before they
+                        // part (lips together = mouthClose up to the opening, fading out), like real lips peeling apart
+                        float jo = _lipW[LipSync.JawOpen];
+                        if (jo < 0.05f) { _stickArmed = true; _stickT = 0f; }
+                        else if (_stickArmed)
+                        {
+                            _stickT += dt;
+                            float st = Mathf.Clamp01(_s.LipSticky) * Mathf.Clamp01(1f - _stickT / 0.12f);
+                            if (st <= 0f) _stickArmed = false;
+                            else _lipW[LipSync.MouthClose] = Mathf.Max(_lipW[LipSync.MouthClose], st * jo);
+                        }
+                        // 0.11.45: the brow channels at their own strength (over her expression's brows)
+                        for (int i = LipSync.BrowFirst; i <= LipSync.BrowLast; i++) _lipW[i] *= Mathf.Max(0f, _s.LipBrows);
                         for (int i = 0; i < LipSync.K; i++) { _lipW[i] = Mathf.Clamp01(_lipW[i] * k); _lipPrev[i] = _lipW[i]; }
                         active = true;
                         if (_now < _lipProbeUntil && _now >= _lipProbeNext) { _lipProbeNext = _now + 0.25f; _lipProbeW = true; }
@@ -940,12 +965,14 @@ namespace SfMorph
                 }
                 _probeUsed = 0;
                 sb.Append(wrote ? " -> bones: " + _face.LipDeltaReport() : " -> nothing written (no mapped pose)");
+                if (_face.LipClamped > 0) sb.Append(" (held back to 15 mm / 30 deg on ").Append(_face.LipClamped).Append(" bone moves: a pose is too strong)");
                 L(sb.ToString());
             }
             return wrote;
         }
         float _lipProbeUntil = -1f, _lipProbeNext;
-        bool _autoSeeded;
+        bool _autoSeeded, _newShapesChecked;
+        bool _stickArmed; float _stickT;
         bool _lipProbeW;
         long _probeUsed;
 

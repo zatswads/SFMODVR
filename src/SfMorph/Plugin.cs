@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.11.44";
+        public const string Version = "0.11.45";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -49,7 +49,7 @@ namespace SfMorph
         internal ConfigEntry<float> ReactSensitivity, ReactCooldown, ReactVolume, ReactSkinVolume, ReactBlushGain, ReactVoicePitchVar, ReactLineChance, ReactFaceStrength, VoicePitch, VoiceFormant;
         internal ConfigEntry<string> ReactFaceMap, VoicePackName;
         internal ConfigEntry<bool> LipSyncOn;
-        internal ConfigEntry<float> LipStrength, LipLead, LipOverGame, LipMood;
+        internal ConfigEntry<float> LipStrength, LipLead, LipOverGame, LipMood, LipBrows, LipSticky;
         internal ConfigEntry<int> ReactVoiceMode, ReactLog, ReactConfigRev;
         // 0.8.0 contact visuals v2 (GPU contact: dent edge, rim bulge, bent normals, self-contact, partner body, bend bulges, ripple, skin marks)
         internal ConfigEntry<bool> VoiceMuteDialogue, VoicePackInScenes, VoiceNonEnglish;
@@ -262,6 +262,8 @@ namespace SfMorph
             LipLead = Config.Bind("Voice", "LipTiming", 0f, new ConfigDescription("Seconds the mouth moves ahead of the sound (+ = earlier, - = later). The game's audio buffer delay is already accounted for; this is for the rest (wireless headset audio).", new AcceptableValueRange<float>(-0.3f, 0.3f)));
             LipOverGame = Config.Bind("Voice", "LipOverGame", 0.5f, new ConfigDescription("Under the lip-sync poses: 0 = the game's mouth of the moment (the poses add on top), 1 = her neutral mouth (the game's mouth is replaced).", new AcceptableValueRange<float>(0f, 1f)));
             LipMood = Config.Bind("Voice", "LipMood", 0.7f, new ConfigDescription("While a lip-synced clip plays, how much of her expression's mouth (the face clip of her mood: a smile, a grimace) stays under the lip-sync poses. 0 = the poses go on the base above (the expression keeps only its eyes, brows and cheeks), 1 = the expression's full mouth under them.", new AcceptableValueRange<float>(0f, 1f)));
+            LipBrows = Config.Bind("Voice", "LipBrows", 0.7f, new ConfigDescription("How much the lip-sync curves move her brows while she speaks (inner / outer raise, lowerer), on top of her expression's brows. 0 = the expression's brows only.", new AcceptableValueRange<float>(0f, 1.5f)));
+            LipSticky = Config.Bind("Voice", "LipSticky", 0.6f, new ConfigDescription("Sticky lips: when her mouth starts to open, the lips cling together for a moment before they part. 0 = off.", new AcceptableValueRange<float>(0f, 1f)));
             ReactBlush = Config.Bind("Reactions", "Blush", true, "Her face reddens with excitement and after slaps.");
             ReactBlushBody = Config.Bind("Reactions", "BlushBody", false, "Her body skin reddens too, at half strength.");
             ReactBlushGain = Config.Bind("Reactions", "BlushGain", 0.6f, new ConfigDescription("How strong the redness is.", new AcceptableValueRange<float>(0f, 2f)));

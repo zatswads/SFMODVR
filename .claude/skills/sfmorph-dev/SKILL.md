@@ -31,6 +31,26 @@ each wrap-up / release; give sessions you start the same format.
 5. **Release**: bump `Plugin.Version`, README changelog (symptom → cause → fix), commit with the trailer, push `main`.
 6. **Reply**: what was wrong and why, what changed, what to check, and say plainly it was built but not run in game.
 
+## Face, lip sync and voice packs (lessons from 0.9.9-0.11.45)
+
+- **Never copy a game clip's frame as a pose.** 0.9.9-0.11.10 seeded the ARKit mouth poses from her face clips: a fellatio frame
+  for jawOpen, -50 deg on the lower lip for mouthLowerDown; the lip curled and pouted. Poses are built (`ReactionsFace.Seed`):
+  millimetre moves in her mouth's frame, rotation only on the jaw and on the lips carried round the jaw's pivot.
+- **Check the frame, don't assume it.** 0.11.11-0.11.38 took "up" from two inner-lip bones that coincide on a closed mouth; up
+  pointed forward and every shape moved the wrong way. `Seed` now refuses to build unless her brows sit 40-80 mm above the mouth
+  along up and opening the jaw takes the lower lip down; keep that check when changing it. Offline, the saved `arkit-map.txt`
+  shows it: on bones with the same parent, mouthRollLower / Pucker / UpperUp must not point along jawOpen's lower-lip delta.
+- **Read the curves before mapping a channel.** Measure each new ARKit channel over a pack's CSVs (per-clip minimum = baseline,
+  p50 / p99) before driving bones with it. mouthClose is "lips together while the jaw is open": clamp it to jawOpen (0.11.11 / 0.11.12).
+- **Limits stay on:** `LipStep` holds the non-jaw deltas of a bone to 15 mm / 30 deg (the jaw-follow part is outside the limit,
+  or the lips leave the teeth); the lip probe logs `held back ...` when a pose is too strong.
+- **Old saved maps:** a fix to the pose builder must retire maps saved before it (`LipSync.RetireOldMap`, keeps a backup) or add
+  only the missing shapes (`Seed(onlyEmpty)`); otherwise the user keeps the broken poses.
+- **Verify in the log after every change:** `lip map built N shapes ... (up from the model's up, brows N mm above the mouth)` and
+  `lip probe` lines with single-digit mm, under ~25 deg, no `held back`.
+- **Voice packs:** never delete user audio (move it to `_removed-voice-packs`); check `origin/main`'s version before copying a
+  build into the game (an older worktree build downgrades it); pack paths can pass 260 chars, so bake from a short staging path.
+
 ## Don'ts
 
 - Don't scale or move her root (`MovePlayerAndGirl.reika`): the game positions it (shoe height, scenes).

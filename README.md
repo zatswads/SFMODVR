@@ -44,6 +44,18 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.45 (lip sync: brows, nose wrinkler, sticky lips; guards against extreme poses):
+- Her brows now follow the Audio2Face curves while she speaks (inner raise, outer raise, lowerer), as moves on top of her
+  expression's brows (Reactions tab, **Brows while she speaks**, 70 %). The nose wrinkler, which has no nose bone on her rig,
+  lifts that side of the upper lip and the cheek and dips the inner brow. **Sticky lips** (60 %): when her jaw starts to open from
+  closed lips, they cling together for ~120 ms before parting. Cheek raiser, upper-lip raiser, lip pressor, corner puller and
+  corner depressor were already driven; the curves have no channel for the nasolabial fold, nostrils or lip stickiness itself.
+  A saved pose map gets only the new brow / nose poses added (log `added the brow / nose-sneer poses ...`).
+- Guards so the lip sync can't throw her face around again: the pose builder checks its mouth frame (her brows must sit
+  40-80 mm above the mouth, opening the jaw must lower the lower lip) and builds nothing if it fails; all shapes together may
+  move one bone at most 15 mm / 30 deg apart from the jaw-follow (the probe logs `held back` when that bites). The curves'
+  brow / nose channels were measured over three packs first (baseline 0, p99 0.2-0.5).
+
 0.11.44 (voice packs: other languages, a drop-down):
 - A pack can carry its spoken lines in another language: `Sounds\voice\<pack>\lang\<Language>\lines\...` (same banks as `lines\`).
   Reactions tab: **Non-English lines (Spanish)** (`[Voice] NonEnglish`), greyed for a pack without one; the lines then come from

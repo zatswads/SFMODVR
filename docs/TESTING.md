@@ -98,6 +98,17 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.45 (brows, nose, sticky lips, pose guards)
+
+Install `dist/SfMorph.dll`. Reactions on, Face clips on, Lip sync on, a pack with lines.
+1. First lip-synced clip: with a map from 0.11.11 (yours): `the mouth poses from an older version were set aside ...` then
+   `lip map built 37 shapes for a N mm mouth (up from the model's up, brows 50-70 mm above the mouth)`. If it says
+   `mouth frame failed its check`, nothing is built: send the log.
+2. Test: a pack clip with lip sync: lip probe lines show single-digit mm, no `held back`; her brows lift and knit a little with
+   the speech while her expression's brows stay; on "m / b / p" after an open vowel the lips meet, and they peel apart a moment
+   late when she opens again (Sticky lips 0 % = no delay). Brows while she speaks 0 % = the 0.11.44 face.
+3. Smile / pain expression + a line: the expression's brows stay, the speech brows add on top; no jumping or drifting brows.
+
 ## 0.11.44 (pack languages, drop-down)
 
 Install `dist/SfMorph.dll`. Reactions tab:
