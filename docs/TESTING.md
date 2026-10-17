@@ -98,6 +98,13 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.40 (Round joints fixed)
+
+Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Physics tab: Round joints in deep bends on.
+- Standing, then sitting / kneeling / cowgirl: no dark red or inside-out patches on her groin, belly, thighs, knees. Debug tab Round
+  joints A/B on a bent knee or hip: ON should look rounder, never torn.
+- If anything still tears, note where and send the log (the bake line's `delta mush ... N without a frame`).
+
 ## 0.11.39 (pack answers every game line; lip frame; shuffle)
 
 Install `dist/SfMorph.dll`. Reactions on, a pack with lines (Pixie Dominant / Southern Domme / Scottish Peach / Pixie).

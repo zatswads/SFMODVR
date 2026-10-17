@@ -44,6 +44,20 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.40 (Round joints fixed for real):
+- Turning Round joints (Delta Mush) on still left dark red, inside-out patches on her groin, belly and upper thighs (user). The
+  0.11.35 change to his body's marks was not the main cause. The joint pass was: at vertices with few neighbours, at mesh borders
+  and in tight folds (her crotch, the vulva opening, the glute cleft), the smoothed neighbours can span a plane at right angles to
+  her skin. The frame built from them then had its normal side-on to the skin, and which way it flipped was a coin toss between the
+  bake and the GPU, so the skin detail came back mirrored with flipped normals. Her subdivided lower body has many such spots.
+- The frame's normal is now her skinned vertex normal, which is always defined and survives the mirrored space; the two other axes
+  come from the smoothed neighbours, and a vertex whose frame is close to degenerate fades out instead of flipping.
+- Checked with the plugin's own bake code and the real compute shader in Unity on her exported lower body:
+  - At rest, under a rotation and under a mirror: every vertex comes back exactly (it moved up to 3.2 mm with 4 flipped normals
+    before).
+  - A 90-degree knee bend: half of plain skinning's inverted triangles are gone (102 -> 55), the same with or without a mirror.
+- Shader bundle rebuilt: install dist/sfmorph_shaders too.
+
 0.11.39 (the pack answers every game voice line; lower lip and teeth; fewer repeats):
 - The pack now replaces her game voice wherever it has a fitting clip, whether or not "mute" was ticked (the switch is gone),
   and the game's own voice plays wherever the pack has nothing (a pack without lines like Rebecca / Amy, story scenes, a
