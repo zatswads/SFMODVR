@@ -196,6 +196,10 @@ So the avatar now shares her skeleton (the VRChat "armature merge" idea, with th
    feet by the bone map (avatar bone -> hers; its extra spine / neck bones split between her neighbours; its twist bones -> her
    ShoulderPart / ElbowPart / HipPart), blended by the avatar's own weight shares where the two meet (neck, wrists, ankles);
 4. bound to her bones with her bind poses; the game skins it; no per-frame work.
+5. her genitals (0.11.38, user: the avatar's own crotch did not work with the game): the game's pussy patch (vulva and anus, every
+   customisation type), pubic hair and internal meshes stay drawn; the avatar's crotch is cut where it is nearer her patch than her
+   skin, its skin within 3 cm of the patch / pubic hair is laid onto her body surface (fading out to 8 cm) so the patch rim fits;
+   the patch is tinted to the avatar's skin around it (per-renderer _SkinColor). Her clothes, toys and props stay drawn too.
 Offline (tools/avatar/drive_test.ps1, the plugin's own Avatar.cs + MeshData.cs in the Unity editor on her export and two recordings):
 her body skin to the avatar's 3 mm median, soles within 3-7 mm of hers, the avatar's skin stretch in the range of her own upper
 body's (x0.45-2.8 vs x0.3-2.3 at 0.1 / 99.9 %), all her renderers given back. The per-frame retarget below stays as the record of

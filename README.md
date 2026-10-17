@@ -44,6 +44,18 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.38 (avatar: her own genitals):
+- The avatar's own crotch did not work with the game (user, headset): a translucent, untextured piece that did not match her genital
+  customisation or move with the game's sex animations. Now the game's own genital meshes stay on: her pussy patch (vulva and anus,
+  every type the customisation swaps), pubic hair and the internal meshes, bound to her bones as always, so the swaps and the
+  animations work. The avatar's crotch is cut out where the patch sits and its skin around it (within 3 cm, fading out to 8 cm) is
+  laid onto her body surface, so the patch's rim and the pubic hair sit on it as on her (checked offline: from below the patch shows
+  exactly as on her own body, framed by the avatar's thighs). The patch is tinted to the avatar's skin: its own _SkinColor scaled by
+  the avatar's skin colour around it over hers (a per-renderer property block: her shared body material, the game's skin colour
+  setting and the brightness slider still apply).
+- Her renderers the avatar does not replace stay drawn: clothes, toys, props, internal meshes (before, all of her was hidden); only
+  her skin, nipples, face, eyes, lashes, brows, mouth and tears (and hair when Keep her hair is off) are hidden.
+
 0.11.37 (chubby glutes move like the breasts; a broad upper body in the Muscles section):
 - Chubby glutes now also change her glute physics, the way breast tissue behaves (user). More glute fat makes the glute soft zones
   softer (slower, wider jiggle), lets them give further under a hand or his body, and lets them keep wobbling longer. The belly and

@@ -98,6 +98,14 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.38 (avatar: her own genitals)
+
+Log, in the `Avatar RKS Krista 9: ...` line: `crotch: N vertices laid onto her skin, M triangles cut where her genital meshes sit, tint r g
+b (...)` (no tint = her colour maps could not be read). Headset: (1) the game's vulva / anus on the avatar, no gap or step at its rim,
+pubic hair on the mons, nothing translucent; (2) its tone close to the avatar's skin around it (Skin brightness changes both); (3) the
+customisation's genital types swap on the avatar; the sex animations open and move it; (4) her clothes and toys show on the avatar
+(they are fitted to her, so some clipping is expected); (5) None: all back.
+
 ## 0.11.37 (glute fat physics, broad upper body)
 
 Install `dist/SfMorph.dll` (no bundle change).
