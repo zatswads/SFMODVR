@@ -44,6 +44,14 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.36 (neck lines across her whole neck, not two mirrored strokes):
+- Her neck creases showed as two short, mirrored lines slanting down from under her jaw (headset 17 Oct). The front of her neck on
+  the body texture is shared by two meshes: her throat and the small piece under her chin. The maps were made on the under-chin
+  piece there, where the lines don't reach, so each line was blank in the middle and only its two side ends showed.
+- The body maps are now made on her throat, and the neck has three soft creases running across the whole front: uneven, slightly
+  wavy, each at its own height, depth and reach to either side (not mirrored), the middle one strongest, the top one short and faint.
+  Same driver as before: they fade in when she looks down or tucks her chin. Shader bundle rebuilt.
+
 0.11.35 (chubby on whole limbs and the torso; the lower body's bends back; no red smears from his body):
 - Her lower body had no bend bulges, knee or groin folds and no chubby since 0.11.31 (log: "no frame (no toes or breasts to tell
   her front)"). Her toes are on the foot mesh, so 0.11.31's front check found nothing there. It now uses the leg's front skin helper
