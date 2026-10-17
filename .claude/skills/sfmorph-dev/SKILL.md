@@ -5,7 +5,7 @@ description: Work on SF Body Morphs (src/SfMorph), the BepInEx plugin for Sex Fo
 
 # SfMorph development
 
-Read `docs/HANDOFF.md` (architecture, game facts, apply model) before changing code, and `docs/TESTING.md`
+Read `docs/LESSONS.md` (rules from past headset runs; skin marks are frozen) and `docs/HANDOFF.md` (architecture, game facts, apply model) before changing code, and `docs/TESTING.md`
 for what to verify and what to ask the user to test.
 
 ## Session title

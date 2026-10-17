@@ -9,6 +9,8 @@ group "Sex Formula VR" (file new sessions there).
 
 - Start with `docs/HANDOFF.md` (state, architecture, game facts, rules). Test plan: `docs/TESTING.md`.
   Changelog: `README.md`. Workflow skill: `.claude/skills/sfmorph-dev/SKILL.md`.
+- Before changing a system read `docs/LESSONS.md` (rules learnt the hard way: skin marks are frozen; folds, wrinkles, builds);
+  add a lesson whenever a headset run teaches one.
 - Build: `REFS=<reference DLL folder> sh build.sh` (game DLLs must be uploaded by the user; never commit them).
 - Branch `main`; bump `Plugin.Version` + README entry per release, rebuild `dist/SfMorph.dll`; no model names in commits.
 - Session titles: `MMDD HHMM <mark> [Tag] <topic> <ver>`, at most 44 characters (the sidebar cuts the rest), e.g.
