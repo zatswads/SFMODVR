@@ -98,6 +98,28 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.47 (correctives, muscle lengths, curve wrinkles, body creases, Delta Mush, presets, smoke tests)
+
+Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log: `SF Body Morphs 0.11.47`. First: Debug tab -> Smoke tests -> Run all
+smoke tests, then send the log (every `Smoke:` line). Then:
+1. Pose correctives (Physics tab, switch On): the build line ("Pose correctives: clavicle drivers ... interpolative", axis checks
+   under ~5 deg, no WARNING); arms overhead -> shoulders rise, arms keep their direction; forward / across -> shoulder forward, back ->
+   back; no creep over a minute; Off gives the exact game shoulders back; try Clavicle amount 0.3 / 0.6 / 1; "Log pose now" on any pose
+   that still looks wrong.
+2. Muscles (Driver 1): idle -> nothing above ~0.1 in the `length ratios` line; seated -> quads/calves relaxed; arms out/up -> deltoids,
+   then lats/serratus; crunch -> abs/obliques; arch -> back; Driver 0 = 0.11.46.
+3. Face curves: mouth pose editor previews (browInnerUp -> forehead, mouthSmileLeft -> left smile line only, noseSneer, shrugLower ->
+   chin); moods Pain / Ticklish / Surprise / Climax keep their lines while held; speech: lines flicker in, not noisy (else CurveGain 0.5).
+4. Body creases (Wrinkle test, new group flank / waist / upper belly; and poses): soft folds, no scar / drawn line / stitches; one side
+   only when that side compresses; groin crease deeper when seated legs apart. Send the peak compression lines (ranges 0.12 / 0.10 / 0.15
+   are first guesses).
+5. Delta Mush: deep knee / elbow bends keep the knee cap / elbow point full; joint strength sliders to 0 = plain skinning live; Keep
+   volume 0 vs 1; standing: no difference on / off.
+6. Presets: each click logs `Quality preset X (panel): N settings written`; the same preset again = nothing to change; a covered slider
+   -> Custom; her look unchanged; skin marks unchanged with every preset; turning away -> culled count rises, no pop turning back;
+   a hand out of view still dents; lip closures on p/b/m at low frame rate (LipFilter 0/1/2).
+7. Perf line before / after each preset (gpuRun, wrinkleRun, simulate, GPU ms).
+
 ## 0.11.45 (brows, nose, sticky lips, pose guards)
 
 Install `dist/SfMorph.dll`. Reactions on, Face clips on, Lip sync on, a pack with lines.

@@ -44,6 +44,48 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.47 (muscles, folds, wrinkles and correctives from a research pass; quality presets; smoke tests):
+- Research behind it: Unreal 5.8's ML Deformer sample and engine (Pose Driver RBF, Local Neural Morph bone masks, Chaos Flesh muscle
+  activation, MetaHuman wrinkle-map blending), the pose-driver docs, Unity Delta Mush and MyoSuite muscle-path models, and the user's
+  reference photos and videos of real torsos in motion (notes kept with the sessions).
+- Her shoulders stayed down when the game's animations raised her arms: the upper arm turned in place and the shoulder top and armpit
+  collapsed, because the animations barely move her Scapula bones. New pose correctives (Physics tab -> Pose correctives,
+  [Correctives] On, OFF in this first build until one headset A/B confirms the directions): an RBF pose driver per shoulder (about 9
+  target poses: rest, arm down, abduction 90/150, scaption, flexion 90/160, back, across) lifts, brings forward or pulls back and tilts
+  the shoulder blade with the arm (about a quarter of the lift beyond 30 deg), while the upper arm keeps the animation's exact direction.
+  It runs before her colliders and secondary motion read her pose, writes through trackers and fades out when switched off. "Log pose
+  now" writes the shoulder's coordinates for a pose that still looks wrong.
+- Muscles tensed from hand-written joint-angle tables, so muscles crossing two joints read wrongly (the thigh tensed when she sat, the
+  hamstrings couldn't tell a hip hinge from sitting) and a raised shoulder blade changed nothing. Each muscle is now driven by its
+  length, the way Chaos Flesh does it: origin, via and insertion points on her bones (30 strands, anatomy from MyoSuite's muscle paths
+  where they exist), a muscle shortening past its threshold contracts; the gravity / load terms stay on top (a held squat barely
+  changes a length). Deltoids read the arm against the shoulder blade; serratus and traps its rotation. [Muscles] Driver 0 keeps the
+  old tables; a log line every 10 s shows the length ratios.
+- Her face lines only appeared while the GPU measured her skin compressing, and the idle baseline faded a held expression, so a held
+  smile, a pain face or lip-synced speech left her face smooth. Face and neck regions now also follow the curves her face is driven by,
+  like MetaHuman's wrinkle maps: the lip sync's weights and an estimate per face-clip mood; piecewise-linear terms per region, left and
+  right from the curves' sides; the stronger of strain and curves wins, curves skip the idle fade. [Wrinkles] CurveDrive, CurveGain.
+- New body creases from the reference photos and videos: stacked flank creases on the back of the waist (arching with a twist or a bend
+  to that side), diagonal side-waist folds (a crunch or side bend), two upper-belly rolls with a paler band between them (sitting
+  hunched), and a deeper groin crease with the thigh rolling over it, a faint line below and small branch folds. Each side only when
+  that side compresses; ranges are first guesses.
+- Delta Mush thinned the outside of deep bends (knee cap, elbow point: 2-8 % of the limb's radius) and drifted sideways where her mesh
+  is unevenly dense (groin, vulva rim). It now weighs neighbours by their rest edge length (rest pose still exact), never moves her
+  skin inward ([Physics] DeltaMushKeepVolume) and has per-joint strengths (MushShoulder / MushElbow / MushHip / MushKnee).
+- Quality presets: Performance / Balanced / Quality / Best quality at the top of the Physics tab (and beside the timing in the Debug
+  tab) set what every part costs in one click: soft-point density, Delta Mush and its radius, self-contact, GPU contact culling,
+  wrinkle textures and redraw rates, face-clip tracks, physics-hand colliders and solver. Her look and the skin marks are never
+  touched; Custom shows when a covered setting differs. Fixes behind it: the soft zones lost a quarter of their simulation time at
+  23 fps (now up to 8 steps a frame, [Physics] SoftMaxSteps); GPU contact now skips her meshes out of view or beyond 3 m
+  ([Physics] ContactCullDistance; a pressing hand or a slap still runs); lip sync read one moment per frame and could miss a p / b / m
+  (now averaged over the frame keeping the strongest lip closure, [Voice] LipFilter, plus a one-frame display lead, LipAutoLead);
+  [Physics] Quality defaults to Balanced (a config still at the old Fidelity default moves once; Best quality brings it back), the row
+  is now "Soft points"; several constants became settings (SelfHitHold, RasterGap, AsleepAfter, Muscles BlendInterval, FaceTrackRate /
+  FaceTrackBudget, hands CookPerFrame / SolverIterations).
+- Debug tab: every section folds; Smoke tests run each feature and log `Smoke: <feature> PASS|FAIL|SKIP (why)` (send the log after
+  "Run all smoke tests"). docs/LESSONS.md collects the rules learnt from headset runs (skin marks are frozen).
+- Shader bundle rebuilt. Built and checked offline (renders, numeric harnesses); not run in the game.
+
 0.11.46 (VaM looks as avatars; one-click importer):
 - A VaM look could not become an avatar: VaM's export had no skin weights. `tools/vam/SfExport.cs` now also writes them
   (`weights.txt`: VaM's own `DAZSkinV2` nodes, DAZ TriAx weights per bone and axis, fully weighted vertices, general weights, seam
