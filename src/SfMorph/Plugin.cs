@@ -85,6 +85,7 @@ namespace SfMorph
             Tab = Config.Bind("Interface", "Tab", 0, "Last panel tab.");
             PerfLog = Config.Bind("General", "PerfLog", true, "Every 10 s a 'Perf' line in the log (and at the top of the panel): what each part of SF Body Morphs costs per frame (avg/max ms), the frame rate, fixed steps per frame, the GPU time when the VR runtime reports it, and where the rest of the frame goes (the game's physics, rendering, waiting). Costs about 0.01 ms a frame.");
             Avatar.Bind(Config);
+            PoseDriver.Bind(Config);   // 0.11.47 [Correctives]: automatic clavicle / scapula (PoseDriver.cs)
             Apply = Config.Bind("General", "Apply", true, "Apply the body changes (off = the game's own look, for comparing).");
             Physics = Config.Bind("Physics", "SoftZones", true, "Hands and limbs press into her glutes, thighs, belly and breasts (helper bones driven by the game's DynamicBone).");
             Softness = Config.Bind("Physics", "Softness", 0.5f, new ConfigDescription("How much the soft zones give (0 firm, 1 soft).", new AcceptableValueRange<float>(0f, 1f)));

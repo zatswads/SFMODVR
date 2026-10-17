@@ -363,7 +363,35 @@ namespace SfMorph
             GUILayout.Space(10);
             MotionSection(c);
             GUILayout.Space(10);
+            CorrectivesSection(c);
+            GUILayout.Space(10);
             PushesSection(c);
+        }
+
+        // 0.11.47 pose correctives ([Correctives], PoseDriver.cs): her clavicles / shoulder blades follow her arms over the game's animations
+        void CorrectivesSection(Character c)
+        {
+            GUILayout.Label("Pose correctives", _bold);
+            string off = !_p.Apply.Value ? "'Apply changes' is off" : !c.Female || c.IsPlayer ? "only for the game's woman" : null;
+            GUI.enabled = off == null;
+            bool on = GUILayout.Toggle(PoseDriver.On.Value, " Shoulders follow her arms (clavicle and shoulder blade rise, come forward or go back with the arm)");
+            GUI.enabled = true;
+            if (off == null && on != PoseDriver.On.Value) PoseDriver.On.Value = on;
+            string sub = off ?? (PoseDriver.On.Value ? null : "pose correctives are off");
+            float a = Slider("  Clavicle amount", PoseDriver.ClavicleAmount.Value * 100f, 0f, 100f, "0", 60f, sub == null ? null : "off: " + sub, " %") / 100f;
+            if (sub == null && Mathf.Abs(a - PoseDriver.ClavicleAmount.Value) > 0.0001f) PoseDriver.ClavicleAmount.Value = a;
+            GUI.enabled = off == null;
+            GUILayout.BeginHorizontal();
+            bool dbg = GUILayout.Toggle(PoseDriver.Debug.Value, " Log every 10 s");
+            if (off == null && dbg != PoseDriver.Debug.Value) PoseDriver.Debug.Value = dbg;
+            if (GUILayout.Button("Log pose now", GUILayout.Width(110f))) PoseDriver.LogNow();
+            GUILayout.EndHorizontal();
+            GUI.enabled = true;
+            if (off != null) GUILayout.Label("off: " + off, _off);
+            else if (PoseDriver.Status.Length > 0) GUILayout.Label(PoseDriver.Status, PoseDriver.Status.StartsWith("off") ? _off : _hint);
+            GUILayout.Label("The game's animations hardly move her shoulders: a raised arm turns under a shoulder that stays down. This adds the natural " +
+                            "shoulder-girdle motion (about a third of the arm's lift beyond 30 deg, forward when reaching forward or across, back when reaching back); " +
+                            "the arm still points where the animation puts it. 'Log pose now' writes both shoulders' angles and driver weights to the log (for poses that look wrong).", _hint);
         }
 
         // 0.11.7 (user: wrinkles and muscles are not physics): how her skin looks; the dents stay with the contacts in Physics

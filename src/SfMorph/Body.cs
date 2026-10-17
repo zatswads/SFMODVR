@@ -592,12 +592,24 @@ namespace SfMorph
                 Perf.Begin(Perf.S.Trackers);
                 if (_p.Apply.Value && !c.Look.Empty && c.Root != null) Apply(c);
                 Perf.End(Perf.S.Trackers);
+                // 0.11.47 pose correctives (PoseDriver.cs): her clavicles follow her arms, after the bone sliders and BEFORE HerBody / Overlap
+                // read her pose, so her colliders, the yield and the secondary motion see the corrected shoulders. Overlap.Unwind first: a
+                // bone the animation did not rewrite then holds the animation's rotation (our write of last frame), not last frame's lag.
+                bool unwound = false;
+                if (c == her && _p.Apply.Value)
+                {
+                    if (_overlapOn) { Overlap.Unwind(); unwound = true; }
+                    Perf.Begin(Perf.S.Trackers);
+                    try { PoseDriver.Step(c, Time.deltaTime); }
+                    catch (Exception e) { Plugin.Log.LogError("Pose correctives failed, retrying in 10 s: " + e); PoseDriver.Fail(); }
+                    Perf.End(Perf.S.Trackers);
+                }
                 // her segments BEFORE Overlap (0.8.0): the yield is measured against the animation's pose, so a limb that already yielded
                 // does not feed its own displacement back (the 0.7.8/0.7.9 Newton's cradle). Overlap.Unwind puts the animation's rotation
                 // back on bones the animation did not rewrite this frame, so the query never sees last frame's yield.
                 if (c == her && (physics || physHands))
                 {
-                    if (_overlapOn) Overlap.Unwind();
+                    if (_overlapOn && !unwound) Overlap.Unwind();
                     _hb.On = true; _hb.PushByTouch = _p.HandsPushByTouch.Value; _hb.PushByPartner = _p.HandsPushByPartner.Value; _hb.Embodied = embody && Embody != null ? Embody.PartnerRoot : null; _hb.Softness = _p.Softness.Value; _hb.SoftZonesOn = physics; _hb.Caps = Contacts();
                     Perf.Begin(Perf.S.HerBody);
                     try { HerBody.Update(c, _hb); }
@@ -674,6 +686,7 @@ namespace SfMorph
             Release();
             if ((her == null || !(_p.ReactOn.Value || _p.VoiceGuard.Value)) && _reactOn) { _reactOn = false; try { React.Release(); } catch { } }
             if ((her == null || !_p.Apply.Value) && _overlapOn) { _overlapOn = false; try { Overlap.Release(); } catch { } }
+            if ((her == null || !_p.Apply.Value) && PoseDriver.Frame >= 0) { try { PoseDriver.Release(); } catch { } }
             if ((!physics || her == null) && _gpuOn) { _gpuOn = false; try { if (Gpu != null) Gpu.Release(); } catch { } Gpu = null; _gpuTried = false; }
             if (Gpu == null && _marksOn) MarksOff();
             if ((!physics || her == null) && _rippleOn) RippleOff();
