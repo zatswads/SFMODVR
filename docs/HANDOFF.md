@@ -258,7 +258,8 @@ chains and per-outfit `Panties_Skin_*`. **No mesh has blendshapes.** Exact paren
 ## Character pipeline
 
 Avatar replacement (a third mode: the character's own mesh, rig and textures driven from her bones; design + the offline
-check `tools/avatar/retarget_check.py`, nothing in the plugin yet): `docs/SOURCES.md`, 'A third mode'.
+check `tools/avatar/retarget_check.py`, the bundle builder `tools/avatar/build.ps1` (Unity project tools/avatar/SfAvatarBundle),
+nothing in the plugin yet): `docs/SOURCES.md`, 'A third mode'.
 
 See `docs/PIPELINE.md` (VaM look → her: her export 0.5.x; VaM exporter `tools/vam/SfExport.cs`; fit/bake
 `tools/pipeline/run.ps1` and the runtime loader + Characters gallery in 0.6.0). Local toolchain on the user's PC:

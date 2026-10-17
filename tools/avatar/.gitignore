@@ -1,0 +1,12 @@
+SfAvatarBundle/Library/
+SfAvatarBundle/Temp/
+SfAvatarBundle/Logs/
+SfAvatarBundle/UserSettings/
+SfAvatarBundle/obj/
+SfAvatarBundle/*.csproj
+SfAvatarBundle/*.sln
+SfAvatarBundle/Build/
+SfAvatarBundle/Packages/packages-lock.json
+# characters copied in by build.ps1: never commit DAZ / VaM content
+SfAvatarBundle/Assets/Avatars/
+SfAvatarBundle/Assets/Avatars.meta
