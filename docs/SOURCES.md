@@ -305,9 +305,13 @@ pieces, in this order:
 
 1. Offline retarget check (done, above); the same on a real recording.
 2. The bundle project and builder (`tools/avatar`), the materials manifest; a test bundle of Krista 9 (done 2026-10-17).
-3. Plugin: `Avatar.cs` (load, hide, drive, give back) + the HerBody refit + a Characters tab *Avatars* list + `[Avatar]`
-   config (scale mode, IK weights, material route), exclusive with converted characters. **Ask the user before building or
-   installing anything into the game.**
+3. Plugin: `Avatar.cs` (load, hide, drive, give back) + a Characters tab *Avatars* list + `[Avatar]` config (scale mode, IK
+   weights, material route), exclusive with converted characters: built in 0.11.29, checked offline only. `tools/avatar/
+   drive_test.ps1` compiles the plugin's own Avatar.cs in the bundle project's editor (stubs for the plugin types) and runs it on
+   her export + a PoseRecorder recording: on Room_Scene every limb and finger segment within 0.03 degrees of hers (54 bones mapped),
+   her renderers given back on None; the driven skin, baked to OBJ, folds only where plain skinning does (wrist under a hard
+   bend, elbow point), which DAZ's correctives are for. Still open from this step: the HerBody refit (physics hands still meet
+   her body shape), the cornea / tear overlays (left out), her systems on the avatar (steps 5-6).
 4. G9 face map and blink; DAZ correctives exported and driven; material tuning from the first headset run.
 5. Soft zones, GPU contact and marks on the avatar.
 6. Wrinkle / muscle layouts per base figure; hair and outfits.

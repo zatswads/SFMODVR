@@ -23,6 +23,9 @@ plugin, `dist/SfMorph.dll`, independent of the SF Neural Rendering VR plugin
 - **Characters**: a gallery of VaM characters converted for her (`tools/pipeline/run.ps1`, `docs/PIPELINE.md`). Picking
   one gives her that character's body and face shape as a real blendshape (0–100 % slider, the other sliders still
   work on top), moves her joints to match, makes her clothes follow, and puts the character's skin textures on her.
+- **Avatars** (Characters tab): a character's own mesh, rig and skin (a DAZ Genesis 9 / 8 / 2 figure built into an avatar bundle
+  by `tools/avatar/build.ps1`) drawn instead of her and moved by her pose every frame, the way VRChat drives an avatar: her
+  animation, IK and the plugin's motion still drive it. Size, skin shader, brightness, her hair and hand / foot IK in the panel.
 - **Character pipeline**: export her meshes for turning a VaM character into a morph for her (`docs/PIPELINE.md`).
 - **Presets**: her changes save to `BepInEx\config\SfMorphs\characters\<name>.txt` as you edit and come
   back when she appears; presets (`...\presets\`) store a look by name to load later.
@@ -40,6 +43,28 @@ REFS=<folder with reference DLLs> sh build.sh      # -> dist/SfMorph.dll
 See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfMorph -c Release -p:GameDir="..."`.
 
 ## Changelog
+
+0.11.29 (avatar replacement, first build):
+- A third character mode (docs/SOURCES.md, 'A third mode: avatar replacement'). Instead of reshaping her mesh to a character
+  (the full conversion folded under the breasts) or baking its skin onto her UVs (her blush and makeup layers drew over it), the
+  character's own mesh, skeleton and textures are drawn in her place and driven from her bones every frame, as VRChat drives an
+  avatar from the player.
+- Characters tab, Avatars: pick an avatar bundle from `BepInEx\config\SfMorphs\avatars\<Name>` (built from the character's FBX by
+  `tools/avatar/build.ps1`; nothing of the character is in the repository). Her renderers are hidden (forceRenderingOff; the
+  game's own outfit swaps keep working under it); None gives everything back. Settings: Size (her leg length, her height, its
+  own), Skin shader (the game's HDRP/Lit with subsurface scattering and her skin's diffusion profile, or a copy of her own skin
+  shader with her makeup and blush layers off), Skin brightness, Keep her hair, Hands / Feet onto hers (two-bone IK, 0 = its own
+  limb lengths).
+- The retarget: each of her bones' change since her bind pose goes onto the avatar's matching bone, from a rest pose turned so
+  every limb and finger segment points where hers does; the trunk, collars, eyes and jaw take only her change (their directions
+  are rig conventions); the avatar's extra spine and neck bones share her bends; its twist bones share the upper-arm, thigh and
+  forearm twist; it runs right before the game skins the meshes, after her animation, FinalIK, DynamicBone and our own motion.
+  Checked offline with this code on a recording of her (Unity editor, `tools/avatar/drive_test.ps1`): every limb and finger
+  segment within 0.03 degrees of hers.
+- v1 limits: the cornea and tear overlays are left out (see-through surfaces, next step), lashes and brows are alpha-cut; her soft
+  zones, dents, marks, wrinkles and muscles still run on her hidden body; your physics hands still collide with her body shape,
+  which differs from the avatar's by its proportions; no face expressions beyond her jaw and eyes yet; DAZ's joint correctives are
+  not exported, so deep bends fold like plain skinning (wrist, elbow point).
 
 0.11.28 (round joints in deep bends: Delta Mush):
 - Her elbows, knees, hips and shoulders pinched and flattened in deep bends (user). The game skins her with plain linear skinning:

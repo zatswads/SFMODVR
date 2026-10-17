@@ -10,3 +10,6 @@ SfAvatarBundle/Packages/packages-lock.json
 # characters copied in by build.ps1: never commit DAZ / VaM content
 SfAvatarBundle/Assets/Avatars/
 SfAvatarBundle/Assets/Avatars.meta
+# drive_test.ps1 copies src/SfMorph/Avatar.cs in for the editor test
+SfAvatarBundle/Assets/Editor/DriveTest/Copied/
+SfAvatarBundle/Assets/Editor/DriveTest/Copied.meta

@@ -176,16 +176,33 @@ public static class AvatarBundle
                 }
                 k["albedoalpha"] = gp;
             }
+            else if (k.TryGetValue("opacity", out var op2))
+            {
+                // an opacity map alone (DAZ's lashes, tear): the surface's constant colour with the opacity in alpha
+                var col = ConstColor(s);
+                var key = op2 + "|" + col;
+                if (!genDone.TryGetValue(key, out var gp))
+                {
+                    var o = AssetDatabase.LoadAssetAtPath<Texture2D>(op2);
+                    int w = o.width, h = o.height;
+                    var px = o.GetPixels();
+                    for (int i = 0; i < px.Length; i++) px[i] = new Color(col.r, col.g, col.b, px[i].r);
+                    gp = WritePng(gen + "/" + Path.GetFileNameWithoutExtension(op2) + "_" + ColorUtility.ToHtmlStringRGB(col) + ".png", w, h, px);
+                    SetupTexture(gp, "albedoalpha", mapSize, mapSize, readable: false);
+                    genDone[key] = gp;
+                }
+                k["albedoalpha"] = gp;
+            }
         }
+        // readable copies were only needed for the generated maps
+        foreach (var kv in kindOf) if (kv.Value == "roughness" || kv.Value == "opacity") SetupTexture(kv.Key, kv.Value, maxSize, mapSize, readable: false);
+        foreach (var k in chan.Values) if (k.ContainsKey("albedoalpha") && k.ContainsKey("albedo")) SetupTexture(k["albedo"], "albedo", maxSize, mapSize, readable: false);
         // the bundle carries no roughness / opacity originals (their generated maps replace them) unless nothing replaced them
         foreach (var k in chan.Values)
         {
             if (k.ContainsKey("smooth")) k.Remove("roughness");
             if (k.ContainsKey("albedoalpha")) { k.Remove("opacity"); k.Remove("albedo"); }
         }
-        // readable copies were only needed for the generated maps
-        foreach (var kv in kindOf) if (kv.Value == "roughness" || kv.Value == "opacity") SetupTexture(kv.Key, kv.Value, maxSize, mapSize, readable: false);
-        foreach (var k in chan.Values) if (k.ContainsKey("albedoalpha") && k.ContainsKey("albedo")) SetupTexture(k["albedo"], "albedo", maxSize, mapSize, readable: false);
 
         // the prefab
         var go = (GameObject)PrefabUtility.InstantiatePrefab(model);
@@ -272,6 +289,8 @@ public static class AvatarBundle
         sb.Append("source ").Append(Path.GetFileName(fbx)).Append('\n');
         sb.Append("built ").Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", Inv)).Append('\n');
         sb.Append("unity ").Append(Application.unityVersion).Append('\n');
+        string bundle = Regex.Replace(name.ToLowerInvariant(), @"[^a-z0-9]+", "_").Trim('_');
+        sb.Append("bundle ").Append(bundle).Append('\n');
         sb.Append("prefab ").Append(name).Append('\n');
         sb.Append("height ").Append((hi - lo).ToString("0.###", Inv)).Append(' ').Append(lo.ToString("0.###", Inv)).Append('\n');
         sb.Append("skeleton ").Append(top.name).Append(' ').Append(mainSet.Count).Append('\n');
@@ -301,7 +320,6 @@ public static class AvatarBundle
         UnityEngine.Object.DestroyImmediate(go);
 
         // the bundle
-        string bundle = Regex.Replace(name.ToLowerInvariant(), @"[^a-z0-9]+", "_").Trim('_');
         Directory.CreateDirectory(outDir);
         var assets = new List<string> { prefabPath, manifestPath };
         assets.AddRange(bundleTex);
@@ -315,6 +333,18 @@ public static class AvatarBundle
             smrs.Length + " skinned meshes, " + surfaces.Count + " surfaces, " + bundleTex.Count + " textures, height " +
             (hi - lo).ToString("0.000", Inv) + " m");
         foreach (var n in notes) Log(n);
+    }
+
+    // the surface's constant colour from its FBX material ("color=r,g,b"), white when it has none
+    static Color ConstColor(string surface)
+    {
+        if (FbxConst.TryGetValue(surface, out var c))
+        {
+            var m = Regex.Match(c, @"color=([0-9.]+),([0-9.]+),([0-9.]+)");
+            if (m.Success)
+                return new Color(float.Parse(m.Groups[1].Value, Inv), float.Parse(m.Groups[2].Value, Inv), float.Parse(m.Groups[3].Value, Inv), 1f);
+        }
+        return Color.white;
     }
 
     static Dictionary<string, Dictionary<string, string>> ReadDaz(string path)
