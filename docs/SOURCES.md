@@ -177,6 +177,30 @@ Run 2026-10-16, RKS Krista 9 (G9 FBX from `daz_export.dsa`) on export Reika-2026
   narrower). IK to her wrists would not fix it (her hips are wider). Contacts with her own body need targets relative to the
   avatar's surface (below).
 
+### 0.11.32: on her skeleton, not its own (what the first headset run showed)
+
+0.11.29 built the retarget below: the avatar's own skeleton driven from hers every frame. In the headset (user, 2026-10-17) the
+pose was right but the avatar moved off her curves, its feet floated, drifted and one went through the floor, nothing jiggled and
+her hair did not stay on its head. The cause is the separate skeleton itself: the avatar's limb lengths and joints differ from
+hers, and the game's breast DynamicBones, her hair, Overlap / Embody contacts and every system of the plugin hang on her bones.
+So the avatar now shares her skeleton (the VRChat "armature merge" idea, with the mesh fitted instead of the bones moved):
+1. pose: the avatar's rest turned into her bind pose by the aligned rest below (limbs and fingers along hers; trunk, collars,
+   eyes, jaw unturned);
+2. fit: a smooth biharmonic RBF warp (affine part + r kernel) puts its shoulder, elbow, wrist, finger, hip, knee, ankle, toe, head
+   and eye joints on hers (45 points for G9; no spine / collar joints, rig conventions) and its heels and balls at her soles'
+   height (4 points), so it bends at her pivots and stands on her floor; the limbs take her lengths, the girths stay its own;
+3. weights: torso, breasts, glutes, arms and legs from her own skin (upperBody / lowerBody / foot / neck, read with MeshData,
+   our soft-zone helpers folded into their bones): an inverse-distance blend of the 4 nearest vertices within 4 cm, only from her
+   skin of the body regions the avatar vertex's own weights cover (else her hand, hanging by her hip in her bind pose, pulled hip
+   skin along; a single nearest vertex tore the crotch midline between her left and right inner-thigh helpers); head, hands and
+   feet by the bone map (avatar bone -> hers; its extra spine / neck bones split between her neighbours; its twist bones -> her
+   ShoulderPart / ElbowPart / HipPart), blended by the avatar's own weight shares where the two meet (neck, wrists, ankles);
+4. bound to her bones with her bind poses; the game skins it; no per-frame work.
+Offline (tools/avatar/drive_test.ps1, the plugin's own Avatar.cs + MeshData.cs in the Unity editor on her export and two recordings):
+her body skin to the avatar's 3 mm median, soles within 3-7 mm of hers, the avatar's skin stretch in the range of her own upper
+body's (x0.45-2.8 vs x0.3-2.3 at 0.1 / 99.9 %), all her renderers given back. The per-frame retarget below stays as the record of
+step 1 (and as the way for an avatar that cannot share her skeleton).
+
 ### The retarget (what the plugin would run every frame)
 
 All rotations are world rotations in her root's space; `D_h = R_h(now) R_h(bind)^-1` is her bone's change since her bind

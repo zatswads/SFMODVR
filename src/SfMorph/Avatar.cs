@@ -6,50 +6,42 @@ using System.Linq;
 using System.Reflection;
 using BepInEx.Configuration;
 using UnityEngine;
-using UnityEngine.LowLevel;
-using UnityEngine.PlayerLoop;
 using UnityEngine.Rendering;
 
 namespace SfMorph
 {
-    // Avatar replacement (docs/SOURCES.md, 'A third mode: avatar replacement'): a character's own mesh, rig and textures from an
-    // avatar bundle (tools/avatar/build.ps1) drawn instead of her and driven by her pose every frame.
+    // Avatar replacement (docs/SOURCES.md, 'A third mode: avatar replacement'): a character's own mesh and textures from an avatar
+    // bundle (tools/avatar/build.ps1) drawn instead of her, skinned to HER skeleton.
     //
-    // Her skeleton keeps animating as before (the game's Animator, FinalIK, the face Animator, our Overlap / Embody / Reactions):
-    // it is only the pose source. Her renderers are hidden with forceRenderingOff (the game's own SetActive swaps keep working
-    // under it); the avatar is a top-level 'SfAvatar <name>' object (every scan skips 'Sf' objects) that follows her root.
-    //
-    // The retarget is the one tools/avatar/retarget_check.py checks offline (Blender, on her export and a PoseRecorder
-    // recording), in her root's space: D_h = her bone's rotation now x its rotation in her bind pose^-1;
-    //   aligned rest A_b: the avatar's rest turned bone by bone (parents first) so each limb / finger segment points where hers
-    //                     does in her bind pose (the hand by two directions); trunk, collars, eyes and jaw are not turned
-    //                     (their directions are rig conventions);
-    //   mapped    W_b = D_h A_b;   trunk bones between anchors (G9 spine1 / spine3 / neck2)  W_b = D_lo (D_lo^-1 D_hi)^f A_b;
-    //   twist     the upper arm / thigh keeps its swing, its twist bones take 1/n..1 of its twist; forearm twist bones take
-    //             k/(n+1) of the hand's twist about the forearm;
-    //   others    keep their rest local rotation (metacarpals, toes, the face rig, pectorals);
-    //   root      her pelvis + D_root (avatar hips - her pelvis at bind); uniform scale by the legs (or height, or none);
-    //   IK        optional two-bone IK of arms / legs toward her wrists / ankles (pole: her elbow / knee), by weight.
-    // It runs in a PlayerLoop step right before PostLateUpdate.UpdateAllSkinnedMeshes, where PoseRecorder samples: after the
-    // Animator, FinalIK, DynamicBone, the face Animator and our own steps.
+    // 0.11.29 drove the avatar's own skeleton from her pose every frame: the pose matched, but nothing of hers carried over (the
+    // game's breast physics, her hair on her head, her feet on the floor; the avatar's own limb lengths made its feet drift and
+    // dip through the floor and its body move off her curves). Since 0.11.30 the avatar mesh is rebuilt once, at load, onto her
+    // skeleton, and the game skins it with her bones like her own meshes:
+    //   1. pose: the avatar's rest turned bone by bone into her bind pose (each limb / finger segment along hers, the hand by two
+    //      directions; trunk, collars, eyes and jaw keep their rest: their directions are rig conventions);
+    //   2. fit: a smooth warp (biharmonic RBF with an affine part) moves the avatar's joints onto hers: head, eyes, shoulders,
+    //      elbows, wrists, finger joints, hips, knees, ankles, toes (no spine / collar joints: rig conventions again), so every
+    //      limb bends at her pivots and the feet stand where hers do;
+    //   3. weights: torso, breasts, glutes, arms and legs take her own skin weights from the nearest vertex of her body meshes
+    //      (her breast chain moved by the game's DynamicBone, her twist bones, her skin helpers), head / hands / feet and anything
+    //      farther than 4 cm from her skin by the bone map (the avatar's bone -> hers; its extra spine / neck bones split between
+    //      her neighbours; its twist bones -> her ShoulderPart / ElbowPart / HipPart);
+    //   4. the new meshes are bound to her bones with her bind poses; her renderers are hidden (forceRenderingOff), her hair
+    //      optionally kept. No per-frame work: her animation, IK, DynamicBone, Overlap / Embody and the Body / Bones sliders on
+    //      her bones move the avatar exactly as they move her.
     internal static class Avatar
     {
-        internal struct DriveStep { }
-
         public static ConfigEntry<string> Pick;
-        public static ConfigEntry<int> ScaleMode, MaterialRoute;
-        public static ConfigEntry<float> Brightness, HandIk, FootIk;
+        public static ConfigEntry<int> MaterialRoute;
+        public static ConfigEntry<float> Brightness;
         public static ConfigEntry<bool> KeepHair;
 
         public static void Bind(ConfigFile cfg)
         {
             Pick = cfg.Bind("Avatar", "Name", "", "Avatar replacement: the avatar drawn instead of her (a folder under BepInEx\\config\\SfMorphs\\avatars made by tools/avatar/build.ps1). Empty: off.");
-            ScaleMode = cfg.Bind("Avatar", "Scale", 0, new ConfigDescription("Avatar size: 0 her leg length (its feet on her floor), 1 her height, 2 its own size.", new AcceptableValueRange<int>(0, 2)));
             MaterialRoute = cfg.Bind("Avatar", "Material", 1, new ConfigDescription("Avatar skin shader: 0 a copy of her own skin material (Shader Graphs/Skin) with the avatar's textures and her makeup / blush layers off, 1 the game's HDRP/Lit with subsurface scattering and her skin's diffusion profile.", new AcceptableValueRange<int>(0, 1)));
             Brightness = cfg.Bind("Avatar", "Brightness", 1f, new ConfigDescription("Avatar skin brightness (multiplies its colour maps).", new AcceptableValueRange<float>(0.5f, 1.5f)));
-            HandIk = cfg.Bind("Avatar", "HandIk", 0f, new ConfigDescription("Pull the avatar's hands onto hers (0 = its own arm lengths, 1 = exactly where hers are; elbows bend to make up the difference).", new AcceptableValueRange<float>(0f, 1f)));
-            FootIk = cfg.Bind("Avatar", "FootIk", 0f, new ConfigDescription("Pull the avatar's feet onto hers (0 = its own leg lengths, 1 = exactly where hers are).", new AcceptableValueRange<float>(0f, 1f)));
-            KeepHair = cfg.Bind("Avatar", "KeepHair", true, "Keep her hair on while the avatar is drawn (it follows her head, which sits within a few cm of the avatar's).");
+            KeepHair = cfg.Bind("Avatar", "KeepHair", true, "Keep her hair on while the avatar is drawn (the avatar's head is fitted onto hers, so her hair sits on it).");
         }
 
         public static string Root { get { return Path.Combine(Store.Dir, "avatars"); } }
@@ -97,7 +89,7 @@ namespace SfMorph
 
         public static bool On { get { return _rig != null; } }
 
-        // From Runner.Update: loads / unloads by the config, keeps the frame-loop step and the hidden set every 2 s.
+        // From Runner.Update: loads / unloads by the config; every 2 s her renderers the game added since are hidden too.
         public static void Tick(Body body)
         {
             try
@@ -112,8 +104,8 @@ namespace SfMorph
                     Status = off;
                     return;
                 }
-                if (_rig != null && (_rig.HerRoot != her.Root || _rig.Name != want || _rig.Go == null || _rig.ScaleMode != ScaleMode.Value))
-                    Unload(_rig.Go == null ? "its object went away (scene change)" : _rig.HerRoot != her.Root ? "her character changed" : "settings changed");
+                if (_rig != null && (_rig.HerRoot != her.Root || _rig.Name != want || _rig.Go == null || _rig.Broken))
+                    Unload(_rig.Go == null ? "its object went away (scene change)" : _rig.HerRoot != her.Root ? "her character changed" : _rig.Broken ? "her skeleton changed" : "another avatar picked");
                 if (_rig == null)
                 {
                     if (_failed == want && _failedRoot == her.Root) return;
@@ -122,12 +114,12 @@ namespace SfMorph
                     else _failed = null;
                     return;
                 }
-                if (_rig.Route != MaterialRoute.Value || Mathf.Abs(_rig.Bright - Brightness.Value) > 0.001f) _rig.Materials(MaterialRoute.Value, Brightness.Value);
+                if (_rig.Route != MaterialRoute.Value) _rig.Materials(MaterialRoute.Value, Brightness.Value);
+                else if (Mathf.Abs(_rig.Bright - Brightness.Value) > 0.001f) _rig.SetBrightness(Brightness.Value);
                 if (_rig.Hair != KeepHair.Value) _rig.Hide(KeepHair.Value);
                 if (Time.unscaledTime >= _nextCheck)
                 {
                     _nextCheck = Time.unscaledTime + 2f;
-                    EnsureStep();
                     _rig.Hide(KeepHair.Value);   // renderers the game added since (outfit swaps)
                 }
             }
@@ -146,7 +138,9 @@ namespace SfMorph
             if (e == null) { Rescan(); e = Entries.FirstOrDefault(x => x.Name == name); }
             if (e == null) { Status = "off: no avatar '" + name + "' in " + Root; Plugin.Log.LogWarning("Avatar: " + Status); return; }
             var rig = new Rig();
-            string err = rig.Build(e, her);
+            string err;
+            try { err = rig.Build(e, her); }
+            catch (Exception ex) { err = ex.GetType().Name + ": " + ex.Message; Plugin.Log.LogError("Avatar build: " + ex); }
             if (err != null)
             {
                 Status = "off: " + err;
@@ -155,7 +149,6 @@ namespace SfMorph
                 return;
             }
             _rig = rig;
-            EnsureStep();
             Status = rig.Summary;
         }
 
@@ -165,57 +158,6 @@ namespace SfMorph
             Plugin.Log.LogInfo("Avatar '" + _rig.Name + "' off: " + why);
             var r = _rig; _rig = null;
             r.Destroy();
-            RemoveStep();
-        }
-
-        static int _errors;
-        static void Step()
-        {
-            if (_rig == null) return;
-            try { _rig.Drive(); }
-            catch (Exception e)
-            {
-                if (++_errors <= 3) Plugin.Log.LogError("Avatar drive failed: " + e);
-                if (_errors >= 3) { Status = "off: drive failed (" + e.Message + ")"; Pick.Value = ""; try { Unload("drive errors"); } catch { } }
-            }
-        }
-
-        // ---- PlayerLoop (the PoseRecorder pattern): right before the game skins the meshes -------------------------------------
-        static void EnsureStep()
-        {
-            var root = PlayerLoop.GetCurrentPlayerLoop();
-            var subs = root.subSystemList;
-            if (subs == null) return;
-            for (int i = 0; i < subs.Length; i++)
-            {
-                if (subs[i].type != typeof(PostLateUpdate) || subs[i].subSystemList == null) continue;
-                var list = new List<PlayerLoopSystem>(subs[i].subSystemList);
-                if (list.Exists(s => s.type == typeof(DriveStep))) return;
-                int at = list.FindIndex(s => s.type == typeof(PostLateUpdate.UpdateAllSkinnedMeshes));
-                var step = new PlayerLoopSystem { type = typeof(DriveStep), updateDelegate = Step };
-                if (at < 0) list.Add(step); else list.Insert(at, step);
-                subs[i].subSystemList = list.ToArray();
-                root.subSystemList = subs;
-                PlayerLoop.SetPlayerLoop(root);
-                return;
-            }
-        }
-
-        static void RemoveStep()
-        {
-            var root = PlayerLoop.GetCurrentPlayerLoop();
-            var subs = root.subSystemList;
-            if (subs == null) return;
-            for (int i = 0; i < subs.Length; i++)
-            {
-                if (subs[i].type != typeof(PostLateUpdate) || subs[i].subSystemList == null) continue;
-                var list = new List<PlayerLoopSystem>(subs[i].subSystemList);
-                if (list.RemoveAll(s => s.type == typeof(DriveStep)) == 0) return;
-                subs[i].subSystemList = list.ToArray();
-                root.subSystemList = subs;
-                PlayerLoop.SetPlayerLoop(root);
-                return;
-            }
         }
 
         // ---- bone tables: canonical key -> names ('{s}' = the rig's side token) -------------------------------------------------
@@ -268,7 +210,7 @@ namespace SfMorph
                 "thigh", "{s}Thigh", "shin", "{s}Shin", "foot", "{s}Foot", "toe", "{s}Toe"),
         };
 
-        // key (+ side 'L' / 'R' for sided keys) -> bone, from a name lookup (case-insensitive)
+        // key (+ '.L' / '.R' for sided keys) -> bone, from a name lookup (lower case)
         static Dictionary<string, Transform> MapBones(RigTable t, Dictionary<string, Transform> byName)
         {
             var m = new Dictionary<string, Transform>();
@@ -288,24 +230,58 @@ namespace SfMorph
 
         static string K(string key, string side) { return side == null ? key : key + "." + side; }
 
-        // ---- quaternion helpers ---------------------------------------------------------------------------------------------
-        static Quaternion Pow(Quaternion q, float f)
+        // ---- a smooth warp through point pairs: biharmonic RBF (phi = r) plus an affine part -------------------------------------
+        class Rbf
         {
-            q.ToAngleAxis(out float ang, out Vector3 axis);
-            if (float.IsNaN(axis.x) || axis.sqrMagnitude < 1e-12f) return Quaternion.identity;
-            if (ang > 180f) ang -= 360f;
-            return Quaternion.AngleAxis(ang * f, axis);
-        }
+            Vector3[] _c; double[,] _w; int _n;
 
-        // twist part of q about u (q = swing x twist)
-        static Quaternion TwistAbout(Quaternion q, Vector3 u)
-        {
-            u.Normalize();
-            var p = Vector3.Project(new Vector3(q.x, q.y, q.z), u);
-            var t = new Quaternion(p.x, p.y, p.z, q.w);
-            float n = Mathf.Sqrt(t.x * t.x + t.y * t.y + t.z * t.z + t.w * t.w);
-            if (n < 1e-9f) return Quaternion.identity;
-            return new Quaternion(t.x / n, t.y / n, t.z / n, t.w / n);
+            public static Rbf Fit(List<Vector3> src, List<Vector3> dst)
+            {
+                int n = src.Count, m = n + 4;
+                var a = new double[m, m + 3];
+                for (int i = 0; i < n; i++)
+                {
+                    for (int j = 0; j < n; j++) a[i, j] = (src[i] - src[j]).magnitude + (i == j ? 1e-6 : 0.0);
+                    a[i, n] = src[i].x; a[i, n + 1] = src[i].y; a[i, n + 2] = src[i].z; a[i, n + 3] = 1.0;
+                    a[n, i] = src[i].x; a[n + 1, i] = src[i].y; a[n + 2, i] = src[i].z; a[n + 3, i] = 1.0;
+                    var d = dst[i] - src[i];
+                    a[i, m] = d.x; a[i, m + 1] = d.y; a[i, m + 2] = d.z;
+                }
+                // Gaussian elimination with partial pivoting, three right-hand sides
+                for (int col = 0; col < m; col++)
+                {
+                    int piv = col;
+                    for (int r = col + 1; r < m; r++) if (Math.Abs(a[r, col]) > Math.Abs(a[piv, col])) piv = r;
+                    if (Math.Abs(a[piv, col]) < 1e-12) continue;
+                    if (piv != col) for (int c = 0; c < m + 3; c++) { var t = a[col, c]; a[col, c] = a[piv, c]; a[piv, c] = t; }
+                    for (int r = 0; r < m; r++)
+                    {
+                        if (r == col) continue;
+                        double f = a[r, col] / a[col, col];
+                        if (f == 0.0) continue;
+                        for (int c = col; c < m + 3; c++) a[r, c] -= f * a[col, c];
+                    }
+                }
+                var w = new double[m, 3];
+                for (int r = 0; r < m; r++) for (int k = 0; k < 3; k++) w[r, k] = Math.Abs(a[r, r]) > 1e-12 ? a[r, m + k] / a[r, r] : 0.0;
+                return new Rbf { _c = src.ToArray(), _w = w, _n = n };
+            }
+
+            public Vector3 Apply(Vector3 p)
+            {
+                double x = 0, y = 0, z = 0;
+                for (int i = 0; i < _n; i++)
+                {
+                    double r = (p - _c[i]).magnitude;
+                    x += _w[i, 0] * r; y += _w[i, 1] * r; z += _w[i, 2] * r;
+                }
+                for (int k = 0; k < 3; k++)
+                {
+                    double v = _w[_n, k] * p.x + _w[_n + 1, k] * p.y + _w[_n + 2, k] * p.z + _w[_n + 3, k];
+                    if (k == 0) x += v; else if (k == 1) y += v; else z += v;
+                }
+                return p + new Vector3((float)x, (float)y, (float)z);
+            }
         }
 
         // ---- one loaded avatar ------------------------------------------------------------------------------------------------
@@ -314,47 +290,43 @@ namespace SfMorph
             public string Name, Summary = "";
             public Transform HerRoot;
             public GameObject Go;
-            public int ScaleMode, Route = -1;
+            public int Route = -1;
             public float Bright = -1f;
             public bool Hair = true;
             AssetBundle _bundle;
-            GameObject _model;
             readonly List<Material> _made = new List<Material>();
+            readonly List<KeyValuePair<Material, Color>> _tint = new List<KeyValuePair<Material, Color>>();   // material, its colour at brightness 1
             readonly List<Mesh> _meshes = new List<Mesh>();
             readonly Dictionary<Renderer, bool> _hidden = new Dictionary<Renderer, bool>();
-            SkinnedMeshRenderer[] _rends;
-            Material[][] _origMats; Mesh[] _origMesh;   // the bundle's, for rebuilding the materials
+            readonly List<SkinnedMeshRenderer> _rends = new List<SkinnedMeshRenderer>();
+            readonly List<Material[]> _origMats = new List<Material[]>();   // the bundle's materials per new renderer (named by surface)
             readonly Dictionary<string, string> _surfRole = new Dictionary<string, string>();
             readonly Dictionary<string, Dictionary<string, string>> _surfTex = new Dictionary<string, Dictionary<string, string>>();
             readonly Dictionary<string, Color> _surfCol = new Dictionary<string, Color>();
             Material _herSkin;
+            Transform[] _herBones;   // the bones the new meshes are bound to
 
-            // avatar skeleton, parents first
-            Transform[] _t; int[] _p;
-            Quaternion[] _g, _al, _w; Vector3[] _h, _x;
-            bool[] _fixed, _write;
-            int[] _kind, _her, _lo, _hi; float[] _f;
-            const int Follow = 0, Mapped = 1, Spread = 2, Twist = 3;
-            class TwistSet { public int Bend, To, Hand; public bool HandMode; public int[] Bones; public float[] F; }
-            readonly List<TwistSet> _twists = new List<TwistSet>();
-            int _hips, _hipsHer;
-            Vector3 _rootOff;
-            readonly List<int[]> _arms = new List<int[]>(), _legs = new List<int[]>();   // avatar upper, mid, end + her upper, mid, end
-            // her bones used
-            readonly List<Transform> _ht = new List<Transform>();
-            readonly List<Quaternion> _hb = new List<Quaternion>();
-            readonly List<Vector3> _hp = new List<Vector3>();
-            Quaternion[] _d; Vector3[] _hx;
+            // a bone of hers the new meshes use went away (the game rebuilt her): reload
+            public bool Broken { get { if (_herBones == null) return false; foreach (var b in _herBones) if (b == null) return true; return false; } }
 
             public string Build(Entry e, Character her)
             {
-                Name = e.Name; HerRoot = her.Root; ScaleMode = Avatar.ScaleMode.Value;
+                Name = e.Name; HerRoot = her.Root;
                 var lines = File.ReadAllLines(Path.Combine(e.Dir, "avatar.txt"));
                 _bundle = AssetBundle.LoadFromFile(e.Bundle);
                 if (_bundle == null) return "could not load " + e.Bundle + " (built for another Unity version, or already loaded)";
                 string prefabName = Val(lines, "prefab") ?? Name;
                 var prefab = _bundle.LoadAsset<GameObject>(prefabName);
                 if (prefab == null) return "no prefab '" + prefabName + "' in " + e.Bundle;
+                ReadSurfaces(lines);
+                var tmp = new GameObject("SfAvatarBuild");
+                tmp.transform.SetPositionAndRotation(HerRoot.position, HerRoot.rotation);
+                try { return BuildFrom(prefab, tmp); }
+                finally { UnityEngine.Object.DestroyImmediate(tmp); }
+            }
+
+            void ReadSurfaces(string[] lines)
+            {
                 foreach (var l in lines)
                 {
                     if (!l.StartsWith("surface ", StringComparison.Ordinal)) continue;
@@ -377,222 +349,432 @@ namespace SfMorph
                     }
                     _surfCol[f[0]] = col;
                 }
+            }
 
-                Go = new GameObject("SfAvatar " + Name);
-                Go.transform.SetPositionAndRotation(HerRoot.position, HerRoot.rotation);
-                _model = UnityEngine.Object.Instantiate(prefab, Go.transform, false);
-                _model.name = "model";
-                _rends = _model.GetComponentsInChildren<SkinnedMeshRenderer>(true);
-                if (_rends.Length == 0) return "the prefab has no skinned meshes";
-                _origMats = _rends.Select(r => r.sharedMaterials).ToArray();
-                _origMesh = _rends.Select(r => r.sharedMesh).ToArray();
+            string BuildFrom(GameObject prefab, GameObject tmp)
+            {
+                var model = UnityEngine.Object.Instantiate(prefab, tmp.transform, false);
+                var avRends = model.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+                if (avRends.Length == 0) return "the prefab has no skinned meshes";
+                foreach (var r in avRends) if (r.sharedMesh == null || !r.sharedMesh.isReadable) return "mesh of " + r.name + " is not readable (rebuild the bundle with tools/avatar/build.ps1)";
 
-                // bones: the avatar's by name, hers by name (her root, not ours)
+                // bones: the avatar's by name, hers by name (not ours)
                 var avByName = new Dictionary<string, Transform>();
-                foreach (var t in _model.GetComponentsInChildren<Transform>(true)) { var k = t.name.ToLowerInvariant(); if (!avByName.ContainsKey(k)) avByName[k] = t; }
+                foreach (var t in model.GetComponentsInChildren<Transform>(true)) { var k = t.name.ToLowerInvariant(); if (!avByName.ContainsKey(k)) avByName[k] = t; }
                 var herByName = new Dictionary<string, Transform>();
-                foreach (var t in HerRoot.GetComponentsInChildren<Transform>(true)) { var k = t.name.ToLowerInvariant(); if (!herByName.ContainsKey(k)) herByName[k] = t; }
+                foreach (var t in HerRoot.GetComponentsInChildren<Transform>(true)) { if (VrHands.UnderSf(t)) continue; var k = t.name.ToLowerInvariant(); if (!herByName.ContainsKey(k)) herByName[k] = t; }
                 var hm = MapBones(Hers, herByName);
                 RigTable best = null; Dictionary<string, Transform> am = null;
                 foreach (var t in AvatarTables) { var m = MapBones(t, avByName); if (am == null || m.Count > am.Count) { am = m; best = t; } }
-                var need = new[] { "hips", "spine", "neck", "head" }.Concat(new[] { "upperarm", "forearm", "hand", "thigh", "shin", "foot" }.SelectMany(k => new[] { k + ".L", k + ".R" }));
+                var need = new[] { "hips", "spine", "neck", "head" }.Concat(new[] { "upperarm", "forearm", "hand", "thigh", "shin", "foot" }.SelectMany(k => new[] { k + ".L", k + ".R" })).ToList();
                 var missA = need.Where(k => !am.ContainsKey(k)).ToList();
                 var missH = need.Where(k => !hm.ContainsKey(k)).ToList();
                 if (missA.Count > 0) return "the avatar's rig (" + best.Id + " table) has no " + string.Join(", ", missA.ToArray());
                 if (missH.Count > 0) return "her rig has no " + string.Join(", ", missH.ToArray());
+                var herBind = HerBind();   // her bone -> bone-to-root at her bind pose
+                foreach (var k in need) if (!herBind.ContainsKey(hm[k])) return "no bind pose for her " + hm[k].name;
+                Vector3 HP(Transform t) { return herBind[t].GetColumn(3); }
 
-                // her bind pose in her root's space, from her renderers' bind poses (a bone in several meshes: the most common;
-                // a side bone placed differently by copies, Eye_R: the one mirroring its counterpart, as rig.py does)
-                var herBind = HerBind();
-
-                // avatar skeleton: everything under the common ancestor of the mapped bones' top
+                // the avatar skeleton, parents first
                 Transform top = am["hips"];
-                while (top.parent != null && top.parent != _model.transform && top.parent.GetComponent<Renderer>() == null && top.parent.childCount == 1) top = top.parent;
+                while (top.parent != null && top.parent != model.transform && top.parent.GetComponent<Renderer>() == null && top.parent.childCount == 1) top = top.parent;
                 var order = new List<Transform>();
                 var idx = new Dictionary<Transform, int>();
                 void Walk(Transform t) { idx[t] = order.Count; order.Add(t); for (int i = 0; i < t.childCount; i++) Walk(t.GetChild(i)); }
                 Walk(top);
                 int n = order.Count;
-                _t = order.ToArray(); _p = new int[n];
-                for (int i = 0; i < n; i++) _p[i] = _t[i].parent != null && idx.TryGetValue(_t[i].parent, out var pi) ? pi : -1;
-                _g = new Quaternion[n]; _al = new Quaternion[n]; _w = new Quaternion[n]; _h = new Vector3[n]; _x = new Vector3[n];
-                _fixed = new bool[n]; _write = new bool[n]; _kind = new int[n]; _her = new int[n]; _lo = new int[n]; _hi = new int[n]; _f = new float[n];
-                for (int i = 0; i < n; i++) { _her[i] = _lo[i] = _hi[i] = -1; }
-
-                int HerIndex(Transform t)
+                var T = order.ToArray(); var par = new int[n];
+                for (int i = 0; i < n; i++) par[i] = T[i].parent != null && idx.TryGetValue(T[i].parent, out var pi) ? pi : -1;
+                var G = new Quaternion[n]; var H = new Vector3[n];
+                void ReadRest()
                 {
-                    int i = _ht.IndexOf(t);
-                    if (i >= 0) return i;
-                    if (!herBind.TryGetValue(t, out var b)) return -1;
-                    _ht.Add(t); _hb.Add(b.Value); _hp.Add(b.Key);
-                    return _ht.Count - 1;
+                    var inv = Quaternion.Inverse(HerRoot.rotation);
+                    for (int i = 0; i < n; i++) { G[i] = inv * T[i].rotation; H[i] = HerRoot.InverseTransformPoint(T[i].position); }
                 }
+                int I(string key) { return am.TryGetValue(key, out var t) && idx.TryGetValue(t, out var i) ? i : -1; }
 
-                // facing: turn the model about up so its feet point where hers do; then the scale
+                // facing: turn the model about up so its feet point where hers do; size: its legs to hers (the fit does the rest)
                 ReadRest();
-                Vector3 Fwd(Func<string, Vector3> pos, string toe, string foot) { var v = pos(toe) - pos(foot); v.y = 0f; return v; }
-                Vector3 avPos(string k) { return am.TryGetValue(k, out var t) ? _h[idx[t]] : Vector3.zero; }
-                Vector3 herPos(string k) { return hm.TryGetValue(k, out var t) && herBind.TryGetValue(t, out var b) ? b.Key : Vector3.zero; }
-                bool toes = am.ContainsKey("toe.L") && hm.ContainsKey("toe.L");
-                var avF = toes ? Fwd(avPos, "toe.L", "foot.L") + Fwd(avPos, "toe.R", "foot.R") : Vector3.Cross(avPos("thigh.L") - avPos("thigh.R"), Vector3.up);
-                var herF = toes ? Fwd(herPos, "toe.L", "foot.L") + Fwd(herPos, "toe.R", "foot.R") : Vector3.Cross(herPos("thigh.L") - herPos("thigh.R"), Vector3.up);
+                Vector3 Flat(Vector3 v) { v.y = 0f; return v; }
+                Vector3 avF = I("toe.L") >= 0 && hm.ContainsKey("toe.L") ? Flat(H[I("toe.L")] - H[I("foot.L")]) + Flat(H[I("toe.R")] - H[I("foot.R")]) : Vector3.Cross(H[I("thigh.L")] - H[I("thigh.R")], Vector3.up);
+                Vector3 herF = hm.ContainsKey("toe.L") && herBind.ContainsKey(hm["toe.L"]) ? Flat(HP(hm["toe.L"]) - HP(hm["foot.L"])) + Flat(HP(hm["toe.R"]) - HP(hm["foot.R"])) : Vector3.Cross(HP(hm["thigh.L"]) - HP(hm["thigh.R"]), Vector3.up);
                 float yaw = avF.sqrMagnitude > 1e-8f && herF.sqrMagnitude > 1e-8f ? Vector3.SignedAngle(avF, herF, Vector3.up) : 0f;
-                _model.transform.localRotation = Quaternion.AngleAxis(yaw, Vector3.up) * _model.transform.localRotation;
+                model.transform.localRotation = Quaternion.AngleAxis(yaw, Vector3.up) * model.transform.localRotation;
                 ReadRest();
-                float scale = 1f;
-                if (ScaleMode == 0) scale = (Mean(herPos, "thigh") - Mean(herPos, "foot")) / Mathf.Max(1e-4f, Mean(avPos, "thigh") - Mean(avPos, "foot"));
-                else if (ScaleMode == 1) scale = herPos("head").y / Mathf.Max(1e-4f, avPos("head").y);
+                float legAv = 0.5f * (H[I("thigh.L")].y + H[I("thigh.R")].y) - 0.5f * (H[I("foot.L")].y + H[I("foot.R")].y);
+                float legHer = 0.5f * (HP(hm["thigh.L"]).y + HP(hm["thigh.R"]).y) - 0.5f * (HP(hm["foot.L"]).y + HP(hm["foot.R"]).y);
+                float scale = legAv > 1e-4f ? legHer / legAv : 1f;
                 if (!(scale > 0.3f && scale < 3f)) scale = 1f;
-                Go.transform.localScale = Vector3.one * scale;
+                tmp.transform.localScale = Vector3.one * scale;
                 ReadRest();
 
-                // roles
-                string[] trunk = { "hips", "spine", "chest", "neck", "head", "jaw" };
-                var next = new Dictionary<string, string> { { "upperarm", "forearm" }, { "forearm", "hand" }, { "thigh", "shin" }, { "shin", "foot" }, { "foot", "toe" } };
-                var to = new int[n]; var toHer = new int[n]; var across = new int[n][];
-                for (int i = 0; i < n; i++) to[i] = toHer[i] = -1;
+                // roles: which of her bones each avatar bone follows, and which segment aligns its rest
+                string[] changeOnly = { "hips", "spine", "chest", "neck", "head", "jaw", "eye", "collar" };
+                var next = new Dictionary<string, string> { { "upperarm", "forearm" }, { "forearm", "hand" }, { "thigh", "shin" }, { "shin", "foot" }, { "foot", "toe" }, { "hand", "middle1" } };
+                var herOf = new Transform[n]; var to = new int[n]; var toHer = new Transform[n]; var across = new int[n][]; var acrossHer = new Transform[n][];
+                var keyOf = new string[n];
+                for (int i = 0; i < n; i++) to[i] = -1;
                 int mapped = 0;
                 foreach (var key in Keys)
                     foreach (var side in Array.IndexOf(Keys, key) >= FirstSided ? new[] { "L", "R" } : new string[] { null })
                     {
-                        if (!am.TryGetValue(K(key, side), out var at) || !hm.TryGetValue(K(key, side), out var ht)) continue;
-                        int i = idx.TryGetValue(at, out var ii) ? ii : -1;
-                        int h = HerIndex(ht);
-                        if (i < 0 || h < 0) continue;
-                        _kind[i] = Mapped; _her[i] = h; mapped++;
-                        string nk = null;
-                        if (next.ContainsKey(key)) nk = next[key];
-                        else if (key.Length > 1 && char.IsDigit(key[key.Length - 1]) && key[key.Length - 1] < '3') nk = key.Substring(0, key.Length - 1) + (char)(key[key.Length - 1] + 1);
-                        else if (key == "hand") nk = "middle1";
-                        if (nk != null && am.TryGetValue(K(nk, side), out var a2) && hm.TryGetValue(K(nk, side), out var h2) && idx.ContainsKey(a2))
-                        {
-                            int hh = HerIndex(h2);
-                            if (hh >= 0) { to[i] = idx[a2]; toHer[i] = hh; }
-                        }
-                        if (key == "hand" && am.TryGetValue(K("pinky1", side), out var ap) && am.TryGetValue(K("index1", side), out var ai)
-                            && hm.TryGetValue(K("pinky1", side), out var hp) && hm.TryGetValue(K("index1", side), out var hi2) && idx.ContainsKey(ap) && idx.ContainsKey(ai))
-                        {
-                            int a = HerIndex(hp), b = HerIndex(hi2);
-                            if (a >= 0 && b >= 0) across[i] = new[] { idx[ap], idx[ai], a, b };
-                        }
-                        if (Array.IndexOf(trunk, key) >= 0 || key == "eye" || key == "collar") to[i] = toHer[i] = -1;   // change only
+                        int i = I(K(key, side));
+                        if (i < 0 || !hm.TryGetValue(K(key, side), out var ht) || !herBind.ContainsKey(ht)) continue;
+                        herOf[i] = ht; keyOf[i] = K(key, side); mapped++;
+                        if (Array.IndexOf(changeOnly, key) >= 0) continue;
+                        string nk = next.ContainsKey(key) ? next[key] : (key.Length > 1 && char.IsDigit(key[key.Length - 1]) && key[key.Length - 1] < '3') ? key.Substring(0, key.Length - 1) + (char)(key[key.Length - 1] + 1) : null;
+                        if (nk != null && I(K(nk, side)) >= 0 && hm.TryGetValue(K(nk, side), out var h2) && herBind.ContainsKey(h2)) { to[i] = I(K(nk, side)); toHer[i] = h2; }
+                        if (key == "hand" && I(K("pinky1", side)) >= 0 && I(K("index1", side)) >= 0 && hm.TryGetValue(K("pinky1", side), out var hp1) && hm.TryGetValue(K("index1", side), out var hi1)
+                            && herBind.ContainsKey(hp1) && herBind.ContainsKey(hi1))
+                        { across[i] = new[] { I(K("pinky1", side)), I(K("index1", side)) }; acrossHer[i] = new[] { hp1, hi1 }; }
                     }
-                // trunk bones between anchors on the hips -> head path share their neighbours' bend
-                _hips = idx[am["hips"]]; _hipsHer = _her[_hips];
-                var path = new List<int>();
-                for (int i = idx[am["head"]]; i >= 0; i = _p[i]) { path.Insert(0, i); if (i == _hips) break; }
-                var anchors = path.Where(i => _kind[i] == Mapped).ToList();
-                int spread = 0;
-                for (int a = 0; a + 1 < anchors.Count; a++)
-                {
-                    int i0 = path.IndexOf(anchors[a]), i1 = path.IndexOf(anchors[a + 1]);
-                    for (int j = i0 + 1; j < i1; j++) { int b = path[j]; _kind[b] = Spread; _lo[b] = _her[anchors[a]]; _hi[b] = _her[anchors[a + 1]]; _f[b] = (j - i0) / (float)(i1 - i0); spread++; }
-                }
-                // twist bones: children of the upper arm / thigh (their own twist) and the forearm (the hand's)
-                int twists = 0;
-                foreach (var key in new[] { "upperarm", "thigh", "forearm" })
-                    foreach (var side in new[] { "L", "R" })
-                    {
-                        if (!am.TryGetValue(K(key, side), out var bt) || !idx.TryGetValue(bt, out var bi) || to[bi] < 0) continue;
-                        var tw = new List<int>();
-                        for (int c = 0; c < bt.childCount; c++)
-                        {
-                            var ch = bt.GetChild(c);
-                            if (ch.name.ToLowerInvariant().Contains("twist") && idx.TryGetValue(ch, out var ci) && _kind[ci] == Follow) tw.Add(ci);
-                        }
-                        if (tw.Count == 0) continue;
-                        tw.Sort((x, y) => (_h[x] - _h[bi]).sqrMagnitude.CompareTo((_h[y] - _h[bi]).sqrMagnitude));
-                        bool hand = key == "forearm";
-                        int handI = am.TryGetValue(K("hand", side), out var htr) && idx.TryGetValue(htr, out var hix) ? hix : -1;
-                        if (hand && handI < 0) continue;
-                        var ts = new TwistSet { Bend = bi, To = to[bi], HandMode = hand, Hand = handI, Bones = tw.ToArray(), F = new float[tw.Count] };
-                        for (int t = 0; t < tw.Count; t++) { ts.F[t] = hand ? (t + 1f) / (tw.Count + 1f) : (t + 1f) / tw.Count; _kind[tw[t]] = Twist; twists++; }
-                        _twists.Add(ts);
-                    }
-                // IK chains
-                foreach (var side in new[] { "L", "R" })
-                {
-                    int[] Chain(string a, string b, string c)
-                    {
-                        if (!am.TryGetValue(K(a, side), out var ta) || !am.TryGetValue(K(b, side), out var tb) || !am.TryGetValue(K(c, side), out var tc)) return null;
-                        if (!idx.ContainsKey(ta) || !idx.ContainsKey(tb) || !idx.ContainsKey(tc)) return null;
-                        int ia = idx[ta], ib = idx[tb], ic = idx[tc];
-                        if (_her[ia] < 0 || _her[ib] < 0 || _her[ic] < 0) return null;
-                        return new[] { ia, ib, ic, _her[ia], _her[ib], _her[ic] };
-                    }
-                    var arm = Chain("upperarm", "forearm", "hand"); if (arm != null) _arms.Add(arm);
-                    var leg = Chain("thigh", "shin", "foot"); if (leg != null) _legs.Add(leg);
-                }
 
-                // aligned rest, parents first
+                // 1. pose: the avatar's rest turned into her bind pose (aligned rest), then its joints by forward kinematics
+                var A = new Quaternion[n]; var X = new Vector3[n];
                 for (int i = 0; i < n; i++)
                 {
-                    int p = _p[i];
-                    var carry = p >= 0 ? _al[p] * Quaternion.Inverse(_g[p]) : Quaternion.identity;
-                    var kq = carry * _g[i];
+                    int p = par[i];
+                    var carry = p >= 0 ? A[p] * Quaternion.Inverse(G[p]) : Quaternion.identity;
                     var c = Quaternion.identity;
                     if (to[i] >= 0)
                     {
-                        var da = carry * (_h[to[i]] - _h[i]); var dh = _hp[toHer[i]] - _hp[_her[i]];
+                        var da = carry * (H[to[i]] - H[i]); var dh = HP(toHer[i]) - HP(herOf[i]);
                         c = Quaternion.FromToRotation(da, dh);
                         if (across[i] != null)
                         {
                             var u = dh.normalized;
-                            var xa = c * (carry * (_h[across[i][1]] - _h[across[i][0]])); var xh = _hp[across[i][3]] - _hp[across[i][2]];
+                            var xa = c * (carry * (H[across[i][1]] - H[across[i][0]])); var xh = HP(acrossHer[i][1]) - HP(acrossHer[i][0]);
                             xa -= Vector3.Dot(xa, u) * u; xh -= Vector3.Dot(xh, u) * u;
                             if (xa.sqrMagnitude > 1e-10f && xh.sqrMagnitude > 1e-10f) c = Quaternion.FromToRotation(xa, xh) * c;
                         }
                     }
-                    _al[i] = c * kq;
+                    A[i] = c * carry * G[i];
+                    X[i] = p >= 0 ? X[p] + A[p] * (Quaternion.Inverse(G[p]) * (H[i] - H[p])) : H[i];
                 }
-                foreach (var ts in _twists) ts.To = to[ts.Bend];
-                for (int i = 0; i < n; i++) _write[i] = _kind[i] != Follow;
-                _rootOff = _h[_hips] - _hp[_hipsHer];
-                _d = new Quaternion[_ht.Count]; _hx = new Vector3[_ht.Count];
+                // per avatar bone: rest -> aligned rest (a rigid move in her root's space)
+                var Rb = new Quaternion[n]; var tb = new Vector3[n];
+                for (int i = 0; i < n; i++) { Rb[i] = A[i] * Quaternion.Inverse(G[i]); tb[i] = X[i] - Rb[i] * H[i]; }
 
-                // look: renderers on her layer, materials, the cornea / tear overlays left out (see-through: not in v1)
+                // 2. the bone map: avatar bone -> her bones (with shares)
+                var tgt = new List<KeyValuePair<Transform, float>>[n];
+                Transform herRootBone = hm["hips"];
+                // trunk bones between mapped ones on the hips -> head path share their neighbours
+                var path = new List<int>();
+                for (int i = I("head"); i >= 0; i = par[i]) { path.Insert(0, i); if (i == I("hips")) break; }
+                var anchors = path.Where(i => herOf[i] != null).ToList();
+                for (int a = 0; a + 1 < anchors.Count; a++)
+                {
+                    int i0 = path.IndexOf(anchors[a]), i1 = path.IndexOf(anchors[a + 1]);
+                    for (int j = i0 + 1; j < i1; j++)
+                    {
+                        float f = (j - i0) / (float)(i1 - i0);
+                        tgt[path[j]] = new List<KeyValuePair<Transform, float>> { new KeyValuePair<Transform, float>(herOf[anchors[a]], 1f - f), new KeyValuePair<Transform, float>(herOf[anchors[a + 1]], f) };
+                    }
+                }
+                // twist bones -> her part bones (ShoulderPart / ElbowPart / HipPart 1, 2), in order from the joint
+                foreach (var key in new[] { "upperarm", "forearm", "thigh" })
+                    foreach (var side in new[] { "L", "R" })
+                    {
+                        int bi = I(K(key, side));
+                        if (bi < 0 || herOf[bi] == null) continue;
+                        var tw = new List<int>();
+                        for (int c = 0; c < T[bi].childCount; c++)
+                        {
+                            var ch = T[bi].GetChild(c);
+                            if (ch.name.ToLowerInvariant().Contains("twist") && idx.TryGetValue(ch, out var ci) && herOf[ci] == null) tw.Add(ci);
+                        }
+                        tw.Sort((x, y) => (H[x] - H[bi]).sqrMagnitude.CompareTo((H[y] - H[bi]).sqrMagnitude));
+                        string part = key == "upperarm" ? "ShoulderPart" : key == "forearm" ? "ElbowPart" : "HipPart";
+                        for (int k = 0; k < tw.Count; k++)
+                        {
+                            herByName.TryGetValue((part + Mathf.Min(k + 1, 2) + "_" + side).ToLowerInvariant(), out var pt);
+                            tgt[tw[k]] = new List<KeyValuePair<Transform, float>> { new KeyValuePair<Transform, float>(pt != null && herBind.ContainsKey(pt) ? pt : herOf[bi], 1f) };
+                        }
+                    }
+                for (int i = 0; i < n; i++)
+                {
+                    if (herOf[i] != null) tgt[i] = new List<KeyValuePair<Transform, float>> { new KeyValuePair<Transform, float>(herOf[i], 1f) };
+                    else if (tgt[i] == null) tgt[i] = par[i] >= 0 ? tgt[par[i]] : new List<KeyValuePair<Transform, float>> { new KeyValuePair<Transform, float>(herRootBone, 1f) };
+                }
+                // body regions (head, torso, upper arm, forearm, hand, thigh, shin, foot per side) for both rigs: an avatar vertex
+                // takes her weights only from her skin of the regions its own weights cover (her hand hangs by her hip in her bind
+                // pose, her upper arm by her breast: nearest-vertex alone pulled hip and breast skin along with them)
+                var avRegion = new int[n];
+                for (int i = 0; i < n; i++)
+                {
+                    avRegion[i] = 1;
+                    for (int a = i; a >= 0; a = par[a]) if (keyOf[a] != null) { avRegion[i] = Region(keyOf[a]); break; }
+                }
+                var herKey = new Dictionary<Transform, string>();
+                foreach (var kv in hm) if (!herKey.ContainsKey(kv.Value)) herKey[kv.Value] = kv.Key;
+                var herRegion = new Dictionary<Transform, int>();
+                int HerRegion(Transform t)
+                {
+                    if (t == null) return 1;
+                    if (herRegion.TryGetValue(t, out var r0)) return r0;
+                    int r = 1;
+                    for (var a = t; a != null && a != HerRoot; a = a.parent) if (herKey.TryGetValue(a, out var k)) { r = Region(k); break; }
+                    herRegion[t] = r;
+                    return r;
+                }
+                bool ByMap(int region) { return region == 0 || region == 6 || region == 7 || region == 12 || region == 13; }   // head, hands, feet
+
+                // 3. her body skin for the weights: her body meshes at her bind pose, in her root's space
+                var near = new SkinGrid(0.03f);
+                var herW2L = HerRoot.worldToLocalMatrix;
+                string herMeshes = "";
+                foreach (var r in HerRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+                {
+                    if (r == null || r.sharedMesh == null || VrHands.UnderSf(r.transform) || !r.gameObject.activeInHierarchy) continue;
+                    var nm = r.name.ToLowerInvariant();
+                    if (!(nm.Contains("upperbody") || nm.Contains("lowerbody") || nm.Contains("foot") || nm.Contains("neck"))) continue;
+                    if (!r.sharedMaterials.Any(m => m != null && m.shader != null && m.shader.name.Contains("Skin"))) continue;
+                    var d = MeshData.Read(r.sharedMesh, out var err);
+                    if (d == null || d.Pos == null || d.Weights == null) { Plugin.Log.LogWarning("Avatar: couldn't read " + r.name + ": " + err); continue; }
+                    var bones = r.bones;
+                    var real = new Transform[bones.Length];
+                    for (int b = 0; b < bones.Length; b++)
+                    {
+                        var t = bones[b];
+                        while (t != null && (t.name.StartsWith("Sf", StringComparison.Ordinal) || !herBind.ContainsKey(t))) t = t.parent;   // our soft-zone helpers -> their bone
+                        real[b] = t;
+                    }
+                    near.Add(d, real, herW2L * r.transform.localToWorldMatrix, HerRegion);
+                    herMeshes += (herMeshes.Length > 0 ? ", " : "") + r.name + " " + d.Pos.Length;
+                }
+                if (near.Count == 0) return "none of her body meshes could be read (upperBody / lowerBody / foot / neck)";
+
+                // 4. first pass: every avatar vertex in her bind pose (rest -> aligned rest by its own weights)
+                var pass = new List<Posed>();
+                foreach (var r in avRends)
+                {
+                    var src3 = r.sharedMesh;
+                    var v = src3.vertices; var nr = src3.normals; var tn = src3.tangents; var bw = src3.boneWeights;
+                    var bIdx = r.bones.Select(b => b != null && idx.TryGetValue(b, out var bi) ? bi : -1).ToArray();
+                    var l2w = r.transform.localToWorldMatrix;
+                    int nv = v.Length;
+                    var ps = new Posed { R = r, P = new Vector3[nv], N = nr != null && nr.Length == nv ? new Vector3[nv] : null, T = tn != null && tn.Length == nv ? new Vector4[nv] : null,
+                                         Dom = new int[nv], Mask = new int[nv], MapShare = new float[nv], W = bw, BIdx = bIdx };
+                    for (int vi = 0; vi < nv; vi++)
+                    {
+                        var p = HerRoot.InverseTransformPoint(l2w.MultiplyPoint3x4(v[vi]));
+                        var w = bw.Length == nv ? bw[vi] : new BoneWeight { boneIndex0 = 0, weight0 = 1f };
+                        Vector3 pp = Vector3.zero, np = Vector3.zero, tp = Vector3.zero;
+                        Vector3 nIn = ps.N != null ? HerRoot.InverseTransformDirection(r.transform.TransformDirection(nr[vi])) : Vector3.zero;
+                        Vector3 tIn = ps.T != null ? HerRoot.InverseTransformDirection(r.transform.TransformDirection(tn[vi])) : Vector3.zero;
+                        float ws = 0f, domW = -1f, mapW = 0f; int dom = -1, mask = 0;
+                        for (int k = 0; k < 4; k++)
+                        {
+                            int bi = k == 0 ? w.boneIndex0 : k == 1 ? w.boneIndex1 : k == 2 ? w.boneIndex2 : w.boneIndex3;
+                            float wt = k == 0 ? w.weight0 : k == 1 ? w.weight1 : k == 2 ? w.weight2 : w.weight3;
+                            if (wt <= 0f || bi < 0 || bi >= bIdx.Length || bIdx[bi] < 0) continue;
+                            int a = bIdx[bi];
+                            pp += wt * (Rb[a] * p + tb[a]); np += wt * (Rb[a] * nIn); tp += wt * (Rb[a] * tIn); ws += wt;
+                            if (wt > domW) { domW = wt; dom = a; }
+                            if (ByMap(avRegion[a])) mapW += wt;
+                            else if (wt >= 0.1f) mask |= 1 << avRegion[a];
+                        }
+                        ps.P[vi] = ws > 1e-6f ? pp / ws : p;
+                        if (ps.N != null) ps.N[vi] = np.sqrMagnitude > 1e-12f ? np.normalized : nIn;
+                        if (ps.T != null) { var t3 = tp.sqrMagnitude > 1e-12f ? tp.normalized : tIn; ps.T[vi] = new Vector4(t3.x, t3.y, t3.z, tn[vi].w); }
+                        ps.Dom[vi] = dom; ps.MapShare[vi] = ws > 1e-6f ? mapW / ws : 1f;
+                        if (mask == 0 && dom >= 0 && !ByMap(avRegion[dom])) mask = 1 << avRegion[dom];
+                        if (mask == 0 && ps.MapShare[vi] < 0.999f) mask = 1 << 1;   // a little weight on small bones: the torso
+                        ps.Mask[vi] = mask;
+                    }
+                    pass.Add(ps);
+                }
+
+                // 5. fit: her joints as landmarks (no spine / collar joints: rig conventions), then the soles (heel and ball) at her
+                //    soles' height so the feet stand on her floor
+                var src = new List<Vector3>(); var dst = new List<Vector3>();
+                foreach (var key in new[] { "head", "eye", "upperarm", "forearm", "hand", "thumb1", "thumb2", "thumb3", "index1", "index2", "index3", "middle1", "middle2", "middle3",
+                                            "ring1", "ring2", "ring3", "pinky1", "pinky2", "pinky3", "thigh", "shin", "foot", "toe" })
+                    foreach (var side in key == "head" ? new string[] { null } : new[] { "L", "R" })
+                    {
+                        int i = I(K(key, side));
+                        if (i < 0 || herOf[i] == null) continue;
+                        src.Add(X[i]); dst.Add(HP(herOf[i]));
+                    }
+                int joints = src.Count;
+                var rbf = Rbf.Fit(src, dst);
+                var mainPass = pass.OrderByDescending(x => x.P.Length).First();
+                string soles = "";
+                foreach (var side in new[] { "L", "R" })
+                {
+                    int fa = I(K("foot", side)), ft = I(K("toe", side));
+                    if (fa < 0 || ft < 0 || herOf[fa] == null || herOf[ft] == null) continue;
+                    int reg = Region(K("foot", side));
+                    for (int part = 0; part < 2; part++)   // heel, ball
+                    {
+                        var a0 = X[fa]; var dir = X[ft] - a0; float len = dir.magnitude; dir /= Mathf.Max(len, 1e-5f);
+                        int lo = -1;
+                        for (int vi = 0; vi < mainPass.P.Length; vi++)
+                        {
+                            int dm = mainPass.Dom[vi];
+                            if (dm < 0 || avRegion[dm] != reg) continue;
+                            float t = Vector3.Dot(mainPass.P[vi] - a0, dir) / Mathf.Max(len, 1e-5f);
+                            if (part == 0 ? t > 0.3f : t < 0.7f) continue;
+                            if (lo < 0 || mainPass.P[vi].y < mainPass.P[lo].y) lo = vi;
+                        }
+                        float herY = near.Lowest(reg, HP(herOf[fa]), HP(herOf[ft]), part == 0);
+                        if (lo < 0 || float.IsNaN(herY)) continue;
+                        var s0 = mainPass.P[lo]; var d0 = rbf.Apply(s0);
+                        soles += (soles.Length > 0 ? ", " : "") + side + (part == 0 ? " heel " : " ball ") + ((d0.y - herY) * 1000f).ToString("0", CultureInfo.InvariantCulture) + " mm";
+                        d0.y = herY;
+                        src.Add(s0); dst.Add(d0);
+                    }
+                }
+                if (src.Count > joints) rbf = Rbf.Fit(src, dst);
+                float fitErr = 0f; for (int i = 0; i < src.Count; i++) fitErr = Mathf.Max(fitErr, (rbf.Apply(src[i]) - dst[i]).magnitude);
+                float moveMax = 0f; for (int i = 0; i < joints; i++) moveMax = Mathf.Max(moveMax, (dst[i] - src[i]).magnitude);
+
+                // 6. the new meshes, bound to her bones
+                Go = new GameObject("SfAvatar " + Name);
+                Go.transform.SetPositionAndRotation(HerRoot.position, HerRoot.rotation);
+                var herBones = new List<Transform>(); var herIndex = new Dictionary<Transform, int>();
+                int Bi(Transform t) { if (!herIndex.TryGetValue(t, out var i)) { i = herBones.Count; herBones.Add(t); herIndex[t] = i; } return i; }
+                bool lit = LitTemplate() != null;
                 var herBody = HerBodyRenderer();
                 _herSkin = herBody != null ? herBody.sharedMaterials.FirstOrDefault(m => m != null && m.shader != null && m.shader.name.Contains("Skin")) : null;
-                foreach (var r in _rends)
+                int fromHer = 0, fromMap = 0, far = 0, verts = 0;
+                var built = new List<KeyValuePair<SkinnedMeshRenderer, Mesh>>();
+                var acc = new Dictionary<Transform, float>(); var hacc = new Dictionary<Transform, float>();
+                foreach (var ps in pass)
                 {
+                    var r = ps.R; var src3 = r.sharedMesh; int nv = ps.P.Length;
+                    var nv3 = new Vector3[nv]; var nbw = new BoneWeight[nv];
+                    for (int vi = 0; vi < nv; vi++)
+                    {
+                        var q = rbf.Apply(ps.P[vi]);
+                        nv3[vi] = q;
+                        // weights: the share on head / hand / foot bones by the bone map, the rest her own (the nearest skin of the
+                        // regions it covers); no such skin within 4 cm: all by the bone map. Shares keep the seams at the neck, wrists
+                        // and ankles smooth.
+                        acc.Clear();
+                        float ms = ps.MapShare[vi];
+                        var w = ps.W.Length == nv ? ps.W[vi] : new BoneWeight { boneIndex0 = 0, weight0 = 1f };
+                        bool her = false;
+                        if (ms < 0.999f)
+                        {
+                            hacc.Clear();
+                            her = near.Nearest(q, 0.04f, ps.Mask[vi], hacc);
+                            if (her) { foreach (var kv in hacc) acc[kv.Key] = (1f - ms) * kv.Value; fromHer++; }
+                            else far++;
+                        }
+                        if (!her) fromMap++;
+                        for (int k = 0; k < 4; k++)
+                        {
+                            int bi = k == 0 ? w.boneIndex0 : k == 1 ? w.boneIndex1 : k == 2 ? w.boneIndex2 : w.boneIndex3;
+                            float wt = k == 0 ? w.weight0 : k == 1 ? w.weight1 : k == 2 ? w.weight2 : w.weight3;
+                            if (wt <= 0f || bi < 0 || bi >= ps.BIdx.Length || ps.BIdx[bi] < 0) continue;
+                            int a = ps.BIdx[bi];
+                            if (her && !ByMap(avRegion[a])) continue;   // that share came from her skin
+                            foreach (var kv in tgt[a]) { acc.TryGetValue(kv.Key, out var o); acc[kv.Key] = o + wt * kv.Value; }
+                        }
+                        if (acc.Count == 0) acc[herRootBone] = 1f;
+                        nbw[vi] = Top4(acc, Bi);
+                    }
+                    verts += nv;
+                    var mesh = new Mesh { name = src3.name + " (on her)", indexFormat = nv > 65000 ? IndexFormat.UInt32 : src3.indexFormat };
+                    mesh.vertices = nv3;
+                    if (ps.N != null) mesh.normals = ps.N;
+                    if (ps.T != null) mesh.tangents = ps.T;
+                    for (int c = 0; c < 4; c++)
+                        if (src3.HasVertexAttribute(VertexAttribute.TexCoord0 + c)) { var uv = new List<Vector4>(); src3.GetUVs(c, uv); mesh.SetUVs(c, uv); }
+                    if (src3.HasVertexAttribute(VertexAttribute.Color)) mesh.colors = src3.colors;
+                    mesh.boneWeights = nbw;
+                    var mats = r.sharedMaterials;
+                    mesh.subMeshCount = src3.subMeshCount;
+                    for (int s = 0; s < src3.subMeshCount; s++)
+                    {
+                        string surf = s < mats.Length && mats[s] != null ? mats[s].name : "";
+                        string role = _surfRole.TryGetValue(surf, out var ro) ? ro : "skin";
+                        bool leftOut = role == "cornea" || role == "tear" || ((role == "lashes" || role == "brows") && !lit);   // see-through overlays: not in this version
+                        mesh.SetIndices(leftOut ? new int[0] : src3.GetIndices(s), src3.GetTopology(s), s, false);
+                    }
+                    _meshes.Add(mesh);
+                    built.Add(new KeyValuePair<SkinnedMeshRenderer, Mesh>(r, mesh));
+                }
+                _herBones = herBones.ToArray();
+                var herBindposes = _herBones.Select(t => herBind[t].inverse).ToArray();   // renderer at her root: bone^-1 in her root's space
+                foreach (var kv in built)
+                {
+                    kv.Value.bindposes = herBindposes;
+                    kv.Value.RecalculateBounds();
+                    var go = new GameObject(kv.Key.name);
+                    go.transform.SetParent(Go.transform, false);
+                    var sr = go.AddComponent<SkinnedMeshRenderer>();
+                    sr.sharedMesh = kv.Value;
+                    sr.bones = _herBones;
+                    sr.rootBone = herRootBone;
+                    sr.updateWhenOffscreen = true;
+                    sr.skinnedMotionVectors = true;
                     if (herBody != null)
                     {
-                        r.gameObject.layer = herBody.gameObject.layer;
-                        r.renderingLayerMask = herBody.renderingLayerMask;
-                        r.shadowCastingMode = herBody.shadowCastingMode;
-                        r.receiveShadows = herBody.receiveShadows;
-                        r.lightProbeUsage = herBody.lightProbeUsage;
-                        r.reflectionProbeUsage = herBody.reflectionProbeUsage;
+                        go.layer = herBody.gameObject.layer;
+                        sr.renderingLayerMask = herBody.renderingLayerMask;
+                        sr.shadowCastingMode = herBody.shadowCastingMode;
+                        sr.receiveShadows = herBody.receiveShadows;
+                        sr.lightProbeUsage = herBody.lightProbeUsage;
+                        sr.reflectionProbeUsage = herBody.reflectionProbeUsage;
                     }
-                    r.updateWhenOffscreen = true;
-                    r.skinnedMotionVectors = true;
+                    _rends.Add(sr);
+                    _origMats.Add(kv.Key.sharedMaterials);
                 }
                 Materials(MaterialRoute.Value, Brightness.Value);
                 Hide(KeepHair.Value);
 
-                int verts = _rends.Sum(r => r.sharedMesh != null ? r.sharedMesh.vertexCount : 0);
-                Summary = Name + ": " + best.Id + " rig, " + mapped + " bones mapped (" + spread + " spread, " + twists + " twist), x" + scale.ToString("0.000", CultureInfo.InvariantCulture) +
-                          ", " + _rends.Length + " meshes, " + verts + " vertices, " + _hidden.Count + " of her renderers hidden";
-                Plugin.Log.LogInfo("Avatar " + Summary + "; facing turned " + yaw.ToString("0.#", CultureInfo.InvariantCulture) + " deg; her skin material " +
-                                   (_herSkin != null ? _herSkin.name + " (" + _herSkin.shader.name + ")" : "not found") + "; bundle " + e.Bundle);
+                Summary = Name + ": " + best.Id + " rig, " + mapped + " bones mapped, fitted to her " + joints + " joints (moved up to " +
+                          (moveMax * 100f).ToString("0.0", CultureInfo.InvariantCulture) + " cm), " + _rends.Count + " meshes on " + _herBones.Length + " of her bones";
+                Plugin.Log.LogInfo("Avatar " + Summary + "; " + verts + " vertices: " + fromHer + " with her skin weights (head, hand and foot shares by the bone map), " + fromMap + " by the bone map alone (" + far +
+                                   " of them farther than 4 cm from her skin); x" + scale.ToString("0.000", CultureInfo.InvariantCulture) + ", facing turned " +
+                                   yaw.ToString("0.#", CultureInfo.InvariantCulture) + " deg, fit residual " + (fitErr * 1000f).ToString("0.0", CultureInfo.InvariantCulture) +
+                                   " mm, soles before the fit " + (soles.Length > 0 ? soles : "-") + "; her meshes " + herMeshes + "; her skin material " + (_herSkin != null ? _herSkin.name : "not found") + "; " + _hidden.Count +
+                                   " of her renderers hidden");
                 return null;
             }
 
-            static float P(string s) { return float.Parse(s, CultureInfo.InvariantCulture); }
-            static float Mean(Func<string, Vector3> pos, string key) { return 0.5f * (pos(key + ".L").y + pos(key + ".R").y); }
+            class Posed { public SkinnedMeshRenderer R; public Vector3[] P, N; public Vector4[] T; public int[] Dom, Mask, BIdx; public float[] MapShare; public BoneWeight[] W; }
 
-            void ReadRest()
+            // 0 head, 1 torso, 2/3 upper arm, 4/5 forearm, 6/7 hand, 8/9 thigh, 10/11 shin, 12/13 foot (L/R)
+            static int Region(string key)
             {
-                if (_t == null) return;
-                var inv = Quaternion.Inverse(HerRoot.rotation);
-                for (int i = 0; i < _t.Length; i++)
-                {
-                    _g[i] = inv * _t[i].rotation;
-                    _h[i] = HerRoot.InverseTransformPoint(_t[i].position);
-                }
+                int side = key.EndsWith(".R", StringComparison.Ordinal) ? 1 : 0;
+                string k = key.Split('.')[0];
+                if (k == "head" || k == "jaw" || k == "eye") return 0;
+                if (k == "upperarm") return 2 + side;
+                if (k == "forearm") return 4 + side;
+                if (k == "hand" || k.StartsWith("thumb", StringComparison.Ordinal) || k.StartsWith("index", StringComparison.Ordinal) || k.StartsWith("middle", StringComparison.Ordinal)
+                    || k.StartsWith("ring", StringComparison.Ordinal) || k.StartsWith("pinky", StringComparison.Ordinal)) return 6 + side;
+                if (k == "thigh") return 8 + side;
+                if (k == "shin") return 10 + side;
+                if (k == "foot" || k == "toe") return 12 + side;
+                return 1;
             }
 
-            Dictionary<Transform, KeyValuePair<Vector3, Quaternion>> HerBind()
+            static BoneWeight Top4(Dictionary<Transform, float> acc, Func<Transform, int> index)
+            {
+                var top = acc.Where(kv => kv.Key != null && kv.Value > 0f).OrderByDescending(kv => kv.Value).Take(4).ToList();
+                float s = top.Sum(kv => kv.Value);
+                if (s <= 0f) return new BoneWeight();
+                var w = new BoneWeight();
+                for (int k = 0; k < top.Count; k++)
+                {
+                    int i = index(top[k].Key); float x = top[k].Value / s;
+                    if (k == 0) { w.boneIndex0 = i; w.weight0 = x; }
+                    else if (k == 1) { w.boneIndex1 = i; w.weight1 = x; }
+                    else if (k == 2) { w.boneIndex2 = i; w.weight2 = x; }
+                    else { w.boneIndex3 = i; w.weight3 = x; }
+                }
+                return w;
+            }
+
+            static float P(string s) { return float.Parse(s, CultureInfo.InvariantCulture); }
+
+            // her bind pose in her root's space from her renderers' bind poses (a bone in several meshes: the most common; a side
+            // bone placed differently by copies, Eye_R: the one mirroring its counterpart, as rig.py does)
+            Dictionary<Transform, Matrix4x4> HerBind()
             {
                 var cand = new Dictionary<Transform, List<KeyValuePair<Matrix4x4, int>>>();
                 var w2l = HerRoot.worldToLocalMatrix;
@@ -603,15 +785,15 @@ namespace SfMorph
                     var mr = w2l * r.transform.localToWorldMatrix;
                     for (int i = 0; i < bones.Length && i < bp.Length; i++)
                     {
-                        if (bones[i] == null) continue;
+                        if (bones[i] == null || bones[i].name.StartsWith("Sf", StringComparison.Ordinal)) continue;
                         var m = mr * bp[i].inverse;
                         if (!cand.TryGetValue(bones[i], out var l)) cand[bones[i]] = l = new List<KeyValuePair<Matrix4x4, int>>();
                         int at = l.FindIndex(x => Close(x.Key, m));
                         if (at >= 0) l[at] = new KeyValuePair<Matrix4x4, int>(l[at].Key, l[at].Value + 1); else l.Add(new KeyValuePair<Matrix4x4, int>(m, 1));
                     }
                 }
-                var outp = new Dictionary<Transform, KeyValuePair<Vector3, Quaternion>>();
-                foreach (var kv in cand) { var b = kv.Value.OrderByDescending(x => x.Value).First().Key; outp[kv.Key] = new KeyValuePair<Vector3, Quaternion>(b.GetColumn(3), b.rotation); }
+                var outp = new Dictionary<Transform, Matrix4x4>();
+                foreach (var kv in cand) outp[kv.Key] = kv.Value.OrderByDescending(x => x.Value).First().Key;
                 foreach (var kv in cand)
                 {
                     if (kv.Value.Count < 2) continue;
@@ -621,8 +803,7 @@ namespace SfMorph
                     var ot = cand.Keys.FirstOrDefault(t => t.name == o);
                     if (ot == null || cand[ot].Count != 1) continue;
                     Vector3 mp = cand[ot][0].Key.GetColumn(3); mp.x = -mp.x;
-                    var b = kv.Value.OrderBy(x => ((Vector3)x.Key.GetColumn(3) - mp).sqrMagnitude).First().Key;
-                    outp[kv.Key] = new KeyValuePair<Vector3, Quaternion>(b.GetColumn(3), b.rotation);
+                    outp[kv.Key] = kv.Value.OrderBy(x => ((Vector3)x.Key.GetColumn(3) - mp).sqrMagnitude).First().Key;
                 }
                 return outp;
             }
@@ -692,12 +873,13 @@ namespace SfMorph
                 return t != null && t.TryGetValue(kind, out var n) ? _bundle.LoadAsset<Texture2D>(n) : null;
             }
 
+            // a game material on HDRP/Lit (opaque, standard if there is one); never one of ours
             static Material LitTemplate()
             {
                 Material best = null;
                 foreach (var m in Resources.FindObjectsOfTypeAll<Material>())
                 {
-                    if (m == null || m.shader == null || m.shader.name != "HDRP/Lit") continue;
+                    if (m == null || m.shader == null || m.shader.name != "HDRP/Lit" || m.name.StartsWith("SfAvatar", StringComparison.Ordinal)) continue;
                     if (m.HasProperty("_SurfaceType") && m.GetFloat("_SurfaceType") != 0f) continue;
                     best = m;
                     if (m.HasProperty("_MaterialID") && m.GetFloat("_MaterialID") == 1f) break;
@@ -709,48 +891,47 @@ namespace SfMorph
 
             public void Materials(int route, float bright)
             {
-                foreach (var m in _made) if (m != null) UnityEngine.Object.Destroy(m);
-                _made.Clear();
-                foreach (var m in _meshes) if (m != null) UnityEngine.Object.Destroy(m);
-                _meshes.Clear();
+                foreach (var m in _made) Kill(m);
+                _made.Clear(); _tint.Clear();
                 Route = route; Bright = bright;
                 var lit = LitTemplate();
                 var report = new List<string>();
-                for (int ri = 0; ri < _rends.Length; ri++)
+                for (int ri = 0; ri < _rends.Count; ri++)
                 {
-                    var r = _rends[ri];
                     var mats = (Material[])_origMats[ri].Clone();
-                    var mesh = _origMesh[ri];
-                    Mesh copy = null;
-
                     for (int s = 0; s < mats.Length; s++)
                     {
-                        string surf = mats[s] != null ? mats[s].name.Replace(" (Instance)", "") : "";
+                        string surf = mats[s] != null ? mats[s].name : "";
                         string role = _surfRole.TryGetValue(surf, out var ro) ? ro : "skin";
                         _surfTex.TryGetValue(surf, out var tex);
                         var col = _surfCol.TryGetValue(surf, out var cc) ? cc : Color.white;
                         Material m = null;
-                        if (role == "cornea" || role == "tear" || ((role == "lashes" || role == "brows") && lit == null))
-                        {
-                            // see-through overlays (and cut-outs without a Lit shader) are left out in v1: an empty sub-mesh
-                            if (copy == null && mesh != null && mesh.isReadable) { copy = UnityEngine.Object.Instantiate(mesh); copy.name = mesh.name; _meshes.Add(copy); }
-                            if (copy != null && s < copy.subMeshCount) copy.SetIndices(new int[0], MeshTopology.Triangles, s, false);
-                            report.Add(surf + " left out");
-                            m = mats[s];
-                        }
-                        else if ((role == "skin" || role == "nails") && route == 0 && _herSkin != null) m = SkinCopy(tex, bright);
-                        else if (lit != null) m = LitCopy(lit, role, tex, col, bright);
-                        else if (_herSkin != null) m = SkinCopy(tex, bright);
-                        if (m != null && m != mats[s]) { m.name = "SfAvatar " + surf; _made.Add(m); mats[s] = m; }
+                        if (role == "cornea" || role == "tear" || ((role == "lashes" || role == "brows") && lit == null)) { report.Add(surf + " left out"); continue; }
+                        if ((role == "skin" || role == "nails") && route == 0 && _herSkin != null) m = SkinCopy(tex);
+                        else if (lit != null) m = LitCopy(lit, role, tex, col);
+                        else if (_herSkin != null) m = SkinCopy(tex);
+                        if (m != null) { m.name = "SfAvatar " + surf; _made.Add(m); mats[s] = m; }
                     }
-                    r.sharedMaterials = mats;
-                    r.sharedMesh = copy ?? mesh;
+                    _rends[ri].sharedMaterials = mats;
                 }
+                SetBrightness(bright);
                 Plugin.Log.LogInfo("Avatar materials: " + (route == 0 ? "her skin shader" : "HDRP/Lit") + " for the skin, Lit " + (lit != null ? "from " + lit.name : "missing") +
-                                   ", brightness " + bright.ToString("0.00", CultureInfo.InvariantCulture) + (report.Count > 0 ? "; " + string.Join(", ", report.ToArray()) : ""));
+                                   (report.Count > 0 ? "; " + string.Join(", ", report.ToArray()) : ""));
             }
 
-            Material SkinCopy(Dictionary<string, string> tex, float bright)
+            public void SetBrightness(float b)
+            {
+                Bright = b;
+                foreach (var kv in _tint)
+                {
+                    if (kv.Key == null) continue;
+                    var c = new Color(kv.Value.r * b, kv.Value.g * b, kv.Value.b * b, kv.Value.a);
+                    if (kv.Key.HasProperty("_BaseColor")) kv.Key.SetColor("_BaseColor", c);
+                    else if (kv.Key.HasProperty("_SkinColor")) kv.Key.SetColor("_SkinColor", c);
+                }
+            }
+
+            Material SkinCopy(Dictionary<string, string> tex)
             {
                 var m = new Material(_herSkin);
                 void T(string p, Texture v) { if (m.HasProperty(p)) m.SetTexture(p, v); }
@@ -768,12 +949,12 @@ namespace SfMorph
                     if (m.HasProperty("_AttachColor_" + i)) { var c = m.GetColor("_AttachColor_" + i); c.a = 0f; m.SetColor("_AttachColor_" + i, c); }
                 }
                 T("_SkinColorMaskMap", null);
-                if (m.HasProperty("_SkinColor")) m.SetColor("_SkinColor", new Color(bright, bright, bright, 1f));
                 F("_CutoutSize", 0f);
+                _tint.Add(new KeyValuePair<Material, Color>(m, Color.white));
                 return m;
             }
 
-            Material LitCopy(Material tpl, string role, Dictionary<string, string> tex, Color col, float bright)
+            Material LitCopy(Material tpl, string role, Dictionary<string, string> tex, Color col)
             {
                 var m = new Material(tpl);
                 bool cut = role == "lashes" || role == "brows";
@@ -781,9 +962,10 @@ namespace SfMorph
                 var albedo = cut ? Tex(tex, "albedoalpha") ?? Tex(tex, "albedo") : Tex(tex, "albedo");
                 var normal = Tex(tex, "normal");
                 var mask = Tex(tex, "mask");
-                float b = role == "skin" || role == "nails" || role == "mouth" ? bright : 1f;
                 m.SetTexture("_BaseColorMap", albedo);
-                m.SetColor("_BaseColor", albedo != null ? new Color(b, b, b, 1f) : new Color(col.r * b, col.g * b, col.b * b, 1f));
+                var baseCol = albedo != null ? Color.white : new Color(col.r, col.g, col.b, 1f);
+                m.SetColor("_BaseColor", baseCol);
+                if (role == "skin" || role == "nails" || role == "mouth") _tint.Add(new KeyValuePair<Material, Color>(m, baseCol));
                 m.SetFloat("_Metallic", 0f);
                 m.SetTexture("_NormalMap", normal); m.SetFloat("_NormalScale", 1f);
                 if (normal != null) { m.EnableKeyword("_NORMALMAP"); m.EnableKeyword("_NORMALMAP_TANGENT_SPACE"); } else m.DisableKeyword("_NORMALMAP");
@@ -825,117 +1007,114 @@ namespace SfMorph
                 return m;
             }
 
-            // ---- every frame ----
-            public void Drive()
+            static void Kill(UnityEngine.Object o)
             {
-                if (HerRoot == null || Go == null) return;
-                Go.transform.SetPositionAndRotation(HerRoot.position, HerRoot.rotation);
-                var inv = Quaternion.Inverse(HerRoot.rotation);
-                for (int h = 0; h < _ht.Count; h++)
-                {
-                    var t = _ht[h];
-                    if (t == null) { _d[h] = Quaternion.identity; continue; }
-                    _d[h] = inv * t.rotation * Quaternion.Inverse(_hb[h]);
-                    _hx[h] = HerRoot.InverseTransformPoint(t.position);
-                }
-                int n = _t.Length;
-                for (int i = 0; i < n; i++)
-                {
-                    _fixed[i] = false;
-                    if (_kind[i] == Mapped) { _w[i] = _d[_her[i]] * _al[i]; _fixed[i] = true; }
-                    else if (_kind[i] == Spread) { var lo = _d[_lo[i]]; _w[i] = lo * Pow(Quaternion.Inverse(lo) * _d[_hi[i]], _f[i]) * _al[i]; _fixed[i] = true; }
-                }
-                var rootPos = _hx[_hipsHer] + _d[_hipsHer] * _rootOff;
-                Resolve(rootPos);
-                float hik = HandIk.Value, fik = FootIk.Value;
-                if (hik > 0f) foreach (var c in _arms) TwoBone(c, hik);
-                if (fik > 0f) foreach (var c in _legs) TwoBone(c, fik);
-                if (hik > 0f || fik > 0f) Resolve(rootPos);
-                foreach (var ts in _twists) TwistSplit(ts);
-                if (_twists.Count > 0) Resolve(rootPos);   // bones under a twisted one see its final rotation
-                // write: rotations of the bones we drive (the rest keep their rest local rotation), then the hips' position
-                var hr = HerRoot.rotation;
-                for (int i = 0; i < n; i++)
-                {
-                    if (!_write[i] || !_fixed[i] || _t[i] == null) continue;
-                    if (_p[i] < 0) _t[i].rotation = hr * _w[i];
-                    else _t[i].localRotation = Quaternion.Inverse(_w[_p[i]]) * _w[i];
-                }
-                if (_t[_hips] != null) _t[_hips].position = HerRoot.TransformPoint(_x[_hips]);
-            }
-
-            void Resolve(Vector3 rootPos)
-            {
-                int n = _t.Length;
-                for (int i = 0; i < n; i++)
-                {
-                    int p = _p[i];
-                    if (!_fixed[i]) _w[i] = p >= 0 ? _w[p] * Quaternion.Inverse(_al[p]) * _al[i] : _al[i];
-                    _x[i] = p >= 0 ? _x[p] + _w[p] * (Quaternion.Inverse(_g[p]) * (_h[i] - _h[p])) : _h[i];
-                }
-                var d = rootPos - _x[_hips];
-                for (int i = 0; i < n; i++) _x[i] += d;
-            }
-
-            // two-bone IK toward her end joint (by weight), pole at her middle joint; the end keeps its rotation
-            void TwoBone(int[] c, float wgt)
-            {
-                int a = c[0], m = c[1], e = c[2];
-                Vector3 pa = _x[a], pm = _x[m], pe = _x[e];
-                Vector3 target = Vector3.Lerp(pe, _hx[c[5]], wgt), pole = _hx[c[4]];
-                float la = (pm - pa).magnitude, lb = (pe - pm).magnitude;
-                var tv = target - pa;
-                float dist = Mathf.Clamp(tv.magnitude, Mathf.Abs(la - lb) + 1e-4f, la + lb - 1e-4f);
-                if (tv.sqrMagnitude < 1e-10f) return;
-                var tn = tv.normalized;
-                float x = (la * la - lb * lb + dist * dist) / (2f * dist);
-                float hgt = Mathf.Sqrt(Mathf.Max(la * la - x * x, 0f));
-                var pv = pole - pa; pv -= Vector3.Dot(pv, tn) * tn;
-                if (pv.sqrMagnitude < 1e-10f) { pv = pm - pa; pv -= Vector3.Dot(pv, tn) * tn; }
-                if (pv.sqrMagnitude < 1e-10f) return;
-                pv.Normalize();
-                var mid = pa + tn * x + pv * hgt;
-                var end = pa + tn * dist;
-                var r1 = Quaternion.FromToRotation(pm - pa, mid - pa);
-                var r2 = Quaternion.FromToRotation(r1 * (pe - pm), end - mid);
-                _w[a] = r1 * _w[a];
-                _w[m] = r2 * r1 * _w[m];
-            }
-
-            void TwistSplit(TwistSet ts)
-            {
-                int b = ts.Bend, p = _p[b];
-                if (ts.To < 0) return;
-                var dA = _al[b] * (Quaternion.Inverse(_g[b]) * (_h[ts.To] - _h[b]));   // the segment at the aligned rest
-                if (!ts.HandMode)
-                {
-                    if (p < 0) return;
-                    var carry = _w[p] * Quaternion.Inverse(_al[p]);
-                    var delta = _w[b] * Quaternion.Inverse(carry * _al[b]);
-                    var tw = TwistAbout(delta, carry * dA);
-                    var swing = delta * Quaternion.Inverse(tw);
-                    _w[b] = swing * carry * _al[b];
-                    for (int k = 0; k < ts.Bones.Length; k++) { int t = ts.Bones[k]; _w[t] = swing * Pow(tw, ts.F[k]) * carry * _al[t]; _fixed[t] = true; }
-                }
-                else
-                {
-                    var carry = _w[b] * Quaternion.Inverse(_al[b]);
-                    var delta = _w[ts.Hand] * Quaternion.Inverse(carry * _al[ts.Hand]);
-                    var tw = TwistAbout(delta, carry * dA);
-                    for (int k = 0; k < ts.Bones.Length; k++) { int t = ts.Bones[k]; _w[t] = Pow(tw, ts.F[k]) * carry * _al[t]; _fixed[t] = true; }
-                }
+                if (o == null) return;
+                if (Application.isPlaying) UnityEngine.Object.Destroy(o); else UnityEngine.Object.DestroyImmediate(o);
             }
 
             public void Destroy()
             {
                 foreach (var kv in _hidden) if (kv.Key != null) kv.Key.forceRenderingOff = kv.Value;
                 _hidden.Clear();
-                if (Go != null) UnityEngine.Object.Destroy(Go);
-                foreach (var m in _made) if (m != null) UnityEngine.Object.Destroy(m);
-                _made.Clear();
-                foreach (var m in _meshes) if (m != null) UnityEngine.Object.Destroy(m);
+                Kill(Go);
+                foreach (var m in _made) Kill(m);
+                _made.Clear(); _tint.Clear();
+                foreach (var m in _meshes) Kill(m);
                 _meshes.Clear();
                 if (_bundle != null) { _bundle.Unload(true); _bundle = null; }
+            }
+        }
+
+        // her body skin for nearest-vertex weights: positions in her root's space with their bones and weights, on a grid
+        class SkinGrid
+        {
+            readonly float _cell;
+            readonly Dictionary<long, List<int>> _grid = new Dictionary<long, List<int>>();
+            readonly List<Vector3> _p = new List<Vector3>();
+            readonly List<Transform[]> _b = new List<Transform[]>();
+            readonly List<Vector4> _w = new List<Vector4>();
+            readonly List<int> _r = new List<int>();
+            public int Count { get { return _p.Count; } }
+
+            public SkinGrid(float cell) { _cell = cell; }
+
+            long Key(int x, int y, int z) { return ((long)(x + 100000) << 40) ^ ((long)(y + 100000) << 20) ^ (long)(z + 100000); }
+
+            public void Add(MeshData d, Transform[] bones, Matrix4x4 toRoot, Func<Transform, int> region)
+            {
+                for (int i = 0; i < d.Pos.Length && i < d.Weights.Length; i++)
+                {
+                    var w = d.Weights[i];
+                    var b = new Transform[4];
+                    int[] bi = { w.boneIndex0, w.boneIndex1, w.boneIndex2, w.boneIndex3 };
+                    for (int k = 0; k < 4; k++) b[k] = bi[k] >= 0 && bi[k] < bones.Length ? bones[bi[k]] : null;
+                    var p = toRoot.MultiplyPoint3x4(d.Pos[i]);
+                    int id = _p.Count;
+                    var wv = new Vector4(w.weight0, w.weight1, w.weight2, w.weight3);
+                    int mk = 0; for (int k = 1; k < 4; k++) if (wv[k] > wv[mk]) mk = k;
+                    _p.Add(p); _b.Add(b); _w.Add(wv); _r.Add(region(b[mk]));
+                    long key = Key(Mathf.FloorToInt(p.x / _cell), Mathf.FloorToInt(p.y / _cell), Mathf.FloorToInt(p.z / _cell));
+                    if (!_grid.TryGetValue(key, out var l)) _grid[key] = l = new List<int>();
+                    l.Add(id);
+                }
+            }
+
+            // the lowest vertex of a region in the rear (heel) or front (ball) part between ankle and toe joints; NaN if none
+            public float Lowest(int region, Vector3 ankle, Vector3 toe, bool heel)
+            {
+                var dir = toe - ankle; float len = dir.magnitude; if (len < 1e-5f) return float.NaN; dir /= len;
+                float best = float.NaN;
+                for (int i = 0; i < _p.Count; i++)
+                {
+                    if (_r[i] != region) continue;
+                    float t = Vector3.Dot(_p[i] - ankle, dir) / len;
+                    if (heel ? t > 0.3f : t < 0.7f) continue;
+                    if (float.IsNaN(best) || _p[i].y < best) best = _p[i].y;
+                }
+                return best;
+            }
+
+            // her skin near q (regions in the mask, within max): the weights of the 4 nearest vertices blended by inverse distance into
+            // acc (one nearest vertex gave the left and right inner thighs to neighbours 2 mm apart at the midline: torn when the legs
+            // part)
+            readonly int[] _kI = new int[4]; readonly float[] _kD = new float[4];
+            public bool Nearest(Vector3 q, float max, int mask, Dictionary<Transform, float> acc)
+            {
+                int cx = Mathf.FloorToInt(q.x / _cell), cy = Mathf.FloorToInt(q.y / _cell), cz = Mathf.FloorToInt(q.z / _cell);
+                int r = Mathf.CeilToInt(max / _cell);
+                int found = 0; float max2 = max * max;
+                for (int x = cx - r; x <= cx + r; x++)
+                    for (int y = cy - r; y <= cy + r; y++)
+                        for (int z = cz - r; z <= cz + r; z++)
+                        {
+                            if (!_grid.TryGetValue(Key(x, y, z), out var l)) continue;
+                            foreach (var i in l)
+                            {
+                                if ((mask & (1 << _r[i])) == 0) continue;
+                                float dd = (_p[i] - q).sqrMagnitude;
+                                if (dd > max2) continue;
+                                if (found < 4) { _kI[found] = i; _kD[found] = dd; found++; }
+                                else
+                                {
+                                    int far = 0; for (int k = 1; k < 4; k++) if (_kD[k] > _kD[far]) far = k;
+                                    if (dd < _kD[far]) { _kI[far] = i; _kD[far] = dd; }
+                                }
+                            }
+                        }
+                if (found == 0) return false;
+                float sum = 0f;
+                for (int k = 0; k < found; k++) { _kD[k] = 1f / (Mathf.Sqrt(_kD[k]) + 0.002f); sum += _kD[k]; }
+                for (int k = 0; k < found; k++)
+                {
+                    var bb = _b[_kI[k]]; var ww = _w[_kI[k]]; float f = _kD[k] / sum;
+                    for (int j = 0; j < 4; j++)
+                    {
+                        if (bb[j] == null || ww[j] <= 0f) continue;
+                        acc.TryGetValue(bb[j], out var o); acc[bb[j]] = o + f * ww[j];
+                    }
+                }
+                return acc.Count > 0;
             }
         }
     }

@@ -23,9 +23,9 @@ plugin, `dist/SfMorph.dll`, independent of the SF Neural Rendering VR plugin
 - **Characters**: a gallery of VaM characters converted for her (`tools/pipeline/run.ps1`, `docs/PIPELINE.md`). Picking
   one gives her that character's body and face shape as a real blendshape (0–100 % slider, the other sliders still
   work on top), moves her joints to match, makes her clothes follow, and puts the character's skin textures on her.
-- **Avatars** (Characters tab): a character's own mesh, rig and skin (a DAZ Genesis 9 / 8 / 2 figure built into an avatar bundle
-  by `tools/avatar/build.ps1`) drawn instead of her and moved by her pose every frame, the way VRChat drives an avatar: her
-  animation, IK and the plugin's motion still drive it. Size, skin shader, brightness, her hair and hand / foot IK in the panel.
+- **Avatars** (Characters tab): a character's own mesh and skin (a DAZ Genesis 9 / 8 / 2 figure built into an avatar bundle by
+  `tools/avatar/build.ps1`) drawn instead of her, fitted onto her skeleton at load: her animation, IK, breast physics, hair and the
+  Body / Bones sliders move it like her own body. Skin shader, brightness and her hair in the panel.
 - **Character pipeline**: export her meshes for turning a VaM character into a morph for her (`docs/PIPELINE.md`).
 - **Presets**: her changes save to `BepInEx\config\SfMorphs\characters\<name>.txt` as you edit and come
   back when she appears; presets (`...\presets\`) store a look by name to load later.
@@ -43,6 +43,23 @@ REFS=<folder with reference DLLs> sh build.sh      # -> dist/SfMorph.dll
 See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfMorph -c Release -p:GameDir="..."`.
 
 ## Changelog
+
+0.11.32 (avatar replacement on her skeleton):
+- 0.11.29 drove the avatar's own skeleton from her pose (user, first headset run): the pose matched, but the body moved off her
+  curves, the feet floated, drifted and one dipped through the floor, there was no breast jiggle and her hair did not stay on its
+  head. Its own skeleton was the cause: its limb lengths and joints are not hers, and the game's physics, her hair and every system
+  of the plugin hang on her skeleton.
+- Now the avatar's mesh is rebuilt once at load onto her skeleton and the game skins it with her bones, like her own meshes. Posed
+  into her bind pose, then warped smoothly so its shoulders, elbows, wrists, finger joints, hips, knees, ankles, toes, head and
+  eyes sit on hers and its soles at her soles' height; torso, breasts, glutes, arms and legs take her own skin weights (blended from
+  her nearest skin of the same body part: her breast chain the game's breast physics moves, her twist bones, her skin helpers);
+  head, hands and feet go by the bone map, blended by the avatar's own weight shares at the neck, wrists and ankles. No per-frame
+  work. Checked offline on two recordings of her (tools/avatar/drive_test.ps1): the avatar's skin within 3 mm of hers (median), soles
+  within 3-7 mm of hers, skin stretch in the range of her own mesh.
+- Size and hand / foot IK are gone from the panel (the avatar has her proportions and joints now). The HDRP/Lit material is never
+  copied from one of the avatar's own materials again; the brightness slider only changes the colour.
+- Still open: her soft zones, dents, marks, wrinkles and muscles act on her hidden meshes; the face moves only with her jaw and
+  eyes; the cornea / tear overlays are left out; DAZ's joint correctives are not exported.
 
 0.11.31 (skin folds, chubby, build triangle; the knee and waist bends work):
 - Skin folds at deep bends: where a joint bends far, her skin now folds in as geometry. A soft crease runs across the joint with the

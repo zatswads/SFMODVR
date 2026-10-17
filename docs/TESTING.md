@@ -127,6 +127,16 @@ shoulders, elbows) and `baked reika_lowerBody...` (hips, knees); the bake's tota
 - Standing still: no patches at her hips, groin or knees; toggling Round joints in deep bends changes nothing visible.
 - Then the 0.11.28 checks below (deep bends A/B, seams, GPU cost).
 
+## 0.11.32 (avatar on her skeleton)
+
+Install `dist/SfMorph.dll` (the avatar folder from 0.11.29 stays). Log: `Avatar RKS Krista 9: g9 rig, 52 bones mapped, fitted to her
+45 joints (moved up to 6.3 cm), 6 meshes on 9x of her bones; ... with her skin weights ...; soles before the fit ...; her meshes
+reika_upperBody_normal ... reika_foot ...` (in the game her body meshes are read from the GPU: a 'couldn't read' warning means no her
+weights). Headset: (1) Krista moves exactly with her: no floating or drifting feet, no foot in the floor, the body on her curves
+through idle, sex poses, bending over, kneeling; (2) her breasts jiggle with the game's breast physics; (3) her hair sits on Krista's
+head and follows it (Keep her hair); (4) a Body slider (breast size, hips) changes Krista too; (5) no torn skin at the crotch, hips,
+armpits, neck, wrists in deep poses (compare with her own body: Avatar None); (6) None gives her back.
+
 ## 0.11.29 (avatar replacement, first build)
 
 Install `dist/SfMorph.dll`, and copy the avatar folder `%LOCALAPPDATA%\SfMorph\avatars\RKS Krista 9` (built by
