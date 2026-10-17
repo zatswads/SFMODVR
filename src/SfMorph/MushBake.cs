@@ -107,23 +107,28 @@ namespace SfMorph
                 gather.Add((uint)v);
                 if (ring[v] <= K) smooth.Add((uint)v);
             }
-            // 4. the rest smoothing, exactly as the GPU does it (ping-pong, ring K+1 frozen)
-            var A = new Vector3[V]; var B = new Vector3[V];
-            foreach (uint v in gather) { A[v] = P[v]; B[v] = P[v]; }
-            Vector3[] src = A, dst = B;
+            // 4. the rest smoothing, exactly as the GPU does it (ping-pong, ring K+1 frozen); flat arrays: Vector3 operators made this take seconds
+            var ax = new float[V]; var ay = new float[V]; var az = new float[V];
+            var bx = new float[V]; var by = new float[V]; var bz = new float[V];
+            foreach (uint v in gather) { ax[v] = bx[v] = P[v].x; ay[v] = by[v] = P[v].y; az[v] = bz[v] = P[v].z; }
+            var sm = smooth.ToArray();
+            float[] sx = ax, sy = ay, sz = az, dx = bx, dy = by, dz = bz;
             for (int pass = 0; pass < K; pass++)
             {
-                foreach (uint v in smooth)
+                for (int i = 0; i < sm.Length; i++)
                 {
+                    uint v = sm[i];
                     uint o0 = adjOff[v], o1 = adjOff[v + 1];
-                    if (o1 <= o0) { dst[v] = src[v]; continue; }
-                    Vector3 s = Vector3.zero;
-                    for (uint k = o0; k < o1; k++) s += src[adjV[k]];
-                    dst[v] = 0.5f * src[v] + 0.5f * (s / (float)(o1 - o0));
+                    if (o1 <= o0) { dx[v] = sx[v]; dy[v] = sy[v]; dz[v] = sz[v]; continue; }
+                    float tx = 0f, ty = 0f, tz = 0f;
+                    for (uint k = o0; k < o1; k++) { uint u = adjV[k]; tx += sx[u]; ty += sy[u]; tz += sz[u]; }
+                    float inv = 0.5f / (o1 - o0);
+                    dx[v] = 0.5f * sx[v] + tx * inv; dy[v] = 0.5f * sy[v] + ty * inv; dz[v] = 0.5f * sz[v] + tz * inv;
                 }
-                var t = src; src = dst; dst = t;
+                var t1 = sx; sx = dx; dx = t1; t1 = sy; sy = dy; dy = t1; t1 = sz; sz = dz; dz = t1;
             }
-            Vector3[] S = src;   // after K passes
+            var S = new Vector3[V];   // after K passes
+            foreach (uint v in gather) S[v] = new Vector3(sx[v], sy[v], sz[v]);
             // 5. frames: two neighbours spanning the tangent plane well, ordered so their cross product points out of her skin
             var delta = new Vector4[V]; var nrm = new Vector4[V]; var nb = new uint[2 * V];
             var coreOk = new List<uint>(core.Count);
@@ -149,9 +154,8 @@ namespace SfMorph
                     if (sn > best) { best = sn; i1 = u; }
                 }
                 if (i1 < 0 || best < 0.3f) { weak++; continue; }
-                if (Vector3.Dot(Vector3.Cross(S[i0] - sv, S[i1] - sv), n0) < 0f) { int x = i0; i0 = i1; i1 = x; }
                 Vector3 fn, ft, fb;
-                if (!Frame(S[i0] - sv, S[i1] - sv, out fn, out ft, out fb)) { weak++; continue; }
+                if (!Frame(S[i0] - sv, S[i1] - sv, n0, out fn, out ft, out fb)) { weak++; continue; }
                 Vector3 d = (P[v] - sv) * mpu;
                 delta[v] = new Vector4(Vector3.Dot(d, ft), Vector3.Dot(d, fb), Vector3.Dot(d, fn), w[v]);
                 nrm[v] = new Vector4(Vector3.Dot(n0, ft), Vector3.Dot(n0, fb), Vector3.Dot(n0, fn), 0f);
@@ -171,16 +175,21 @@ namespace SfMorph
             return res;
         }
 
-        // The smoothed surface's frame from the two neighbour edges (the GPU's MushRecon builds it the same way).
-        static bool Frame(Vector3 e0, Vector3 e1, out Vector3 n, out Vector3 t, out Vector3 b)
+        // The smoothed surface's frame from the two neighbour edges, the same way the GPU's MushRecon builds it. 0.11.29: no handedness (her
+        // skinning space is mirrored relative to the mesh, and a mirror flips a cross product): n along nref (the vertex normal: the rest normal
+        // here, the skinned one on the GPU), t = e0 and b = e1 orthogonalised. Checked offline: exact at rest, under rotations and mirrors.
+        static bool Frame(Vector3 e0, Vector3 e1, Vector3 nref, out Vector3 n, out Vector3 t, out Vector3 b)
         {
             n = Vector3.Cross(e0, e1); t = b = Vector3.zero;
             if (n.sqrMagnitude < 1e-20f) return false;
             n.Normalize();
+            if (Vector3.Dot(n, nref) < 0f) n = -n;
             t = e0 - n * Vector3.Dot(e0, n);
             if (t.sqrMagnitude < 1e-20f) return false;
             t.Normalize();
-            b = Vector3.Cross(n, t);
+            b = e1 - n * Vector3.Dot(e1, n) - t * Vector3.Dot(e1, t);
+            if (b.sqrMagnitude < 1e-20f) return false;
+            b.Normalize();
             return true;
         }
 

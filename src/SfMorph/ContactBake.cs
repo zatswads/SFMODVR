@@ -368,7 +368,7 @@ namespace SfMorph
             // never the pose correctives), so the detail it puts back is hers
             MushData mush = null;
             string mushNote = "";
-            if (mushRadius > 0f && frame.Ok)
+            if (mushRadius > 0f && frame.Bp != null)   // 0.11.29: not frame.Ok (that needs the hips: the upper body has none)
             {
                 var pm = (Vector3[])P.Clone();
                 Vector3[] dv = null;
