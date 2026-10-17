@@ -245,15 +245,31 @@ pieces, in this order:
   change (v2). VaM Genesis 2: the SfExport folder has no skin weights (OBJ + joints); either `SfExport.cs` also writes the
   `DAZMergedMesh` weights (to look up in VaM's Assembly-CSharp), or the weights are transferred in Blender from a weighted
   Genesis 2 Female FBX exported once from DAZ Studio. Open.
-- **Build**: a separate Unity 2022.3.9 project `tools/avatar/SfAvatarBundle` (not the shader project: it stays small and
-  its compute bundle unaffected), batch mode like `tools/shaders/build.ps1`. Editor script: copy the FBX + textures into
-  `Assets/Avatars/<Name>`; ModelImporter Generic rig (no Humanoid), **Read/Write on** (readable meshes: soft zones, GPU
-  contact and the HerBody hulls need no GPU readback, unlike her meshes), blend shapes on, no animation, no materials;
-  textures BC7 (albedo sRGB; roughness, translucency linear; normals BC5), mipmaps; a mask map per surface (A = 1 -
-  roughness). The bundle holds the prefab, the textures and `avatar.txt` (name, source, rig table, scale, per surface: role
-  and texture names per channel). Output `BepInEx\config\SfMorphs\avatars\<Name>\` (bundle, avatar.txt, thumb.jpg). The
-  bundle carries **no shaders**: HDRP is not in the project, and shader variants built outside the game are the usual
-  reason such bundles render pink or wrong.
+- **Build** (step 2, built 2026-10-17): `powershell -File tools\avatar\build.ps1 -Fbx <character.fbx> [-Name N] [-Out dir]
+  [-MaxSize 4096] [-MapSize 2048]`, a separate Unity 2022.3.9 project `tools/avatar/SfAvatarBundle` (not the shader project:
+  that one stays small and its compute bundle unaffected; Linear colour space like the game). build.ps1 copies the FBX,
+  `<fbx>.materials.txt` and every texture it names plus `<name>.images` into `Assets/Avatars/<Name>` (git-ignored: never
+  commit a character), then runs `AvatarBundle.Build` and loads the result back with `AvatarBundle.Verify`. Output
+  `%LOCALAPPDATA%\SfMorph\avatars\<Name>\` (`<name>` bundle + `avatar.txt`); nothing goes into the game.
+  - Import: Generic rig with no avatar (rig type None drops the skinning), the Animator removed, **Read/Write on** (readable
+    meshes: soft zones, GPU contact and the HerBody hulls need no GPU readback, unlike her meshes), blend shapes kept, no
+    animation, 4 weights per vertex, file units (DAZ's centimetres come in as metres).
+  - DAZ's follower figures (eyes, lashes, brows, tear, mouth) are rebound onto the main skeleton by bone name when the rest
+    transforms agree (0.1 mm / 0.06 degrees); bones only a follower has (the G9 mouth's tongue01-05) are grafted onto the
+    main skeleton under their nearest common ancestor; the duplicate skeletons and DAZ's stray 'Cube' are removed.
+  - Textures per surface from DAZ's materials.txt (Base Color, Normal Map, Detail Normal Map, Specular Lobe 1 Roughness,
+    Translucency Color, Cutout Opacity), else the FBX's own material slots (Unity hands those over as asset GUIDs): the eyes,
+    lashes, brows, tear and mouth come from there. Albedo / translucency sRGB BC7, normals BC5, maps linear; albedo and
+    normals up to 4096, the rest 2048. Generated: `<rough>_smooth` (1 - roughness, BC4, for her Skin shader's
+    SmoothnessMap.r), `<rough>_mask` (HDRP mask map, A = smoothness), `<albedo>_<opacity>` (albedo with the cut-out in
+    alpha: brows). Each surface's constant colour (black lashes, brown brows, the mouth's tint) goes into avatar.txt too.
+  - Roles by surface name: skin, nails, eye, cornea, tear, lashes, brows, mouth, teeth.
+  - The bundle carries **no shaders**: HDRP is not in the project, and shader variants built outside the game are the usual
+    reason such bundles render pink or wrong. The prefab's materials are Unity's FBX defaults, named by surface: the plugin
+    replaces them by name.
+  - RKS Krista 9: 160.8 MB, 6 skinned meshes (body 27 087 vertices, 138 bones; eyes, lashes, brows, tear, mouth rebound,
+    5 tongue bones grafted) on one skeleton of 143 bones, 18 surfaces, 29 textures, 1.683 m tall; loaded back: every mesh
+    readable, every bone present, the skin's rest pose exact (bone x bind pose = the renderer's space within 0.00001).
 - **Materials at load**, from the game's own loaded shaders (so keywords, stencils and SSS match the game's HDRP build).
   Route A: a copy of her body / face Skin material per avatar skin surface with the avatar's albedo / normal / roughness
   maps, every overlay layer zeroed (`_BlushPower`, `_AttachColor_*` alpha, `_AttachMap_*`, `_AddMap`, `_NormalMap_2`: the
@@ -288,7 +304,7 @@ pieces, in this order:
 ### Steps
 
 1. Offline retarget check (done, above); the same on a real recording.
-2. The bundle project and builder (`tools/avatar`), the materials manifest; a test bundle of Krista 9 (no game change).
+2. The bundle project and builder (`tools/avatar`), the materials manifest; a test bundle of Krista 9 (done 2026-10-17).
 3. Plugin: `Avatar.cs` (load, hide, drive, give back) + the HerBody refit + a Characters tab *Avatars* list + `[Avatar]`
    config (scale mode, IK weights, material route), exclusive with converted characters. **Ask the user before building or
    installing anything into the game.**
