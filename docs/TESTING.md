@@ -98,6 +98,20 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.50 (avatar correctives, auto clavicle, Genesis 9 wrinkles / muscles)
+
+Copy `SfMorph.dll` and `sfmorph_shaders`, and the rebuilt RKS Krista 9 avatar folder (bundle, avatar.txt, **correctives.txt**) into
+`SfMorphs\avatars\RKS Krista 9`. Log: `SF Body Morphs 0.11.50`; `Avatar RKS Krista 9: ... correctives: 99 joint correctives
+(Genesis9): DAZ axes fitted over 138 joints (mirrored, x0.0095, residual ~5 mm), 63 bones read`. In the headset with the avatar on:
+(1) deep poses (squat, kneel, legs apart, arms up / forward, neck down, elbows bent): the hip crease, knees, armpits and elbows keep
+their volume instead of pinching; Characters -> Avatars -> Joint correctives 0 vs 1 to compare; (2) raise her arms: the avatar's
+shoulders rise ([Avatar] AutoClavicle), no flat collapsed shoulder; (3) Skin tab wrinkles + muscles on: lines at her elbows / knees /
+hip folds / belly / neck and face lines on the avatar, the muscle relief and flex on its torso, arms and legs; log `Wrinkles: ... g9head
+/ g9body / g9arms / g9legs`, no 'not on the ... wrinkle layout'; (4) Debug tab -> Avatar: **Smoke: Avatar joint correctives**
+(`PASS (97 shapes driven, N evaluations in 0.3 s ... Euler round trip 0.000 deg worst ... joint residual ~5 mm; now <corrective> 0.xx`),
+**Smoke: Avatar auto clavicle**, **Smoke: Avatar wrinkles / muscles** (4 avatar sheets, 0 failed, muscle maps read). Known: skin marks
+(prints, redness) don't show on the avatar's body / arms / legs (their UV raster ignores UDIM tiles; follow-up).
+
 ## 0.11.49 (soft-zone smoke test)
 
 Debug tab -> Soft zones and hands -> **Smoke: Soft zones (1 s)**, once while she stands still and once while she dances or walks:

@@ -62,6 +62,24 @@ Chain: `GpuContact` capsules -> `SoftDeform.compute` Depth (`_Foreign`) -> Compo
    these and per-frame garbage; a line that is fine says `timing-lint: ok <why>`. `sh tools/timing/check.sh` before every release that
    touches a per-frame system; extend the harness when adding a simulation.
 
+## Avatars (0.11.50)
+
+1. **A DAZ figure's correctives are part of its mesh.** Without them the avatar tears / collapses at the crotch, armpits, neck and
+   wrists in deep poses. Export them (`daz_export.dsa ... morphs`), drive them by DAZ's own formulas (`correctives.txt`), never by
+   hand-made angle guesses: the shapes were sculpted against those drivers.
+2. **Check a convention against the source program, don't reason it out.** DAZ's rotation order (first letter applied first, twist
+   innermost) was confirmed by setting channels in DAZ Studio and decomposing its world rotations (exact, except where its joint
+   limits clamp: so the limits are in the table too).
+3. **Euler drivers have a gimbal band.** An arm straight forward lies along the bend axis; a plain Euler split read it as "up 90 +
+   twist -95" and fired the arm-up corrective. Near the middle angle's +-90 deg the outer angle fades into the twist.
+4. **UV layouts can live in UDIM tiles** (Genesis 9: Head 0, Body 1, Legs 2, Arms 3, each its own texture). Anything that looks a UV
+   up in a 0..1 map takes the tile off (`WrinkleLayout.InTile`); a raster that draws UVs to clip space must too (skin marks don't yet).
+5. **Offline harness skeletons need the unlisted groups.** skeleton.txt leaves out her `Facial` / `LegFront_*` groups; hung under the
+   root they stay put and a posed neck tore the avatar's face off (looked like an avatar bug). drive_test hangs them under the nearest
+   bone already under Root_M.
+6. **Pose-following shapes are never rest shape**: anything that bakes "the current blendshapes" as the neutral (soft zones, hulls,
+   wrinkle neutral, re-bake triggers) must skip `ShapeKind.Jcm`, the avatar's included.
+
 ## Cross-system lessons
 
 - **Rule out stale builds first.** Check the version in the log (`grep "SF Body Morphs"`) and in the DLL (`strings -el`). Each

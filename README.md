@@ -44,6 +44,30 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.50 (avatars keep their own joint correctives, shoulders and get wrinkles / muscles):
+- An avatar tore or collapsed at the crotch, armpits, neck and wrists in deep poses. Cause: DAZ figures fix those joints with
+  corrective shapes driven by their bone angles, and the avatar route dropped them twice (the DAZ export baked no morphs, the rebuild
+  onto her skeleton kept no blend shapes). Now `tools/sources/daz_export.dsa ... morphs` (the importer passes it) exports the figure's
+  correctives (Genesis 9 body_cbs_*, Genesis 3 / 8 pJCM*) as blend shapes, `tools/sources/daz_correctives.py` writes their drivers
+  from DAZ's own .dsf formulas (bone rotation channels, TCB splines, helper products, the master dial, joint limits) into the avatar's
+  `correctives.txt`, Avatar.cs carries each shape onto the rebuilt mesh (turned and warped like its vertices) and `AvatarJcm.cs`
+  evaluates DAZ's formulas every frame from her final pose, just before Unity skins the meshes. DAZ's Euler order checked against DAZ
+  Studio's own rotations (exact); near an order's gimbal lock (an arm straight forward) the bend fades into the twist instead of
+  firing the arm-up corrective. Krista 9: 97 correctives; offline they move the skin up to 32 mm (kneel), 26 mm (arms up). [Avatar]
+  Correctives (0-1.5, default 1) in the Avatars section.
+- The avatar's shoulders: PoseDriver's clavicle correction (0.11.47) now runs for the avatar ([Avatar] AutoClavicle, on by default,
+  even with [Correctives] On off for her): the shoulders rise with raised arms (scapula +16 deg at 150 deg) and come forward when the
+  arms reach forward or across.
+- Wrinkles and muscles on the avatar: 0.11.42-0.11.47 skipped the avatar (her maps are on her UV layout). The author scripts now take
+  an avatar export (`--avatar=<drive_test export>`): creases placed on the avatar mesh fitted to her skeleton exactly as on her, then
+  one layout per Genesis 9 UV sheet (g9head with the face lines and the neck, g9body, g9arms, g9legs; the UDIM tile taken off), same
+  for the muscle relief and geometry (the bake now reads each submesh's own sheet). Every Genesis 9 character shares them.
+- Avatar bundles: blend shapes that move nothing are dropped (DAZ writes every corrective onto every follower mesh: 436 -> 202 MB for
+  Krista 9). Correctives never count as rest shape (soft zones, hulls, wrinkle neutral and re-bakes ignore them).
+- Debug tab -> Avatar: smoke tests for the correctives (DAZ maths self-test, the frame step running), the auto clavicle and the
+  avatar's wrinkle / muscle sheets. Shader bundle rebuilt (the Genesis 9 maps). Checked offline (tools/avatar/drive_test.ps1: the
+  plugin's Avatar.cs on her export with deep poses, renders); not run in the game.
+
 0.11.49 (soft-zone smoke test reads the jiggle's steadiness):
 - Debug tab, **Smoke: Soft zones (1 s)** now also prints the biggest per-frame jump of one soft point and the cuts in that second,
   and fails when a point jumps over 4 cm between two frames without a cut (a pop). Nothing else changed.

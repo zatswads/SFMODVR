@@ -319,7 +319,12 @@ pieces, in this order:
    the corrective names; the exact G9 / G8 names from a test export's list) and drive each by its joint angle at runtime,
    the way converted characters already drive VaM's pJCM shapes (`JcmDef` in Morph.cs). This is DAZ's own fix for this
    mesh, so it comes before anything hand-made.
-2. **Auto clavicle** (avatar only, if a recording shows it is needed): when her upper arm rises above ~30 degrees and her
+   **Built in 0.11.50**: `daz_export.dsa ... morphs` exports every body_cbs_* / pJCM* morph as a blend shape (rules: name -> 1
+   export, Anything -> 0 bake; the base mesh is unchanged, checked vertex for vertex), `tools/sources/daz_correctives.py` reads their
+   formulas from the figure's .dsf files (not single-axis angles: DAZ's own drivers, TCB splines and the CTRLMD helper products of the
+   combined shapes), `AvatarJcm.cs` evaluates them. The RBF pose driver (PoseDriver.cs) stays for what DAZ does not drive: the clavicle
+   (step 2, also built in 0.11.50 for the avatar). A VaM (Genesis 2) avatar has no correctives yet: its export carries no morphs.
+2. **Auto clavicle** (built in 0.11.50: PoseDriver's clavicle correction runs for the avatar, [Avatar] AutoClavicle): when her upper arm rises above ~30 degrees and her
    Scapula does not follow, give the avatar's collar a share of the elevation. The same idea as the helper-joint clavicle
    rigs the user pointed at (Paul Popov's Advanced Clavicle Rig, MIT, Maya: an IK clavicle plus scapula / trapezius /
    pectoral / latissimus helper joints on aim and point constraints, e.g. the pectoral joint half way between clavicle and
