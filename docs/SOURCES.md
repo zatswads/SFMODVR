@@ -203,6 +203,16 @@ So the avatar now shares her skeleton (the VRChat "armature merge" idea, with th
 6. her skin systems (0.11.42): the avatar's renderers replace her hidden ones in her character's renderer list, so GPU contact, skin
    marks, soft zones and her body colliders run on it (all keyed by her bones); its skin defaults to a copy of her Skin material.
    Wrinkles and muscle relief wait for a Genesis 9 UV layout (tools/wrinkles/author.py, tools/muscles/author.py on the avatar).
+7. her face rig (0.11.43): the avatar's face skin, lashes and brows take her face mesh's weights at the matching place, found by a
+   warp of face landmarks (lip corners and middles, inner / outer brows, eyes, head) used only for the lookup; per-rig tables for
+   Genesis 9, 8 and 2 keep it general.
+
+Generality (user, 2026-10-17: not bespoke to one character): everything on the avatar side goes by per-rig tables (body: g9 / g8 /
+g2 from tools/sources/humanoid.py; face landmarks: the same three families; DAZ surface names of each generation) and by geometry
+(fits, crotch, soles); nothing is keyed to RKS Krista 9. Open for VaM characters (Genesis 2): SfExport writes OBJ + joints without
+skin weights, so a VaM look cannot be built into an avatar bundle yet. The route: SfExport also writes the DAZMergedMesh's bone
+weights (or the weights are transferred in Blender from a weighted Genesis 2 Female FBX), then a small Blender step writes the FBX
+build.ps1 takes.
 Offline (tools/avatar/drive_test.ps1, the plugin's own Avatar.cs + MeshData.cs in the Unity editor on her export and two recordings):
 her body skin to the avatar's 3 mm median, soles within 3-7 mm of hers, the avatar's skin stretch in the range of her own upper
 body's (x0.45-2.8 vs x0.3-2.3 at 0.1 / 99.9 %), all her renderers given back. The per-frame retarget below stays as the record of

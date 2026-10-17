@@ -208,6 +208,41 @@ namespace SfMorph
             "thigh", "Hip{s}", "shin", "Knee{s}", "foot", "Ankle{s}", "toe", "Toes{s}");
 
         // the avatars' (tools/sources/humanoid.py's tables): DAZ Genesis 9, Genesis 3 / 8 / 8.1, Genesis 2 (VaM)
+        // Face landmarks for the face weights (0.11.43): lip corners, the middle of the upper and lower lip, inner and outer brows. Hers
+        // (AdvancedSkeleton face rig) and per avatar rig family; a rig without them (no face bones) keeps the jaw / eyes / head weights.
+        static readonly string[] FaceKeys = { "lipcorner.L", "lipcorner.R", "lipupper", "liplower", "browin.L", "browin.R", "browout.L", "browout.R" };
+        static readonly Dictionary<string, string[]> HerFace = new Dictionary<string, string[]>
+        {
+            { "lipcorner.L", new[] { "Lip_Left_Inside" } }, { "lipcorner.R", new[] { "Lip_Right_Inside" } },
+            { "lipupper", new[] { "Lip_Upper_Inside" } }, { "liplower", new[] { "Lip_Lower_Insite", "Lip_Lower_Inside" } },
+            { "browin.L", new[] { "Eyebrow_Left_Insite" } }, { "browin.R", new[] { "Eyebrow_Right_Insite" } },
+            { "browout.L", new[] { "Eyebrow_Left_Outsite" } }, { "browout.R", new[] { "Eyebrow_Right_Outsite" } },
+        };
+        static readonly Dictionary<string, Dictionary<string, string[]>> AvatarFace = new Dictionary<string, Dictionary<string, string[]>>
+        {
+            { "g9", new Dictionary<string, string[]> {
+                { "lipcorner.L", new[] { "l_lipcorner" } }, { "lipcorner.R", new[] { "r_lipcorner" } },
+                { "lipupper", new[] { "lipuppermiddle" } }, { "liplower", new[] { "liplowermiddle" } },
+                { "browin.L", new[] { "l_browinner" } }, { "browin.R", new[] { "r_browinner" } },
+                { "browout.L", new[] { "l_browouter" } }, { "browout.R", new[] { "r_browouter" } } } },
+            { "g8", new Dictionary<string, string[]> {
+                { "lipcorner.L", new[] { "lLipCorner" } }, { "lipcorner.R", new[] { "rLipCorner" } },
+                { "lipupper", new[] { "LipUpperMiddle", "lipUpperMiddle" } }, { "liplower", new[] { "LipLowerMiddle", "lipLowerMiddle" } },
+                { "browin.L", new[] { "lBrowInner" } }, { "browin.R", new[] { "rBrowInner" } },
+                { "browout.L", new[] { "lBrowOuter" } }, { "browout.R", new[] { "rBrowOuter" } } } },
+            { "g2", new Dictionary<string, string[]> {
+                { "lipcorner.L", new[] { "lLipCorner" } }, { "lipcorner.R", new[] { "rLipCorner" } },
+                { "lipupper", new[] { "LipUpperMiddle", "lipUpperMiddle", "LipUpper" } }, { "liplower", new[] { "LipLowerMiddle", "lipLowerMiddle", "LipLower" } },
+                { "browin.L", new[] { "lBrowInner" } }, { "browin.R", new[] { "rBrowInner" } },
+                { "browout.L", new[] { "lBrowOuter" } }, { "browout.R", new[] { "rBrowOuter" } } } },
+        };
+
+        static Transform FindAny(Dictionary<string, Transform> byLowerName, string[] names)
+        {
+            foreach (var n in names) if (byLowerName.TryGetValue(n.ToLowerInvariant(), out var t)) return t;
+            return null;
+        }
+
         static readonly RigTable[] AvatarTables =
         {
             Table("g9", "l_", "r_", Fingers("{s}thumb{0}", "{s}index{0}", "{s}mid{0}", "{s}ring{0}", "{s}pinky{0}"),
@@ -329,7 +364,7 @@ namespace SfMorph
                 if (!_surfRole.TryGetValue(n, out var role) || role != "skin") return 0;
                 var l = n.ToLowerInvariant();
                 if (l.Contains("mouth")) return 0;   // the mouth cavity
-                return l.Contains("head") || l.Contains("face") ? 1 : 3;
+                return l.Contains("head") || l.Contains("face") || l.Contains("lip") || l.Contains("ear") || l.Contains("nostril") || l.Contains("eyesocket") ? 1 : 3;
             }
 
             // a bone of hers the new meshes use went away (the game rebuilt her): reload
@@ -620,6 +655,17 @@ namespace SfMorph
                         if (mask == 0 && ps.MapShare[vi] < 0.999f) mask = 1 << 1;   // a little weight on small bones: the torso
                         ps.Mask[vi] = mask;
                     }
+                    // which vertices take her face weights: skin (not the mouth cavity), lashes, brows; eyes, teeth, mouth, tear by the bone map
+                    ps.FaceOk = new bool[nv];
+                    var pm = r.sharedMaterials;
+                    for (int sm = 0; sm < src3.subMeshCount; sm++)
+                    {
+                        string sn2 = sm < pm.Length && pm[sm] != null ? pm[sm].name : "";
+                        string rl2 = _surfRole.TryGetValue(sn2, out var ro2) ? ro2 : "skin";
+                        bool ok = (rl2 == "skin" && sn2.ToLowerInvariant().IndexOf("mouth", StringComparison.Ordinal) < 0) || rl2 == "lashes" || rl2 == "brows";
+                        if (!ok) continue;
+                        foreach (var ix in src3.GetIndices(sm)) ps.FaceOk[ix] = true;
+                    }
                     pass.Add(ps);
                 }
 
@@ -635,6 +681,7 @@ namespace SfMorph
                         src.Add(X[i]); dst.Add(HP(herOf[i]));
                     }
                 int joints = src.Count;
+                var fitFace = new List<Vector3>(); var herFaceLm = new List<Vector3>(); string faceNote = "";
                 var rbf = Rbf.Fit(src, dst);
                 var mainPass = pass.OrderByDescending(x => x.P.Length).First();
                 string soles = "";
@@ -664,6 +711,56 @@ namespace SfMorph
                     }
                 }
                 if (src.Count > joints) rbf = Rbf.Fit(src, dst);
+
+                // the face (0.11.43): her face rig on the avatar's face. Her face skin's weights (lips, cheeks, brows, lids, jaw) are
+                // looked up through a warp of the avatar's face landmarks onto hers (lip corners and middles, brows, eyes, head); the
+                // avatar's face keeps its own shape (the warp only finds where on her face each vertex is), so the game's expressions,
+                // face clips and lip sync move its lips, brows and lids as they move hers
+                var faceSkin = new SkinGrid(0.01f);
+                Rbf faceWarp = null;
+                {
+                    AvatarFace.TryGetValue(best.Id, out var af);
+                    var fs = new List<Vector3>(); var fd = new List<Vector3>(); var got = new List<string>();
+                    foreach (var key in new[] { "head", "eye.L", "eye.R" })
+                    {
+                        int i = I(key);
+                        if (i >= 0 && herOf[i] != null) { fs.Add(rbf.Apply(X[i])); fd.Add(HP(herOf[i])); }
+                    }
+                    if (af != null)
+                        foreach (var k in FaceKeys)
+                        {
+                            var at = af.TryGetValue(k, out var an) ? FindAny(avByName, an) : null;
+                            var ht = HerFace.TryGetValue(k, out var hn) ? FindAny(herByName, hn) : null;
+                            if (at == null || ht == null || !idx.ContainsKey(at) || !herBind.ContainsKey(ht)) continue;
+                            fs.Add(rbf.Apply(X[idx[at]])); fd.Add(HP(ht)); got.Add(k);
+                        }
+                    if (got.Count >= 4)
+                    {
+                        faceWarp = Rbf.Fit(fs, fd);
+                        foreach (var r in HerRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+                        {
+                            if (r == null || r.sharedMesh == null || VrHands.UnderSf(r.transform) || !r.gameObject.activeInHierarchy) continue;
+                            var nm = r.name.ToLowerInvariant();
+                            if (!nm.Contains("face")) continue;
+                            var d = MeshData.Read(r.sharedMesh, out var err);
+                            if (d == null || d.Pos == null || d.Weights == null) { Plugin.Log.LogWarning("Avatar: couldn't read her face " + r.name + ": " + err); continue; }
+                            var bones = r.bones; var real = new Transform[bones.Length];
+                            for (int b = 0; b < bones.Length; b++)
+                            {
+                                var t = bones[b];
+                                while (t != null && (t.name.StartsWith("Sf", StringComparison.Ordinal) || !herBind.ContainsKey(t))) t = t.parent;
+                                real[b] = t;
+                            }
+                            faceSkin.Add(d, real, herW2L * r.transform.localToWorldMatrix, t => 0);
+                            faceNote = r.name;
+                        }
+                        float fe = 0f; for (int i = 0; i < fs.Count; i++) fe = Mathf.Max(fe, (fd[i] - fs[i]).magnitude);
+                        faceNote = faceSkin.Count > 0 ? "face: her rig from " + faceNote + " by " + got.Count + " landmarks (" + string.Join(" ", got.ToArray()) + "), moved up to " +
+                                                        (fe * 1000f).ToString("0", CultureInfo.InvariantCulture) + " mm for the lookup"
+                                                      : "face: her face mesh not readable (jaw / eyes / head only)";
+                    }
+                    else faceNote = "face: the " + best.Id + " rig has " + got.Count + " of the face landmarks (jaw / eyes / head only)";
+                }
                 float fitErr = 0f; for (int i = 0; i < src.Count; i++) fitErr = Mathf.Max(fitErr, (rbf.Apply(src[i]) - dst[i]).magnitude);
                 float moveMax = 0f; for (int i = 0; i < joints; i++) moveMax = Mathf.Max(moveMax, (dst[i] - src[i]).magnitude);
 
@@ -675,7 +772,7 @@ namespace SfMorph
                 bool lit = LitTemplate() != null;
                 var herBody = HerBodyRenderer();
                 _herSkin = herBody != null ? herBody.sharedMaterials.FirstOrDefault(m => m != null && m.shader != null && m.shader.name.Contains("Skin")) : null;
-                int fromHer = 0, fromMap = 0, far = 0, verts = 0;
+                int fromHer = 0, fromMap = 0, far = 0, verts = 0, fromFace = 0;
                 var built = new List<KeyValuePair<SkinnedMeshRenderer, Mesh>>();
                 var acc = new Dictionary<Transform, float>(); var hacc = new Dictionary<Transform, float>();
                 int snapped = 0, cutTris = 0;
@@ -711,6 +808,11 @@ namespace SfMorph
                         // regions it covers); no such skin within 4 cm: all by the bone map. Shares keep the seams at the neck, wrists
                         // and ankles smooth.
                         acc.Clear();
+                        if (faceWarp != null && faceSkin.Count > 0 && ps.FaceOk != null && ps.FaceOk[vi] && ps.Dom[vi] >= 0 && avRegion[ps.Dom[vi]] == 0)
+                        {
+                            if (faceSkin.Nearest(faceWarp.Apply(q), 0.02f, 1, acc)) { nbw[vi] = Top4(acc, Bi); fromFace++; continue; }
+                            acc.Clear();
+                        }
                         float ms = ps.MapShare[vi];
                         var w = ps.W.Length == nv ? ps.W[vi] : new BoneWeight { boneIndex0 = 0, weight0 = 1f };
                         bool her = false;
@@ -830,12 +932,12 @@ namespace SfMorph
                 Plugin.Log.LogInfo("Avatar " + Summary + "; " + verts + " vertices: " + fromHer + " with her skin weights (head, hand and foot shares by the bone map), " + fromMap + " by the bone map alone (" + far +
                                    " of them farther than 4 cm from her skin); x" + scale.ToString("0.000", CultureInfo.InvariantCulture) + ", facing turned " +
                                    yaw.ToString("0.#", CultureInfo.InvariantCulture) + " deg, fit residual " + (fitErr * 1000f).ToString("0.0", CultureInfo.InvariantCulture) +
-                                   " mm, soles before the fit " + (soles.Length > 0 ? soles : "-") + "; " + crotch + "; her meshes " + herMeshes + "; her skin material " + (_herSkin != null ? _herSkin.name : "not found") + "; " + _hidden.Count +
+                                   " mm, soles before the fit " + (soles.Length > 0 ? soles : "-") + "; " + faceNote + " (" + fromFace + " vertices); " + crotch + "; her meshes " + herMeshes + "; her skin material " + (_herSkin != null ? _herSkin.name : "not found") + "; " + _hidden.Count +
                                    " of her renderers hidden");
                 return null;
             }
 
-            class Posed { public SkinnedMeshRenderer R; public Vector3[] P, N; public Vector4[] T; public int[] Dom, Mask, BIdx; public float[] MapShare; public BoneWeight[] W; }
+            class Posed { public SkinnedMeshRenderer R; public Vector3[] P, N; public Vector4[] T; public int[] Dom, Mask, BIdx; public float[] MapShare; public BoneWeight[] W; public bool[] FaceOk; }
 
             // 0 head, 1 torso, 2/3 upper arm, 4/5 forearm, 6/7 hand, 8/9 thigh, 10/11 shin, 12/13 foot (L/R)
             static int Region(string key)

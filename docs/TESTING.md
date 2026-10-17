@@ -98,6 +98,13 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.43 (avatar face)
+
+Log, in the `Avatar ...` line: `face: her rig from reika_face_x by 8 landmarks (lipcorner.L ... browout.R), moved up to N mm for the
+lookup (M vertices)`. Headset: (1) expressions (smile, pain, pleasure clips) move the avatar's mouth corners, cheeks, brows and lids;
+(2) blinks close its lids; (3) lip sync and moans open its mouth as much as hers (not wider), lips follow; (4) no tearing at the
+lips, nose or lids; eyes still look around; (5) None: hers again.
+
 ## 0.11.42 (avatar in her skin systems)
 
 Log: `Avatar materials: her skin shader for the skin`; then (within 2 s) her character rebuilt with the avatar: soft zones built on

@@ -44,6 +44,18 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.43 (avatar: her face rig on its face):
+- The avatar's face moved only with her jaw and eyes, and its mouth opened too far on lines (user): its whole head hung on her head
+  and jaw bones. Now its face skin, lashes and brows take her face rig's weights (lips, mouth corners, cheeks, brows, lids, jaw) from
+  the matching place on her face, so the game's expressions, face clips and lip sync move its lips, brows and lids as they move hers,
+  and the jaw opens the same amount. The matching place comes from a warp of the avatar's face landmarks onto hers (lip corners, the
+  middle of each lip, inner and outer brows, eyes, head), used only for the lookup: the avatar's face keeps its own shape. Its eyes,
+  teeth and mouth stay on her eye / jaw / head bones. Checked offline on a talking recording: the avatar's mouth opens and closes with
+  hers.
+- Not specific to one character: the landmarks come from per-rig face bone tables for DAZ Genesis 9, Genesis 3 / 8 and Genesis 2
+  (VaM's figure); a rig without face bones keeps the jaw / eyes / head weights. Face surfaces are recognised by the DAZ names of each
+  generation (Head; Face, Lips, Ears). VaM characters still need an exporter that writes their skin weights (docs/SOURCES.md).
+
 0.11.42 (avatar: her skin shader and her skin systems):
 - The avatar looked like a ghost and none of her muscles, chubby, dents, marks or the game's subsurface scattering showed on it (user):
   those systems ran on her hidden meshes, and its skin was an HDRP/Lit copy. Now the avatar's skin is a copy of her own skin material
