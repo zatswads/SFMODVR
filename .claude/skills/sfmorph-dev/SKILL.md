@@ -52,6 +52,11 @@ every wrap-up so the time and the mark stay current.
 - **Voice packs:** never delete user audio (move it to `_removed-voice-packs`); check `origin/main`'s version before copying a
   build into the game (an older worktree build downgrades it); pack paths can pass 260 chars, so bake from a short staging path.
 
+## Every feature: a Debug-tab smoke test
+
+Add (or update) a smoke test for each feature in the Debug tab, in a collapsible section, logging `Smoke: <feature> PASS|FAIL (why)`;
+"Run all smoke tests" runs them in turn. Ask the user to run it and send the log (docs/LESSONS.md).
+
 ## Don'ts
 
 - Don't scale or move her root (`MovePlayerAndGirl.reika`): the game positions it (shoe height, scenes).

@@ -63,3 +63,7 @@ Chain: `GpuContact` capsules -> `SoftDeform.compute` Depth (`_Foreign`) -> Compo
 - **Short lines across a fold read as stitches** (0.11.41). A belly line below the navel, rising to the sides, reads as a caesarean
   scar. The fold belongs at the navel, drooping to the flanks.
 - **New body sources (avatar, 0.11.42):** systems on hidden meshes show nothing. Route the shown renderers in.
+- **Every feature ships with a Debug-tab smoke test** (0.11.47). Nothing here can be run outside the game, so each feature gets a test
+  in the Debug tab (in its own collapsible section) that exercises it and logs one `Smoke: <feature> PASS|FAIL (<why>)` line: the
+  user presses it in the headset and the log tells the next session what works. Add or update the test in the same release as the
+  feature, and list it in TESTING.md.
