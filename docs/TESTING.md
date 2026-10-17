@@ -98,6 +98,26 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.26 (controller haptics)
+
+Install `dist/SfMorph.dll`. Startup log, even with haptics off: `Haptics: runtime VirtualDesktopXR 1.1.0, XR_FB_touch_controller_pro
+off -> OpenXR one motor per controller (OculusTouchController / OculusTouchController)` over VD. Over Link it should say `... on ->
+OpenXR localized (grip, trigger, thumb actuators; QuestProTouchController)`.
+
+- Debug tab → Haptics: each button buzzes that controller for 0.5 s. Over VD, trigger / thumb play on the main motor. Over Link each
+  should be felt in its own place: the grip in the handle, the trigger under your index finger, the thumb on the thumb rest. If a
+  button is silent: [Haptics] Path 1 (the XR device path), restart, and report the `Haptics:` line.
+- VR tab → Haptics on (needs soft zones or physics hands), Log 2:
+  - Tap her lightly: a tick. Pat, then slap harder: stronger, sharper pulses (`... pulse 0.xx for NN ms: slap at N m/s`).
+  - Rest a hand: barely anything. Slide it: a low buzz that grows with speed.
+  - Grab her (grab button) while touching: a squeeze, then a light hold.
+  - A finger in her: a buzz by depth and a pulse per stroke (`into her vagina`, `in-stroke ...`).
+- Report:
+  - whether the levels feel right (Touch and rub too strong / weak, slap too soft);
+  - any buzz that never stops (the `buzz off` line missing);
+  - the `last 10 s:` summary while touching;
+  - whether a resting hand chatters (onset pulses while you don't move).
+
 ## 0.11.25 (penetration sound and reactions)
 
 Install `dist/SfMorph.dll`; put the chosen squishes in `BepInEx\plugins\SfMorph\Sounds\penetration`. Log: `Skin foley: ...

@@ -47,6 +47,7 @@ namespace SfMorph
     {
         public Vector3 A, B; public float R;
         public int Hand;                // 0 left, 1 right, -1 unknown (which of YOUR hands it stands for)
+        public int Part;                // 0.11.26: the haptic actuator it stands for (Haptics.AGrip palm / other fingers, ATrigger index, AThumb)
         public string By;               // "your left physics hand", "your left hand (Player)": never built per frame
         public CapSource Src;           // for the Live gate / Reactions naming; may be null (= always live)
     }
@@ -1088,6 +1089,7 @@ namespace SfMorph
             _geoActive = false;
             ShapesNow();                                    // also for SkinDepth / CapsuleDepth, whatever the sources are
             Penetration.Begin();                            // 0.11.25: the openings for this frame; every source below is fed to it too
+            Haptics.Begin();                                // 0.11.26: your hands' contacts for the controller haptics
             var caps = s.Caps;
             bool listOn = s.PushByTouch && caps != null && caps.Count > 0;
             int n = listOn ? caps.Count : 0;
@@ -1120,7 +1122,7 @@ namespace SfMorph
                 if (!Finite(a) || !Finite(b)) continue;
                 _geoActive = true;
                 string who = src != null && src.Name != null ? src.Name : (c.Owner ?? "a hand");
-                Feed(a, b, c.Radius, src, c.Owner, who, HandOf(who), true, va, vb, raA, raB);
+                Feed(a, b, c.Radius, src, c.Owner, who, HandOf(who), Haptics.Want ? Haptics.PartOf(c.T) : 0, true, va, vb, raA, raB);
                 Penetration.Feed(a, b, c.Radius, who, HandOf(who));
             }
             for (int gi = 0; gi < ng; gi++)
@@ -1132,7 +1134,7 @@ namespace SfMorph
                 Vector3 va = Vector3.zero, vb = Vector3.zero, raA = Vector3.zero, raB = Vector3.zero;
                 if (geo) Velocity(n + gi, w.A, w.B, invDt, out va, out vb, out raA, out raB);
                 _geoActive = true;
-                Feed(w.A, w.B, w.R, w.Src, w.By, w.By ?? "a hand", w.Hand, geo, va, vb, raA, raB);
+                Feed(w.A, w.B, w.R, w.Src, w.By, w.By ?? "a hand", w.Hand, w.Part, geo, va, vb, raA, raB);
                 Penetration.Feed(w.A, w.B, w.R, w.By ?? "a hand", w.Hand);
             }
 
@@ -1210,7 +1212,8 @@ namespace SfMorph
         }
 
         // One source capsule against every segment (see GeoPush). who/hand: for the yield; owner: GeoName; geo false = yield only.
-        static void Feed(Vector3 a, Vector3 b, float rad, CapSource src, string owner, string who, int hand, bool geo, Vector3 va, Vector3 vb, Vector3 raA, Vector3 raB)
+        // part: the haptic actuator the capsule stands for (Haptics.AGrip / ATrigger / AThumb), for your hands' contacts.
+        static void Feed(Vector3 a, Vector3 b, float rad, CapSource src, string owner, string who, int hand, int part, bool geo, Vector3 va, Vector3 vb, Vector3 raA, Vector3 raB)
         {
             for (int i = 0; i < Segs.Count; i++)
             {
@@ -1227,6 +1230,7 @@ namespace SfMorph
                 // yield: pen-weighted so the point and direction stay continuous when the deepest capsule changes (a palm and five fingers on a thigh)
                 g.YieldW += pen; g.YieldPt += (cc + nrm * rad) * pen; g.YieldN += nrm * pen;
                 if (pen > g.YieldPen) { g.YieldPen = pen; g.YieldBy = who; g.YieldHand = hand; }
+                if (hand >= 0 && Haptics.Want) Haptics.Contact(hand, part, pen, cc + nrm * rad, nrm, g.A);
                 if (!geo) continue;
                 float vn = Mathf.Max(0f, Vector3.Dot(Vector3.Lerp(va, vb, t), nrm));
                 float vnRaw = Mathf.Max(0f, Vector3.Dot(Vector3.Lerp(raA, raB, t), nrm));   // unclamped: a hand-model slap above the push clamp still reads as one

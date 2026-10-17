@@ -381,6 +381,33 @@ namespace SfMorph
             HandsSection(c);
             GUILayout.Space(10);
             ContactsSection(c);
+            GUILayout.Space(10);
+            HapticsSection(c);
+        }
+
+        // 0.11.26 controller haptics ([Haptics]); the per-actuator tests are in the Debug tab
+        void HapticsSection(Character c)
+        {
+            GUILayout.Label("Haptics", _bold);
+            bool onWas = _p.HapticsOn.Value;   // read before the controls: the same rows in the Layout pass and the click pass
+            bool on = GUILayout.Toggle(onWas, " Controllers vibrate with what your hands touch on her");
+            if (on != _p.HapticsOn.Value) _p.HapticsOn.Value = on;
+            string off = !onWas ? "haptics are off" : !(_p.Apply.Value && _p.Physics.Value) && !_p.HandsOn.Value ? "her body is not built (soft zones or physics hands)" : null;
+            string offS = !onWas ? "off: haptics are off" : null;
+            float v = Slider("Strength", _p.HapticsStrength.Value * 100f, 0f, 100f, "0", 100f, offS, " %") / 100f;
+            if (offS == null && Mathf.Abs(v - _p.HapticsStrength.Value) > 0.001f) _p.HapticsStrength.Value = v;
+            v = Slider("Touch and rub", _p.HapticsTouch.Value * 100f, 0f, 100f, "0", 50f, offS, " %") / 100f;
+            if (offS == null && Mathf.Abs(v - _p.HapticsTouch.Value) > 0.001f) _p.HapticsTouch.Value = v;
+            v = Slider("Pats and slaps", _p.HapticsImpact.Value * 100f, 0f, 100f, "0", 100f, offS, " %") / 100f;
+            if (offS == null && Mathf.Abs(v - _p.HapticsImpact.Value) > 0.001f) _p.HapticsImpact.Value = v;
+            v = Slider("Grab", _p.HapticsGrab.Value * 100f, 0f, 100f, "0", 60f, offS, " %") / 100f;
+            if (offS == null && Mathf.Abs(v - _p.HapticsGrab.Value) > 0.001f) _p.HapticsGrab.Value = v;
+            v = Slider("Penetration", _p.HapticsPen.Value * 100f, 0f, 100f, "0", 70f, offS, " %") / 100f;
+            if (offS == null && Mathf.Abs(v - _p.HapticsPen.Value) > 0.001f) _p.HapticsPen.Value = v;
+            if (off != null && onWas) GUILayout.Label("    off: " + off, _off);
+            GUILayout.Label(Haptics.Path.Length > 0 ? "Path: " + Haptics.Path : "Path: " + (Haptics.Status.Length > 0 ? Haptics.Status : "not found yet"), _hint);
+            GUILayout.Label("Grip actuator: palm, grabs, slaps and rubs; trigger: your index fingertip and fingers in her; thumb: your thumb. " +
+                            "Only Meta's runtime (Link / Air Link) drives the Quest Pro's trigger and thumb actuators; over Virtual Desktop everything plays on the main motor. Tests: Debug tab.", _hint);
         }
 
         void EmbodySection(Character c)

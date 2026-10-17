@@ -1588,7 +1588,8 @@ namespace SfMorph
                 float c = cmdMode ? a.FCurl[f] : Mathf.Max(a.Curl, 0f);
                 FingerFk(fg, f, Mathf.Clamp01(c), _fkP);
                 float r = f == 0 ? GhostThumbR : GhostFingerR;
-                for (int j = 0; j < 3; j++) n += Put(into, at + n, room - n, T + tq * _fkP[j], T + tq * _fkP[j + 1], r, hand, a.GhostBy);
+                int part = f == 0 ? Haptics.AThumb : f == 1 ? Haptics.ATrigger : Haptics.AGrip;
+                for (int j = 0; j < 3; j++) n += Put(into, at + n, room - n, T + tq * _fkP[j], T + tq * _fkP[j + 1], r, hand, a.GhostBy, part);
             }
             return n;
         }
@@ -1665,10 +1666,10 @@ namespace SfMorph
             }
         }
 
-        static int Put(WorldCap[] into, int i, int room, Vector3 A, Vector3 B, float r, int hand, string by)
+        static int Put(WorldCap[] into, int i, int room, Vector3 A, Vector3 B, float r, int hand, string by, int part = 0)
         {
             if (room <= 0 || i < 0 || i >= into.Length) return 0;
-            into[i] = new WorldCap { A = A, B = B, R = r, Hand = hand, By = by, Src = null };
+            into[i] = new WorldCap { A = A, B = B, R = r, Hand = hand, Part = part, By = by, Src = null };
             return 1;
         }
 

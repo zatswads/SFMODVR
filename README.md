@@ -41,6 +41,30 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.26 (controller haptics):
+- The controllers now vibrate with what your hands touch on her. This is new and **off by default**: [Haptics] On, or VR tab → Haptics.
+  It uses the contacts SF Body Morphs already measures: your hand models, the physics hands' fingers at the controller pose and the
+  embodied partner's hands, each capsule tagged by finger (thumb, index, rest of the hand). The partner's animated hands play nothing.
+  - A hand landing on her gives a short tick. From 0.45 m/s it is a pat pulse, and from 1.2 m/s a sharp slap pulse that grows to full at 3 m/s.
+  - A resting hand gives a faint hold by how deep it presses, and sliding gives a low buzz by speed (full at 40 cm/s, the rub sound's curve).
+  - The grab button closing on her gives a squeeze pulse, then a light hold while it stays closed.
+  - A finger in her vagina, anus or mouth gives a buzz by depth and pulses going in and out and on each stroke (12 mm turns, at most 5 a second).
+- Quest Pro actuators: the grip motor takes grabs, slaps and the palm, the trigger actuator your index fingertip and fingers in her,
+  the thumb actuator your thumb.
+  - The separate trigger and thumb actuators need Meta's runtime (Link / Air Link). There, the OpenXR extension
+    XR_FB_touch_controller_pro is on and the game's Quest Pro controller profile binds them.
+  - Virtual Desktop's OpenXR runtime (VDXR) has no Touch Pro profile and drops trigger / thumb outputs. The game's own log shows
+    "XR_FB_touch_controller_pro not supported by runtime". Over VD, all three are mixed onto the main motor (the largest wins).
+- The path is found at startup and logged once ("Haptics: runtime ... -> ..."):
+  1. OpenXR Input System actions on the actuators (localized);
+  2. else one OpenXR haptic action per controller;
+  3. else `XR.InputDevice.SendHapticImpulse` channel 0 (set this one with [Haptics] Path 1).
+  Everything is reached by reflection.
+- Rate-limited: a buzz is re-sent at most 30 times a second as a 0.1 s impulse (so it dies on its own) and stopped when it falls to
+  0. Onsets are at least 0.12 s apart per actuator.
+- Sliders: Strength, Touch and rub, Pats and slaps, Grab, Penetration. Debug tab tests: per hand grip / trigger / thumb / slap, a rub
+  buzz and strokes on the right trigger. [Haptics] Log 2 logs every pulse and buzz on / off.
+
 0.11.25 (a penetration sound, and penetration excites her):
 - A finger going into her vagina, anus or mouth had no sound of its own: the grab and the rub played (the user: the recorded squishes
   are too wet for a grab but suit this). New skin-sound category **penetration** (`Sounds\penetration\*.wav`, your files only; an empty

@@ -690,6 +690,14 @@ namespace SfMorph
             // themselves when they are on)
             int eh = embody && _embodyOn ? _p.EmbodyHands.Value : 0;
             try { PhysicsHands.EmbodyHide(eh == 1 || eh == 3, eh == 2 || eh == 3); } catch (Exception e) { Plugin.Log.LogWarning("Embody: hiding the controller models failed: " + e.Message); }
+            // 0.11.26 controller haptics: your hands' contacts of this frame (HerBody fed them before Overlap), penetration, the grab button
+            Haptics.On = _p.HapticsOn.Value && her != null; Haptics.Strength = _p.HapticsStrength.Value; Haptics.TouchAmt = _p.HapticsTouch.Value;
+            Haptics.ImpactAmt = _p.HapticsImpact.Value; Haptics.GrabAmt = _p.HapticsGrab.Value; Haptics.PenAmt = _p.HapticsPen.Value;
+            Haptics.PathPick = _p.HapticsPath.Value; Haptics.Log = _p.HapticsLog.Value;
+            Perf.Begin(Perf.S.Grip);
+            try { Haptics.Step(Time.deltaTime); }
+            catch (Exception e) { Plugin.Log.LogError("Haptics failed, turned off: " + e); _p.HapticsOn.Value = false; try { Haptics.Release(); } catch { } }
+            Perf.End(Perf.S.Grip);
             // the soft points after her bones carry our changes AND after Embody (0.8.5), before the game's physics and IK: the Animator
             // rewrites the embodied partner's arms before this step and Embody writes them back at your controllers just above, so the
             // "partner" capsules on his hand bones are where you hold his hand only from here on (before 0.8.5 the soft points were

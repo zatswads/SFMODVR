@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.11.25";
+        public const string Version = "0.11.26";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -55,6 +55,9 @@ namespace SfMorph
         internal ConfigEntry<bool> VoiceMuteDialogue, VoicePackInScenes;
         internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn, ReactRubSound, VoiceMuteGame, RippleThrust;
         internal ConfigEntry<bool> ReactPenSound, ReactPenReact;   // 0.11.25
+        internal ConfigEntry<bool> HapticsOn;                      // 0.11.26
+        internal ConfigEntry<float> HapticsStrength, HapticsTouch, HapticsImpact, HapticsGrab, HapticsPen;
+        internal ConfigEntry<int> HapticsPath, HapticsLog;
         internal ConfigEntry<float> ReactPenVolume;
         internal ConfigEntry<float> ContactSkirt, ContactBulge, ContactDepth, BendBulge, BendBicepsMm, BendKneeMm, BendCalfMm, BendHipMm, BendBellyFoldMm, BendWaistRollMm,
             RippleAmount, RippleSpeed, RippleWavelength, RippleDamping, RippleImpact, MarksRedness, MarksFade, MarksAo, MarksBoost,
@@ -184,6 +187,14 @@ namespace SfMorph
             EmbodyElbowAvoid = Config.Bind("Embody", "ElbowAvoid", true, "His elbow swings around her instead of his arm passing through her.");
             EmbodyView = Config.Bind("Embody", "View", 2, new ConfigDescription("0 the game's camera, 1 snap to his eyes once, 2 follow his eyes.", new AcceptableValueRange<int>(0, 2)));
             EmbodyPartner = Config.Bind("Embody", "Partner", 0, new ConfigDescription("0 the player, 1 the other man (badGuy).", new AcceptableValueRange<int>(0, 1)));
+            HapticsOn = Config.Bind("Haptics", "On", false, "The controllers vibrate with what your hands touch on her: a tick or a slap pulse when a hand lands, a low buzz while it slides over her skin, a squeeze when you grab her, a buzz and pulses while a finger is in her. Quest Pro (Meta's runtime over Link): the grip, trigger and thumb actuators separately; Virtual Desktop and other runtimes: the main motor. Needs soft zones or physics hands (her body).");
+            HapticsStrength = Config.Bind("Haptics", "Strength", 1f, new ConfigDescription("All haptics together (times each kind below).", new AcceptableValueRange<float>(0f, 1f)));
+            HapticsTouch = Config.Bind("Haptics", "Touch", 0.5f, new ConfigDescription("Resting and sliding touches: the faint hold by how deep the hand presses, the buzz by slide speed (full at 40 cm/s), the onset tick.", new AcceptableValueRange<float>(0f, 1f)));
+            HapticsImpact = Config.Bind("Haptics", "Impacts", 1f, new ConfigDescription("Pats and slaps: a short sharp pulse by how fast the hand lands (a pat from 0.45 m/s, a slap from 1.2, full at 3).", new AcceptableValueRange<float>(0f, 1f)));
+            HapticsGrab = Config.Bind("Haptics", "Grab", 0.6f, new ConfigDescription("The grab button closing on her (a squeeze pulse) and the hold while it stays closed (grip actuator).", new AcceptableValueRange<float>(0f, 1f)));
+            HapticsPen = Config.Bind("Haptics", "Penetration", 0.7f, new ConfigDescription("A finger in her vagina, anus or mouth: a buzz by depth and a pulse going in / out and on each stroke (trigger actuator).", new AcceptableValueRange<float>(0f, 1f)));
+            HapticsPath = Config.Bind("Haptics", "Path", 0, new ConfigDescription("0 automatic (OpenXR actions: the Touch Pro actuators when the runtime has them, else one motor per controller; else the XR device), 1 always the XR device's channel 0 (if the automatic path stays silent).", new AcceptableValueRange<int>(0, 1)));
+            HapticsLog = Config.Bind("Haptics", "Log", 1, new ConfigDescription("0 only the path, 1 also the first pulse of each kind and a 10 s summary, 2 every pulse and every buzz on / off.", new AcceptableValueRange<int>(0, 2)));
             HandsOn = Config.Bind("Hands", "PhysicsHands", false, "Replace the VR controller models with physics-driven hands that collide with her and press her soft zones.");
             HandsMesh = Config.Bind("Hands", "Mesh", 0, new ConfigDescription("0 the game's own (male) hands, 1 simple shapes.", new AcceptableValueRange<int>(0, 1)));
             HandsCollide = Config.Bind("Hands", "CollideWithHer", true, "The hands stop at her body (after the skin gives) instead of passing through.");

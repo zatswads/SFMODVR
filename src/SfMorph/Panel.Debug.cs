@@ -77,7 +77,31 @@ namespace SfMorph
             GUILayout.EndHorizontal();
             if (flexOff != null) GUILayout.Label("    Flex test off: " + flexOff, _off);
 
+            HapticTests();
             ReactionTests(c);
+        }
+
+        // 0.11.26: one test per actuator (0.8 for 0.5 s), a slap pulse, a rub buzz, strokes; they play with Haptics off too
+        void HapticTests()
+        {
+            GUILayout.Label("Haptics", _bold);
+            bool any = Haptics.Path.Length > 0;
+            GUI.enabled = any;
+            for (int h = 0; h < 2; h++)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Label(h == 0 ? "Left" : "Right", GUILayout.Width(50));
+                for (int a = 0; a < Haptics.NA; a++) if (GUILayout.Button(Haptics.ActNames[a])) Haptics.TestActuator(h, a);
+                if (GUILayout.Button("slap")) Haptics.TestSlap(h);
+                GUILayout.EndHorizontal();
+            }
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Rub buzz (1.5 s)")) Haptics.TestRub();
+            if (GUILayout.Button("Strokes, right trigger (2.5 s)")) Haptics.TestStrokes();
+            GUILayout.EndHorizontal();
+            GUI.enabled = true;
+            GUILayout.Label(!any ? "    off: no haptics path found yet (" + Haptics.Status + ")"
+                                 : "    Path: " + Haptics.Path + (Haptics.Localized ? "" : ". One motor: trigger / thumb tests play on the main motor."), any ? _hint : _off);
         }
 
         void ReactionTests(Character c)

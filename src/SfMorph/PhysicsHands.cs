@@ -94,7 +94,7 @@ namespace SfMorph
                     // InverseTransformPoint divides by the root's scale (root units): back to metres in the palm frame
                     Vector3 la = vr.InverseTransformPoint(bone.TransformPoint(h.GhostA[i])) * u;
                     Vector3 lb = vr.InverseTransformPoint(bone.TransformPoint(h.GhostB[i])) * u;
-                    var wc = new WorldCap { A = tp + tq * la, B = tp + tq * lb, R = h.GhostR[i], Hand = side, By = h.Src.Name, Src = h.Src };
+                    var wc = new WorldCap { A = tp + tq * la, B = tp + tq * lb, R = h.GhostR[i], Hand = side, Part = Haptics.Want ? Haptics.PartOf(bone) : 0, By = h.Src.Name, Src = h.Src };
                     if (!Finite(wc.A) || !Finite(wc.B)) continue;
                     into[start + n] = wc;
                     n++;
