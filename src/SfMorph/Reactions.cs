@@ -877,7 +877,9 @@ namespace SfMorph
             {
                 System.Array.Clear(_lipW, 0, LipSync.K); _lipW[LipPreview] = Mathf.Clamp01(LipPreviewW);
                 LipStatus = "previewing " + LipSync.Shapes[LipPreview];
-                return _face.LipStep(_lipW, 1f, _s.LipOverGame, _s.LipMood);
+                bool pw = _face.LipStep(_lipW, 1f, _s.LipOverGame, _s.LipMood);
+                if (pw) FaceCurves.Lip(_lipW, 1f);   // 0.11.47: the curve-driven wrinkles see the previewed shape too
+                return pw;
             }
             bool active = false;
             if (_s.LipSync)
@@ -951,6 +953,8 @@ namespace SfMorph
             }
             // fading out: the last weights held. An empty map writes nothing: the loudness jaw stays.
             bool wrote = _face.LipStep(active ? _lipW : _lipPrev, _lipFade, _s.LipOverGame, _s.LipMood);
+            // 0.11.47: the weights her mouth is driven by, for the curve-driven face wrinkles (FaceCurves -> Wrinkles.UpdateActs)
+            if (wrote) FaceCurves.Lip(active ? _lipW : _lipPrev, _lipFade);
             if (_lipProbeW)
             {
                 _lipProbeW = false;

@@ -21,6 +21,9 @@ namespace SfMorph
         public float Cavity = 0.3f;   // 0.8.4: crease shade in the albedo copy (0 = no albedo copy unless the debug view is on)
         // 0.10.0: muscle definition, a second layer of the same sheets (Muscles.cs); On above = the wrinkles themselves
         public readonly MuscleSettings Muscles = new MuscleSettings();
+        // 0.11.47: curve-driven face wrinkles ([Wrinkles] CurveDrive / CurveGain; set by Plugin from the config, read by UpdateActs)
+        public static bool CurveDrive = true;
+        public static float CurveGain = 1f;
     }
 
     // PlayerLoop marker type of the wrinkle step (right after PostLateUpdate.UpdateAllSkinnedMeshes).
@@ -261,6 +264,132 @@ namespace SfMorph
             public float MLastAt, MLastDirty, MStrengthApplied = -1f, MShadeApplied = -1f, MObliquesApplied = -1f;
             public int MDebugApplied = -1;
             public bool MOnApplied;
+            // 0.11.47 curve drive: the term table resolved against this layout (region index per term, -1 = not in it), the curve target
+            // per region this frame and its peak since the last peak log
+            public WrinkleLayout CurveLayout;
+            public int[] CurveReg;
+            public readonly float[] CurveT = new float[MaxRegions], CurvePeak = new float[MaxRegions];
+        }
+
+        // ---- 0.11.47 curve-driven face wrinkles ----
+        // MetaHuman drives its wrinkle maps from the rig's controls, not from the mesh: per region a sum of piecewise-linear terms of the
+        // ARKit-style curves (clamp(slope x (curve - threshold), 0, max), a few on the product of two curves), clamped to 0..1. Our curves are
+        // FaceCurves (the lip sync's weights, an estimate per face clip mood). The terms name the layout's regions; a region the loaded layout
+        // lacks is skipped.
+        struct CurveTerm
+        {
+            public string Region; public int A, B; public float Thr, Slope, Max;
+        }
+
+        static CurveTerm[] _terms;
+        static readonly float[] _curveW = new float[FaceCurves.N];
+
+        static void Term(List<CurveTerm> l, string region, string a, string b, float thr, float slope, float max)
+        {
+            int ia = FaceCurves.Index(a), ib = b != null ? FaceCurves.Index(b) : -1;
+            if (ia < 0 || (b != null && ib < 0)) { Plugin.Log.LogWarning("Wrinkles: curve term for " + region + " names an unknown curve (" + a + (b != null ? " x " + b : "") + ")"); return; }
+            l.Add(new CurveTerm { Region = region, A = ia, B = ib, Thr = thr, Slope = slope, Max = max });
+        }
+
+        // one term per side: region_L <- curveLeft, region_R <- curveRight (a curve with no side: the same curve on both)
+        static void Side(List<CurveTerm> l, string region, string curve, float thr, float slope, float max)
+        {
+            bool split = FaceCurves.Index(curve + "Left") >= 0;
+            Term(l, region + "_L", split ? curve + "Left" : curve, null, thr, slope, max);
+            Term(l, region + "_R", split ? curve + "Right" : curve, null, thr, slope, max);
+        }
+
+        static CurveTerm[] Terms()
+        {
+            if (_terms != null) return _terms;
+            var l = new List<CurveTerm>();
+            // forehead: brows raised
+            Side(l, "forehead", "browInnerUp", 0.1f, 1.4f, 0.75f);
+            Side(l, "forehead", "browOuterUp", 0.1f, 1.2f, 0.8f);
+            // glabella: brows lowered (corrugator), a bit from the nose wrinkler, worried brows (inner up while lowered)
+            Term(l, "glabella", "browDownLeft", null, 0.1f, 1.3f, 0.6f);
+            Term(l, "glabella", "browDownRight", null, 0.1f, 1.3f, 0.6f);
+            Term(l, "glabella", "noseSneerLeft", null, 0.2f, 0.6f, 0.3f);
+            Term(l, "glabella", "noseSneerRight", null, 0.2f, 0.6f, 0.3f);
+            Term(l, "glabella", "browInnerUp", "browDownLeft", 0.05f, 1.5f, 0.4f);
+            // nose (bunny lines): the nose wrinkler, a strong upper-lip raise; an old bundle's single "nose" region takes both sides
+            Side(l, "nose", "noseSneer", 0.05f, 1.5f, 1f);
+            Side(l, "nose", "mouthUpperUp", 0.3f, 0.8f, 0.4f);
+            Term(l, "nose", "noseSneerLeft", null, 0.05f, 0.8f, 0.6f);
+            Term(l, "nose", "noseSneerRight", null, 0.05f, 0.8f, 0.6f);
+            // smile lines: the smile, the cheek raiser, the sneer and upper-lip raise
+            Side(l, "nasolabial", "mouthSmile", 0.15f, 1.2f, 1f);
+            Side(l, "nasolabial", "cheekSquint", 0.1f, 1f, 0.6f);
+            Side(l, "nasolabial", "noseSneer", 0.2f, 0.6f, 0.4f);
+            Side(l, "nasolabial", "mouthUpperUp", 0.3f, 0.6f, 0.3f);
+            // crow's feet: squint, cheek raiser, a big smile (Duchenne), eyes squeezed shut
+            Side(l, "crowsfeet", "eyeSquint", 0.15f, 1.2f, 0.9f);
+            Side(l, "crowsfeet", "cheekSquint", 0.15f, 1.2f, 0.9f);
+            Side(l, "crowsfeet", "mouthSmile", 0.4f, 0.8f, 0.4f);
+            Side(l, "crowsfeet", "eyeBlink", 0.8f, 2f, 0.3f);
+            // under the eyes: squint, cheek raiser, smile
+            Side(l, "undereye", "eyeSquint", 0.1f, 1.2f, 0.8f);
+            Side(l, "undereye", "cheekSquint", 0.1f, 1.2f, 0.8f);
+            Side(l, "undereye", "mouthSmile", 0.3f, 0.8f, 0.5f);
+            // chin (mentalis): the lower-lip shrug, lips pressed, frown, lower lip rolled in, a pucker, a funnel on an open jaw
+            Term(l, "chin", "mouthShrugLower", null, 0.1f, 1.3f, 1f);
+            Term(l, "chin", "mouthPressLeft", null, 0.2f, 0.6f, 0.4f);
+            Term(l, "chin", "mouthPressRight", null, 0.2f, 0.6f, 0.4f);
+            Term(l, "chin", "mouthFrownLeft", null, 0.2f, 0.6f, 0.4f);
+            Term(l, "chin", "mouthFrownRight", null, 0.2f, 0.6f, 0.4f);
+            Term(l, "chin", "mouthRollLower", null, 0.3f, 0.6f, 0.3f);
+            Term(l, "chin", "mouthPucker", null, 0.3f, 0.6f, 0.3f);
+            Term(l, "chin", "jawOpen", "mouthFunnel", 0.05f, 1.5f, 0.4f);
+            // mouth corners: frown, press, stretch, dimple
+            Side(l, "mouthcorner", "mouthFrown", 0.1f, 1.3f, 1f);
+            Side(l, "mouthcorner", "mouthPress", 0.15f, 1f, 0.6f);
+            Side(l, "mouthcorner", "mouthStretch", 0.2f, 0.8f, 0.5f);
+            Side(l, "mouthcorner", "mouthDimple", 0.15f, 1f, 0.6f);
+            // neck (platysma): a wide-open jaw lightly, the stretched mouth, most of all both together
+            Term(l, "neck", "jawOpen", null, 0.35f, 0.6f, 0.3f);
+            Term(l, "neck", "mouthStretchLeft", null, 0.4f, 0.6f, 0.25f);
+            Term(l, "neck", "mouthStretchRight", null, 0.4f, 0.6f, 0.25f);
+            Term(l, "neck", "jawOpen", "mouthStretchLeft", 0.05f, 1.5f, 0.35f);
+            Term(l, "neck", "jawOpen", "mouthStretchRight", 0.05f, 1.5f, 0.35f);
+            _terms = l.ToArray();
+            return _terms;
+        }
+
+        // The curve target of each face / neck region of this sheet this frame (sh.CurveT, 0..1, before CurveGain). False: no curve drives
+        // her face now (every target 0).
+        bool CurveTargets(Sheet sh)
+        {
+            var L = sh.Layout;
+            var T = Terms();
+            if (!ReferenceEquals(sh.CurveLayout, L) || sh.CurveReg == null)
+            {
+                sh.CurveLayout = L;
+                sh.CurveReg = new int[T.Length];
+                int hit = 0;
+                for (int j = 0; j < T.Length; j++)
+                {
+                    sh.CurveReg[j] = -1;
+                    for (int k = 0; k < L.Count && k < MaxRegions; k++)
+                        if (string.Equals(L.RegionName[k], T[j].Region, StringComparison.Ordinal) && L.RegionClass[k] != "body") { sh.CurveReg[j] = k; hit++; break; }
+                }
+                if (hit > 0) Plugin.Log.LogInfo("Wrinkles: sheet '" + sh.Name + "' curve drive: " + hit + " of " + T.Length + " curve terms match its regions");
+            }
+            Array.Clear(sh.CurveT, 0, MaxRegions);
+            var w = _curveW;
+            if (!FaceCurves.Read(w)) return false;
+            var reg = sh.CurveReg;
+            for (int j = 0; j < T.Length; j++)
+            {
+                int k = reg[j];
+                if (k < 0) continue;
+                float x = w[T[j].A];
+                if (T[j].B >= 0) x *= w[T[j].B];
+                float v = (x - T[j].Thr) * T[j].Slope;
+                if (v <= 0f) continue;
+                sh.CurveT[k] += v < T[j].Max ? v : T[j].Max;
+            }
+            for (int k = 0; k < MaxRegions; k++) if (sh.CurveT[k] > 1f) sh.CurveT[k] = 1f;
+            return true;
         }
 
         ComputeShader _cs;
@@ -629,6 +758,14 @@ namespace SfMorph
             float ka = 1f - Mathf.Exp(-dt / Mathf.Max(0.01f, s.Attack)), kr = 1f - Mathf.Exp(-dt / Mathf.Max(0.01f, s.Release));
             bool changed = false;
             string[] test = WrinkleTest.Regions();
+            // 0.11.47: the curve-driven targets (explicit expression intent: no idle baseline), max'ed with the strain target below
+            bool cd = false;
+            float cg = Mathf.Clamp(WrinkleSettings.CurveGain, 0f, 2f);
+            if (test == null && s.On && WrinkleSettings.CurveDrive && cg > 0f)
+            {
+                try { cd = CurveTargets(sh); }
+                catch (Exception e) { cd = false; if (_logged.Add("curvedrive")) Plugin.Log.LogWarning("Wrinkles: curve drive failed (" + e.Message + "); strain only"); }
+            }
             for (int k = 0; k < L.Count; k++)
             {
                 string cls = L.RegionClass[k];
@@ -656,6 +793,12 @@ namespace SfMorph
                 }
                 float x = on ? Mathf.Clamp01((c - s.Threshold) / L.Range[k]) : 0f;
                 float target = x * x * (3f - 2f * x);
+                if (cd && on && cls != "body" && k < MaxRegions)
+                {
+                    float ct = Mathf.Clamp01(sh.CurveT[k] * cg);
+                    if (ct > target) target = ct;
+                    if (ct > sh.CurvePeak[k]) sh.CurvePeak[k] = ct;
+                }
                 float a = sh.Act[k];
                 a += (target - a) * (target > a ? ka : kr);
                 if (target <= 0.004f && a < 0.004f) a = 0f;
@@ -679,6 +822,10 @@ namespace SfMorph
                 for (int k = 0; k < MaxRegions; k++) sh.Peak[k] = 0f;
                 if (line.Length > 0 && line != sh.LastPeakLine) Plugin.Log.LogInfo("Wrinkles: sheet '" + sh.Name + "' peak compression over " + PeakLogEvery.ToString("0") + " s (threshold " + s.Threshold.ToString("0.000") + "): " + line);
                 sh.LastPeakLine = line;
+                // 0.11.47: which regions the curves drove (peak curve target) and from what
+                string cl = CurvePeakLine(sh);
+                if (cl.Length > 0) Plugin.Log.LogInfo("Wrinkles: sheet '" + sh.Name + "' curve-driven over " + PeakLogEvery.ToString("0") + " s (gain " + cg.ToString("0.00") + "; from " + FaceCurves.TakeSeen() + "): " + cl);
+                for (int k = 0; k < MaxRegions; k++) sh.CurvePeak[k] = 0f;
             }
         }
 
@@ -697,6 +844,20 @@ namespace SfMorph
                   .Append(" (").Append((sh.Act[k] * 100f).ToString("0")).Append("%")
                   .Append(L.RegionClass[k] != "body" ? ", idle " + sh.Idle[k].ToString("0.000") : "").Append(")");
             }
+            return sb.ToString();
+        }
+
+        // The regions whose curve target peaked past 5 % since the last log, strongest first: "name 60%".
+        static string CurvePeakLine(Sheet sh)
+        {
+            var L = sh.Layout;
+            var idx = new List<int>();
+            for (int k = 0; k < L.Count && k < MaxRegions; k++) if (sh.CurvePeak[k] >= 0.05f) idx.Add(k);
+            if (idx.Count == 0) return "";
+            idx.Sort((a, b) => sh.CurvePeak[b].CompareTo(sh.CurvePeak[a]));
+            var sb = new StringBuilder();
+            for (int i = 0; i < idx.Count && i < 10; i++)
+                sb.Append(i > 0 ? ", " : "").Append(L.RegionName[idx[i]]).Append(' ').Append((sh.CurvePeak[idx[i]] * 100f).ToString("0")).Append('%');
             return sb.ToString();
         }
 
