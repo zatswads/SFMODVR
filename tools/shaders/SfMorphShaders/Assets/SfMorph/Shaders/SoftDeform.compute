@@ -30,6 +30,7 @@
 #pragma kernel MushSmooth
 #pragma kernel MushRecon
 #pragma kernel MushApply
+#pragma kernel MushWeighted
 #pragma kernel MushFollow
 #pragma kernel Folds
 
@@ -658,17 +659,27 @@ void MuscleFlex(uint3 id : SV_DispatchThreadID)
 //   -> MushApply (every vertex of the core, welded copies too: position += offset x weight, normal toward the rebuilt one, tangent re-orthogonalised).
 // MushFollow: an overlay mesh (areola, tattoo, vulva rim) takes the offset of the body vertex under it (its _Map), like ApplyMap.
 // Each kernel reads only the buffers the previous one wrote, and only MushApply / MushFollow write the skinned buffer.
+// 0.11.47: smoothing weighted by the rest edge lengths (_MushAdjW, the bake's weights: the rest pose stays exact); per-joint strengths;
+// the normal component of the rest offset scaled by sqrt(rest / current frame area) (a compressed inner bend keeps its volume); the
+// inward part of the final offset limited by _MushKeep (classic Delta Mush thins the outside of a bend: the knee cap, the elbow point).
+// The rebuilt normal is her skinned normal (the frame's normal IS that since 0.11.39), so the mush moves positions only. Turning her normal
+// by the one-ring face normal's change (keep-imported-normals) was tried offline: no better on average with the volume keeping on, and
+// more normals off the moved surface by > 30 deg at the crease (the crumpled skinning there makes that turn noisy), so it is not used.
 StructuredBuffer<uint> _MushIdx;     // the pass's vertex list
 uint _MushN;                         // its length
 StructuredBuffer<float4> _MushIn;    // smoothed positions (world, xyz) by canonical id
 RWStructuredBuffer<float4> _MushOut, _MushOut2;
+StructuredBuffer<float> _MushAdjW;   // beside _AdjV: the rest smoothing weight of that neighbour (sums to 1 per vertex)
 StructuredBuffer<float4> _MushDelta; // per canonical: rest offset in the frame (t, b, n), metres; w = weight
-StructuredBuffer<float4> _MushNrm;   // per canonical: rest normal in the frame
+StructuredBuffer<float4> _MushAux;   // per canonical: x = the frame's rest area |e0 x e1| (m^2), y = joint 0..3 (shoulder, elbow, hip, knee)
 StructuredBuffer<uint> _MushNb;      // 2 per canonical: the frame's neighbours
 RWStructuredBuffer<float4> _MushOff; // 2 per canonical: (world offset, blend weight), (rebuilt normal, world)
 StructuredBuffer<float4> _MushOffR;  // MushFollow: the parent body's _MushOff of this frame
 float _MushAmt;                      // strength 0..1
 float _MushMax;                      // the largest offset allowed (m): a broken frame can never throw a vertex across the room
+float4 _MushJoint;                   // strength per joint (shoulder, elbow, hip, knee) 0..1
+float _MushKeep;                     // 0..1: how much of an inward (thinning) move along her normal is taken back
+float2 _MushVol;                     // the area term's clamp (min, max); (1, 1) = off
 
 [numthreads(64, 1, 1)]
 void MushGather(uint3 id : SV_DispatchThreadID)
@@ -690,9 +701,10 @@ void MushSmooth(uint3 id : SV_DispatchThreadID)
     uint o0 = _AdjOff[v], o1 = _AdjOff[v + 1];
     float3 f = _MushIn[v].xyz;
     if (o1 <= o0) { _MushOut[v] = float4(f, 0); return; }
+    // 0.11.47: weighted by the bake's rest weights (MushBake.SmoothRest does the same sum in the same order)
     float3 s = float3(0, 0, 0);
-    for (uint k = o0; k < o1; k++) { uint u = _AdjV[k]; s += u < _Count ? _MushIn[u].xyz : f; }
-    _MushOut[v] = float4(0.5 * f + 0.5 * s / (float)(o1 - o0), 0);
+    for (uint k = o0; k < o1; k++) { uint u = _AdjV[k]; s += _MushAdjW[k] * (u < _Count ? _MushIn[u].xyz : f); }
+    _MushOut[v] = float4(0.5 * f + 0.5 * s, 0);
 }
 
 [numthreads(64, 1, 1)]
@@ -722,14 +734,29 @@ void MushRecon(uint3 id : SV_DispatchThreadID)
     if (bl < 1e-20) { _MushOff[2 * v] = float4(0, 0, 0, 0); _MushOff[2 * v + 1] = float4(0, 0, 0, 0); return; }
     float q = min(sqrt(tl / max(dot(e0, e0), 1e-30)), sqrt(bl / max(dot(e1, e1), 1e-30)));
     b *= rsqrt(bl);
-    float3 target = S + t * d.x + b * d.y + n * d.z;
+    // 0.11.47 volume: the rest offset's normal part x sqrt(rest / current area of the frame's smoothed triangle pair), clamped: where the
+    // bend squeezes the smoothed skin (the inside of the elbow and knee, the groin) the detail stands out more; 1 at rest
+    float4 aux = _MushAux[v];
+    float ac = length(cross(e0, e1));
+    float dz = d.z;
+    if (aux.x > 0.0 && ac > 1e-20) dz *= clamp(sqrt(aux.x / ac), _MushVol.x, _MushVol.y);
+    float3 target = S + t * d.x + b * d.y + n * dz;
     float3 off = target - WorldPos(v);
     float ol = length(off);
     if (ol > _MushMax) off *= _MushMax / ol;
-    float4 r = _MushNrm[v];
-    float3 nt = t * r.x + b * r.y + n * r.z;
-    _MushOff[2 * v] = float4(off, saturate(d.w * _MushAmt) * smoothstep(0.15, 0.4, q));
-    _MushOff[2 * v + 1] = float4(nt, 0);
+    // 0.11.47: the inward part along her normal taken back by _MushKeep (the smoothed surface shrinks more on the outside of a bend than
+    // at rest, so classic Delta Mush thins the knee cap and the elbow point; offline -2 to -8 % of the limb radius there, 0 with this)
+    float on = dot(off, n);
+    if (on < 0.0) off -= n * (on * saturate(_MushKeep));
+    uint j = min((uint)(aux.y + 0.5), 3u);
+    _MushOff[2 * v] = float4(off, saturate(d.w * _MushAmt * saturate(_MushJoint[j])) * smoothstep(0.15, 0.4, q));
+    _MushOff[2 * v + 1] = float4(n, 0);   // the rest normal in the frame was (0, 0, 1): her skinned normal (welded copies and overlays take it)
+}
+
+// MushWeighted: never dispatched; its presence tells the plugin the Mush kernels are the 0.11.47 ones (_MushAdjW, _MushAux, _MushJoint ...).
+[numthreads(1, 1, 1)]
+void MushWeighted(uint3 id : SV_DispatchThreadID)
+{
 }
 
 // The move of one vertex: position += off x w, normal turned toward the rebuilt one by w, tangent kept orthogonal.

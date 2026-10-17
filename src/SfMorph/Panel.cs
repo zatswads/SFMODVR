@@ -823,6 +823,11 @@ namespace SfMorph
             if (mo != null) GUILayout.Label("    " + mo, _off);
             v = Slider("    joint smoothing", _p.DeltaMushAmount.Value * 100f, 0f, 100f, "0", 100f, mo ?? (_p.DeltaMush.Value ? null : "off: round joints is off"), " %") / 100f;
             if (Mathf.Abs(v - _p.DeltaMushAmount.Value) > 0.0001f) _p.DeltaMushAmount.Value = v;
+            if (mo == null && _p.DeltaMush.Value)   // 0.11.47: per joint and the volume keeping (shown only while it runs)
+            {
+                MushRow("      shoulders", _p.MushShoulder); MushRow("      elbows", _p.MushElbow); MushRow("      hips", _p.MushHip); MushRow("      knees", _p.MushKnee);
+                MushRow("    keep volume", _p.DeltaMushKeepVolume);
+            }
             // 0.11.31 skin folds at deep bends
             string fo = so ?? (_body.Gpu != null && !_body.Gpu.FoldKernels ? "off: the shader bundle is older than this DLL (install dist/sfmorph_shaders)" : null);
             v = Slider("  Skin folds", _p.SkinFolds.Value * 100f, 0f, 200f, "0", 100f, fo, " %") / 100f;
@@ -1112,6 +1117,13 @@ namespace SfMorph
             _changedOnly = GUILayout.Toggle(_changedOnly, " changed only (" + changed + ")", GUILayout.Width(170));
             GUI.enabled = true;
             GUILayout.EndHorizontal();
+        }
+
+        // 0.11.47: a 0..100 % row for a 0..1 Delta Mush setting (default 1)
+        void MushRow(string label, BepInEx.Configuration.ConfigEntry<float> e)
+        {
+            float v = Slider(label, e.Value * 100f, 0f, 100f, "0", 100f, null, " %") / 100f;
+            if (Mathf.Abs(v - e.Value) > 0.0001f) e.Value = v;
         }
 
         // Label, slider, value and a reset button; greyed with the reason when it can't apply.
