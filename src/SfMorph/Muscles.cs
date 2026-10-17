@@ -75,8 +75,11 @@ namespace SfMorph
     // frame cheap (about 30 bone reads); the blend only re-runs when an activation moves by 1/32, at most 10 times a second.
     // Strain (the skin's measured compression) was the other candidate driver: it says where skin folds, not which muscle works, and a
     // contracted muscle under a straight joint (a braced belly, a held squat) barely compresses the skin, so the pose and load drive it.
-    internal static class MusclePose
+    // 0.11.47: the angle tables below are driver 0; MusclePaths.cs adds muscle lengths (driver 1 = lengths + the load terms, the default;
+    // 2 = the stronger of lengths and the old tables), [Muscles] Driver.
+    internal static partial class MusclePose
     {
+        public static int Driver = 1;                              // [Muscles] Driver, set by Body every frame
         // joints (index): trunk 0, hip L/R 1/2, knee 3/4, ankle 5/6, shoulder 7/8, elbow 9/10, wrist 11/12
         const int NJ = 13;
         static readonly Transform[] _p = new Transform[NJ], _c = new Transform[NJ], _e = new Transform[NJ];
@@ -140,6 +143,17 @@ namespace SfMorph
         }
         public static readonly float[] HipFlex = new float[2], Abd = new float[2], Knee = new float[2], Plantar = new float[2], Elev = new float[2],
             ArmSwing = new float[2], Elbow = new float[2], Wrist = new float[2], LegLoad = new float[2], ArmLoad = new float[2];
+        // 0.11.47 the shoulder girdle (degrees). Elev is the arm against her chest (thoracohumeral: what the eye reads as a raised arm).
+        // ScapRot: how far her Scapula bone (the rig's clavicle / shoulder blade) has turned the shoulder up against the chest since bind,
+        // whoever turned it (the game's clip, an automatic clavicle correction). GhElev: the arm against that bone (glenohumeral, what the
+        // deltoids do) = Elev while the bone stays put. ScapUp: the shoulder blade's upward rotation the traps / serratus make, the measured
+        // one or, when the rig leaves the bone still (as the base game's clips seem to), the one a raised arm implies (scapulohumeral rhythm: a
+        // third of the elevation past 30 deg).
+        public static readonly float[] ScapRot = new float[2], GhElev = new float[2], ScapUp = new float[2];
+        static readonly Transform[] _scap = new Transform[2];
+        static readonly Vector3[] _scapDown = new Vector3[2], _clavBind = new Vector3[2];
+        static Vector3 _chestUp;
+        static float _legLift;
 
         static bool Get(Character her, string n, out Transform t) { return her.Bones.TryGetValue(n, out t) && t != null; }
 
@@ -205,11 +219,28 @@ namespace SfMorph
                 if (_headRest == Vector3.zero || _headFront == Vector3.zero) _head = null;
             }
             else _head = null;
+            // 0.11.47 the shoulder girdle: her chest's down in each Scapula bone's bind frame, the clavicle line (Scapula -> Shoulder) and up
+            // in Chest_M's
+            if (_chest != null) _chestUp = ToLocal(her, _chest, Vector3.up);
+            for (int s = 0; s < 2; s++)
+            {
+                string sd = s == 0 ? "_L" : "_R";
+                Transform sc, so;
+                _scap[s] = null;
+                if (_chest != null && Get(her, "Scapula" + sd, out sc) && Get(her, "Shoulder" + sd, out so) && her.Bind.ContainsKey(sc) && her.Bind.ContainsKey(so))
+                {
+                    _scapDown[s] = ToLocal(her, sc, Vector3.down);
+                    _clavBind[s] = ToLocal(her, _chest, MeshPos(her, so) - MeshPos(her, sc));
+                    if (_scapDown[s] != Vector3.zero && _clavBind[s] != Vector3.zero && _chestUp != Vector3.zero) _scap[s] = sc;
+                }
+            }
             Transform h, a, sh, w;
             if (Get(her, "Hip_L", out h) && Get(her, "Ankle_L", out a)) _legLen = Mathf.Max(0.3f, (MeshPos(her, h) - MeshPos(her, a)).magnitude);
             if (Get(her, "Shoulder_L", out sh) && Get(her, "Wrist_L", out w)) _armLen = Mathf.Max(0.2f, (MeshPos(her, sh) - MeshPos(her, w)).magnitude);
             BindNote = Joints + " of " + NJ + " joints" + (miss.Count > 0 ? ", missing " + string.Join(", ", miss.ToArray()) : "");
-            Plugin.Log.LogInfo("Muscles: " + BindNote + " (leg " + _legLen.ToString("0.00") + " m, arm " + _armLen.ToString("0.00") + " m)");
+            Plugin.Log.LogInfo("Muscles: " + BindNote + " (leg " + _legLen.ToString("0.00") + " m, arm " + _armLen.ToString("0.00") + " m" +
+                               (_scap[0] == null || _scap[1] == null ? ", no scapula bone: shoulder girdle from the arm alone" : "") + ")");
+            BindPaths(her);
         }
 
         static float Sm(float a, float b, float x)
@@ -295,12 +326,26 @@ namespace SfMorph
                     Vector3 shin = _p[5 + s].InverseTransformDirection(_c[5 + s].position - _p[5 + s].position).normalized;
                     Plantar[s] = Vector3.Angle(_rest[5 + s], _ref[5 + s]) - Vector3.Angle(r, shin);
                 }
+                ScapRot[s] = GhElev[s] = ScapUp[s] = 0f;
                 if (Dir(7 + s, out r))
                 {
                     Elev[s] = Vector3.Angle(r, _ref[7 + s]);                 // 0 hanging, 90 out to the side / forward, 180 overhead
                     float f, sd;
                     Swing(7 + s, r, out f, out sd);
                     ArmSwing[s] = f;                                          // + forward, - behind her
+                    GhElev[s] = Elev[s];
+                    Transform sc = _scap[s], shj = _c[7 + s], elb = _e[7 + s];
+                    if (sc != null && shj != null && elb != null)
+                    {
+                        // the arm in the Scapula bone's frame against her chest's down as that bone held it at bind; the clavicle line's rise
+                        // in the chest's frame
+                        Vector3 g = sc.InverseTransformDirection(elb.position - shj.position);
+                        if (g.sqrMagnitude > 1e-12f) GhElev[s] = Vector3.Angle(g, _scapDown[s]);
+                        Vector3 cl = _chest.InverseTransformDirection(shj.position - sc.position);
+                        if (cl.sqrMagnitude > 1e-12f)
+                            ScapRot[s] = (Mathf.Asin(Mathf.Clamp(Vector3.Dot(cl.normalized, _chestUp), -1f, 1f)) - Mathf.Asin(Mathf.Clamp(Vector3.Dot(_clavBind[s], _chestUp), -1f, 1f))) * Mathf.Rad2Deg;
+                    }
+                    ScapUp[s] = Mathf.Max(Mathf.Max(0f, ScapRot[s]), (Elev[s] - 30f) / 3f);
                 }
                 if (Dir(9 + s, out r)) Elbow[s] = Vector3.Angle(r, _rest[9 + s]);
                 if (Dir(11 + s, out r)) Wrist[s] = Vector3.Angle(r, _rest[11 + s]);
@@ -316,50 +361,101 @@ namespace SfMorph
             // 0.11.8 anatomy pass (the tension now also drives geometry, so a muscle that is only stretched must not read as contracted):
             // lying on her back with the legs lifted off the floor the abs brace the pelvis (hip flexors pull on it)
             float supine = Sm(0.3f, 0.7f, -prone);
-            float legLift = supine * Sm(30f, 80f, hipAvg) * (1f - 0.5f * (LegLoad[0] + LegLoad[1]));
-            float absT = Mathf.Max(Mathf.Max(Sm(5f, 35f, Flex), 0.85f * AbsLoad), 0.6f * legLift);
+            _legLift = supine * Sm(30f, 80f, hipAvg) * (1f - 0.5f * (LegLoad[0] + LegLoad[1]));
+            float absT = Mathf.Max(Mathf.Max(Sm(5f, 35f, Flex), 0.85f * AbsLoad), 0.6f * _legLift);
             float backT = Mathf.Max(Mathf.Max(Sm(5f, 30f, ext), BackLoad), 0.5f * Sm(10f, 35f, Mathf.Abs(Twist)));
             float elevMax = Mathf.Max(Elev[0], Elev[1]);
+            // 0.11.47 muscle lengths (MusclePaths.cs): abs and back first, the others lean on them (a braced trunk under the obliques, pecs,
+            // neck); driver 1 keeps only the load terms of their tables, driver 2 the whole table
+            bool len = Driver != 0 && UpdatePaths();
+            if (len)
+            {
+                float absLen = DefAct(_defAbs), backLen = DefAct(_defBack);
+                if (Driver == 1)
+                {
+                    absT = Mathf.Max(absLen, Mathf.Max(0.85f * AbsLoad, 0.6f * _legLift));
+                    backT = Mathf.Max(backLen, Mathf.Max(BackLoad, 0.5f * Sm(10f, 35f, Mathf.Abs(Twist))));
+                }
+                else { absT = Mathf.Max(absT, absLen); backT = Mathf.Max(backT, backLen); }
+                LogLengths();
+            }
             for (int k = 0; k < L.Count && k < tension.Length; k++)
             {
                 string n = L.MuscleName[k];
                 int s = L.Side[k] == "R" ? 1 : 0;
                 float sgn = s == 0 ? 1f : -1f;          // side bend + = towards her left
+                float la = len ? LenAct(L, k) : -1f;   // -1: no strand for this muscle (the ribcage), its table drives it
                 float t;
                 if (n == "abs") t = absT;
-                else if (n == "ribcage") t = Mathf.Max(Mathf.Max(0.8f * Sm(110f, 165f, elevMax), 0.8f * Sm(5f, 30f, ext)), 0.4f * absT);   // ribs showing (no geometry: GpuContact)
                 else if (n == "back") t = backT;
-                else if (n.StartsWith("obliques")) t = Mathf.Max(Mathf.Max(0.7f * absT, Sm(8f, 30f, Mathf.Abs(Twist))), 0.9f * Sm(5f, 25f, Side * sgn) + 0.3f * Sm(5f, 25f, Mathf.Abs(Side)));
-                else if (n.StartsWith("serratus")) t = Mathf.Max(Mathf.Max(0.9f * Sm(100f, 160f, Elev[s]), 0.5f * ArmLoad[s]), 0.4f * absT);
-                // lats extend / adduct the arm: they work propping her up, pulling the arm back and holding the trunk; overhead they are mostly
-                // stretched (0.7 -> 0.35: the flare that shows), so a raised arm alone no longer reads as a contracted lat
-                else if (n.StartsWith("lats")) t = Mathf.Max(Mathf.Max(0.35f * Sm(100f, 160f, Elev[s]), 0.6f * backT), Mathf.Max(0.8f * ArmLoad[s], 0.7f * Sm(10f, 40f, -ArmSwing[s])));
-                else if (n.StartsWith("glutes")) t = Mathf.Max(Mathf.Max(Sm(30f, 100f, HipFlex[s]) * LegLoad[s], Sm(5f, 25f, -HipFlex[s])), Mathf.Max(0.6f * Sm(15f, 40f, Abd[s]), 0.5f * backT));
-                else if (n.StartsWith("quads")) t = Mathf.Max(Sm(15f, 95f, Knee[s]) * LegLoad[s], 0.7f * Sm(30f, 80f, HipFlex[s]) * (1f - Sm(30f, 70f, Knee[s])) * (1f - LegLoad[s]));
-                // hamstrings: hip extension (with the glutes), knee flexion without her weight on the leg, and holding a hip hinge on a straight
-                // loaded leg; a straight leg lifted while she lies (a stretch, 0.10.0 gave it half tension) is passive
-                else if (n.StartsWith("hams")) t = Mathf.Max(Mathf.Max(Sm(40f, 110f, HipFlex[s]) * (1f - Sm(20f, 60f, Knee[s])) * LegLoad[s], Sm(40f, 110f, Knee[s]) * (1f - LegLoad[s])),
-                                                             0.7f * Sm(5f, 25f, -HipFlex[s]));
-                else if (n.StartsWith("adductors")) t = Mathf.Max(Sm(5f, 20f, -Abd[s]), 0.3f * Sm(30f, 60f, Abd[s]) * LegLoad[s]);   // wide: stretched, works only under her weight
-                else if (n.StartsWith("calves")) t = Mathf.Max(Sm(5f, 30f, Plantar[s]) * (0.5f + 0.5f * LegLoad[s]), 0.5f * Sm(20f, 80f, Knee[s]) * LegLoad[s]);
-                else if (n.StartsWith("deltoids")) t = Mathf.Max(Mathf.Max(Sm(60f, 110f, Elev[s]), 0.6f * ArmLoad[s]), 0.5f * Sm(15f, 45f, Mathf.Abs(ArmSwing[s])));
-                else if (n.StartsWith("biceps")) t = Mathf.Max(Sm(30f, 110f, Elbow[s]), 0.3f * ArmLoad[s]);
-                else if (n.StartsWith("triceps")) t = Mathf.Max(Sm(10f, 40f, -ArmSwing[s]), ArmLoad[s] * (1f - 0.6f * Sm(30f, 80f, Elbow[s])));
-                // 0.11.13: pecs push the arm forward / across and bear weight on the hands; traps lift and brace the shoulders (arms raised,
-                // propping her up, an arched or held trunk)
-                else if (n.StartsWith("pecs")) t = Mathf.Max(Mathf.Max(Sm(15f, 60f, ArmSwing[s]) * (1f - 0.5f * Sm(100f, 150f, Elev[s])), 0.8f * ArmLoad[s]), 0.3f * absT);
-                // 0.11.18: arms pulled back (hands clasped behind her) squeeze the shoulder blades together: traps and rhomboids
-                else if (n == "traps") t = Mathf.Max(Mathf.Max(0.8f * Sm(80f, 150f, elevMax), 0.7f * Mathf.Max(ArmLoad[0], ArmLoad[1])),
-                                                     Mathf.Max(0.6f * backT, Sm(10f, 40f, -Mathf.Min(ArmSwing[0], ArmSwing[1]))));
-                // 0.11.23: the sternocleidomastoid turns the head to the other side, tips it to its own side and, with its partner, tips it
-                // forward or lifts it off the floor (a crunch, lying on her back)
-                else if (n.StartsWith("neck_")) t = Mathf.Max(Mathf.Max(Sm(10f, 45f, HeadTurn * sgn), Sm(8f, 25f, HeadSide * sgn)),
-                                                              Mathf.Max(0.7f * Sm(10f, 35f, HeadFlex), 0.6f * absT));
-                else if (n.StartsWith("forearms")) t = Mathf.Max(Mathf.Max(0.6f * Sm(30f, 110f, Elbow[s]), Sm(15f, 50f, Wrist[s])), 0.8f * ArmLoad[s]);
-                else t = 0f;
+                else if (la < 0f) t = Old(n, s, sgn, absT, backT, elevMax, ext);
+                else if (Driver == 1) t = Mathf.Max(la, Load(n, s, absT, backT));
+                else t = Mathf.Max(la, Old(n, s, sgn, absT, backT, elevMax, ext));
                 tension[k] = Mathf.Clamp01(t);
             }
             return true;
+        }
+
+        // 0.10.0-0.11.23 the angle tables: tension of muscle n from her joint angles and loads (driver 0, and the muscles without a strand).
+        // 0.11.47: the deltoids read the arm against the Scapula bone (GhElev) and serratus / traps the shoulder blade's rotation (ScapUp);
+        // both give the old chest-relative thresholds while that bone stays still (the rhythm makes ScapUp 23-43 deg of Elev 100-160 and
+        // 17-40 of 80-150)
+        static float Old(string n, int s, float sgn, float absT, float backT, float elevMax, float ext)
+        {
+            if (n == "ribcage") return Mathf.Max(Mathf.Max(0.8f * Sm(110f, 165f, elevMax), 0.8f * Sm(5f, 30f, ext)), 0.4f * absT);   // ribs showing (no geometry: GpuContact)
+            if (n.StartsWith("obliques")) return Mathf.Max(Mathf.Max(0.7f * absT, Sm(8f, 30f, Mathf.Abs(Twist))), 0.9f * Sm(5f, 25f, Side * sgn) + 0.3f * Sm(5f, 25f, Mathf.Abs(Side)));
+            if (n.StartsWith("serratus")) return Mathf.Max(Mathf.Max(0.9f * Sm(23.3f, 43.3f, ScapUp[s]), 0.5f * ArmLoad[s]), 0.4f * absT);
+            // lats extend / adduct the arm: they work propping her up, pulling the arm back and holding the trunk; overhead they are mostly
+            // stretched (0.7 -> 0.35: the flare that shows), so a raised arm alone no longer reads as a contracted lat
+            if (n.StartsWith("lats")) return Mathf.Max(Mathf.Max(0.35f * Sm(100f, 160f, Elev[s]), 0.6f * backT), Mathf.Max(0.8f * ArmLoad[s], 0.7f * Sm(10f, 40f, -ArmSwing[s])));
+            if (n.StartsWith("glutes")) return Mathf.Max(Mathf.Max(Sm(30f, 100f, HipFlex[s]) * LegLoad[s], Sm(5f, 25f, -HipFlex[s])), Mathf.Max(0.6f * Sm(15f, 40f, Abd[s]), 0.5f * backT));
+            if (n.StartsWith("quads")) return Mathf.Max(Sm(15f, 95f, Knee[s]) * LegLoad[s], 0.7f * Sm(30f, 80f, HipFlex[s]) * (1f - Sm(30f, 70f, Knee[s])) * (1f - LegLoad[s]));
+            // hamstrings: hip extension (with the glutes), knee flexion without her weight on the leg, and holding a hip hinge on a straight
+            // loaded leg; a straight leg lifted while she lies (a stretch, 0.10.0 gave it half tension) is passive
+            if (n.StartsWith("hams")) return Mathf.Max(Mathf.Max(Sm(40f, 110f, HipFlex[s]) * (1f - Sm(20f, 60f, Knee[s])) * LegLoad[s], Sm(40f, 110f, Knee[s]) * (1f - LegLoad[s])),
+                                                       0.7f * Sm(5f, 25f, -HipFlex[s]));
+            if (n.StartsWith("adductors")) return Mathf.Max(Sm(5f, 20f, -Abd[s]), 0.3f * Sm(30f, 60f, Abd[s]) * LegLoad[s]);   // wide: stretched, works only under her weight
+            if (n.StartsWith("calves")) return Mathf.Max(Sm(5f, 30f, Plantar[s]) * (0.5f + 0.5f * LegLoad[s]), 0.5f * Sm(20f, 80f, Knee[s]) * LegLoad[s]);
+            if (n.StartsWith("deltoids")) return Mathf.Max(Mathf.Max(Sm(60f, 110f, GhElev[s]), 0.6f * ArmLoad[s]), 0.5f * Sm(15f, 45f, Mathf.Abs(ArmSwing[s])));
+            if (n.StartsWith("biceps")) return Mathf.Max(Sm(30f, 110f, Elbow[s]), 0.3f * ArmLoad[s]);
+            if (n.StartsWith("triceps")) return Mathf.Max(Sm(10f, 40f, -ArmSwing[s]), ArmLoad[s] * (1f - 0.6f * Sm(30f, 80f, Elbow[s])));
+            // 0.11.13: pecs push the arm forward / across and bear weight on the hands; traps lift and brace the shoulders (arms raised,
+            // propping her up, an arched or held trunk)
+            if (n.StartsWith("pecs")) return Mathf.Max(Mathf.Max(Sm(15f, 60f, ArmSwing[s]) * (1f - 0.5f * Sm(100f, 150f, Elev[s])), 0.8f * ArmLoad[s]), 0.3f * absT);
+            // 0.11.18: arms pulled back (hands clasped behind her) squeeze the shoulder blades together: traps and rhomboids
+            if (n == "traps") return Mathf.Max(Mathf.Max(0.8f * Sm(16.7f, 40f, Mathf.Max(ScapUp[0], ScapUp[1])), 0.7f * Mathf.Max(ArmLoad[0], ArmLoad[1])),
+                                               Mathf.Max(0.6f * backT, Sm(10f, 40f, -Mathf.Min(ArmSwing[0], ArmSwing[1]))));
+            // 0.11.23: the sternocleidomastoid turns the head to the other side, tips it to its own side and, with its partner, tips it
+            // forward or lifts it off the floor (a crunch, lying on her back)
+            if (n.StartsWith("neck_")) return Mathf.Max(Mathf.Max(Sm(10f, 45f, HeadTurn * sgn), Sm(8f, 25f, HeadSide * sgn)), Mathf.Max(0.7f * Sm(10f, 35f, HeadFlex), 0.6f * absT));
+            if (n.StartsWith("forearms")) return Mathf.Max(Mathf.Max(0.6f * Sm(30f, 110f, Elbow[s]), Sm(15f, 50f, Wrist[s])), 0.8f * ArmLoad[s]);
+            return 0f;
+        }
+
+        // 0.11.47 driver 1: what a muscle length can't see, kept from the tables beside the length activation: effort under her weight
+        // (LegLoad / ArmLoad / BackLoad / AbsLoad), synergists bracing with the trunk (absT / backT), the shoulder blade's rotation and
+        // retraction that a raised or pulled-back arm implies when the rig doesn't pose it (ScapUp, the arms pulled back), and the wrist (no palm frame for a
+        // flexor path)
+        static float Load(string n, int s, float absT, float backT)
+        {
+            if (n.StartsWith("obliques")) return 0.7f * absT;
+            if (n.StartsWith("serratus")) return Mathf.Max(Mathf.Max(0.9f * Sm(23.3f, 43.3f, ScapUp[s]), 0.5f * ArmLoad[s]), 0.4f * absT);
+            if (n.StartsWith("lats")) return Mathf.Max(0.6f * backT, 0.8f * ArmLoad[s]);
+            if (n.StartsWith("glutes")) return Mathf.Max(Sm(30f, 100f, HipFlex[s]) * LegLoad[s], 0.5f * backT);
+            if (n.StartsWith("quads")) return Sm(15f, 95f, Knee[s]) * LegLoad[s];
+            if (n.StartsWith("hams")) return Sm(40f, 110f, HipFlex[s]) * (1f - Sm(20f, 60f, Knee[s])) * LegLoad[s];
+            if (n.StartsWith("adductors")) return 0.3f * Sm(30f, 60f, Abd[s]) * LegLoad[s];
+            if (n.StartsWith("calves")) return Mathf.Max(Sm(5f, 30f, Plantar[s]), 0.5f * Sm(20f, 80f, Knee[s])) * LegLoad[s];
+            if (n.StartsWith("deltoids")) return 0.6f * ArmLoad[s];
+            if (n.StartsWith("biceps")) return 0.3f * ArmLoad[s];
+            // the long head's shoulder extension barely changes its path length on her rig (its origin sits by the joint): kept as an angle
+            if (n.StartsWith("triceps")) return Mathf.Max(Sm(10f, 40f, -ArmSwing[s]), ArmLoad[s] * (1f - 0.6f * Sm(30f, 80f, Elbow[s])));
+            if (n.StartsWith("pecs")) return Mathf.Max(0.8f * ArmLoad[s], 0.3f * absT);
+            if (n == "traps") return Mathf.Max(Mathf.Max(0.8f * Sm(16.7f, 40f, Mathf.Max(ScapUp[0], ScapUp[1])), 0.7f * Mathf.Max(ArmLoad[0], ArmLoad[1])),
+                                               Mathf.Max(0.6f * backT, Sm(10f, 40f, -Mathf.Min(ArmSwing[0], ArmSwing[1]))));
+            if (n.StartsWith("neck_")) return 0.6f * absT;
+            if (n.StartsWith("forearms")) return Mathf.Max(Sm(15f, 50f, Wrist[s]), 0.8f * ArmLoad[s]);
+            return 0f;
         }
 
         // "trunk flex 12 side -3 twist 5 deg, hips 40/38, knees 85/80, ..." for the peak log
@@ -374,6 +470,8 @@ namespace SfMorph
               .Append(", plantar ").Append(Plantar[0].ToString("0")).Append('/').Append(Plantar[1].ToString("0"))
               .Append(", arm elev ").Append(Elev[0].ToString("0")).Append('/').Append(Elev[1].ToString("0"))
               .Append(" swing ").Append(ArmSwing[0].ToString("0")).Append('/').Append(ArmSwing[1].ToString("0"))
+              .Append(" vs scapula ").Append(GhElev[0].ToString("0")).Append('/').Append(GhElev[1].ToString("0"))
+              .Append(", scapula up ").Append(ScapUp[0].ToString("0")).Append('/').Append(ScapUp[1].ToString("0"))
               .Append(", elbow ").Append(Elbow[0].ToString("0")).Append('/').Append(Elbow[1].ToString("0"))
               .Append(", loads back ").Append(BackLoad.ToString("0.0")).Append(" abs ").Append(AbsLoad.ToString("0.0"))
               .Append(" legs ").Append(LegLoad[0].ToString("0.0")).Append('/').Append(LegLoad[1].ToString("0.0"))
@@ -389,6 +487,8 @@ namespace SfMorph
             Joints = 0;
             for (int j = 0; j < NJ; j++) { _ok[j] = false; _p[j] = _c[j] = _e[j] = null; }
             _chest = _root = _neck = _spine = _head = null;
+            _scap[0] = _scap[1] = null;
+            ReleasePaths();
         }
     }
     // 0.11.8 tensed muscles as geometry: the body sheet's faded activations (Wrinkles.UpdateMuscles publishes them every frame while

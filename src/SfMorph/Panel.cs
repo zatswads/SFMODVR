@@ -923,6 +923,7 @@ namespace SfMorph
         }
 
         static readonly string[] MuscleDebugs = { "Off", "Tension", "Muscles" };
+        static readonly string[] MuscleDrivers = { "Angles", "Lengths + loads", "Both" };   // 0.11.47 [Muscles] Driver
 
         // 0.10.0 muscle definition: a layer of the wrinkle sheets (same textures, same shader bundle), its own switch
         void MusclesSection(Character c)
@@ -945,6 +946,13 @@ namespace SfMorph
             if (Mathf.Abs(st - _p.MuscleStrength.Value) > 0.0001f) _p.MuscleStrength.Value = st;
             float sh = Slider("Groove shade", _p.MuscleShade.Value, 0f, 1f, "0.00", 0.3f, why);
             if (Mathf.Abs(sh - _p.MuscleShade.Value) > 0.0001f) _p.MuscleShade.Value = sh;
+            // 0.11.47 what tenses them: muscle lengths + loads (default), the old joint-angle tables, or the stronger of both
+            GUI.enabled = sliderOff == null;
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Driver", GUILayout.Width(170));
+            int drv = GUILayout.Toolbar(Mathf.Clamp(_p.MuscleDriver.Value, 0, 2), MuscleDrivers);
+            GUILayout.EndHorizontal();
+            if (sliderOff == null && drv != _p.MuscleDriver.Value) _p.MuscleDriver.Value = drv;
             GUI.enabled = sliderOff == null;
             GUILayout.BeginHorizontal();
             bool core = GUILayout.Toggle(_p.MuscleCore.Value, " Core", GUILayout.Width(80));

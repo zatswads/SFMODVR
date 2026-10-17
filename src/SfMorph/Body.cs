@@ -792,6 +792,7 @@ namespace SfMorph
             s.HipMm = _p.BendHipMm.Value; s.BellyFoldMm = _p.BendBellyFoldMm.Value; s.WaistRollMm = _p.BendWaistRollMm.Value;
             s.Flex = _p.MuscleFlexAmt.Value; s.CoreMm = _p.MuscleCoreMm.Value; s.BackMm = _p.MuscleBackMm.Value; s.LegsMm = _p.MuscleLegsMm.Value; s.ArmsMm = _p.MuscleArmsMm.Value; s.Obliques = _p.MuscleObliques.Value;
             MuscleFlex.Firm = _p.MuscleOn.Value ? _p.MuscleFirmness.Value : 0f;   // 0.11.8 (the activations stop being published with the muscles off anyway)
+            MusclePose.Driver = _p.MuscleDriver.Value;   // 0.11.47 lengths / angle tables
             s.Ripple = _p.RippleAmount.Value; s.RippleSpeed = _p.RippleSpeed.Value; s.RippleImpact = _p.RippleImpact.Value; s.RippleWavelength = _p.RippleWavelength.Value; s.RippleDamping = _p.RippleDamping.Value;
             s.Marks = _p.SkinMarksOn.Value; s.MarkFade = _p.MarksFade.Value;
             s.Print = _p.MarksPrint.Value; s.PrintTime = _p.MarksPrintTime.Value; s.MarkSmooth = _p.MarksSmooth.Value / 1000f;   // 0.11.20
