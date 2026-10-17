@@ -120,6 +120,15 @@ smoke tests, then send the log (every `Smoke:` line). Then:
    a hand out of view still dents; lip closures on p/b/m at low frame rate (LipFilter 0/1/2).
 7. Perf line before / after each preset (gpuRun, wrinkleRun, simulate, GPU ms).
 
+Smoke tests (Debug tab; each logs `Smoke: <id> PASS|FAIL|SKIP (why)`, "Run all" ends `Smoke run done: N PASS, N FAIL, N SKIP of 13`):
+shaders (21 kernels incl. markers, 5 new body regions, a muscle layer) · gpu-contact (1 cm sink 1 s -> dispatches) · cull (cull distance
+= config, nothing culled in view and near) · delta-mush (kernels, 4 joints baked, weights 0..1, strengths = config, dispatching) ·
+wrinkles (new regions forced to 1.00, body sheet re-blends) · curve-wrinkles (browInnerUp injected -> forehead_L target >= 0.5) ·
+muscles (all strands bound, bind-pose max < 0.35) · correctives (both drivers interpolative, abd90 weight >= 0.95, rest 0, signs, nothing
+written while off) · quality (preset re-apply writes 0; SKIP when Custom) · lip-sync (synthetic closure kept by the filter) · soft-zones
+(helpers bound, 0 s dropped) · physics-hands (built, capsules) · skin-marks (alive, flip settled; read only). Side effects: gpu-contact sinks
+her skin 1 cm for 1 s; wrinkles turns other regions off ~0.8 s; quality re-saves the config.
+
 ## 0.11.45 (brows, nose, sticky lips, pose guards)
 
 Install `dist/SfMorph.dll`. Reactions on, Face clips on, Lip sync on, a pack with lines.
