@@ -209,14 +209,61 @@ So the avatar now shares her skeleton (the VRChat "armature merge" idea, with th
 
 Generality (user, 2026-10-17: not bespoke to one character): everything on the avatar side goes by per-rig tables (body: g9 / g8 /
 g2 from tools/sources/humanoid.py; face landmarks: the same three families; DAZ surface names of each generation) and by geometry
-(fits, crotch, soles); nothing is keyed to RKS Krista 9. Open for VaM characters (Genesis 2): SfExport writes OBJ + joints without
-skin weights, so a VaM look cannot be built into an avatar bundle yet. The route: SfExport also writes the DAZMergedMesh's bone
-weights (or the weights are transferred in Blender from a weighted Genesis 2 Female FBX), then a small Blender step writes the FBX
-build.ps1 takes.
+(fits, crotch, soles); nothing is keyed to RKS Krista 9. VaM characters (Genesis 2): see *VaM looks as avatars* below (0.11.44).
 Offline (tools/avatar/drive_test.ps1, the plugin's own Avatar.cs + MeshData.cs in the Unity editor on her export and two recordings):
 her body skin to the avatar's 3 mm median, soles within 3-7 mm of hers, the avatar's skin stretch in the range of her own upper
 body's (x0.45-2.8 vs x0.3-2.3 at 0.1 / 99.9 %), all her renderers given back. The per-frame retarget below stays as the record of
 step 1 (and as the way for an avatar that cannot share her skeleton).
+
+### VaM looks as avatars, and the importer (0.11.44)
+
+**Weights from VaM itself.** VaM's Assembly-CSharp keeps a Person's skinning in `DAZSkinV2.nodes` (public; one `DAZSkinV2Node`
+per bone, in `skin.dazBones` order; `DAZMergedSkinV2.Merge` re-indexes the genital graft into the merged mesh): `weights` (DAZ
+TriAx: `xweight / yweight / zweight` per vertex, plus bulge factors), `fullyWeightedVertices` (weight 1 on every axis) and
+`generalWeights` (linear, when `hasGeneralWeights`). The indices are UV-vertex indices, the same order as body.obj
+(`InitMesh`: `startVerts = dazMesh.morphedUVVertices`); seam vertices then copy their base vertex (`dazMesh.baseVerticesToUVVertices`,
+`fromvert -> tovert`). SfExport.cs writes all of it as `weights.txt` (and `skeleton.txt`: rotation order and rest orientation per
+bone). No reflection is needed (VaM forbids it in plugins).
+
+**TriAx to a linear skin** (`tools/avatar/vam_avatar.py`): per bone the mean of its two bend axes (the twist axis: the last letter
+of VaM's rotation order, which lists DAZ's reversed (shoulder ZYX, shin XZY), carries DAZ's twist gradient along the limb, which a linear skin without twist bones can only smear), 1 for
+fully weighted vertices, general weights when present; normalised. VaM's own `CalculateStrongestWeights` uses the mean of all three.
+The node weights are **cumulative down the skeleton** (`WalkBonesAndAccumulateWeights` adds each child's weights into its parent;
+VaM's skinner applies the bones as a chain): on the export the collar carries 1 along the whole upper arm and the chest 1 at the
+shoulder. Each bone's own share is its weight minus its children's (per axis), then the bend-axis mean. Taken as they come, the
+first build stretched the left upper arm x19 in the drive test (99.9 % x6.9); with the own shares x2.7.
+In avatar mode only the head, hands and feet keep the avatar's own weights; the torso and limbs take hers (above), so this mainly
+decides which body regions an avatar vertex belongs to. VaM's nipple joints are soft-body targets without a rest position: left out.
+VaM has no face bones (its face is morphs): the face follows her jaw, eyes and head only.
+
+**The FBX**: the Genesis 2 skeleton (DAZ names) and VaM's morphed mesh in metres, Y up, identity root (Blender's space transform
+applied), one material per VaM surface with DAZ's names (InnerMouth -> Mouth, EyeReflection -> EyeMoisture for AvatarBundle's roles;
+Hidden and disabled surfaces left out), `<fbx>.materials.txt` in DAZ's format: Base Color, Normal Map (VaM's DXT5nm-packed maps are
+unpacked to RGB), Specular Lobe 1 Roughness (1 - VaM's gloss), Cutout Opacity (`_AlphaTex`). build.ps1 takes it unchanged.
+
+**SF Avatar Import** (`tools/avatar/SF Avatar Import.cmd` -> `import.ps1`; `-NoGui -Source ...` for scripts): one window, a source,
+a name, the software paths (found from the registry, Steam and Unity Hub, else set once; `pipeline.json`, shared with run.ps1),
+Import. Sources: a VaM .var (copied into AddonPackages; its appearance presets and every Person of its scenes are looks; missing
+dependency packages are listed), loose VaM content (merged into VaM, existing files kept), a .vap / scene .json, an SfExport folder,
+a DAZ .duf or product zip (copied into the first DAZ content library, existing files kept; its character presets), an FBX; any of
+them in a zip. VaM runs unattended: the importer copies SfExport.cs to `Custom\Scripts\SfMod` and `tools\vam\SfVamBridge\SfVamBridge.dll`
+(BepInEx 5, idle unless `Saves\PluginData\SfExport\auto\request.txt` exists) to `BepInEx\plugins`, writes `auto\scene.json` (VaM's
+default scene, plugins removed, SfExport on its Person), `request.txt` (preset path, label per look) and `quit`, starts
+`VaM.exe -vrmode None`; the bridge loads the scene, SfExport's auto mode loads each preset (waits until the skin's textures stop
+changing), exports it and writes `done.txt`, the bridge closes VaM. Without BepInEx in VaM (or with VaM already open) the log asks
+to open that scene by hand; the rest is the same. Then vam_avatar.py, build.ps1, and with *Install* a copy into the game's
+`BepInEx\config\SfMorphs\avatars`. Not covered: DAZ products that need other products (the DAZ export stops on its missing-files
+dialog after 10 minutes), VaM looks whose dependency packages are missing (exported without those textures / morphs). VaM can hang on its way out after the bridge's
+quit (seen with the user's VaM plugins): the importer ends the instance it started a minute after the export is on disk.
+
+**Run 2026-10-17** (a VaM appearance preset, Genesis 2 Female, through `import.ps1 -Source <Preset_*.vap>`): VaM started, loaded the
+scene after its startup (3 min), loaded the preset, exported it in 30 s (24 928 vertices, every one weighted, 86 bones, 2 012 seam
+copies, the lashes' `_AlphaTex`, 0 stretched faces); FBX 86 bones (VaM's two nipple targets left out), 29 surfaces, 1.799 m; bundle
+139.8 MB, verify OK (rest error 0.00002). Drive test on export Reika-20261016-175648 + Room_Scene recording: **g2** rig, 52 bones
+mapped, fitted to her 45 joints (moved up to 7.8 cm), 9 714 vertices on her skin weights; her body skin to the avatar's 3.3 mm median
+(95 % 17.1 mm), soles within 6.5 mm, skin stretch x0.47-2.74 (0.1 / 99.9 %; her upper body x0.34-2.02, Krista 9 x0.45-2.8), her
+renderers given back. Remaining outliers: a few edges at the crotch midline next to her genital patch (x10-14, her Hip_L against
+Root_M), the same place as on stand-in weights. Not yet seen in the headset.
 
 ### The retarget (what the plugin would run every frame)
 

@@ -19,6 +19,12 @@ if (-not $Name) { $Name = [IO.Path]::GetFileNameWithoutExtension($Fbx) }
 if (-not $Out) { $Out = Join-Path $env:LOCALAPPDATA "SfMorph\avatars\$Name" }
 $proj = Join-Path $PSScriptRoot "SfAvatarBundle"
 $dst = Join-Path $proj "Assets\Avatars\$Name"
+# the project's editor code includes the drive test, which compiles the plugin's own Avatar.cs / MeshData.cs: copy them in
+# (as drive_test.ps1 does), else a fresh checkout does not compile
+$copied = Join-Path $proj "Assets\Editor\DriveTest\Copied"
+New-Item -ItemType Directory -Force $copied | Out-Null
+Copy-Item -Force (Join-Path $PSScriptRoot "..\..\src\SfMorph\Avatar.cs") $copied
+Copy-Item -Force (Join-Path $PSScriptRoot "..\..\src\SfMorph\MeshData.cs") $copied
 
 # 1. the character into the project
 if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
@@ -54,8 +60,10 @@ foreach ($d in @("$base.images", "$base.fbm", (Join-Path (Split-Path $Fbx) "text
 "copied $Name`: FBX + $($seen.Count) textures -> $dst"
 
 # 2. build, 3. verify
-$build = Join-Path $proj "Build\$Name"
-if (Test-Path $build) { Remove-Item -Recurse -Force $build }
+# Unity names the manifest bundle after the output folder: "_out" never clashes with an avatar's bundle name (a one-word name
+# such as "Lexi" would: Build\Lexi -> manifest "lexi" = the avatar's bundle "lexi")
+$build = Join-Path $proj "Build\$Name\_out"
+if (Test-Path (Split-Path $build)) { Remove-Item -Recurse -Force (Split-Path $build) }
 function Run-Unity([string]$method, [string[]]$more, [string]$log) {
     & $Unity -batchmode -quit -nographics -projectPath $proj -executeMethod $method @more -logFile $log | Out-Null
     $code = $LASTEXITCODE

@@ -270,7 +270,12 @@ Person skin = `DAZMergedSkinV2`, mesh = `skin.dazMesh` (`DAZMergedMesh`, metres)
 (MeshPoly: materialNum, vertices, may be quads); bones `skin.root.dazBones`, `morphedWorldPosition` = rest frame of the
 morphed mesh; textures `skin.GPUmaterials[i]` slots `_MainTex _SpecTex _GlossTex _BumpMap _DecalTex`; plugins write
 with `FileManagerSecure` under `Saves/PluginData` (no prompt). To compile-check the plugin here: mcs against VaM's
-Assembly-CSharp + Unity module refs + a stub UnityEngine.UI (Button.onClick).
+Assembly-CSharp + Unity module refs + a stub UnityEngine.UI (Button.onClick); locally `tools/vam/build_bridge.sh` (Unity's bundled
+mcs, VaM's own Managed DLLs incl. UnityEngine.UI) also builds the VaM BepInEx helper SfVamBridge. Skin weights: `skin.nodes`
+(DAZSkinV2Node per bone: TriAx `weights`, `fullyWeightedVertices`, `generalWeights`; UV-vertex indices) + seam copies
+`dazMesh.baseVerticesToUVVertices` (docs/SOURCES.md, *VaM looks as avatars*). Appearance presets load through the Person's
+`AppearancePresets` storable (`presetBrowsePath` url + action `LoadPreset`); `SuperController.singleton.Load(path)`, `.isLoading`,
+`.Quit()` are public. VaM has BepInEx 5.4.21 (CLR 2 / .NET 3.5): its plugins build against VaM's mscorlib.
 User decisions: personal use only; no Appearance tab (DLSS 5 NR repaints materials anyway); face likeness from AI
 character sheets via FaceGen or VaM. Not building selfie/photo-of-a-real-person features.
 

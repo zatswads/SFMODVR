@@ -277,6 +277,19 @@ namespace SfMorph
             return m;
         }
 
+        // how many of a table's keys the skeleton has under the table's first-choice name
+        static int Primary(RigTable t, Dictionary<string, Transform> byName)
+        {
+            int n = 0;
+            for (int ki = 0; ki < Keys.Length; ki++)
+            {
+                if (!t.Names.TryGetValue(Keys[ki], out var cands) || cands.Length == 0) continue;
+                foreach (var side in ki >= FirstSided ? new[] { t.L, t.R } : new[] { "" })
+                    if (byName.ContainsKey(cands[0].Replace("{s}", side).ToLowerInvariant())) n++;
+            }
+            return n;
+        }
+
         static string K(string key, string side) { return side == null ? key : key + "." + side; }
 
         // ---- a smooth warp through point pairs: biharmonic RBF (phi = r) plus an affine part -------------------------------------
@@ -426,7 +439,15 @@ namespace SfMorph
                 foreach (var t in HerRoot.GetComponentsInChildren<Transform>(true)) { if (VrHands.UnderSf(t)) continue; var k = t.name.ToLowerInvariant(); if (!herByName.ContainsKey(k)) herByName[k] = t; }
                 var hm = MapBones(Hers, herByName);
                 RigTable best = null; Dictionary<string, Transform> am = null;
-                foreach (var t in AvatarTables) { var m = MapBones(t, avByName); if (am == null || m.Count > am.Count) { am = m; best = t; } }
+                // most bones mapped; on a tie the table whose first-choice names the skeleton has (a Genesis 2 skeleton maps as fully
+                // through the g8 table's fallbacks, abdomen2 / chest / lShldr, but has none of G8's abdomenUpper / lShldrBend)
+                int bestPrim = -1;
+                foreach (var t in AvatarTables)
+                {
+                    var m = MapBones(t, avByName);
+                    int prim = Primary(t, avByName);
+                    if (am == null || m.Count > am.Count || (m.Count == am.Count && prim > bestPrim)) { am = m; best = t; bestPrim = prim; }
+                }
                 var need = new[] { "hips", "spine", "neck", "head" }.Concat(new[] { "upperarm", "forearm", "hand", "thigh", "shin", "foot" }.SelectMany(k => new[] { k + ".L", k + ".R" })).ToList();
                 var missA = need.Where(k => !am.ContainsKey(k)).ToList();
                 var missH = need.Where(k => !hm.ContainsKey(k)).ToList();

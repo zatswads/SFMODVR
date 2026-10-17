@@ -3,6 +3,9 @@
 //   body.obj        Genesis 2 mesh with every morph applied, NOT posed (rest frame, metres,
 //                   Unity axes), UV vertices with UVs, one group per material
 //   joints.txt      every DAZ bone: name, parent, morphed rest position, posed position
+//   skeleton.txt    every DAZ bone: name, parent, rotation order, morphed rest position and orientation (for an FBX)
+//   weights.txt     the skin weights VaM skins body.obj with (per bone: TriAx weights, fully weighted vertices, general
+//                   weights; seam copies), so the look can be built into an avatar (tools/avatar/vam_avatar.py)
 //   materials.txt   material index, name, enabled, region, and the PNG written per texture slot
 //   urls.txt        the texture files the appearance uses (face/torso/limbs/genitals)
 //   tex_*.png       the textures VaM renders with (diffuse, specular, gloss, normal, decal)
@@ -13,6 +16,9 @@
 //   info.txt             gets the base drift lines appended
 // Morph list: Custom/Scripts/SfMod/morphs.cfg next to the plugin (built-in defaults if absent).
 // into Saves\PluginData\SfExport\<atom>-<time>\ (VaM lets plugins write there without asking).
+// Auto mode (tools/avatar/import.ps1 with tools/vam/SfVamBridge): Saves/PluginData/SfExport/auto/request.txt lists appearance
+// presets ("<preset path>\t<label>" per line); the plugin loads each onto its Person, exports it as above into
+// SfExport/<label>-<time>, then writes auto/done.txt ("ok\t<label>\t<dir>" or "fail\t<label>\t<reason>"); progress in auto/status.txt.
 // Personal use: the output contains DAZ/VaM content; never share it.
 using System;
 using System.Collections;
@@ -28,6 +34,8 @@ public class SfExport : MVRScript
     bool _busy;
     string _lastDir;
     const string CfgPath = "Custom/Scripts/SfMod/morphs.cfg";
+    const string AutoDir = "Saves/PluginData/SfExport/auto";
+    bool _lastOk;
     static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
     public override void Init()
@@ -43,6 +51,8 @@ public class SfExport : MVRScript
         var b2 = CreateButton("Export morphs for SF (sliders + correctives)");
         b2.button.onClick.AddListener(() => { if (!_busy) StartCoroutine(RunMorphs()); });
         CreateTextField(_status);
+        if (FileManagerSecure.FileExists(AutoDir + "/request.txt") && !FileManagerSecure.FileExists(AutoDir + "/done.txt"))
+            StartCoroutine(Auto());
     }
 
     void Say(string s) { if (_status != null) _status.val = s; SuperController.LogMessage("SF export: " + s); }
@@ -60,9 +70,12 @@ public class SfExport : MVRScript
         return null;
     }
 
-    IEnumerator Run()
+    IEnumerator Run() { return Run(null); }
+
+    IEnumerator Run(string label)
     {
         _busy = true;
+        _lastOk = false;
         var selector = containingAtom.GetComponentInChildren<DAZCharacterSelector>();
         var character = selector != null ? selector.selectedCharacter : null;
         if (character == null) { Say("no character selected"); _busy = false; yield break; }
@@ -71,7 +84,7 @@ public class SfExport : MVRScript
         var mesh = skin != null ? skin.dazMesh : null;
         if (mesh == null) { Say("character has no skin mesh yet"); _busy = false; yield break; }
 
-        string dir = "Saves/PluginData/SfExport/" + Safe(containingAtom.uid) + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", Inv);
+        string dir = "Saves/PluginData/SfExport/" + Safe(label ?? containingAtom.uid) + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", Inv);
         FileManagerSecure.CreateDirectory(dir);
         _lastDir = dir;
         Say("exporting to " + dir + " ...");
@@ -116,13 +129,26 @@ public class SfExport : MVRScript
                   .Append(V(bone.morphedWorldPosition)).Append('\t').Append(V(bone.transform.position)).Append('\n');
             }
         FileManagerSecure.WriteAllText(dir + "/joints.txt", sb.ToString());
+        FileManagerSecure.WriteAllText(dir + "/skeleton.txt", Skeleton(bones));
+        yield return null;
+
+        // The skin weights, for an avatar built from this look (docs/SOURCES.md, avatar replacement).
+        string weightInfo = "none (the skin has no nodes)";
+        if (skin.nodes != null && skin.nodes.Length > 0)
+        {
+            int nw;
+            FileManagerSecure.WriteAllText(dir + "/weights.txt", Weights(skin, mesh, out nw));
+            weightInfo = skin.nodes.Length + " bones, " + nw + " weighted vertices of " + mesh.numUVVertices + (skin.hasGeneralWeights ? ", general weights" : ", TriAx");
+            yield return null;
+        }
 
         // Textures as rendered, one PNG per distinct texture.
         var tc = character.GetComponentInChildren<DAZCharacterTextureControl>();
         var written = new Dictionary<int, string>();
         var mats = new StringBuilder("# index\tname\tenabled\tregion\tslot=file ...\n");
         var gpu = skin.GPUmaterials;
-        string[] slots = { "_MainTex", "_SpecTex", "_GlossTex", "_BumpMap", "_DecalTex" };
+        // _AlphaTex: the cut-out of the lashes, cornea and tear (VaM's separate-alpha skin shaders)
+        string[] slots = { "_MainTex", "_SpecTex", "_GlossTex", "_BumpMap", "_DecalTex", "_AlphaTex" };
         for (int i = 0; gpu != null && i < gpu.Length; i++)
         {
             var m = gpu[i];
@@ -138,7 +164,7 @@ public class SfExport : MVRScript
                     if (!written.TryGetValue(t.GetInstanceID(), out file))
                     {
                         file = "tex_" + written.Count.ToString("00", Inv) + "_" + Safe(t.name) + ".png";
-                        var png = Png(t, slot == "_BumpMap" || slot == "_GlossTex");
+                        var png = Png(t, slot == "_BumpMap" || slot == "_GlossTex" || slot == "_AlphaTex");
                         if (png != null) FileManagerSecure.WriteAllBytes(dir + "/" + file, png);
                         written[t.GetInstanceID()] = file;
                         yield return null;
@@ -179,10 +205,164 @@ public class SfExport : MVRScript
         yield return StartCoroutine(Thumb(dir + "/thumb.jpg", selector));
         FileManagerSecure.WriteAllText(dir + "/info.txt", "character\t" + character.displayName + "\natom\t" + containingAtom.uid +
             "\nvertices\t" + verts.Length + " (UV vertices; base " + mesh.numBaseVertices + ")\nmaterials\t" + (matNames != null ? matNames.Length : 0) +
-            "\nsource\t" + source + "\ntextures\t" + written.Count + "\nstretched faces\t" + stretched + "\n");
+            "\nsource\t" + source + "\ntextures\t" + written.Count + "\nstretched faces\t" + stretched + "\nweights\t" + weightInfo + "\n");
         Say("done: " + verts.Length + " vertices, " + written.Count + " textures -> " + dir + ". Check: " +
             (stretched == 0 ? "body.obj looks intact" : stretched + " stretched faces in body.obj - the morph snapshot may be incomplete; press Export again"));
+        _lastOk = stretched == 0;
         _busy = false;
+    }
+
+    // ---------------------------------------------------------------- skeleton and skin weights
+
+    // Every bone with its rotation order and its rest orientation (DAZ's orientation angles, degrees), in body.obj's frame.
+    static string Skeleton(DAZBone[] bones)
+    {
+        var sb = new StringBuilder("# name\tparent\trotation order\tmorphed rest position\tmorphed rest orientation (degrees)\n");
+        if (bones != null)
+            foreach (var bone in bones)
+            {
+                if (bone == null) continue;
+                sb.Append(bone.name).Append('\t').Append(bone.parentBone != null ? bone.parentBone.name : "-").Append('\t')
+                  .Append(bone.rotationOrder.ToString()).Append('\t').Append(V(bone.morphedWorldPosition)).Append('\t')
+                  .Append(V(bone.morphedWorldOrientation)).Append('\n');
+            }
+        return sb.ToString();
+    }
+
+    // VaM skins the morphed UV vertices (DAZSkinV2: startVerts = morphedUVVertices) with one node per bone: DAZ TriAx weights
+    // (a weight per rotation axis), vertices that move with the bone entirely, and general (linear) weights when the skin has
+    // them; UV seam vertices then take their base vertex's result (dazMesh.baseVerticesToUVVertices). All indices are body.obj's.
+    static string Weights(DAZSkinV2 skin, DAZMesh mesh, out int weighted)
+    {
+        var sb = new StringBuilder(1 << 22);
+        sb.Append("# SfExport skin weights (VaM DAZSkinV2 nodes). Indices: body.obj vertices, 0-based.\n")
+          .Append("# bone <name> <rotation order>; w <i> <x> <y> <z> (TriAx weight per axis); full <i> ... (weight 1 on every axis);\n")
+          .Append("# g <i> <weight> (general weights); copy <from> <to> (a seam vertex skinned like another)\n");
+        sb.Append("vertices ").Append(mesh.numUVVertices).Append(" base ").Append(mesh.numBaseVertices).Append('\n');
+        sb.Append("general ").Append(skin.hasGeneralWeights ? "1" : "0").Append('\n');
+        var seen = new bool[mesh.numUVVertices];
+        weighted = 0;
+        foreach (var node in skin.nodes)
+        {
+            if (node == null) continue;
+            sb.Append("bone ").Append(node.name).Append(' ').Append(node.rotationOrder.ToString()).Append('\n');
+            if (node.weights != null)
+                foreach (var w in node.weights)
+                {
+                    sb.Append("w ").Append(w.vertex).Append(' ').Append(F(w.xweight)).Append(' ').Append(F(w.yweight)).Append(' ').Append(F(w.zweight)).Append('\n');
+                    if (w.vertex >= 0 && w.vertex < seen.Length && !seen[w.vertex]) { seen[w.vertex] = true; weighted++; }
+                }
+            if (node.fullyWeightedVertices != null && node.fullyWeightedVertices.Length > 0)
+                for (int i = 0; i < node.fullyWeightedVertices.Length; i += 32)
+                {
+                    sb.Append("full");
+                    for (int j = i; j < node.fullyWeightedVertices.Length && j < i + 32; j++)
+                    {
+                        int v = node.fullyWeightedVertices[j];
+                        sb.Append(' ').Append(v);
+                        if (v >= 0 && v < seen.Length && !seen[v]) { seen[v] = true; weighted++; }
+                    }
+                    sb.Append('\n');
+                }
+            if (node.generalWeights != null)
+                foreach (var g in node.generalWeights)
+                    sb.Append("g ").Append(g.vertex).Append(' ').Append(F(g.weight)).Append('\n');
+        }
+        var map = mesh.baseVerticesToUVVertices;
+        if (map != null)
+            foreach (var m in map)
+                if (m != null) sb.Append("copy ").Append(m.fromvert).Append(' ').Append(m.tovert).Append('\n');
+        return sb.ToString();
+    }
+
+    // ---------------------------------------------------------------- auto mode
+
+    void AutoStatus(string s)
+    {
+        Progress(s);
+        try { FileManagerSecure.WriteAllText(AutoDir + "/status.txt", DateTime.Now.ToString("HH:mm:ss", Inv) + "\t" + s + "\n"); } catch { }
+    }
+
+    // Loads each requested appearance preset onto this Person and exports it (see the header).
+    IEnumerator Auto()
+    {
+        _busy = true;
+        var rows = new List<string[]>();
+        foreach (var raw in FileManagerSecure.ReadAllText(AutoDir + "/request.txt").Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line[0] == '#') continue;
+            var t = line.Split('\t');
+            rows.Add(new[] { t[0].Trim(), t.Length > 1 && t[1].Trim().Length > 0 ? t[1].Trim() : "look" });
+        }
+        var done = new StringBuilder();
+        // let the scene settle (the Person's character and skin load after the scene)
+        for (int i = 0; i < 300 && (SuperController.singleton == null || SuperController.singleton.isLoading); i++) yield return new WaitForSeconds(0.2f);
+        yield return new WaitForSeconds(2f);
+        for (int k = 0; k < rows.Count; k++)
+        {
+            string path = rows[k][0], label = rows[k][1];
+            AutoStatus("look " + (k + 1) + " of " + rows.Count + ": loading " + path);
+            string err = null;
+            if (path != "-")
+            {
+                var ps = containingAtom.GetStorableByID("AppearancePresets");
+                if (ps == null) err = "this Person has no AppearancePresets storable";
+                else
+                {
+                    try
+                    {
+                        string p = SuperController.singleton.NormalizePath(path);
+                        var url = ps.GetUrlJSONParam("presetBrowsePath");
+                        if (url != null) { url.val = p; ps.CallAction("LoadPreset"); }
+                        else ps.CallAction("LoadPresetWithPath", p);
+                    }
+                    catch (Exception e) { err = "loading the preset: " + e.Message; }
+                }
+            }
+            if (err == null)
+            {
+                // textures load in the background: wait until the skin's textures stop changing for 3 s (at most 90 s)
+                yield return new WaitForSeconds(3f);
+                string last = null; int stable = 0;
+                for (int s = 0; s < 90 && stable < 3; s++)
+                {
+                    yield return new WaitForSeconds(1f);
+                    string sig = TexSignature();
+                    if (sig == last && !SuperController.singleton.isLoading) stable++; else stable = 0;
+                    last = sig;
+                    AutoStatus("look " + (k + 1) + " of " + rows.Count + ": waiting for its textures (" + s + " s)");
+                }
+                AutoStatus("look " + (k + 1) + " of " + rows.Count + ": exporting " + label);
+                _busy = false;
+                yield return StartCoroutine(Run(label));
+                _busy = true;
+                if (!_lastOk) err = _status != null ? _status.val : "export failed";
+            }
+            done.Append(err == null ? "ok" : "fail").Append('\t').Append(label).Append('\t').Append(err == null ? _lastDir : err.Replace('\n', ' ')).Append('\n');
+        }
+        FileManagerSecure.WriteAllText(AutoDir + "/done.txt", done.ToString());
+        AutoStatus("done: " + rows.Count + " look(s)");
+        _busy = false;
+    }
+
+    // which textures the character's skin draws with now (instance ids of every GPU material's maps)
+    string TexSignature()
+    {
+        var sb = new StringBuilder();
+        var selector = containingAtom.GetComponentInChildren<DAZCharacterSelector>();
+        var character = selector != null ? selector.selectedCharacter : null;
+        DAZSkinV2 skin = character != null ? character.GetComponentInChildren<DAZMergedSkinV2>() : null;
+        if (skin == null && character != null) skin = character.skin;
+        if (skin == null || skin.GPUmaterials == null) return "none";
+        sb.Append(character.name).Append(':');
+        foreach (var m in skin.GPUmaterials)
+        {
+            if (m == null) continue;
+            foreach (var slot in new[] { "_MainTex", "_BumpMap", "_SpecTex", "_GlossTex" })
+                if (m.HasProperty(slot)) { var t = m.GetTexture(slot); sb.Append(t != null ? t.GetInstanceID() : 0).Append(','); }
+        }
+        return sb.ToString();
     }
 
     // ---------------------------------------------------------------- morph deltas

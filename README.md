@@ -44,6 +44,20 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.44 (VaM looks as avatars; one-click importer):
+- A VaM look could not become an avatar: VaM's export had no skin weights. `tools/vam/SfExport.cs` now also writes them
+  (`weights.txt`: VaM's own `DAZSkinV2` nodes, DAZ TriAx weights per bone and axis, fully weighted vertices, general weights, seam
+  copies) and `skeleton.txt`; `tools/avatar/vam_avatar.py` (Blender) turns such an export into the skinned Genesis 2 FBX that
+  `tools/avatar/build.ps1` builds unchanged.
+- **SF Avatar Import** (`tools/avatar/SF Avatar Import.cmd`): pick a zip, folder or file (VaM .var / preset / scene, an SfExport
+  folder, a DAZ .duf or product zip, an FBX) and it makes the avatar, and installs it into the game if ticked. VaM looks are exported
+  by VaM itself without clicks: the importer installs SfExport.cs and a small BepInEx helper (`tools/vam/SfVamBridge`, idle unless an
+  import asks), starts VaM in desktop mode, VaM loads each look, exports it and closes. Software paths are found or set once.
+- A Genesis 2 avatar was read with the Genesis 8 bone table (both map the same bones; G8 came first): ties now go to the table whose
+  first-choice names the skeleton has, so it reports and works as g2.
+- build.ps1: a one-word avatar name failed the build (Unity's manifest bundle, named after the output folder, clashed with the
+  avatar's bundle); a fresh checkout did not compile until drive_test.ps1 had run once. Both fixed.
+
 0.11.43 (avatar: her face rig on its face):
 - The avatar's face moved only with her jaw and eyes, and its mouth opened too far on lines (user): its whole head hung on her head
   and jaw bones. Now its face skin, lashes and brows take her face rig's weights (lips, mouth corners, cheeks, brows, lids, jaw) from
