@@ -44,6 +44,18 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.41 (natural wrinkles: micro lines, no scar on her belly):
+- Her stomach line still looked like a caesarean scar: the belly fold sat 2 cm below her navel and curved up to the sides, which is
+  exactly where and how that scar runs. It is now where a sitting or curled-forward belly really folds: at the navel, drooping
+  towards her flanks, its depth varying along it, with the skin rolling over it from above; a fainter, shorter fold 3-4 cm higher.
+- Every wrinkle line, face and body, was one clean groove. Real folds drag finer lines with them where the skin bends most, so each
+  fold now has micro lines: a thinner, fainter echo on each side over part of its length (leaving the fold and rejoining it) and
+  short curved branches forking off towards its ends, all with gaps and varying depth so nothing reads as a drawn copy. Short lines
+  across a fold were tried and dropped (they read as stitches). Face micro lines down to 0.45 mm, body 1.1 mm (the body texture's
+  resolution).
+- The body's wrinkle maps now add up overlapping lines like the face's (a fold and its micro lines together), instead of the
+  strongest line winning per texel. Shader bundle rebuilt.
+
 0.11.40 (Round joints fixed for real):
 - Turning Round joints (Delta Mush) on still left dark red, inside-out patches on her groin, belly and upper thighs (user). The
   0.11.35 change to his body's marks was not the main cause. The joint pass was: at vertices with few neighbours, at mesh borders

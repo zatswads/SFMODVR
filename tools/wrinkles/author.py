@@ -319,6 +319,147 @@ def wobble(p, nrm, amp, seed):
     return q + side * off[:, None]
 
 
+# ---------------------------------------------------------------- micro lines (0.11.40)
+
+
+class SkinNear:
+    """Nearest-vertex lookups on her skin (a coarse grid over the vertices): snap a point onto the skin and take its normal."""
+
+    def __init__(self, surf, cell=0.01):
+        self.v, self.n, self.cell = surf.v, surf.vn, cell
+        key = np.floor(self.v / cell).astype(np.int64)
+        self.grid = {}
+        for i, k in enumerate(map(tuple, key)):
+            self.grid.setdefault(k, []).append(i)
+
+    def near(self, p):
+        k = np.floor(p / self.cell).astype(np.int64)
+        ids = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    ids.extend(self.grid.get((k[0] + dx, k[1] + dy, k[2] + dz), ()))
+        if not ids:
+            return None
+        ids = np.array(ids)
+        return ids[np.argmin(np.linalg.norm(self.v[ids] - p, axis=1))]
+
+    def snap(self, p):
+        """p projected onto the tangent plane of its nearest vertex (good over the few millimetres to centimetres a micro line spans)."""
+        i = self.near(p)
+        if i is None:
+            return None, None
+        nrm = self.n[i]
+        return p - np.dot(p - self.v[i], nrm) * nrm, nrm
+
+
+def micro_lines(c, skin, rng, minw, feather=False, scale=1.0):
+    """0.11.40 the fine lines a fold drags with it (user: 'micro lines from the main lines, where the skin bends the most'): real folds
+    are never one clean groove. Around the middle of a line, where the skin bends most, the fold
+      - echoes: a fainter, thinner line on each side of it, over part of its length, leaving the main line and rejoining it;
+      - branches: short lines that fork off at a shallow angle towards the line's ends (where the folding fans out);
+      - feathers (off by default): very short faint lines across the fold (the 0.11.40 previews: across a fold they read as stitches).
+    Depth and width are shares of the main line's (width never under minw: one texel of the atlas plus a little), all with breaks so
+    nothing reads as a drawn copy. Deterministic from the line's seed."""
+    out = []
+    if c.depth <= 0 or len(c.p) < 3:
+        return out
+    q, sarc = resample(c.p, 0.0008)
+    L = np.linalg.norm(np.diff(q, axis=0), axis=1).sum()
+    w0, d0 = c.width, c.depth * scale
+    if L < 6 * w0:
+        return out
+    t = np.gradient(q, axis=0)
+    t /= np.maximum(np.linalg.norm(t, axis=1), 1e-12)[:, None]
+    nrm = np.zeros_like(q)
+    for i in range(len(q)):
+        j = skin.near(q[i])
+        nrm[i] = skin.n[j] if j is not None else np.array([0, 0, 1.0])
+    side = np.cross(nrm, t)
+    side /= np.maximum(np.linalg.norm(side, axis=1), 1e-12)[:, None]
+
+    def at(u):
+        k = int(np.clip(round(u * (len(q) - 1)), 0, len(q) - 1))
+        return q[k], t[k], side[k]
+
+    def poly(pts):
+        res = []
+        for pnt in pts:
+            sp_, _ = skin.snap(pnt)
+            if sp_ is not None:
+                res.append(sp_)
+        return np.array(res)
+
+    def width(f):
+        return max(minw, w0 * f)
+
+    seed = c.seed * 31 + 7
+    # echoes: one on each side, over 35-65 % of the line around its middle, leaving it and rejoining (offset x sin)
+    for sgn in (1.0, -1.0):
+        span = rng.uniform(0.35, 0.65)
+        u0 = 0.15 + rng.uniform(0, 1) * max(0.0, 0.85 - span - 0.15)
+        off = sgn * rng.uniform(1.7, 2.6) * w0
+        pts = []
+        for k in range(14):
+            v = k / 13.0
+            u = u0 + span * v
+            pnt, tt, sd = at(u)
+            pts.append(pnt + sd * off * math.sin(math.pi * v) ** 0.7)
+        e = poly(pts)
+        if len(e) > 4:
+            out.append(Crease(e, c.region, d0 * rng.uniform(0.2, 0.3), width(rng.uniform(0.4, 0.5)), taper=(1, 1), seed=seed, ridge=0.2,
+                              breaks=0.45))
+            seed += 1
+    # branches: forks towards both ends, pointing away from the middle, off alternate sides
+    nb = 2 if L < 25 * w0 else 3
+    for b in range(nb):
+        u = (rng.uniform(0.12, 0.32) if b % 2 == 0 else rng.uniform(0.68, 0.88)) if b < 2 else rng.uniform(0.42, 0.58)
+        pnt, tt, sd = at(u)
+        dirn = 1.0 if u >= 0.5 else -1.0
+        sg = 1.0 if (b + c.seed) % 2 == 0 else -1.0
+        ang = math.radians(rng.uniform(16, 34))
+        ln = L * rng.uniform(0.09, 0.17)
+        bend = rng.uniform(0.3, 0.8) * (1 if rng.uniform() < 0.5 else -1)   # branches curve away (straight ones read as scratches)
+        pts = []
+        for k in range(10):
+            v = k / 9.0
+            a = ang * (1 + bend * v)
+            pts.append(pnt + (tt * dirn * math.cos(a) + sd * sg * math.sin(a)) * ln * v)
+        e = poly(pts)
+        if len(e) > 4:
+            out.append(Crease(e, c.region, d0 * rng.uniform(0.18, 0.28), width(rng.uniform(0.5, 0.65)), taper=(0, 1), seed=seed, ridge=0.2,
+                              breaks=0.2))
+            seed += 1
+    # feathers: short faint lines across the deepest third of a joint crease
+    if feather:
+        nf = int(np.clip(L / (6 * w0), 3, 7))
+        for k in range(nf):
+            u = 0.33 + 0.34 * (k + rng.uniform(0.2, 0.8)) / nf
+            pnt, tt, sd = at(u)
+            a = math.radians(rng.uniform(62, 85)) * (1 if rng.uniform() < 0.5 else -1)
+            dvec = tt * math.cos(a) + sd * math.sin(a)
+            ln = rng.uniform(2.2, 3.4) * w0
+            ofs = rng.uniform(-0.3, 0.3) * ln
+            e = poly([pnt + dvec * (ofs + ln * (k2 / 6.0 - 0.5)) for k2 in range(7)])
+            if len(e) > 4:
+                out.append(Crease(e, c.region, d0 * rng.uniform(0.12, 0.2), width(rng.uniform(0.35, 0.45)), taper=(1, 1), seed=seed, ridge=0.1))
+                seed += 1
+    return out
+
+
+def add_micro(prims, surf, regions, minw, log, feather_regions=(), scale=1.0):
+    """Micro lines for every fold of prims (not the bunches, not the raised rolls), in the fold's own region."""
+    skin = SkinNear(surf)
+    extra = []
+    for c in prims:
+        if not isinstance(c, Crease):
+            continue
+        rng = np.random.default_rng(c.seed * 1009 + 17)
+        extra.extend(micro_lines(c, skin, rng, minw, feather=regions[c.region][0].split('_')[0] in feather_regions, scale=scale))
+    log('micro lines: %d around %d folds' % (len(extra), sum(isinstance(c, Crease) for c in prims)))
+    return prims + extra
+
+
 # ---------------------------------------------------------------- layout build
 
 
@@ -1038,21 +1179,39 @@ def body_creases(surf, sk, log):
         if len(pts) > 8:
             out.append(Crease(wobble(np.array(pts), lambda q: unit_rows(q - ctr), 0.0005, seed + 10),
                               rk, dep * 0.001, wid * 0.001, seed=seed, ridge=0.35))
-    # belly: when she squats or leans forward the belly folds into one soft roll that follows its curve (lowest at the middle, rising
-    # to the sides), with a fainter one above; broad and shallow with a raised rounded edge. 0.9.1's two thin straight lines read as a
-    # scar (headset, 0.9.1).
+    # belly (0.11.40): when she sits, squats or curls forward her belly folds AT THE NAVEL, the skin bunching into a soft roll above
+    # the fold; to the sides the fold droops towards her flanks (the waist folds down over the hip). 0.9.5's fold sat 2 cm below the
+    # navel and rose to the sides: exactly a caesarean scar's place and smile shape (headset: still read as a scar). Now: the main fold
+    # a few millimetres above the navel, sagging to the sides, broken in places, its roll above it; a fainter upper fold 3-4 cm higher,
+    # shorter and off-centre; and the micro lines around both (main()). Not mirrored.
     rbel = reg('belly', 'body', 0.20)
-    rr[rbel] = 0.04
-    for i, (y0, dep, wid) in enumerate(((0.948, 0.0013, 0.0065), (0.972, 0.0005, 0.005))):
+    rr[rbel] = 0.045
+    nav = None
+    for y in np.arange(0.92, 1.03, 0.002):          # the navel: the deepest point of her front midline in that band
+        h = surf.ray(np.array([0.0, y, 0.4]), np.array([0, 0, -1.0]))
+        if h is not None and (nav is None or h[2] < nav[2]):
+            nav = h
+    ny = nav[1] if nav is not None else 0.97
+    log('belly: navel at y %.3f' % ny)
+    #       height above the navel, sag to the sides (m), reach left / right (m), depth mm, width mm, seed, breaks
+    # (no breaks: on a fold this wide they cut it into a row of dashes, which read as stitches in the preview)
+    folds = ((0.004, 0.022, (-0.105, 0.095), 1.0, 7.0, 300, 0.0),
+             (0.037, 0.012, (-0.055, 0.075), 0.45, 5.0, 301, 0.0))
+    for dy, sag, (x0, x1), dep, wid, seed, brk in folds:
+        rng = np.random.default_rng(seed)
+        ph = rng.uniform(0, 6.28, 2)
         pts = []
-        for k in range(17):
-            x = -0.095 + 0.19 * k / 16.0
-            h = surf.ray(np.array([x, y0 + 0.018 * (x / 0.095) ** 2, 0.4]), np.array([0, 0, -1.0]))
+        for k in range(21):
+            x = x0 + (x1 - x0) * k / 20.0
+            xn = x / 0.1
+            y = ny + dy - sag * xn * xn + 0.0015 * math.sin(3.1 * xn + ph[0]) + 0.004 * xn * 0.3
+            h = surf.ray(np.array([x, y, 0.4]), np.array([0, 0, -1.0]))
             if h is not None:
                 pts.append(h)
-        if len(pts) > 6:
-            out.append(Crease(wobble(np.array(pts), lambda q: np.tile([0, 0, 1.0], (len(q), 1)), 0.0008, 300 + i),
-                              rbel, dep, wid, seed=300 + i, ridge=0.6))
+        if len(pts) > 8:
+            out.append(Crease(wobble(np.array(pts), lambda q: np.tile([0, 0, 1.0], (len(q), 1)), 0.0009, seed + 5),
+                              rbel, dep * 0.001, wid * 0.001, seed=seed, ridge=0.75, roll_toward=np.array([0, 1.0, 0]), roll=(1.0, 0.35),
+                              breaks=brk))
     log('body: %d creases in %d regions' % (len(out), len(regions)))
     excl = []
     for side in ('Left', 'Right'):
@@ -1112,7 +1271,13 @@ def main():
         surf = Surf(pr)
         creases, regions, rad, excl = fn(surf, sk, log)
         rad = {k: rad.get(k, 0.01) for k in range(len(regions))}
-        det, reg, cov, cav, idx, best, wbest = (build_sum if name == 'face' else build)(name, surf, creases, regions, n, nreg, rad, log, excl)
+        # 0.11.40 micro lines around every fold (face: down to 0.45 mm; body: 1.1 mm, about two texels of its atlas) and the body through
+        # the summing build too (a fold and its micro lines add up instead of the strongest one winning per texel)
+        if name == 'face':
+            creases = add_micro(creases, surf, regions, 0.00045, log, scale=0.8)
+        else:
+            creases = add_micro(creases, surf, regions, 0.0011, log)   # no feathers: short lines across a fold read as stitches (preview)
+        det, reg, cov, cav, idx, best, wbest = build_sum(name, surf, creases, regions, n, nreg, rad, log, excl)
         write_png(os.path.join(OUT, 'wrinkle_%s_detail.png' % name), to_u8(det))
         write_png(os.path.join(OUT, 'wrinkle_%s_region.png' % name), reg)
         table.append('layout %s %d %d' % (name, n, nreg))

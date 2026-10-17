@@ -98,6 +98,14 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.41 (micro lines, belly fold)
+
+Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log: `SF Body Morphs 0.11.41`. Wrinkles on (Face, Neck, Body), Debug ->
+Wrinkle test or poses: (1) belly (sit / squat / curl forward): the fold runs through her navel and droops to the sides, a roll of
+skin above it; nothing low across her lower belly; (2) each line (forehead, frown, crow's feet, smile, elbow, knee, groin, neck) has
+fainter fine lines beside it and short branches at its ends, not a single clean groove; no rows of short dashes or stitch-like marks;
+(3) nothing new shows at rest.
+
 ## 0.11.40 (Round joints fixed)
 
 Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Physics tab: Round joints in deep bends on.
