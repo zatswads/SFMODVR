@@ -57,6 +57,7 @@ namespace SfMorph
         // 0.11.28 Delta Mush at her joints
         internal ConfigEntry<bool> DeltaMush;
         internal ConfigEntry<float> DeltaMushAmount, DeltaMushRadius;
+        internal ConfigEntry<float> MushShoulder, MushElbow, MushHip, MushKnee, DeltaMushKeepVolume;   // 0.11.47
         // 0.11.31 skin folds at deep bends, chubby (soft fat by area)
         internal ConfigEntry<float> SkinFolds, FoldElbowMm, FoldKneeMm, FoldHipMm, Chubby;
         internal ConfigEntry<float>[] ChubbyArea;
@@ -109,6 +110,14 @@ namespace SfMorph
             DeltaMush = Config.Bind("Physics", "DeltaMush", true, "GPU contact: her elbows, knees, hips and shoulders keep their volume in deep bends instead of pinching and flattening (Delta Mush on the skinned body: the joint skin is smoothed, then its rest detail put back). Costs GPU time every frame she is visible.");
             DeltaMushAmount = Config.Bind("Physics", "DeltaMushAmount", 1f, new ConfigDescription("Strength of the Delta Mush at her joints (0 = the plain skinning).", new AcceptableValueRange<float>(0f, 1f)));
             DeltaMushRadius = Config.Bind("Physics", "DeltaMushRadius", 20f, new ConfigDescription("How far the Delta Mush smooths around each joint (mm). Larger = rounder bends, more GPU passes (at most 48). Applies when her body is rebuilt (character change, Rescan, restart).", new AcceptableValueRange<float>(5f, 60f)));
+            // 0.11.47: Delta Mush per joint and its volume keeping (read every frame)
+            MushShoulder = Config.Bind("Physics", "MushShoulder", 1f, new ConfigDescription("Delta Mush strength at her shoulders and armpits (x DeltaMushAmount; 0 = plain skinning there).", new AcceptableValueRange<float>(0f, 1f)));
+            MushElbow = Config.Bind("Physics", "MushElbow", 1f, new ConfigDescription("Delta Mush strength at her elbows (x DeltaMushAmount).", new AcceptableValueRange<float>(0f, 1f)));
+            MushHip = Config.Bind("Physics", "MushHip", 1f, new ConfigDescription("Delta Mush strength at her hips and groin (x DeltaMushAmount).", new AcceptableValueRange<float>(0f, 1f)));
+            MushKnee = Config.Bind("Physics", "MushKnee", 1f, new ConfigDescription("Delta Mush strength at her knees (x DeltaMushAmount).", new AcceptableValueRange<float>(0f, 1f)));
+            DeltaMushKeepVolume = Config.Bind("Physics", "DeltaMushKeepVolume", 1f, new ConfigDescription("How much the Delta Mush is kept from moving her skin inward (1 = never thinner than the plain skinning: the knee cap and the elbow point keep their size in a deep bend; 0 = classic Delta Mush).", new AcceptableValueRange<float>(0f, 1f)));
+            GpuContact.MushJointCfg = new[] { MushShoulder, MushElbow, MushHip, MushKnee };
+            GpuContact.MushKeepCfg = DeltaMushKeepVolume;
             SkinFolds = Config.Bind("Physics", "SkinFolds", 1f, new ConfigDescription("GPU contact: her skin folds in at deeply bent joints (a crease with the flesh rolling up on both sides): inner elbow, back of the knee, groin when sitting (0 off).", new AcceptableValueRange<float>(0f, 2f)));
             FoldElbowMm = Config.Bind("Physics", "FoldElbowMm", 4f, new ConfigDescription("Inner-elbow fold depth at a fully bent elbow (mm, before SkinFolds).", new AcceptableValueRange<float>(0f, 15f)));
             FoldKneeMm = Config.Bind("Physics", "FoldKneeMm", 5f, new ConfigDescription("Back-of-the-knee fold depth at a fully bent knee (mm, before SkinFolds).", new AcceptableValueRange<float>(0f, 15f)));

@@ -95,7 +95,8 @@ namespace SfMorph
             public bool Flex, MusOn;
             // 0.11.28 Delta Mush at her joints (MushBake): vertex lists, rest data, ping-pong positions, per canonical offset + normal;
             // this frame: Mush = run it, MushRan = it ran (an overlay follows), MushFollow = an overlay takes its body's offsets
-            public GraphicsBuffer MushGatherBuf, MushSmoothBuf, MushCoreBuf, MushAllBuf, MushDeltaBuf, MushNrmBuf, MushNbBuf, MushPA, MushPB, MushOffBuf;
+            public GraphicsBuffer MushGatherBuf, MushSmoothBuf, MushCoreBuf, MushAllBuf, MushDeltaBuf, MushAuxBuf, MushNbBuf, MushPA, MushPB, MushOffBuf;
+            public GraphicsBuffer MushAdjWBuf;   // 0.11.47: the rest smoothing weights (beside AdjVBuf)
             public bool Mush, MushRan, MushFollow;
             public GraphicsBuffer FoldBuf, FatBuf;   // 0.11.31 skin folds and chubby areas per vertex (always made with the bake)
             public int DiscMask, CapOff, CapN, CapN1;
@@ -121,8 +122,9 @@ namespace SfMorph
             PMus = Shader.PropertyToID("_Mus"), PMusBelly = Shader.PropertyToID("_MusBelly"), PMusAmp = Shader.PropertyToID("_MusAmp"), PMusAct = Shader.PropertyToID("_MusAct"),
             PMusFirm = Shader.PropertyToID("_MusFirm"), PMusOn = Shader.PropertyToID("_MusOn"),
             PMushIdx = Shader.PropertyToID("_MushIdx"), PMushN = Shader.PropertyToID("_MushN"), PMushIn = Shader.PropertyToID("_MushIn"), PMushOut = Shader.PropertyToID("_MushOut"),
-            PMushOut2 = Shader.PropertyToID("_MushOut2"), PMushDelta = Shader.PropertyToID("_MushDelta"), PMushNrm = Shader.PropertyToID("_MushNrm"), PMushNb = Shader.PropertyToID("_MushNb"),
+            PMushOut2 = Shader.PropertyToID("_MushOut2"), PMushDelta = Shader.PropertyToID("_MushDelta"), PMushAux = Shader.PropertyToID("_MushAux"), PMushNb = Shader.PropertyToID("_MushNb"),
             PMushOff = Shader.PropertyToID("_MushOff"), PMushOffR = Shader.PropertyToID("_MushOffR"), PMushAmt = Shader.PropertyToID("_MushAmt"), PMushMax = Shader.PropertyToID("_MushMax"),
+            PMushAdjW = Shader.PropertyToID("_MushAdjW"), PMushJoint = Shader.PropertyToID("_MushJoint"), PMushKeep = Shader.PropertyToID("_MushKeep"), PMushVol = Shader.PropertyToID("_MushVol"),
             PFold = Shader.PropertyToID("_Fold"), PFat = Shader.PropertyToID("_Fat"), PFoldAmt0 = Shader.PropertyToID("_FoldAmt0"), PFoldAmt1 = Shader.PropertyToID("_FoldAmt1"),
             PFatAmt0 = Shader.PropertyToID("_FatAmt0"), PFatAmt1 = Shader.PropertyToID("_FatAmt1"), PFoldOn = Shader.PropertyToID("_FoldOn");
         static readonly uint[] ZeroHits = new uint[1];
@@ -137,7 +139,10 @@ namespace SfMorph
         bool _v2Kernels, _v2Failed, _loggedFirstV2;
         bool _foreignMarks;
         int _kMushGather, _kMushSmooth, _kMushRecon, _kMushApply, _kMushFollow;
-        bool _mushK;                          // 0.11.28 bundle: the Delta Mush kernels
+        bool _mushK;                          // 0.11.28 bundle: the Delta Mush kernels (0.11.47: the weighted ones, marker MushWeighted)
+        // 0.11.47 [Physics] MushShoulder / MushElbow / MushHip / MushKnee, DeltaMushKeepVolume (Plugin sets them; read every frame, no rebake)
+        internal static BepInEx.Configuration.ConfigEntry<float>[] MushJointCfg;
+        internal static BepInEx.Configuration.ConfigEntry<float> MushKeepCfg;
         bool _foldK;                          // 0.11.31 bundle: Depth / Compose read the folds and the fat (Folds marker kernel)
         Vector4 _foldA0, _foldA1, _fatA0, _fatA1;
         float _fatMax;                        // this frame's largest area fat (m); 0 = not chubby
@@ -231,7 +236,10 @@ namespace SfMorph
                 g._muscleK = g._cs.HasKernel("MuscleFlex");
                 g._foldK = g._cs.HasKernel("Folds");
                 if (g._v2Kernels && !g._foldK) Plugin.Log.LogWarning("GPU contact: old sfmorph_shaders (no Folds): no skin folds or chubby areas; install the bundle that came with this DLL");
-                g._mushK = g._cs.HasKernel("MushGather") && g._cs.HasKernel("MushSmooth") && g._cs.HasKernel("MushRecon") && g._cs.HasKernel("MushApply") && g._cs.HasKernel("MushFollow");
+                // 0.11.47: the marker kernel MushWeighted = the Mush kernels read the weights / aux this DLL bakes (an older bundle's want
+                // _MushNrm and smooth uniformly against the weighted rest: off with a note instead)
+                g._mushK = g._cs.HasKernel("MushGather") && g._cs.HasKernel("MushSmooth") && g._cs.HasKernel("MushRecon") && g._cs.HasKernel("MushApply") && g._cs.HasKernel("MushFollow")
+                           && g._cs.HasKernel("MushWeighted");
                 if (g._mushK)
                 {
                     g._kMushGather = g._cs.FindKernel("MushGather"); g._kMushSmooth = g._cs.FindKernel("MushSmooth"); g._kMushRecon = g._cs.FindKernel("MushRecon");
@@ -697,7 +705,8 @@ namespace SfMorph
                 {
                     s.MushGatherBuf = Upload(md.Gather, md.Gather.Length, 4); s.MushSmoothBuf = Upload(md.Smooth, md.Smooth.Length, 4);
                     s.MushCoreBuf = Upload(md.Core, md.Core.Length, 4); s.MushAllBuf = Upload(md.All, md.All.Length, 4);
-                    s.MushDeltaBuf = Upload(md.Delta, V, 16); s.MushNrmBuf = Upload(md.Nrm, V, 16); s.MushNbBuf = Upload(md.Nb, 2 * V, 4);
+                    s.MushDeltaBuf = Upload(md.Delta, V, 16); s.MushAuxBuf = Upload(md.Aux, V, 16); s.MushNbBuf = Upload(md.Nb, 2 * V, 4);
+                    s.MushAdjWBuf = Upload(md.AdjW, md.AdjW.Length, 4);   // 0.11.47
                     s.MushPA = Upload(null, V, 16); s.MushPB = Upload(null, V, 16);
                     s.MushOffBuf = Upload(new Vector4[2 * V], 2 * V, 16);   // zeros: a vertex outside the core never moves (overlays read it too)
                 }
@@ -928,8 +937,9 @@ namespace SfMorph
             Rel(ref s.CanonBuf); Rel(ref s.AdjOffBuf); Rel(ref s.AdjVBuf); Rel(ref s.TissueBuf); Rel(ref s.ClassBuf); Rel(ref s.BendBuf);
             Rel(ref s.FieldA); Rel(ref s.FieldB); Rel(ref s.FieldC); Rel(ref s.FieldD); Rel(ref s.Foreign); Rel(ref s.MarksBuf); Rel(ref s.GradBuf);
             Rel(ref s.HitsBuf); Rel(ref s.MapBuf); Rel(ref s.MapWBuf); Rel(ref s.MusBuf); Rel(ref s.BellyBuf);
-            Rel(ref s.MushGatherBuf); Rel(ref s.MushSmoothBuf); Rel(ref s.MushCoreBuf); Rel(ref s.MushAllBuf); Rel(ref s.MushDeltaBuf); Rel(ref s.MushNrmBuf);
+            Rel(ref s.MushGatherBuf); Rel(ref s.MushSmoothBuf); Rel(ref s.MushCoreBuf); Rel(ref s.MushAllBuf); Rel(ref s.MushDeltaBuf); Rel(ref s.MushAuxBuf);
             Rel(ref s.MushNbBuf); Rel(ref s.MushPA); Rel(ref s.MushPB); Rel(ref s.MushOffBuf);
+            Rel(ref s.MushAdjWBuf);
             Rel(ref s.FoldBuf); Rel(ref s.FatBuf);
             s.Mush = s.MushRan = s.MushFollow = false;
             s.Parent = null; s.Mapped = 0; s.Level = 0;
@@ -1598,6 +1608,7 @@ namespace SfMorph
             cs.Dispatch(_kMushGather, (md.Gather.Length + 63) / 64, 1, 1); n++;
             GraphicsBuffer src = s.MushPA, dst = s.MushPB;
             cs.SetBuffer(_kMushSmooth, PAdjOff, s.AdjOffBuf); cs.SetBuffer(_kMushSmooth, PAdjV, s.AdjVBuf); cs.SetBuffer(_kMushSmooth, PMushIdx, s.MushSmoothBuf);
+            cs.SetBuffer(_kMushSmooth, PMushAdjW, s.MushAdjWBuf);   // 0.11.47: the bake's rest weights
             cs.SetInt(PMushN, md.Smooth.Length);
             int sg = (md.Smooth.Length + 63) / 64;
             for (int k = 0; k < md.K; k++)
@@ -1607,8 +1618,11 @@ namespace SfMorph
                 var t = src; src = dst; dst = t;
             }
             cs.SetFloat(PMushAmt, Mathf.Clamp01(_set.MushAmt)); cs.SetFloat(PMushMax, 0.04f);
+            cs.SetVector(PMushJoint, MushJoints());
+            cs.SetFloat(PMushKeep, MushKeepCfg != null ? Mathf.Clamp01(MushKeepCfg.Value) : 1f);
+            cs.SetVector(PMushVol, new Vector4(MushVolMin, MushVolMax, 0f, 0f));
             cs.SetBuffer(_kMushRecon, PVerts, vb); cs.SetBuffer(_kMushRecon, PMushIdx, s.MushCoreBuf); cs.SetBuffer(_kMushRecon, PMushIn, src);
-            cs.SetBuffer(_kMushRecon, PMushDelta, s.MushDeltaBuf); cs.SetBuffer(_kMushRecon, PMushNrm, s.MushNrmBuf); cs.SetBuffer(_kMushRecon, PMushNb, s.MushNbBuf);
+            cs.SetBuffer(_kMushRecon, PMushDelta, s.MushDeltaBuf); cs.SetBuffer(_kMushRecon, PMushAux, s.MushAuxBuf); cs.SetBuffer(_kMushRecon, PMushNb, s.MushNbBuf);
             cs.SetBuffer(_kMushRecon, PMushOff, s.MushOffBuf);
             cs.SetInt(PMushN, md.Core.Length);
             cs.Dispatch(_kMushRecon, (md.Core.Length + 63) / 64, 1, 1); n++;
@@ -1619,6 +1633,17 @@ namespace SfMorph
             s.MushRan = true;
             _mushVerts += md.Core.Length; _mushPasses += md.K;
             return n;
+        }
+
+        // 0.11.47: the area term's clamp on the rest offset's normal part (offline: the compressed inner knee kept ~1-2 % more radius)
+        const float MushVolMin = 0.8f, MushVolMax = 1.3f;
+
+        // 0.11.47 [Physics] MushShoulder / MushElbow / MushHip / MushKnee (1 each when the config isn't wired)
+        static Vector4 MushJoints()
+        {
+            var c = MushJointCfg;
+            if (c == null || c.Length < 4) return Vector4.one;
+            return new Vector4(Mathf.Clamp01(c[0].Value), Mathf.Clamp01(c[1].Value), Mathf.Clamp01(c[2].Value), Mathf.Clamp01(c[3].Value));
         }
 
         // An overlay on a mushed body: each mapped vertex takes the offset of the body vertex under it (x its map weight).
@@ -1759,9 +1784,11 @@ namespace SfMorph
             int V = s.Count;
             string why = null;
             if (md == null || s.Bake.V != V) why = "no delta mush bake for its vertices";
-            else if (!Len(s.MushDeltaBuf, V) || !Len(s.MushNrmBuf, V) || !Len(s.MushNbBuf, 2 * V) || !Len(s.MushPA, V) || !Len(s.MushPB, V) || !Len(s.MushOffBuf, 2 * V)
+            else if (!Len(s.MushDeltaBuf, V) || !Len(s.MushAuxBuf, V) || !Len(s.MushNbBuf, 2 * V) || !Len(s.MushPA, V) || !Len(s.MushPB, V) || !Len(s.MushOffBuf, 2 * V)
                      || !Len(s.AdjOffBuf, V + 1) || !Len(s.CanonBuf, V))
                 why = "a delta mush buffer has the wrong size";
+            else if (md.AdjW == null || s.AdjVBuf == null || !Len(s.MushAdjWBuf, Math.Max(1, md.AdjW.Length)) || md.AdjW.Length != s.AdjVBuf.count)
+                why = "the delta mush weights don't match the adjacency";   // 0.11.47: _MushAdjW is read beside _AdjV
             else if (!Len(s.MushGatherBuf, Math.Max(1, md.Gather.Length)) || !Len(s.MushSmoothBuf, Math.Max(1, md.Smooth.Length)) || !Len(s.MushCoreBuf, Math.Max(1, md.Core.Length))
                      || !Len(s.MushAllBuf, Math.Max(1, md.All.Length)))
                 why = "a delta mush list has the wrong size";
