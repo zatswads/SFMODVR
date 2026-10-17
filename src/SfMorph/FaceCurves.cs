@@ -121,8 +121,25 @@ namespace SfMorph
                 var row = p[m];
                 for (int i = 0; i < N; i++) { float v = row[i] * mw; if (v > w[i]) w[i] = v; }
             }
+            // 0.11.47 the smoke test's curve (Smoke.cs), max'ed in like a producer until it expires
+            if (_testK >= 0)
+            {
+                if (now < _testUntil) { any = true; if (_testV > w[_testK]) w[_testK] = _testV; }
+                else _testK = -1;
+            }
             return any;
         }
+
+        // ---- 0.11.47 smoke test: one curve held at a value for a while (Smoke.cs: curve-driven wrinkles) ----
+
+        static int _testK = -1;
+        static float _testV, _testUntil;
+        public static void Inject(int k, float v, float seconds)
+        {
+            if (k < 0 || k >= N) return;
+            _testK = k; _testV = Mathf.Clamp01(v); _testUntil = Time.unscaledTime + seconds;
+        }
+        public static void ClearInjected() { _testK = -1; }
 
         // What drove her face since the last call (for the wrinkles' peak log): "lip sync, Pain up to 80%" ...; clears it.
         static int _seen;

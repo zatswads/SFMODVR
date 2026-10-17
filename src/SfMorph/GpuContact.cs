@@ -1161,6 +1161,76 @@ namespace SfMorph
             return n;
         }
 
+        // ---- 0.11.47 smoke tests (Smoke.cs): read-only state; nothing here changes what runs ----
+
+        internal int SmokeDispatches;          // GPU check dispatches so far (one per renderer and frame while it runs)
+        internal bool V2Ok { get { return _v2Kernels && !_v2Failed; } }
+        internal bool MushKernelsOk { get { return _mushK; } }
+        internal float CullSetting { get { return _set.CullDistance; } }
+        internal int RendererCount { get { int n = 0; for (int i = 0; i < _rs.Count; i++) if (_rs[i].Ok) n++; return n; } }
+        static readonly string[] SmokeKernels = { "Smoke", "Imprint", "Depth", "Dilate", "Smooth", "Compose", "Grad", "Apply", "MarkDisc", "MarksDecay", "ApplyMap",
+                                                  "ForeignMarks", "SeamBlend", "MuscleFlex", "Folds", "MushGather", "MushSmooth", "MushRecon", "MushApply", "MushFollow", "MushWeighted" };
+        internal static int SmokeKernelCount { get { return SmokeKernels.Length; } }
+
+        // The kernels (and marker kernels) this DLL expects that the loaded SoftDeform lacks, space-separated; "" = all there.
+        internal string MissingKernels()
+        {
+            if (_cs == null) return "SoftDeform";
+            var sb = new StringBuilder();
+            for (int i = 0; i < SmokeKernels.Length; i++) if (!_cs.HasKernel(SmokeKernels[i])) sb.Append(sb.Length > 0 ? " " : "").Append(SmokeKernels[i]);
+            return sb.ToString();
+        }
+
+        // Her renderers now: in a camera's view, beyond the cull distance (Far, with its hysteresis), culled last frame, and culled although
+        // in view and near (should not happen beyond a frame at the edge of the view).
+        internal void CullStats(out int total, out int visible, out int far, out int culled, out int wrong)
+        {
+            total = visible = far = culled = wrong = 0;
+            for (int i = 0; i < _rs.Count; i++)
+            {
+                var s = _rs[i];
+                if (!s.Ok || !s.R.enabled || !s.R.gameObject.activeInHierarchy) continue;
+                total++;
+                bool vis = s.R.isVisible;
+                if (vis) visible++;
+                if (s.Far) far++;
+                if (s.Culled) { culled++; if (vis && !s.Far) wrong++; }
+            }
+        }
+
+        // Delta Mush as baked: perJoint[0..3] = core vertices of the shoulders / elbows / hips / knees (Aux.y), renderers with a bake,
+        // those whose rest smoothing weights are uploaded (and finite, 0..1), core vertices, the most smoothing passes.
+        internal void MushStats(int[] perJoint, out int baked, out int weighted, out int core, out int passes, out int badWeights)
+        {
+            baked = weighted = core = passes = badWeights = 0;
+            for (int j = 0; j < perJoint.Length; j++) perJoint[j] = 0;
+            for (int i = 0; i < _rs.Count; i++)
+            {
+                var s = _rs[i];
+                if (!s.V2 || s.Bake == null || s.Bake.Mush == null) continue;
+                var md = s.Bake.Mush;
+                baked++;
+                core += md.Core.Length;
+                if (md.K > passes) passes = md.K;
+                bool wOk = s.MushAdjWBuf != null && md.AdjW != null && md.AdjW.Length > 0;
+                if (wOk)
+                    for (int k = 0; k < md.AdjW.Length; k++)
+                    {
+                        float w = md.AdjW[k];
+                        if (float.IsNaN(w) || w < 0f || w > 1.0001f) { badWeights++; wOk = false; }
+                    }
+                if (wOk) weighted++;
+                if (md.Aux == null) continue;
+                for (int k = 0; k < md.Core.Length; k++)
+                {
+                    uint c = md.Core[k];
+                    if (c >= md.Aux.Length) continue;
+                    int j = Mathf.RoundToInt(md.Aux[c].y);
+                    if (j >= 0 && j < perJoint.Length) perJoint[j]++;
+                }
+            }
+        }
+
         public void Smoke(float seconds, float metres)
         {
             _smokeStart = Time.realtimeSinceStartup;
@@ -1495,6 +1565,7 @@ namespace SfMorph
                         _cs.SetFloat(PSmoke, smoke);
                         _cs.Dispatch(_kSmoke, groups, 1, 1);
                         dispatches++;
+                        SmokeDispatches++;   // 0.11.47 the smoke test (Smoke.cs) counts these
                     }
                     if (!_loggedFirstRun) { _loggedFirstRun = true; Plugin.Log.LogInfo("GPU contact: first dispatch on " + s.Name + " (" + (s.Imprint1 ? "imprint " : "") + (s.IsV2 ? "v2 " : "") + (smoke != 0f ? "smoke" : "") + ")"); }
                 }
@@ -1708,7 +1779,7 @@ namespace SfMorph
         const float MushVolMin = 0.8f, MushVolMax = 1.3f;
 
         // 0.11.47 [Physics] MushShoulder / MushElbow / MushHip / MushKnee (1 each when the config isn't wired)
-        static Vector4 MushJoints()
+        internal static Vector4 MushJoints()
         {
             var c = MushJointCfg;
             if (c == null || c.Length < 4) return Vector4.one;

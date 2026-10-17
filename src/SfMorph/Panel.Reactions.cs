@@ -7,7 +7,6 @@ namespace SfMorph
     {
         // panel-local state (not saved)
         int _testZone = 4, _testSide;     // Butt, left
-        bool _expOpen;
         int _expMood, _expReaction;
 
         static readonly string[] VoiceModes = { "Game picks", "By intensity" };

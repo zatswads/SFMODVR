@@ -49,7 +49,7 @@ namespace SfMorph
     internal static class WrinkleTest
     {
         // 0.11.25: the re-sculpted face layout's regions (nose_L / _R, mouthcorner_L / _R, chin are new); an old bundle's "nose" still matches
-        public static readonly string[] Names = { "brows up", "frown", "squint", "smile", "nose scrunch", "frown lips", "whole face", "neck", "body creases" };
+        public static readonly string[] Names = { "brows up", "frown", "squint", "smile", "nose scrunch", "frown lips", "whole face", "neck", "body creases", "body: flank / waist / upper belly" };
         static readonly string[][] Groups =
         {
             new[] { "forehead_L", "forehead_R" },
@@ -62,6 +62,8 @@ namespace SfMorph
                     "chin", "mouthcorner_L", "mouthcorner_R" },
             new[] { "neck" },
             new[] { "elbow_in_L", "elbow_back_L", "knee_back_L", "hipfold_L", "armpit_L", "elbow_in_R", "elbow_back_R", "knee_back_R", "hipfold_R", "armpit_R", "belly" },
+            // 0.11.47 the body creases' new regions (author.py body_creases): flank, side waist, upper belly
+            new[] { "flank_L", "flank_R", "sidewaist_L", "sidewaist_R", "upperbelly" },
         };
         public const float Step = 2.5f;
         static float _start = -1f;
@@ -81,7 +83,19 @@ namespace SfMorph
         }
         public static float Left { get { int i = Index; return i < 0 ? 0f : Mathf.Max(0f, _start + (i + 1) * Step - Time.unscaledTime); } }
         // the regions at full now (null: no test running)
-        public static string[] Regions() { int i = Index; return i < 0 ? null : Groups[i]; }
+        public static string[] Regions()
+        {
+            if (_force != null) { if (Time.unscaledTime < _forceUntil) return _force; _force = null; }
+            int i = Index;
+            return i < 0 ? null : Groups[i];
+        }
+
+        // 0.11.47 the smoke test (Smoke.cs): these regions at full (every other one off) for a short while, like one step of the test
+        static string[] _force;
+        static float _forceUntil;
+        public static void Force(string[] regions, float seconds) { _force = regions; _forceUntil = Time.unscaledTime + seconds; }
+        public static void Unforce() { _force = null; }
+        public static bool Forced { get { return _force != null && Time.unscaledTime < _forceUntil; } }
     }
 
     internal class Wrinkles
@@ -256,6 +270,7 @@ namespace SfMorph
             public int DebugMode;
             public bool Built, Dirty, Asleep, Culled, RasterLogged, AlbedoHeld;
             public bool MarksDirty;               // 0.11.47: SkinMarks touched it since the last raster (re-blended at its fixed 2-frame gap)
+            public int Rasters;                   // 0.11.47: its re-blends since it was made (the smoke test)
             public float LastChange, LastComputeAt, LastTransLog = -100f;
             public int LastRasterFrame = -100;
             public float StrengthApplied = -1f, CavityApplied = -1f;
@@ -502,6 +517,70 @@ namespace SfMorph
         }
 
         static Wrinkles _live;
+
+        // ---- 0.11.47 smoke tests (Smoke.cs): read-only state ----
+
+        internal int Rasters;                     // re-blends of any sheet since load (the initial copies not counted)
+        internal bool FlipOk { get { return _flipState == 2; } }
+        internal bool IsActive { get { return _active; } }
+        internal int LayoutCount { get { return _layouts.Count; } }
+        internal int MuscleLayerCount { get { return _muscleLayers.Count; } }
+
+        // "face 15, body 18" (layouts and their region counts)
+        internal string LayoutSummary()
+        {
+            var sb = new StringBuilder();
+            foreach (var L in _layouts) sb.Append(sb.Length > 0 ? ", " : "").Append(L.Name).Append(' ').Append(L.Count);
+            return sb.ToString();
+        }
+
+        internal bool HasRegion(string region)
+        {
+            foreach (var L in _layouts) if (L.RegionName.IndexOf(region) >= 0) return true;
+            return false;
+        }
+
+        // The built sheet that has this region: false when none is built; culled / asleep as it is now.
+        internal bool SheetOf(string region, out bool culled, out string name)
+        {
+            culled = false; name = "";
+            for (int i = 0; i < _sheets.Count; i++)
+            {
+                var sh = _sheets[i];
+                if (!sh.Built || sh.Layout == null || sh.Layout.RegionName.IndexOf(region) < 0) continue;
+                culled = sh.Culled; name = sh.Name;
+                return true;
+            }
+            return false;
+        }
+
+        // Re-blends of the built sheet that has this region (-1: none built).
+        internal int SheetRasters(string region)
+        {
+            for (int i = 0; i < _sheets.Count; i++)
+            {
+                var sh = _sheets[i];
+                if (sh.Built && sh.Layout != null && sh.Layout.RegionName.IndexOf(region) >= 0) return sh.Rasters;
+            }
+            return -1;
+        }
+
+        // The region's faded activation (0..1) and its curve target (0..1, before CurveGain), the highest over the built sheets.
+        internal float RegionAct(string region, out float curve)
+        {
+            float a = 0f;
+            curve = 0f;
+            for (int i = 0; i < _sheets.Count; i++)
+            {
+                var sh = _sheets[i];
+                if (!sh.Built || sh.Layout == null) continue;
+                int k = sh.Layout.RegionName.IndexOf(region);
+                if (k < 0 || k >= MaxRegions) continue;
+                if (sh.Act[k] > a) a = sh.Act[k];
+                if (sh.CurveT[k] > curve) curve = sh.CurveT[k];
+            }
+            return a;
+        }
 
         // The crease shade (albedo pass) is there (always with a 0.9.0 bundle; the load refuses older ones).
         public bool HasCavity { get { return _albedoPass; } }
@@ -964,6 +1043,7 @@ namespace SfMorph
             Stopwatch sw = null;
             if (!sh.RasterLogged && !initial) sw = Stopwatch.StartNew();
             Graphics.ExecuteCommandBuffer(cmd);
+            if (!initial) { Rasters++; sh.Rasters++; }
             sh.Dirty = false;
             sh.MarksDirty = false;
             sh.LastRasterFrame = frame;

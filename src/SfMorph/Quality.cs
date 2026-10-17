@@ -60,6 +60,8 @@ namespace SfMorph
         }
 
         static Knob[] _k = new Knob[0];
+        public static int KnobCount { get { return _k.Length; } }
+        public static int LastWritten = -1;   // settings the last Apply wrote (the smoke test: re-applying the picked preset writes 0)
         static bool _applying;
         static Plugin _p;
 
@@ -173,6 +175,7 @@ namespace SfMorph
                 // GPU contact to bake the Delta Mush data again
                 bool radius = Mathf.Abs(p.DeltaMushRadius.Value - r0) > 0.01f;
                 if (radius && p.Quality.Value == q0) GpuContact.MushRadiusAsk = true;
+                LastWritten = n;
                 Plugin.Log.LogInfo("Quality preset " + Names[preset] + " (" + why + "): " + (n == 0 ? "nothing to change" : n + " settings written")
                                    + (p.Quality.Value != q0 ? ", soft points rebuild" : radius ? ", Delta Mush baked again" : ""));
             }

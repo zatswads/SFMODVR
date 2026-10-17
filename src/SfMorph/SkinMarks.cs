@@ -18,6 +18,10 @@ namespace SfMorph
     internal sealed class SkinMarks
     {
         public string Status = "";
+        // 0.11.47 smoke test (Smoke.cs): read-only, nothing of the marks changes
+        public bool Dead { get { return _dead; } }
+        public bool FlipSettled { get { return _flipState == 2; } }
+        public int Updates { get { return _updateCount; } }
 
         // True while a sheet is up (marks fading or pressed) or a slap is queued: GpuContact keeps the marks decay and the MarkDisc kernel running.
         public static bool Active { get { return (_cur != null && _cur._sheets.Count > 0 && _cur._anyBuilt) || _discN > 0; } }

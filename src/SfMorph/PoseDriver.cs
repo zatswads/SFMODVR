@@ -310,6 +310,22 @@ namespace SfMorph
             Plugin.Log.LogInfo(sb.ToString());
         }
 
+        // 0.11.47 smoke test (Smoke.cs), read-only: where 10 deg of each offset axis moves the girdle (Chest_M's frame): elevation lifts its
+        // lateral end along up (rise > 0), protraction brings it forward (fwd > 0), tilt turns the top of the blade back (back > 0); and
+        // whether up agrees with her neck now (upDot > 0: Chest_M -> Neck_M along U). False when that side is not built.
+        internal static bool AxisSigns(int s, Transform neck, out float rise, out float fwd, out float back, out float upDot)
+        {
+            rise = fwd = back = upDot = 0f;
+            var sd = s >= 0 && s < 2 ? _sides[s] : null;
+            if (sd == null || sd.Chest == null) return false;
+            Vector3 lat = Vector3.Cross(sd.U, sd.AxE).normalized;   // AxE = lat x U, lat perpendicular to U
+            rise = Vector3.Dot(Quaternion.AngleAxis(10f, sd.AxE) * lat, sd.U);
+            fwd = Vector3.Dot(Quaternion.AngleAxis(10f, sd.AxP) * lat, sd.F);
+            back = Vector3.Dot(Quaternion.AngleAxis(10f, sd.AxT) * sd.U, -sd.F);
+            if (neck != null) upDot = Vector3.Dot(sd.Chest.InverseTransformDirection(neck.position - sd.Chest.position).normalized, sd.U);
+            return true;
+        }
+
         // Called by Body after an exception: everything back, retry in 10 s.
         public static void Fail()
         {

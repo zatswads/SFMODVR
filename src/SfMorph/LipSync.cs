@@ -154,6 +154,9 @@ namespace SfMorph
             return _gameIndex.TryGetValue(DumpName(name, samples), out p) ? Get(p) : null;
         }
 
+        // 0.11.47 smoke test: how many curves the game's clips have (lists the folder once, like ForGame)
+        public static int GameCurves { get { if (_gameIndex == null) ForGame("-", 0); return _gameIndex != null ? _gameIndex.Count : 0; } }
+
         public static string DumpName(string clip, int samples) { return SafeName(clip) + "_" + samples; }
 
         public static string SafeName(string s)

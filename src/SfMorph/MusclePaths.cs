@@ -108,6 +108,12 @@ namespace SfMorph
         static readonly int[] _mapDef = new int[MuscleFlex.Max];
         public static int Strands { get { return _stL0.Length; } }
         public static string PathNote = "";
+        // 0.11.47 smoke test (Smoke.cs): strands the table asks for on this rig (C rows once, S / B rows per side), those skipped at the
+        // last bind (a bone or a scale reference missing) and why
+        public static int ExpectedStrands, SkippedStrands;
+        public static string SkippedNote = "";
+        public static int MuscleCount { get { return _defName.Length; } }
+        public static int PathBones { get { return _pb.Length; } }
         static float _nextLenLog;
         static string _lastLenLog = "";
 
@@ -298,8 +304,51 @@ namespace SfMorph
             _defName = defs.ToArray(); _defAct = new float[_defName.Length];
             _defAbs = defs.IndexOf("abs"); _defBack = defs.IndexOf("back");
             PathNote = _stL0.Length + " strands of " + _defName.Length + " muscles";
+            int expect = 0;
+            foreach (var row in Rows()) expect += row.Kind == 'C' ? 1 : 2;
+            ExpectedStrands = expect; SkippedStrands = miss.Count; SkippedNote = string.Join(", ", miss.ToArray());
             Plugin.Log.LogInfo("Muscles: lengths: " + PathNote + " on " + _pb.Length + " bones, her bind arm " + bindElev.ToString("0") + " deg from her side (rest lengths with the arms " +
                                NeutralArmDeg.ToString("0") + " deg), size x" + size.ToString("0.00") + (miss.Count > 0 ? "; skipped " + string.Join(", ", miss.ToArray()) : ""));
+        }
+
+        // 0.11.47 smoke test: each strand's activation with her at her bind pose (each point where its bone's bind pose puts it, every
+        // scale reference 1): the A-pose shortens the middle deltoid ~9 %, nothing should be near full. The largest, and which strand.
+        public static float BindAct(Character her, out string worst)
+        {
+            worst = "";
+            if (her == null || _stL0.Length == 0) return 0f;
+            float best = 0f;
+            for (int k = 0; k < _stL0.Length; k++)
+            {
+                int f = _stFirst[k];
+                float len = 0f;
+                Vector3 prev = Vector3.zero;
+                bool ok = true;
+                for (int j = 0; j < _stCount[k] && ok; j++)
+                {
+                    Transform t = _pb[_ptB[f + j]];
+                    Matrix4x4 b;
+                    if (t == null || !her.Bind.TryGetValue(t, out b)) { ok = false; break; }
+                    Vector3 p = b.inverse.MultiplyPoint3x4(_ptL[f + j]);
+                    if (j > 0) len += (p - prev).magnitude;
+                    prev = p;
+                }
+                if (!ok) continue;
+                float ratio = len / _stL0[k];
+                float a = Mathf.Clamp01((_stStart[k] - ratio) / (_stStart[k] - _stFull[k])) * _stW[k];
+                if (_stSW[k] > 0f) a = Mathf.Max(a, _stSW[k] * Mathf.Clamp01((ratio - _stS0[k]) / (_stS1[k] - _stS0[k])));
+                if (a > best) { best = a; worst = _stName[k] + " " + ratio.ToString("0.00", CultureInfo.InvariantCulture); }
+            }
+            return best;
+        }
+
+        // the live strand with the highest activation (Smoke.cs)
+        public static float LiveMax(out string name)
+        {
+            name = "";
+            float best = 0f;
+            for (int k = 0; k < StrandAct.Length && k < _stName.Length; k++) if (StrandAct[k] > best) { best = StrandAct[k]; name = _stName[k]; }
+            return best;
         }
 
         static void ReleasePaths()
@@ -310,6 +359,7 @@ namespace SfMorph
             StrandRatio = StrandAct = new float[0];
             _mapLayer = null;
             PathNote = "";
+            ExpectedStrands = SkippedStrands = 0; SkippedNote = "";
         }
 
         // this frame's strand lengths -> _defAct (per muscle: the strongest strand); false when nothing is bound or a bone is gone

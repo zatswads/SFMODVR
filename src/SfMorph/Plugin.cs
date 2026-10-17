@@ -378,6 +378,7 @@ namespace SfMorph
                 if (!Perf.LoopOk) Perf.Roll();   // without the phase markers the frame is rolled here
                 if (Keys.Pressed(_p.PanelKey.Value, _p.KeysUnfocused.Value)) _panel.Visible = !_panel.Visible;
                 _body.Tick();
+                Smoke.Tick(_p, _body);   // 0.11.47 Debug tab smoke tests (idle: returns at once)
                 Avatar.Tick(_body);
                 if (Time.unscaledTime >= _nextLoopCheck)
                 {
