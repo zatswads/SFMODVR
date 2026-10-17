@@ -1350,7 +1350,7 @@ namespace SfMorph
             cs.SetInt(PNoField, s.Depth ? 0 : 1); cs.SetInt(PWaveCount, s.Wave ? nWaves : 0); cs.SetFloat(PWaveAmt, 1f); cs.SetFloat(PWaveImpact, Mathf.Clamp01(_set.RippleImpact));
             var amt = BendPose.Amt;
             cs.SetVector(PBendAmt0, new Vector4(amt[0], amt[1], amt[2], amt[3])); cs.SetVector(PBendAmt1, new Vector4(amt[4], amt[5], amt[6], amt[7]));
-            cs.SetVector(PBendAmt2, new Vector4(amt[8], 0f, 0f, 0f));
+            cs.SetVector(PBendAmt2, new Vector4(amt[8], amt[9], amt[10], 0f));
             cs.Dispatch(_kCompose, groups, 1, 1); n++;
             cs.SetBuffer(_kGrad, PVerts, vb); cs.SetBuffer(_kGrad, PCanon, s.CanonBuf); cs.SetBuffer(_kGrad, PAdjOff, s.AdjOffBuf); cs.SetBuffer(_kGrad, PAdjV, s.AdjVBuf);
             // 0.11.12: the bent normals from a smoothed copy of the final field (C and D are free once Compose has run), ~NormalSmooth wide:

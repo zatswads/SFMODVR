@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.11.23";
+        public const string Version = "0.11.25";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -56,7 +56,7 @@ namespace SfMorph
         internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn, ReactRubSound, VoiceMuteGame, RippleThrust;
         internal ConfigEntry<bool> ReactPenSound, ReactPenReact;   // 0.11.25
         internal ConfigEntry<float> ReactPenVolume;
-        internal ConfigEntry<float> ContactSkirt, ContactBulge, ContactDepth, BendBulge, BendBicepsMm, BendKneeMm, BendCalfMm, BendHipMm, BendBellyFoldMm,
+        internal ConfigEntry<float> ContactSkirt, ContactBulge, ContactDepth, BendBulge, BendBicepsMm, BendKneeMm, BendCalfMm, BendHipMm, BendBellyFoldMm, BendWaistRollMm,
             RippleAmount, RippleSpeed, RippleWavelength, RippleDamping, RippleImpact, MarksRedness, MarksFade, MarksAo, MarksBoost,
             MarksPrint, MarksPrintTime, MarksSmooth, MuscleObliques;   // 0.11.20
         internal ConfigEntry<Vector3> LeftHandPos, LeftHandRot, RightHandPos, RightHandRot;
@@ -101,6 +101,7 @@ namespace SfMorph
             BendCalfMm = Config.Bind("Physics", "BendCalfMm", 6f, new ConfigDescription("Calf bulge at a fully bent knee (mm).", new AcceptableValueRange<float>(0f, 20f)));
             BendHipMm = Config.Bind("Physics", "BendHipMm", 5f, new ConfigDescription("Thigh-top bulge when the hip flexes (sitting, mm).", new AcceptableValueRange<float>(0f, 20f)));
             BendBellyFoldMm = Config.Bind("Physics", "BendBellyFoldMm", 3f, new ConfigDescription("Her belly rounds forward in a soft roll when both hips flex (sitting, squatting; mm before BendBulge).", new AcceptableValueRange<float>(0f, 20f)));
+            BendWaistRollMm = Config.Bind("Physics", "BendWaistRollMm", 10f, new ConfigDescription("Her waist bunches into a soft roll above the hip on the side she bends toward, with a crease under it (mm at a full side bend, before BendBulge).", new AcceptableValueRange<float>(0f, 20f)));
             RippleAmount = Config.Bind("Physics", "Ripple", 1f, new ConfigDescription("An impact (a slap, a thrust against her glutes or thighs) sends a ripple through her flesh (0 off, 1 = 14 mm per m/s above 0.3 m/s up to 35 mm, 2 = twice that).", new AcceptableValueRange<float>(0f, 2f)));
             RippleSpeed = Config.Bind("Physics", "RippleSpeed", 0.5f, new ConfigDescription("How fast the ripple travels over her skin (m/s).", new AcceptableValueRange<float>(0.2f, 3f)));
             RippleWavelength = Config.Bind("Physics", "RippleWavelength", 0.1f, new ConfigDescription("Distance between ripple crests (m); a longer wave also reaches farther.", new AcceptableValueRange<float>(0.03f, 0.2f)));

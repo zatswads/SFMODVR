@@ -32,3 +32,5 @@ muscle 27 forearms_R arms R
 muscle 28 pecs_L arms L
 muscle 29 pecs_R arms R
 muscle 30 traps back C
+muscle 31 neck_L back L
+muscle 32 neck_R back R

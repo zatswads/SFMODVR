@@ -193,7 +193,7 @@ float _SoftScale, _Depth;            // Tissue.SoftScale(softness), ContactSetti
 float _SkirtLen, _Bulge, _BulgeCap, _NormalBend, _Dt, _MarkGain, _MarkFade, _DentFade, _WaveAmt;
 float _PrintAmt;   // 0.11.20: share of the foreign press depth that stays as the lingering print (m.z)
 float _WaveImpact;                   // 0.9.7: the wave's share at the impact point (1 = full dip there; the rings beyond one wavelength keep A)
-float4 _BendAmt0, _BendAmt1, _BendAmt2;   // 9 slot amplitudes (m): [0..3], [4..7], [8]
+float4 _BendAmt0, _BendAmt1, _BendAmt2;   // 11 slot amplitudes (m): [0..3], [4..7], [8..10] (0.11.23: 9 / 10 waist roll L / R)
 float4 _Disc;                        // MarkDisc: xyz world centre, w radius (m)
 float _DiscAmt;
 // 0.11.8 tensed muscles as geometry: per vertex the muscle ids of the body atlas and a belly weight (ContactBake.BakeMuscles), per muscle
@@ -359,7 +359,7 @@ float BendAmt(float slot)
     int j = (int)(slot + 0.5);
     if (j < 4) return _BendAmt0[j];
     if (j < 8) return _BendAmt1[j - 4];
-    return _BendAmt2.x;
+    return _BendAmt2[min(j - 8, 3)];
 }
 
 // Compose: the final signed field (positive = inward, metres) = narrow contact field - rim bulge (the wide field exceeding the narrow one

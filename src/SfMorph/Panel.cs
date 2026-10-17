@@ -203,6 +203,11 @@ namespace SfMorph
                     string off;
                     c.Off.TryGetValue(d.Id, out off);
                     float nv = Slider(d.Label, v, d.Min, d.Max, d.Op == Op.Move ? "+0.0;-0.0;0" : "0.00", d.Neutral, off == null ? null : "off: " + off, d.Unit);
+                    if (off == null && d.Op != Op.Blend)   // 0.11.23: a Blend slider (Athletic upper body) adds to this one
+                    {
+                        float ev = Body.Effective(c.Look, d);
+                        if (Mathf.Abs(ev - v) > 0.004f) GUILayout.Label("      with the build sliders: " + ev.ToString(d.Op == Op.Move ? "+0.0;-0.0;0" : "0.00") + d.Unit, _hint);
+                    }
                     if (off == null && _showBones)
                     {
                         var names = "";
@@ -750,6 +755,9 @@ namespace SfMorph
             if (Mathf.Abs(v - _p.RippleThrustAmt.Value) > 0.0001f) _p.RippleThrustAmt.Value = v;
             v = Slider("  Bend bulges", _p.BendBulge.Value * 100f, 0f, 100f, "0", 60f, so, " %") / 100f;
             if (Mathf.Abs(v - _p.BendBulge.Value) > 0.0001f) _p.BendBulge.Value = v;
+            // 0.11.23: the waist roll on the side she bends toward
+            v = Slider("    waist roll in a side bend", _p.BendWaistRollMm.Value, 0f, 20f, "0", 10f, so ?? (_p.BendBulge.Value > 0f ? null : "off: bend bulges are 0"), " mm");
+            if (Mathf.Abs(v - _p.BendWaistRollMm.Value) > 0.001f) _p.BendWaistRollMm.Value = v;
             v = Slider("  Ripple on impact", _p.RippleAmount.Value * 100f, 0f, 200f, "0", 100f, so, " %") / 100f;
             if (Mathf.Abs(v - _p.RippleAmount.Value) > 0.0001f) _p.RippleAmount.Value = v;
             // 0.9.4: the wave's speed, wavelength and life were config-only

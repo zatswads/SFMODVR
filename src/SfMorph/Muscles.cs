@@ -86,8 +86,9 @@ namespace SfMorph
         static readonly Vector3[] _ref = new Vector3[NJ];         // a second rest direction in P's frame (ankle: the shin; shoulder: chest down)
         static readonly bool[] _ok = new bool[NJ];
         static readonly string[] JointNames = { "trunk", "hip L", "hip R", "knee L", "knee R", "ankle L", "ankle R", "shoulder L", "shoulder R", "elbow L", "elbow R", "wrist L", "wrist R" };
-        static Transform _chest, _root, _neck, _spine;
+        static Transform _chest, _root, _neck, _spine, _head;
         static Vector3 _chestFront, _rootFront;                   // her front in Chest_M's / Root_M's local frame at bind
+        static Vector3 _headRest, _chestLeft, _headFront;         // 0.11.23: Neck_M -> Head_M and her left in Chest_M's frame, her face's front in Head_M's
         static float _legLen = 0.8f, _armLen = 0.45f;
         static Character _bound;
         static int _boundBones = -1;
@@ -96,6 +97,8 @@ namespace SfMorph
 
         // the last pose (degrees / 0..1), for the log and the panel
         public static float Flex, Side, Twist, BackLoad, AbsLoad;
+        // 0.11.23: her head vs her chest (degrees): forward tip (+ chin down), side tilt (+ toward her left), turn (+ toward her right)
+        public static float HeadFlex, HeadSide, HeadTurn;
         // 0.11.20: how far she bends toward each side (0..1, [0] her left): the oblique on that side bunches up at full strength whatever
         // [Muscles] Obliques says (that setting tames them when only the abs work)
         public static readonly float[] SideBend = new float[2];
@@ -160,7 +163,7 @@ namespace SfMorph
             _boundBones = her != null ? her.Bones.Count : -1;
             Joints = 0;
             for (int j = 0; j < NJ; j++) { _ok[j] = false; _p[j] = _c[j] = _e[j] = null; }
-            _chest = _root = _neck = _spine = null;
+            _chest = _root = _neck = _spine = _head = null;
             if (her == null) { BindNote = ""; return; }
             var miss = new List<string>();
             for (int j = 0; j < NJ; j++)
@@ -194,6 +197,14 @@ namespace SfMorph
             Get(her, "Chest_M", out _chest); Get(her, "Root_M", out _root); Get(her, "Neck_M", out _neck); Get(her, "Spine1_M", out _spine);
             if (_chest != null) _chestFront = ToLocal(her, _chest, Vector3.forward);
             if (_root != null) _rootFront = ToLocal(her, _root, Vector3.forward);
+            if (Get(her, "Head_M", out _head) && _chest != null && _neck != null && her.Bind.ContainsKey(_head) && her.Bind.ContainsKey(_neck))
+            {
+                _headRest = ToLocal(her, _chest, MeshPos(her, _head) - MeshPos(her, _neck));
+                _chestLeft = ToLocal(her, _chest, new Vector3(-1f, 0f, 0f));
+                _headFront = ToLocal(her, _head, Vector3.forward);
+                if (_headRest == Vector3.zero || _headFront == Vector3.zero) _head = null;
+            }
+            else _head = null;
             Transform h, a, sh, w;
             if (Get(her, "Hip_L", out h) && Get(her, "Ankle_L", out a)) _legLen = Mathf.Max(0.3f, (MeshPos(her, h) - MeshPos(her, a)).magnitude);
             if (Get(her, "Shoulder_L", out sh) && Get(her, "Wrist_L", out w)) _armLen = Mathf.Max(0.2f, (MeshPos(her, sh) - MeshPos(her, w)).magnitude);
@@ -255,6 +266,24 @@ namespace SfMorph
                 if (a.sqrMagnitude > 1e-6f && b.sqrMagnitude > 1e-6f) Twist = Vector3.SignedAngle(b, a, ax);
             }
             float prone = -Vector3.Dot(front, up);     // 1 = her chest faces the floor, -1 = the ceiling
+            // 0.11.23 her head on her neck (the neck muscles)
+            HeadFlex = HeadSide = HeadTurn = 0f;
+            if (_head != null && _neck != null && _chest != null)
+            {
+                Vector3 hr = _chest.InverseTransformDirection(_head.position - _neck.position);
+                if (hr.sqrMagnitude > 1e-10f)
+                {
+                    hr.Normalize();
+                    Vector3 u = _headRest, f = (_chestFront - Vector3.Dot(_chestFront, u) * u).normalized;
+                    Vector3 l = (_chestLeft - Vector3.Dot(_chestLeft, u) * u - Vector3.Dot(_chestLeft, f) * f).normalized;
+                    float hu = Vector3.Dot(hr, u);
+                    HeadFlex = Mathf.Atan2(Vector3.Dot(hr, f), hu) * Mathf.Rad2Deg;
+                    HeadSide = Mathf.Atan2(Vector3.Dot(hr, l), hu) * Mathf.Rad2Deg;
+                    Vector3 axw = (_head.position - _neck.position).normalized;
+                    Vector3 hf = Vector3.ProjectOnPlane(_head.TransformDirection(_headFront), axw), cf = Vector3.ProjectOnPlane(front, axw);
+                    if (hf.sqrMagnitude > 1e-6f && cf.sqrMagnitude > 1e-6f) HeadTurn = Vector3.SignedAngle(cf, hf, axw);   // + = toward her right (+x)
+                }
+            }
             for (int s = 0; s < 2; s++)
             {
                 HipFlex[s] = Abd[s] = Knee[s] = Plantar[s] = Elev[s] = ArmSwing[s] = Elbow[s] = Wrist[s] = LegLoad[s] = ArmLoad[s] = 0f;
@@ -322,6 +351,10 @@ namespace SfMorph
                 // 0.11.18: arms pulled back (hands clasped behind her) squeeze the shoulder blades together: traps and rhomboids
                 else if (n == "traps") t = Mathf.Max(Mathf.Max(0.8f * Sm(80f, 150f, elevMax), 0.7f * Mathf.Max(ArmLoad[0], ArmLoad[1])),
                                                      Mathf.Max(0.6f * backT, Sm(10f, 40f, -Mathf.Min(ArmSwing[0], ArmSwing[1]))));
+                // 0.11.23: the sternocleidomastoid turns the head to the other side, tips it to its own side and, with its partner, tips it
+                // forward or lifts it off the floor (a crunch, lying on her back)
+                else if (n.StartsWith("neck_")) t = Mathf.Max(Mathf.Max(Sm(10f, 45f, HeadTurn * sgn), Sm(8f, 25f, HeadSide * sgn)),
+                                                              Mathf.Max(0.7f * Sm(10f, 35f, HeadFlex), 0.6f * absT));
                 else if (n.StartsWith("forearms")) t = Mathf.Max(Mathf.Max(0.6f * Sm(30f, 110f, Elbow[s]), Sm(15f, 50f, Wrist[s])), 0.8f * ArmLoad[s]);
                 else t = 0f;
                 tension[k] = Mathf.Clamp01(t);
@@ -334,7 +367,8 @@ namespace SfMorph
         {
             var sb = new StringBuilder();
             sb.Append("trunk flex ").Append(Flex.ToString("0")).Append(" side ").Append(Side.ToString("0")).Append(" twist ").Append(Twist.ToString("0"))
-              .Append(" deg, hip flex ").Append(HipFlex[0].ToString("0")).Append('/').Append(HipFlex[1].ToString("0"))
+              .Append(" deg, head flex ").Append(HeadFlex.ToString("0")).Append(" side ").Append(HeadSide.ToString("0")).Append(" turn ").Append(HeadTurn.ToString("0"))
+              .Append(", hip flex ").Append(HipFlex[0].ToString("0")).Append('/').Append(HipFlex[1].ToString("0"))
               .Append(" abd ").Append(Abd[0].ToString("0")).Append('/').Append(Abd[1].ToString("0"))
               .Append(", knee ").Append(Knee[0].ToString("0")).Append('/').Append(Knee[1].ToString("0"))
               .Append(", plantar ").Append(Plantar[0].ToString("0")).Append('/').Append(Plantar[1].ToString("0"))
@@ -354,7 +388,7 @@ namespace SfMorph
             _boundBones = -1;
             Joints = 0;
             for (int j = 0; j < NJ; j++) { _ok[j] = false; _p[j] = _c[j] = _e[j] = null; }
-            _chest = _root = _neck = _spine = null;
+            _chest = _root = _neck = _spine = _head = null;
         }
     }
     // 0.11.8 tensed muscles as geometry: the body sheet's faded activations (Wrinkles.UpdateMuscles publishes them every frame while
@@ -440,6 +474,7 @@ namespace SfMorph
                 case "spine": case "belly": want = new[] { "abs", "obliques_L", "obliques_R" }; side = ""; break;
                 case "chest": want = new[] { "pecs_L", "pecs_R" }; side = ""; break;           // 0.11.13
                 case "scapula": want = new[] { "traps", "lats_L", "lats_R" }; side = ""; break;
+                case "neck": want = new[] { "neck_L", "neck_R", "traps" }; side = ""; break;   // 0.11.23
                 default: return new int[0];   // breasts, head, hands, feet: no authored muscle under them
             }
             var res = new List<int>();

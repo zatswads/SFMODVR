@@ -98,6 +98,35 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.25 (penetration sound and reactions)
+
+Install `dist/SfMorph.dll`; put the chosen squishes in `BepInEx\plugins\SfMorph\Sounds\penetration`. Log: `Skin foley: ...
+penetration N files`, `Penetration: openings vagina 4 bones (+4 inside), anus .., mouth 8 bones (+1 inside)`.
+
+- Debug tab → Test penetration sound: a squish at her vagina. Test penetration stroke: the sound plus her reaction (a
+  `Reactions: penetration: vagina in-stroke by the test button ... E a -> b` line).
+- Physics hands (or hand models, or embodied partner hands): push a finger into her vagina → a sound as it goes in, one per
+  in / out stroke while you move it, none while it rests; faster = louder; pulling out = a softer one. Same for her anus and
+  her mouth (quieter). A palm pressed between her legs: no penetration sound (the rub / grab as before).
+- With PenetrationReacts on: her excitement rises with strokes, moans / pussy or anal lines come at the voice gaps; off: sound only.
+- Report: whether entry is detected too early (outside the labia) or too late, the stroke rate, and the log lines.
+
+
+## 0.11.24 (athletic upper body, waist roll, wrinkle test)
+
+Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders` (new muscle maps, bend slots 9 / 10). Log: `Bend: 7 of 7 joints bound`,
+`Muscles: ...` layout with 32 muscles; `Bend: first bulge waist roll L/R ... trunk side N deg` in a side bend.
+
+- Body → Torso → Athletic upper body 0 → 1: broader shoulders, thicker upper arms / forearms / neck; elbows, wrists and her head
+  stay where they were (no longer arms); hands still meet where the animation puts them. 1.25 for more.
+- Skin tab, muscles on, Debug → Flex test: back = fuller traps and the new neck mass / neck muscles (no lumps, no cords, no seam
+  where the neck meets her face); arms = rounder deltoid caps. In play: she turns her head → the opposite neck muscle shows.
+- A side bend (a pose that leans her trunk sideways): a soft roll above the hip with a crease under it on the side she bends to,
+  nothing on the stretched side; at rest nothing. Too much / little: Physics tab → waist roll in a side bend.
+- Debug → Wrinkle test: watch her face for each step. Tell me which steps are visible at all and how strong; compare with
+  tools/wrinkles/preview/wrinkle_face_expressions.png. Then send the log's `Wrinkles: sheet 'face' peak compression` lines from
+  normal play (they say how far her expressions activate the lines).
+
 ## 0.11.23 (skin sound sets)
 
 Install `dist/SfMorph.dll`. Log: `Skin foley: ... pat 7 files, grab 6 files, rub 9 files`.

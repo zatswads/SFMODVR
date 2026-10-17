@@ -1,4 +1,4 @@
-export: E:\Bak\New folder\Misc\SF\VR\BepInEx\config\SfMorphs\export\Reika-20261016-023017
+export: E:/Bak/New folder/Misc/SF/VR/BepInEx/config/SfMorphs/export/Reika-20261016-023017
 face: 29 creases in 10 regions
 face: 8992 triangles, rasterising 2048x2048
 face: 95.0% of the texels on her skin
@@ -12,6 +12,7 @@ face: 95.0% of the texels on her skin
   region  8 nasolabial_R     face range 0.03:  33384 texels, 1324 with creases
   region  9 glabella         face range 0.04:  32447 texels, 2968 with creases
   region 10 nose             face range 0.03:  32389 texels, 2367 with creases
+face renders (columns: neutral, brows up, frown, smile / squint, nose scrunch; rows: light from above, from her left): C:\Users\rings\Claude\Projects\Modding\SFMODVR\.claude\worktrees\relaxed-kalam-9cec68\tools\wrinkles\preview\wrinkle_face_expressions.png
 body: 28 creases in 12 regions
 body: 180112 triangles, rasterising 2048x2048
 body: 59.1% of the texels on her skin
