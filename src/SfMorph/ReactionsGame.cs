@@ -1464,12 +1464,12 @@ namespace SfMorph
         public static Func<UnityEngine.Object, bool> LipCurveFor;   // 0.9.9: set by Reactions (lip sync on and a curve for the pack clip)
 
         // Loads the configured pack when it changed (main thread; the first load waits for the game's AudioClip type).
-        public void UsePack(string name)
+        public void UsePack(string name, bool nonEnglish)
         {
             name = name ?? "";
-            if (name == Pack.Name && (Pack.Loaded || name.Length == 0 || Pack.Summary.Length > 0)) return;
+            if (name == Pack.Name && nonEnglish == Pack.WantNonEnglish && (Pack.Loaded || name.Length == 0 || Pack.Summary.Length > 0)) return;
             if (_pClip == null) return;
-            Pack.Load(name, _pClip.PropertyType);
+            Pack.Load(name, _pClip.PropertyType, nonEnglish);
         }
 
         // 0.9.1: a pack line (bank 0 nipple, 1 pussy, 2 anal, 3 public at level 1-3; falls back to the nearest level, then public) or a state

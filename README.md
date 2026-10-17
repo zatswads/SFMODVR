@@ -44,6 +44,15 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.44 (voice packs: other languages, a drop-down):
+- A pack can carry its spoken lines in another language: `Sounds\voice\<pack>\lang\<Language>\lines\...` (same banks as `lines\`).
+  Reactions tab: **Non-English lines (Spanish)** (`[Voice] NonEnglish`), greyed for a pack without one; the lines then come from
+  that language while moans, breaths, climax and exertion stay the pack's own (nothing is duplicated). Lip-sync curves follow the
+  same path under `lipsync\<pack>\lang\<Language>\`.
+- The voice pack chooser is a drop-down (each pack with its languages in brackets) instead of < >.
+- Voice packs (user's PC, not in the repo): Kiwi, Ashley, Mariana (+ Spanish), Aria51 (+ Japanese), hummingael (+ French),
+  from_your_mouth (+ Russian), with lip-sync curves; Rebecca and Amy removed.
+
 0.11.43 (avatar: her face rig on its face):
 - The avatar's face moved only with her jaw and eyes, and its mouth opened too far on lines (user): its whole head hung on her head
   and jaw bones. Now its face skin, lashes and brows take her face rig's weights (lips, mouth corners, cheeks, brows, lids, jaw) from

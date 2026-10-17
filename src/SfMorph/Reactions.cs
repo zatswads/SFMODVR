@@ -6,7 +6,7 @@ namespace SfMorph
     // Her reactions to touch (0.7.9): what the Body hands the director each frame. Filled from the config once per frame (no allocation).
     internal class ReactionSettings
     {
-        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley, RubSound, MuteGameVoice, MuteDialogue, PackInScenes, LipSync;
+        public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley, RubSound, MuteGameVoice, MuteDialogue, PackInScenes, PackNonEnglish, LipSync;
         public bool PenSound, PenReact; public float PenVolume;   // 0.11.25
         public float LipStrength, LipLead, LipOverGame, LipMood;
         public float Sensitivity, Cooldown, Volume, SkinVolume, BlushGain, VoicePitchVar, LimbPush, LineChance, FaceStrength, VoicePitch, VoiceFormant;
@@ -23,7 +23,7 @@ namespace SfMorph
             VoiceMode = p.ReactVoiceMode.Value; Log = p.ReactLog.Value;
             Lines = p.ReactLines.Value; LineChance = p.ReactLineChance.Value;
             LinesGamePath = p.ReactLinesGamePath.Value;
-            Foley = p.ReactFoley.Value; RubSound = p.ReactRubSound.Value; PenSound = p.ReactPenSound.Value; PenReact = p.ReactPenReact.Value; PenVolume = p.ReactPenVolume.Value; VoicePack = p.VoicePackName.Value ?? ""; VoicePitch = p.VoicePitch.Value; VoiceFormant = p.VoiceFormant.Value;
+            Foley = p.ReactFoley.Value; RubSound = p.ReactRubSound.Value; PenSound = p.ReactPenSound.Value; PenReact = p.ReactPenReact.Value; PenVolume = p.ReactPenVolume.Value; VoicePack = p.VoicePackName.Value ?? ""; PackNonEnglish = p.VoiceNonEnglish.Value; VoicePitch = p.VoicePitch.Value; VoiceFormant = p.VoiceFormant.Value;
             FaceClips = p.ReactFaceClips.Value; FaceStrength = p.ReactFaceStrength.Value; FaceMap = p.ReactFaceMap.Value ?? "";
             LipSync = p.LipSyncOn.Value; LipStrength = p.LipStrength.Value; LipLead = p.LipLead.Value; LipOverGame = p.LipOverGame.Value; LipMood = p.LipMood.Value;
             PushByTouch = p.HandsPushByTouch.Value;   // the geometric push of other hands: without it and without physics hands nothing is classified
@@ -178,7 +178,7 @@ namespace SfMorph
             _now += Mathf.Min(dt, 0.1f);
 
             // the game link, the voice guard (independent of On) and the delayed trigger reset
-            if (_now >= _nextRefresh) { _nextRefresh = _now + 1f; _g.Refresh(her, _now); _g.VoiceFx(s.VoicePitch, s.VoiceFormant); _g.UsePack(s.VoicePack); }
+            if (_now >= _nextRefresh) { _nextRefresh = _now + 1f; _g.Refresh(her, _now); _g.VoiceFx(s.VoicePitch, s.VoiceFormant); _g.UsePack(s.VoicePack, s.PackNonEnglish); }
             if (ReactionsGame.LipCurveFor == null) ReactionsGame.LipCurveFor = LipHasCurve;
             if (_g.Found && !_bridgeLogged) { _bridgeLogged = true; if (_g.BridgeLine != null && _g.BridgeLine.Length > 0) L(_g.BridgeLine); }
             else if (!_g.Found) _bridgeLogged = false;       // a re-found bridge is logged again

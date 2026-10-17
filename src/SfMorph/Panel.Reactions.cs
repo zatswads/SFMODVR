@@ -349,14 +349,33 @@ namespace SfMorph
             if (whoOff == null && Mathf.Abs(nf - fc) > 0.0001f) _p.VoiceFormant.Value = nf;
             // 0.9.0: voice pack chooser (folders under Sounds\voice)
             string pk = _p.VoicePackName.Value ?? "";
+            // 0.11.44: a drop-down of the pack folders (their other languages in brackets) instead of < >
             GUILayout.BeginHorizontal();
             GUILayout.Label("Voice pack", GUILayout.Width(170));
             GUI.enabled = whoOff == null;
-            if (GUILayout.Button("<", GUILayout.Width(32))) _p.VoicePackName.Value = NextPack(pk, -1);
-            GUILayout.Label(pk.Length > 0 ? pk : "the game's voice", GUILayout.Width(160));
-            if (GUILayout.Button(">", GUILayout.Width(32))) _p.VoicePackName.Value = NextPack(pk, 1);
+            if (GUILayout.Button((pk.Length > 0 ? PackLabel(pk) : "the game's voice") + (_packDrop ? "   \u25B2" : "   \u25BC"), GUILayout.Width(300))) _packDrop = !_packDrop;
             GUI.enabled = true;
             GUILayout.EndHorizontal();
+            if (_packDrop && whoOff == null)
+            {
+                var l = VoicePack.List();
+                for (int i = -1; i < l.Length; i++)
+                {
+                    string n = i < 0 ? "" : l[i];
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Space(176);
+                    if (GUILayout.Button((n == pk ? "\u2022 " : "   ") + (n.Length > 0 ? PackLabel(n) : "the game's voice"), _left, GUILayout.Width(300)))
+                    { _p.VoicePackName.Value = n; _packDrop = false; }
+                    GUILayout.EndHorizontal();
+                }
+            }
+            // 0.11.44: the pack's lines in its other language (greyed when it has none)
+            var langs = VoicePack.LanguagesOf(pk);
+            GUI.enabled = whoOff == null && langs.Length > 0;
+            bool ne = _p.VoiceNonEnglish.Value;
+            bool tne = GUILayout.Toggle(ne && langs.Length > 0, " Non-English lines" + (langs.Length > 0 ? " (" + string.Join(", ", langs) + ")" : " (this pack has none)"));
+            GUI.enabled = true;
+            if (whoOff == null && langs.Length > 0 && tne != ne) _p.VoiceNonEnglish.Value = tne;
             var vp = ReactionsGame.Pack;
             // 0.11.35 (user: the pack replaces anyway): no mute switch: a pack stands in for every game voice clip it has a fitting clip for
             // (moans, breaths, dirty-talk lines, the climax / creampie / tease / finish scenes); where it has none the game's voice plays
@@ -378,6 +397,11 @@ namespace SfMorph
             if (guard && guardStatus.Length > 0) GUILayout.Label(guardStatus, guardStatus.StartsWith("off") ? _off : _hint);
 
         }
+
+        bool _packDrop;
+        GUIStyle _leftStyle;
+        GUIStyle _left { get { if (_leftStyle == null) { _leftStyle = new GUIStyle(GUI.skin.button); _leftStyle.alignment = TextAnchor.MiddleLeft; } return _leftStyle; } }
+        static string PackLabel(string n) { var l = VoicePack.LanguagesOf(n); return l.Length > 0 ? n + "  (English, " + string.Join(", ", l) + ")" : n; }
 
         // The next voice pack folder ("" = the game's voice comes first).
         static string NextPack(string cur, int dir)
