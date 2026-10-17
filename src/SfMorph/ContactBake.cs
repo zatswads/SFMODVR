@@ -25,6 +25,12 @@ namespace SfMorph
         // 0.11.28 Delta Mush at her joints: on, strength 0..1, radius (m; read when a renderer is baked)
         public bool Mush = true;
         public float MushAmt = 1f, MushRadius = 0.02f;
+        // 0.11.31 skin folds at deep bends (crease depth mm at a full bend, x FoldAmount) and chubby: soft fat per area (mm at its fullest
+        // spot, x Chubby; FatArea order)
+        public float FoldAmount = 1f, ElbowFoldMm = 4f, KneeFoldMm = 5f, HipFoldMm = 5f;
+        public float Chubby = 0f;
+        public readonly float[] FatMm = new float[FatAreas];
+        public const int FatAreas = 8;   // belly, waist, back, glutes, thighs, arms, calves, face (cheeks, double chin, neck)
     }
 
     // 0.8.0: what GpuContact's v2 field chain needs per renderer, baked on the CPU once per soft-zones build (design 1.2): welded vertices,
@@ -54,6 +60,10 @@ namespace SfMorph
         public Vector3[] WorldP;      // V: where each vertex was at bake time (CPU skin with the bones then, no blendshapes; NaN = unskinned). GpuContact
                                       // maps overlay meshes (areola caps, tattoo, vulva rim) onto the body vertex under them with it
         public MushData Mush;         // 0.11.28 Delta Mush at her joints (body skin meshes only; null = none)
+        public Vector4[] Fold;        // 0.11.31 V: (fold slot 0..5 or -1, crease weight (inward), roll weight (outward, both sides of the crease), 0)
+        public int FoldCount;         // canonical vertices with a fold
+        public Vector4[] Fat;         // 0.11.31 V: (area, weight, area, weight) of the chubby areas (-1 none); weight 0..1 = share of the area's mm
+        public int FatCount;
         public string Note = "";
 
         // ---- bone classes (design 1.3): id, side in the id's parity for the paired ones (even = left) ----
@@ -340,6 +350,15 @@ namespace SfMorph
             int bendVerts = 0;
             if (N != null && her != null) bendVerts = BakeBend(frame, bind, P, N, cls, canon, mpu, bend, out bendNote);
 
+            // 6b. 0.11.31 skin folds and the chubby areas
+            var fold = new Vector4[V];
+            var fat = new Vector4[V];
+            for (int v = 0; v < V; v++) { fold[v] = new Vector4(-1f, 0f, 0f, 0f); fat[v] = new Vector4(-1f, 0f, -1f, 0f); }
+            int foldVerts = 0, fatVerts = 0;
+            string foldNote = "", fatNote = "";
+            if (N != null && frame.Ok) foldVerts = BakeFolds(frame, P, N, cls, canon, mpu, fold, out foldNote);
+            if (N != null) fatVerts = BakeFat(frame, HeadFrame.Make(bones, bind, her), P, N, cls, canon, mpu, fat, out fatNote);
+
             // 7. a CPU skin with the current bones (no blendshapes: the overlays carry the same "follow" deltas as the body under them, so leaving
             // them out on both keeps them matched): GpuContact's overlay -> body map
             var wp = new Vector3[V];
@@ -381,7 +400,8 @@ namespace SfMorph
             {
                 R = r, Mesh = m, V = V, CanonCount = groups, Canon = canon, AdjOff = adjOff, AdjV = adjV, Tissue = tissue, Class = cls, Bend = bend,
                 BendCount = bendVerts, Uv = uv, SubTris = subs.ToArray(), AvgEdge = avgEdge, SkinEdge = skinEdge, MetresPerUv = mPerUv, WorldP = wp,
-                Muscle = musN > 0 ? mus : null, Belly = musN > 0 ? belly : null, MuscleCount = musN, Mush = mush
+                Muscle = musN > 0 ? mus : null, Belly = musN > 0 ? belly : null, MuscleCount = musN, Mush = mush,
+                Fold = fold, FoldCount = foldVerts, Fat = fat, FatCount = fatVerts
             };
             sw.Stop();
             var sb = new StringBuilder();
@@ -395,6 +415,8 @@ namespace SfMorph
             if (mPerUv > 0f) sb.Append(", ").Append(mPerUv.ToString("0.###")).Append(" m/uv");
             if (musNote.Length > 0) sb.Append(", ").Append(musNote);
             if (mushNote.Length > 0) sb.Append(", ").Append(mushNote);
+            if (foldNote.Length > 0) sb.Append(", ").Append(foldNote);
+            if (fatNote.Length > 0) sb.Append(", ").Append(fatNote);
             sb.Append(", ").Append(sw.ElapsedMilliseconds).Append(" ms");
             res.Note = sb.ToString();
             return res;
@@ -498,8 +520,12 @@ namespace SfMorph
                 };
                 f.Bp = bp;
                 Vector3? hl = bp("Hip_L"), hr = bp("Hip_R"), root = bp("Root_M");
+                // 0.11.31: her upper body has no hips (its biceps bulge and waist roll were never baked): her left from the shoulders there
+                bool shoulders = false;
+                if ((!hl.HasValue || !hr.HasValue) && root.HasValue && bp("Shoulder_L").HasValue && bp("Shoulder_R").HasValue) { hl = bp("Shoulder_L"); hr = bp("Shoulder_R"); shoulders = true; }
                 if (!hl.HasValue || !hr.HasValue) { f.Note = "no frame (no hips in this mesh)"; return f; }
                 Vector3 rootP = root.HasValue ? root.Value : (hl.Value + hr.Value) * 0.5f;
+                if (shoulders) rootP = root.Value;
                 Vector3? upT = bp("Chest_M") ?? bp("Spine1_M") ?? bp("Neck_M") ?? bp("Head_M");
                 if (!upT.HasValue || (upT.Value - rootP).sqrMagnitude < 1e-12f) { f.Note = "no frame (nothing above the pelvis in this mesh)"; return f; }
                 Vector3 left = (hl.Value - hr.Value).normalized;
@@ -507,7 +533,11 @@ namespace SfMorph
                 Vector3 fwd = Vector3.Cross(up, left).normalized;
                 up = Vector3.Cross(left, fwd).normalized;
                 Vector3? toe = bp("Toes_L"), ankle = bp("Ankle_L");
-                if (toe.HasValue && ankle.HasValue && Vector3.Dot(toe.Value - ankle.Value, fwd) < 0f) fwd = -fwd;
+                Vector3? nip = bp("Left_Nipple") ?? bp("Left_LowerBreast"), chest = bp("Chest_M");
+                if (toe.HasValue && ankle.HasValue) { if (Vector3.Dot(toe.Value - ankle.Value, fwd) < 0f) fwd = -fwd; }
+                else if (nip.HasValue && chest.HasValue) { if (Vector3.Dot(nip.Value - chest.Value, fwd) < 0f) fwd = -fwd; }   // 0.11.31: the breasts are in front
+                else { f.Note = "no frame (no toes or breasts to tell her front)"; return f; }
+                if (shoulders) f.Note = "frame from the shoulders";
                 f.Left = left; f.Up = up; f.Fwd = fwd; f.RootP = rootP; f.Ok = true;
                 return f;
             }
@@ -587,6 +617,237 @@ namespace SfMorph
             for (int i = 0; i < perSlot.Length; i++) sb.Append(i > 0 ? " " : "").Append(perSlot[i]);
             note = sb.Append(']').ToString();
             return count;
+        }
+
+        // ---- 0.11.31 skin folds ----
+
+        // Where the skin of a deeply bent joint folds in: a crease line with the flesh rolling up on both sides, in the mesh's bind space.
+        // Inner elbow (the front of the arm in her A-pose: the crease across the joint), back of the knee, the groin (the line from the front
+        // of the hip down and in to the pubis, as the wrinkle maps draw it). Profile across the line (d, metres): crease g(d, 0, sc), rolls
+        // g(d, +-off, sr) x R; faded around the limb by how much the skin faces the bend. Weights in (slot, crease, roll); BendPose drives them.
+        static int BakeFolds(Frame fr, Vector3[] P, Vector3[] N, uint[] cls, uint[] canon, float mpu, Vector4[] fold, out string note)
+        {
+            Func<string, Vector3?> bp = fr.Bp;
+            int V = P.Length, count = 0;
+            var per = new int[BendPose.FoldSlots];
+            for (int k = 0; k < 2; k++)
+            {
+                string sd = k == 0 ? "_L" : "_R";
+                Vector3? sh = bp("Shoulder" + sd), el = bp("Elbow" + sd), wr = bp("Wrist" + sd), hip = bp("Hip" + sd), kn = bp("Knee" + sd), an = bp("Ankle" + sd);
+                if (!an.HasValue && hip.HasValue && kn.HasValue) an = kn.Value + (kn.Value - hip.Value) * 0.95f;   // her lower body has no ankle bone: the shin ~ the thigh's length
+                Vector3 lat = fr.Left * (k == 0 ? 1f : -1f);   // outward on this side
+                for (int v = 0; v < V; v++)
+                {
+                    if (canon[v] != (uint)v) continue;
+                    int c = (int)cls[v];
+                    Vector3 p = P[v], n = N[v];
+                    float best = 0f; Vector4 w = new Vector4(-1f, 0f, 0f, 0f);
+                    // inner elbow
+                    if (sh.HasValue && el.HasValue && wr.HasValue && (c == ClsUpperArm + k || c == ClsForearm + k))
+                    {
+                        Vector3 ax = (wr.Value - sh.Value).normalized, q = p - el.Value;
+                        float d = Vector3.Dot(q, ax) * mpu, r = (q - ax * Vector3.Dot(q, ax)).magnitude * mpu;
+                        float g = Sm(0.15f, 0.6f, Vector3.Dot(n, fr.Fwd)) * (1f - Sm(0.05f, 0.08f, r));
+                        Profile(d, 0f, 0.006f, 0.015f, 0.009f, 0.45f, g, k, ref best, ref w);
+                    }
+                    // back of the knee (the crease sits a little below the joint centre)
+                    if (hip.HasValue && kn.HasValue && an.HasValue && (c == ClsThigh + k || c == ClsCalf + k))
+                    {
+                        Vector3 ax = (an.Value - hip.Value).normalized, q = p - kn.Value;
+                        float d = Vector3.Dot(q, ax) * mpu, r = (q - ax * Vector3.Dot(q, ax)).magnitude * mpu;
+                        float g = Sm(0.15f, 0.6f, -Vector3.Dot(n, fr.Fwd)) * (1f - Sm(0.08f, 0.11f, r));
+                        Profile(d, 0.004f, 0.007f, 0.017f, 0.010f, 0.5f, g, 2 + k, ref best, ref w);
+                    }
+                    // groin: a line in her front plane from just outside and above the hip joint down and in toward the pubis
+                    if (hip.HasValue && (c == ClsThigh + k || c == ClsPelvis || c == ClsBelly))
+                    {
+                        Vector3 q = p - hip.Value;
+                        float x = Vector3.Dot(q, lat) * mpu, y = Vector3.Dot(q, fr.Up) * mpu;
+                        Vector2 a = new Vector2(0.007f, 0.030f), b = new Vector2(-0.068f, -0.045f), e = b - a;
+                        float u = Vector2.Dot(new Vector2(x, y) - a, e) / e.sqrMagnitude;
+                        Vector2 on = a + e * Mathf.Clamp01(u), nrm2 = new Vector2(-e.y, e.x).normalized;
+                        float d = Vector2.Dot(new Vector2(x, y) - on, nrm2);
+                        float along = 1f - Sm(0f, 0.25f, Mathf.Max(-u, u - 1f));
+                        float g = Sm(0.2f, 0.6f, Vector3.Dot(n, fr.Fwd)) * along;
+                        Profile(d, 0f, 0.006f, 0.016f, 0.010f, 0.5f, g, 4 + k, ref best, ref w);
+                    }
+                    if (best > 0.02f && best > Mathf.Abs(fold[v].y) + Mathf.Abs(fold[v].z)) { if (fold[v].x < 0f) count++; fold[v] = w; per[(int)w.x]++; }
+                }
+            }
+            for (int v = 0; v < V; v++) if (canon[v] != (uint)v) fold[v] = fold[canon[v]];
+            var sb = new StringBuilder("folds ").Append(count).Append(" verts [");
+            for (int i = 0; i < per.Length; i++) sb.Append(i > 0 ? " " : "").Append(per[i]);
+            note = sb.Append(']').ToString();
+            return count;
+        }
+
+        static void Profile(float d, float c, float sc, float off, float sr, float roll, float g, int slot, ref float best, ref Vector4 w)
+        {
+            if (g <= 0f) return;
+            float cr = G(d, c, sc) * g, rl = (G(d, c - off, sr) + G(d, c + off, sr)) * roll * g;
+            if (cr + rl > best) { best = cr + rl; w = new Vector4(slot, cr, rl, 0f); }
+        }
+
+        static float Sm(float a, float b, float x)
+        {
+            float t = Mathf.Clamp01((x - a) / (b - a));
+            return t * t * (3f - 2f * t);
+        }
+
+        // ---- 0.11.31 chubby: soft fat by area ----
+
+        // Where she puts on fat, as soft deposits in the bind pose (her frame and bones, metres): the lower belly's pooch and a softer upper
+        // belly; love handles over the hip bones; the bra-line bulge and the lower back; full glutes; saddlebags and the inner thighs; the backs
+        // of the upper arms; the calves all round. Each area's weight peaks at 1 on its fullest spot (the area's mm there); the GPU pushes
+        // the skin out by the two strongest areas. Hands, feet, head, breasts and genitals carry none.
+        static int BakeFat(Frame fr, HeadFrame hf, Vector3[] P, Vector3[] N, uint[] cls, uint[] canon, float mpu, Vector4[] fat, out string note)
+        {
+            Func<string, Vector3?> bp = fr.Bp ?? (n => (Vector3?)null);
+            int V = P.Length, count = 0;
+            if (!fr.Ok && !hf.Ok) { note = ""; return 0; }
+            const int A = ContactSettings.FatAreas;
+            var per = new int[A];
+            var hip = new Vector3?[2]; var kn = new Vector3?[2]; var an = new Vector3?[2]; var sh = new Vector3?[2]; var el = new Vector3?[2];
+            for (int k = 0; k < 2; k++)
+            {
+                string sd = k == 0 ? "_L" : "_R";
+                hip[k] = bp("Hip" + sd); kn[k] = bp("Knee" + sd); an[k] = bp("Ankle" + sd); sh[k] = bp("Shoulder" + sd); el[k] = bp("Elbow" + sd);
+                if (!an[k].HasValue && hip[k].HasValue && kn[k].HasValue) an[k] = kn[k].Value + (kn[k].Value - hip[k].Value) * 0.95f;
+            }
+            var w = new float[A];
+            for (int v = 0; v < V; v++)
+            {
+                if (canon[v] != (uint)v) continue;
+                int c = (int)cls[v];
+                Vector3 p = P[v], n = N[v];
+                for (int a = 0; a < A; a++) w[a] = 0f;
+                // the face and the neck (area 7): fuller cheeks, a double chin under the jaw, a softer neck
+                if ((c == ClsHead || c == ClsNeck) && hf.Ok)
+                {
+                    Vector3 q = p - hf.Head;
+                    float up = Vector3.Dot(n, hf.Up), fw = Vector3.Dot(n, hf.Fwd);
+                    float wf = 0f;
+                    if (hf.HasCheeks)
+                        for (int k = 0; k < 2; k++)
+                        {
+                            Vector3 ck = (k == 0 ? hf.CheekL : hf.CheekR) + hf.Up * (0.006f / mpu);   // her cheek bones sit at mouth height, 5 cm out
+                            wf = Mathf.Max(wf, G((p - ck).magnitude * mpu, 0f, 0.02f) * Sm(-0.2f, 0.4f, fw));
+                        }
+                    if (hf.HasLip)
+                    {
+                        // under the chin: skin facing down, more than 2 cm under the lower lip (not the underside of her nose, lips or lower lids),
+                        // in front of the jaw's hinge, near her midline
+                        float yl = Vector3.Dot(p - hf.LipLow, hf.Up) * mpu, z = Vector3.Dot(p - hf.Jaw, hf.Fwd) * mpu, xj = Vector3.Dot(p - hf.Jaw, hf.Left) * mpu;
+                        wf = Mathf.Max(wf, Sm(-0.015f, -0.03f, yl) * Sm(0.01f, 0.04f, z) * Sm(0.2f, 0.7f, -up) * G(xj, 0f, 0.045f));
+                    }
+                    if (c == ClsNeck && hf.HasNeck)
+                    {
+                        // the neck: fuller all round, most at the front under the chin
+                        float t = Vector3.Dot(p - hf.Neck, hf.Head - hf.Neck) / Mathf.Max(1e-8f, (hf.Head - hf.Neck).sqrMagnitude);
+                        wf = Mathf.Max(wf, 0.35f + 0.55f * Sm(0.1f, 0.6f, fw) * Sm(0.3f, 0.9f, t));
+                    }
+                    if (wf >= 0.01f) { fat[v] = new Vector4(7f, Mathf.Min(1f, wf), -1f, 0f); count++; per[7]++; }
+                    continue;
+                }
+                if (!fr.Ok) continue;
+                if (c == ClsHand || c == ClsHand + 1 || c == ClsFoot || c == ClsFoot + 1 || c == ClsHead || c == ClsNeck || c == ClsGenital
+                    || c == ClsBreast || c == ClsBreast + 1 || c == ClsNone) continue;
+                float fF = Vector3.Dot(n, fr.Fwd), fL = Vector3.Dot(n, fr.Left);
+                float y = Vector3.Dot(p - fr.RootP, fr.Up) * mpu, x = Vector3.Dot(p - fr.RootP, fr.Left) * mpu;
+                bool trunk = c == ClsPelvis || c == ClsSpine || c == ClsChest || c == ClsBelly || c == ClsScapula || c == ClsButt || c == ClsButt + 1;
+                if (trunk)
+                {
+                    // belly: the pooch under the navel, a softer upper belly
+                    float front = Sm(0.0f, 0.55f, fF);
+                    w[0] = front * Mathf.Max(G(y, 0.05f, 0.055f) * G(x, 0f, 0.085f), 0.55f * G(y, 0.15f, 0.045f) * G(x, 0f, 0.075f));
+                    // love handles: the flanks over the hip bones, a little toward the back
+                    float flank = Sm(0.3f, 0.8f, Mathf.Abs(fL)) * (0.75f + 0.25f * Sm(-0.4f, 0.3f, -fF));
+                    w[1] = flank * G(y, 0.15f, 0.045f);
+                    // back: the bra-line bulge under the shoulder blades (on the sides of the back) and the lower back
+                    float back = Sm(0.1f, 0.6f, -fF);
+                    w[2] = Mathf.Max(G(y, 0.33f, 0.035f) * Sm(0.2f, 0.8f, -fF + 0.6f * Mathf.Abs(fL)) * (0.6f + 0.4f * Sm(0.04f, 0.10f, Mathf.Abs(x))),
+                                     0.6f * back * G(y, 0.09f, 0.045f));
+                    // glutes: round them out (the butt helpers' area and the low back of the pelvis)
+                    if (c == ClsButt || c == ClsButt + 1 || (c == ClsPelvis && y < 0.06f)) w[3] = back * (c == ClsPelvis ? Sm(0.06f, -0.04f, y) : 1f);
+                }
+                for (int k = 0; k < 2; k++)
+                {
+                    Vector3 lat = fr.Left * (k == 0 ? 1f : -1f);
+                    float t;
+                    if ((c == ClsThigh + k || c == ClsButt + k || (c == ClsPelvis && Vector3.Dot(p - fr.RootP, lat) > 0f)) && hip[k].HasValue && kn[k].HasValue && Along(p, hip[k].Value, kn[k].Value, out t))
+                    {
+                        float out_ = Vector3.Dot(n, lat), inner = -out_;
+                        // saddlebags (outer upper thigh) and the inner thigh; the front and back of the thigh a little
+                        float tw = Mathf.Max(G(t, 0.28f, 0.22f) * Sm(0.1f, 0.7f, out_), 0.85f * G(t, 0.25f, 0.25f) * Sm(0.1f, 0.7f, inner));
+                        tw = Mathf.Max(tw, 0.45f * G(t, 0.4f, 0.3f));
+                        if (c == ClsThigh + k) w[4] = Mathf.Max(w[4], tw);
+                        else w[4] = Mathf.Max(w[4], tw * Sm(-0.05f, 0.05f, t));   // the pelvis / butt only where the thigh starts
+                        // the fold under the butt fills a little with the glutes
+                        if (c == ClsThigh + k) w[3] = Mathf.Max(w[3], 0.6f * G(t, 0.05f, 0.08f) * Sm(0.1f, 0.6f, -fF));
+                    }
+                    if (c == ClsCalf + k && kn[k].HasValue && an[k].HasValue && Along(p, kn[k].Value, an[k].Value, out t))
+                        w[6] = G(t, 0.3f, 0.25f) * (0.6f + 0.4f * Sm(0f, 0.6f, -fF));
+                    if (c == ClsUpperArm + k && sh[k].HasValue && el[k].HasValue && Along(p, sh[k].Value, el[k].Value, out t))
+                        w[5] = G(t, 0.5f, 0.3f) * (0.35f + 0.65f * Sm(-0.2f, 0.6f, -fF + 0.3f * Vector3.Dot(n, lat)));
+                }
+                int a0 = -1, a1 = -1;
+                for (int a = 0; a < A; a++)
+                {
+                    if (w[a] < 0.01f) continue;
+                    if (a0 < 0 || w[a] > w[a0]) { a1 = a0; a0 = a; }
+                    else if (a1 < 0 || w[a] > w[a1]) a1 = a;
+                }
+                if (a0 < 0) continue;
+                fat[v] = new Vector4(a0, w[a0], a1, a1 >= 0 ? w[a1] : 0f);
+                count++; per[a0]++;
+            }
+            for (int v = 0; v < V; v++) if (canon[v] != (uint)v) fat[v] = fat[canon[v]];
+            var sb = new StringBuilder("chubby ").Append(count).Append(" verts [");
+            for (int i = 0; i < A; i++) sb.Append(i > 0 ? " " : "").Append(per[i]);
+            note = sb.Append(']').ToString();
+            return count;
+        }
+
+        // 0.11.31: her head's frame in this mesh's bind space (for the face / neck fat). The neck mesh has no left / right bones, so the frame
+        // comes from her live bones (cheeks left / right, neck -> head up, the cheeks in front of the head joint), expressed in Head_M's own
+        // space and carried into the mesh by Head_M's bind pose; positions from the mesh's own bind poses where it has the bone.
+        struct HeadFrame
+        {
+            public bool Ok, HasCheeks, HasJaw, HasNeck, HasLip;
+            public Vector3 Head, Neck, Jaw, CheekL, CheekR, LipLow, Up, Left, Fwd;
+
+            public static HeadFrame Make(Transform[] bones, Matrix4x4[] bind, Character her)
+            {
+                var f = new HeadFrame();
+                if (her == null) return f;
+                Transform head, neck, cl, cr;
+                if (!her.Bones.TryGetValue("Head_M", out head) || !her.Bones.TryGetValue("Neck_M", out neck) || head == null || neck == null) return f;
+                if (!her.Bones.TryGetValue("Cheek_Left", out cl) || !her.Bones.TryGetValue("Cheek_Right", out cr) || cl == null || cr == null) return f;
+                int ih = -1;
+                for (int i = 0; i < bones.Length; i++) if (bones[i] == head) { ih = i; break; }
+                if (ih < 0 || ih >= bind.Length) return f;
+                Vector3 upW = (head.position - neck.position).normalized, leftW = cl.position - cr.position;
+                leftW = (leftW - upW * Vector3.Dot(leftW, upW)).normalized;
+                Vector3 fwdW = Vector3.Cross(upW, leftW);
+                if (Vector3.Dot((cl.position + cr.position) * 0.5f - head.position, fwdW) < 0f) fwdW = -fwdW;
+                Matrix4x4 toMesh = bind[ih].inverse;   // Head_M's local space -> this mesh's bind space
+                Func<Vector3, Vector3> dir = w => toMesh.MultiplyVector(head.InverseTransformDirection(w)).normalized;
+                f.Up = dir(upW); f.Left = dir(leftW); f.Fwd = dir(fwdW);
+                f.Head = toMesh.MultiplyPoint3x4(Vector3.zero);
+                Func<Transform, Vector3?> at = t =>
+                {
+                    for (int i = 0; i < bones.Length && i < bind.Length; i++) if (bones[i] == t) return bind[i].inverse.MultiplyPoint3x4(Vector3.zero);
+                    return toMesh.MultiplyPoint3x4(head.InverseTransformPoint(t.position));   // not on this mesh: from the live pose, in the head's frame
+                };
+                f.Neck = at(neck).Value; f.HasNeck = true;
+                f.CheekL = at(cl).Value; f.CheekR = at(cr).Value; f.HasCheeks = true;
+                Transform jaw;
+                if (her.Bones.TryGetValue("Jaw_M", out jaw) && jaw != null) { f.Jaw = at(jaw).Value; f.HasJaw = true; }
+                Transform lip;
+                if (f.HasJaw && her.Bones.TryGetValue("Lip_Lower_Insite", out lip) && lip != null) { f.LipLow = at(lip).Value; f.HasLip = true; }
+                f.Ok = true;
+                return f;
+            }
         }
 
         // ---- 0.11.8 muscles as geometry ----

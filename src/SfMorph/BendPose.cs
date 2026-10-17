@@ -17,6 +17,13 @@ namespace SfMorph
         public const int Slots = 11;
         public static readonly float[] Amt = new float[Slots];
         public static bool Any;
+        // 0.11.31 skin folds (ContactBake.BakeFolds): the crease depth (m) per fold slot, 0/1 inner elbow L/R, 2/3 back of the knee L/R, 4/5 groin
+        // (hip flexion) L/R; AnyFold = one of them is drawn this frame
+        public const int FoldSlots = 6;
+        public static readonly float[] FoldAmt = new float[FoldSlots];
+        public static bool AnyFold;
+        static readonly bool[] _foldLogged = new bool[FoldSlots];
+        static readonly string[] FoldNames = { "inner elbow L", "inner elbow R", "back of the knee L", "back of the knee R", "groin L", "groin R" };
         public static string Status = "";
         // Joints with all three bones found and a bind pose to take the rest direction from (0..6), for GpuContact's status line.
         public static int Joints;
@@ -97,6 +104,13 @@ namespace SfMorph
                 }
                 if (ip < 0 || ic < 0 || ie < 0) continue;
                 Matrix4x4[] bind = r.sharedMesh.bindposes;
+                if (hl < 0 || hr < 0)
+                    // 0.11.31: her upper body has no hips: her left from the shoulders (the trunk joint was never bound: no waist roll)
+                    for (int i = 0; i < bones.Length; i++)
+                    {
+                        if (bones[i] != null && bones[i].name == "Shoulder_L" && hl < 0) hl = i;
+                        else if (bones[i] != null && bones[i].name == "Shoulder_R" && hr < 0) hr = i;
+                    }
                 if (ip >= bind.Length || ic >= bind.Length || ie >= bind.Length) continue;
                 Vector3 cm = bind[ic].inverse.MultiplyPoint3x4(Vector3.zero), em = bind[ie].inverse.MultiplyPoint3x4(Vector3.zero);
                 Vector3 d = bind[ip].MultiplyVector(em - cm);
@@ -106,7 +120,58 @@ namespace SfMorph
                     left = bind[ip].MultiplyVector(bind[hl].inverse.MultiplyPoint3x4(Vector3.zero) - bind[hr].inverse.MultiplyPoint3x4(Vector3.zero)).normalized;
                 return null;
             }
+            // 0.11.31 (log: 'knee L (no mesh has all three bones)': the knee bulges never ran): the bones from two meshes that share a bind
+            // space, proven by a bone both carry with the same bind pose (her lower body has the hip and knee, the foot mesh the knee and ankle)
+            Vector3 pm, cm2, em2; Matrix4x4 pb;
+            if (CrossMesh(her, p, c, e, out pm, out cm2, out em2, out pb))
+            {
+                Vector3 d = pb.MultiplyVector(em2 - cm2);
+                if (d.sqrMagnitude > 1e-14f) { dir = d.normalized; return null; }
+            }
             return "no mesh has all three bones";
+        }
+
+        // p's bind pose and c / e's bind positions from meshes in one bind space (each pair of meshes used shares a bone with an equal bind pose).
+        static bool CrossMesh(Character her, Transform p, Transform c, Transform e, out Vector3 pPos, out Vector3 cPos, out Vector3 ePos, out Matrix4x4 pBind)
+        {
+            pPos = cPos = ePos = Vector3.zero; pBind = Matrix4x4.identity;
+            var rs = her.Renderers;
+            for (int a = 0; a < rs.Count; a++)
+            {
+                var ra = rs[a];
+                if (ra == null || ra.sharedMesh == null) continue;
+                int ap = Idx(ra, p), ac = Idx(ra, c);
+                var ba = ra.sharedMesh.bindposes;
+                if (ap < 0 || ac < 0 || ap >= ba.Length || ac >= ba.Length) continue;
+                for (int b = 0; b < rs.Count; b++)
+                {
+                    var rb = rs[b];
+                    if (b == a || rb == null || rb.sharedMesh == null) continue;
+                    int bc = Idx(rb, c), be = Idx(rb, e);
+                    var bb = rb.sharedMesh.bindposes;
+                    if (bc < 0 || be < 0 || bc >= bb.Length || be >= bb.Length) continue;
+                    if (!SameMatrix(ba[ac], bb[bc])) continue;   // c's bind pose equal on both: one space
+                    pBind = ba[ap];
+                    pPos = ba[ap].inverse.MultiplyPoint3x4(Vector3.zero);
+                    cPos = ba[ac].inverse.MultiplyPoint3x4(Vector3.zero);
+                    ePos = bb[be].inverse.MultiplyPoint3x4(Vector3.zero);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        static int Idx(SkinnedMeshRenderer r, Transform t)
+        {
+            var bs = r.bones;
+            for (int i = 0; i < bs.Length; i++) if (bs[i] == t) return i;
+            return -1;
+        }
+
+        static bool SameMatrix(Matrix4x4 x, Matrix4x4 y)
+        {
+            for (int i = 0; i < 16; i++) if (Mathf.Abs(x[i] - y[i]) > 1e-4f) return false;
+            return true;
         }
 
         static float Sm(float a, float b, float x)
@@ -119,7 +184,9 @@ namespace SfMorph
         public static void Update(ContactSettings s)
         {
             Any = false;
-            if (Joints == 0 || s == null || s.BendAmount <= 0.0001f)
+            AnyFold = false;
+            for (int i = 0; i < FoldSlots; i++) FoldAmt[i] = 0f;
+            if (Joints == 0 || s == null || (s.BendAmount <= 0.0001f && s.FoldAmount <= 0.0001f))
             {
                 if (Amt[0] != 0f || Amt[8] != 0f || Amt[9] != 0f || Amt[10] != 0f || Status.Length > 0) { for (int i = 0; i < Slots; i++) Amt[i] = 0f; Status = ""; _statSig = -1; }
                 return;
@@ -138,6 +205,27 @@ namespace SfMorph
                 var r = p.InverseTransformDirection(e.position - c.position);
                 _theta[j] = Vector3.Angle(r, _rest[j]);
                 if (j == 6) _side = Mathf.Atan2(Vector3.Dot(r, _trunkLeft), Vector3.Dot(r, _rest[j])) * Mathf.Rad2Deg;
+            }
+            // 0.11.31 skin folds: a crease (with the flesh rolling up on both sides of it) where the skin of a deeply bent joint folds in: the
+            // inner elbow from ~60 degrees (full at 140), the back of the knee from ~70 (full at 145: a kneel or a deep squat), the groin from
+            // ~45 (full at 110: sitting, legs drawn up)
+            float fk = Mathf.Max(0f, s.FoldAmount);
+            for (int side = 0; side < 2 && fk > 0f; side++)
+            {
+                if (_ok[side]) FoldAmt[side] = s.ElbowFoldMm * 0.001f * Sm(60f, 140f, _theta[side]) * fk;
+                if (_ok[2 + side]) FoldAmt[2 + side] = s.KneeFoldMm * 0.001f * Sm(70f, 145f, _theta[2 + side]) * fk;
+                if (_ok[4 + side]) FoldAmt[4 + side] = s.HipFoldMm * 0.001f * Sm(45f, 110f, _theta[4 + side]) * fk;
+            }
+            for (int i = 0; i < FoldSlots; i++)
+            {
+                if (FoldAmt[i] < 0.0003f) { FoldAmt[i] = 0f; continue; }
+                AnyFold = true;
+                if (FoldAmt[i] > 0.001f && !_foldLogged[i])
+                {
+                    _foldLogged[i] = true;
+                    Plugin.Log.LogInfo("Bend: first skin fold " + FoldNames[i] + " " + (FoldAmt[i] * 1000f).ToString("0.0") + " mm (elbow " + _theta[0].ToString("0") + "/" + _theta[1].ToString("0")
+                                       + ", knee " + _theta[2].ToString("0") + "/" + _theta[3].ToString("0") + ", hip " + _theta[4].ToString("0") + "/" + _theta[5].ToString("0") + " deg)");
+                }
             }
             float k = s.BendAmount;
             float mx = 0f;

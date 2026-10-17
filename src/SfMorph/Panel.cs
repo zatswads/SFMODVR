@@ -369,9 +369,13 @@ namespace SfMorph
         // 0.11.7 (user: wrinkles and muscles are not physics): how her skin looks; the dents stay with the contacts in Physics
         void SkinTab(Character c)
         {
+            BuildSection(c);
+            GUILayout.Space(10);
             WrinklesSection(c);
             GUILayout.Space(10);
             MusclesSection(c);
+            GUILayout.Space(10);
+            ChubbySection(c);
             GUILayout.Space(10);
             MarksSection(c);
         }
@@ -791,6 +795,17 @@ namespace SfMorph
             if (mo != null) GUILayout.Label("    " + mo, _off);
             v = Slider("    joint smoothing", _p.DeltaMushAmount.Value * 100f, 0f, 100f, "0", 100f, mo ?? (_p.DeltaMush.Value ? null : "off: round joints is off"), " %") / 100f;
             if (Mathf.Abs(v - _p.DeltaMushAmount.Value) > 0.0001f) _p.DeltaMushAmount.Value = v;
+            // 0.11.31 skin folds at deep bends
+            string fo = so ?? (_body.Gpu != null && !_body.Gpu.FoldKernels ? "off: the shader bundle is older than this DLL (install dist/sfmorph_shaders)" : null);
+            v = Slider("  Skin folds", _p.SkinFolds.Value * 100f, 0f, 200f, "0", 100f, fo, " %") / 100f;
+            if (Mathf.Abs(v - _p.SkinFolds.Value) > 0.0001f) _p.SkinFolds.Value = v;
+            string fo2 = fo ?? (_p.SkinFolds.Value > 0f ? null : "off: skin folds are 0");
+            v = Slider("    inner elbow", _p.FoldElbowMm.Value, 0f, 15f, "0.0", 4f, fo2, " mm");
+            if (Mathf.Abs(v - _p.FoldElbowMm.Value) > 0.001f) _p.FoldElbowMm.Value = v;
+            v = Slider("    back of the knee", _p.FoldKneeMm.Value, 0f, 15f, "0.0", 5f, fo2, " mm");
+            if (Mathf.Abs(v - _p.FoldKneeMm.Value) > 0.001f) _p.FoldKneeMm.Value = v;
+            v = Slider("    groin (sitting)", _p.FoldHipMm.Value, 0f, 15f, "0.0", 5f, fo2, " mm");
+            if (Mathf.Abs(v - _p.FoldHipMm.Value) > 0.001f) _p.FoldHipMm.Value = v;
             v = Slider("  Bend bulges", _p.BendBulge.Value * 100f, 0f, 100f, "0", 60f, so, " %") / 100f;
             if (Mathf.Abs(v - _p.BendBulge.Value) > 0.0001f) _p.BendBulge.Value = v;
             // 0.11.23: the waist roll on the side she bends toward
@@ -983,6 +998,29 @@ namespace SfMorph
                             "shape; mm x Flex eases toward 10 mm so a high setting stays muscle, not a lump). Obliques: the pads over her hip bones and the waist's sides as a share of Core (relief and bulge), so the abs can be raised alone. The relief above stays the fine detail. Firmness: a tensed muscle dents less under a hand and the physics hands meet more resistance there. Flex test: " +
                             "each area at full (at least 3 mm) for 2 s over whatever she is doing, whatever her pose's tension; the log says how far " +
                             "and on how many vertices each one went.", _hint);
+        }
+
+        // 0.11.31 chubby: soft fat by area on the GPU skin (like the muscle shape, the other way)
+        void ChubbySection(Character c)
+        {
+            GUILayout.Label("Chubby", _bold);
+            var gpu = _body.Gpu;
+            string off = !_p.GpuContactOn.Value ? "GPU contact is off (Physics tab)" : gpu == null ? "shader bundle not loaded"
+                       : !gpu.FoldKernels ? "the shader bundle is older than this DLL (install dist/sfmorph_shaders)"
+                       : gpu.FatVerts == 0 ? "no chubby areas on her baked body meshes (yet)" : null;
+            string why = off == null ? null : "off: " + off;
+            float ch = Slider("Chubby", _p.Chubby.Value * 100f, -100f, 200f, "0", 0f, why, " %") / 100f;
+            if (Mathf.Abs(ch - _p.Chubby.Value) > 0.0001f) _p.Chubby.Value = ch;
+            string awhy = why ?? (_p.Chubby.Value != 0f ? null : "off: Chubby is 0");
+            for (int i = 0; i < _p.ChubbyArea.Length; i++)
+            {
+                float a = Slider("    " + Plugin.ChubbyNames[i].ToLowerInvariant(), _p.ChubbyArea[i].Value, 0f, 40f, "0", (float)_p.ChubbyArea[i].DefaultValue, awhy, " mm");
+                if (Mathf.Abs(a - _p.ChubbyArea[i].Value) > 0.001f) _p.ChubbyArea[i].Value = a;
+            }
+            GUILayout.Label("Soft fat where she puts it on: belly (the pooch under the navel, a softer upper belly), waist (love handles), back " +
+                            "(the bra line, the lower back), glutes, thighs (saddlebags, inner thighs), arms (the backs of the upper arms), calves, face (fuller cheeks, a double chin, a softer neck). mm = " +
+                            "the area's fullest spot at 100 %. Fat hides the muscle shape under it, dents deeper under a hand, ripples more, and makes " +
+                            "the belly and waist rolls and the folds beside her joints fuller. Her clothes don't follow it.", _hint);
         }
 
         bool Card(Texture2D thumb, string name, bool on, float size)

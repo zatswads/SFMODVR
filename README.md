@@ -44,6 +44,30 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.31 (skin folds, chubby, build triangle; the knee and waist bends work):
+- Skin folds at deep bends: where a joint bends far, her skin now folds in as geometry. A soft crease runs across the joint with the
+  flesh rolling up on both sides of it: the inner elbow (from ~60 deg, full at 140), the back of the knee (kneeling, a deep squat) and
+  the groin (sitting, legs drawn up; the line from the front of the hip down to the pubis, where the wrinkle maps draw it). The
+  shading follows the fold, and the wrinkle maps' fine lines sit on top. Physics tab: Skin folds (%) and the depth of each fold (mm).
+- Chubby (Skin tab), the soft-fat counterpart of the muscle shape: fat where she would put it on, as geometry.
+  - Belly: the pooch under the navel and a softer upper belly. Waist: love handles over the hip bones. Back: the bra-line bulge and the
+    lower back. Glutes. Thighs: saddlebags and inner thighs. Arms: the backs of the upper arms. Calves. Face: fuller cheeks, a double
+    chin, a softer neck.
+  - One Chubby slider (-100..200 %) scales the areas, each with its own mm.
+  - Fat hides the muscle bulge under it, dents deeper under a hand, ripples more, and makes the belly and waist rolls and the rolls
+    beside the new folds fuller, so the soft creases read as soft, not stiff.
+  - Below 0 she is slimmer in the same areas and the muscle shape shows more. Her clothes don't follow the fat.
+- Build triangle (Skin tab, top): Skinny / Strength / Fat like a game's build screen, as a shortcut. Picking a point sets Chubby (Fat
+  above 0, Skinny below 0) and the muscle tone, Flex and relief depth (Strength; the strength side turns the muscle relief on). Every
+  slider stays free afterwards; the centre is her default look.
+- Fixed: the knee bends never worked (log: "Bend: 4 of 7 joints bound; missing knee L/R ... no mesh has all three bones": her hip
+  and knee are on the lower body, her ankle on the foot mesh). The joint is now measured across two meshes that share a bind pose
+  (checked by a bone they both carry), so the thigh-back and calf bulges and the knee fold work.
+- Fixed: the waist roll in a side bend never worked (trunk: "no hips in its mesh"); her left comes from the shoulders there now.
+- Fixed: her upper body (biceps bulge, the waist roll's upper half, the shin / biceps tissue floors) had no frame ("no hips in this
+  mesh"); it takes her left from the shoulders and her front from the breasts.
+- Shader bundle rebuilt: install dist/sfmorph_shaders too (an old bundle: no folds or chubby, the rows say why).
+
 0.11.30 (round joints, fixed):
 - 0.11.28's Delta Mush tore her hips, groin and knees into purple, inside-out patches even standing still (user's screenshot). Her
   skinned body is mirrored relative to her mesh. The pass rebuilt each vertex's detail in a frame made with cross products, and a

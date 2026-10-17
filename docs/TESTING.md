@@ -98,6 +98,26 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.31 (skin folds, chubby, build triangle)
+
+Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log:
+- `Bend: 7 of 7 joints bound` (it was 4: the knees and the trunk were missing).
+- The upper body's bake line now has `frame from the shoulders`, `bend N verts`, `folds N verts [...]`, `chubby N verts [...]`.
+  The lower body has folds for the knees and groin. reika_face / reika_neck have `chubby` (face area).
+- Folds: `Bend: first skin fold <joint> x mm (...)` the first time each fold shows.
+
+- Skin folds: bend an elbow past 90 deg, kneel, sit. A soft crease should run across the inner elbow, the back of the knee and the
+  groin, with a roll on each side. Physics tab Skin folds 0 vs 100 vs 200 % A/B. Nothing at rest.
+- Chubby: Skin tab Chubby 100 %. The belly pooch, love handles, bra line / lower back, glutes, saddlebags / inner thighs, backs of
+  the arms, calves, cheeks / double chin should fill out softly, with no step at the waist seam or the neck / face seams.
+  - Per area: each slider should change only its area.
+  - -100 %: slimmer there, the abs show more.
+  - With Chubby up: dents deeper, ripples bigger, the waist roll / belly fold / fold rolls fuller.
+  - Her clothes will clip (expected).
+- Build triangle: drag the dot. The corners should read as skinny / muscular / fat; Centre puts her default back. After a pick, the
+  sliders below still move freely.
+- The knee bulges (Bend bulges): a kneel or squat should now fill the back of the thigh and the calf.
+
 ## 0.11.30 (Delta Mush fixed)
 
 Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log: a `delta mush ...` part on BOTH `baked reika_upperBody...` (4 joints:

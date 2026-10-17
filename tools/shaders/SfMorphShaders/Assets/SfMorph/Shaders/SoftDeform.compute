@@ -31,6 +31,7 @@
 #pragma kernel MushRecon
 #pragma kernel MushApply
 #pragma kernel MushFollow
+#pragma kernel Folds
 
 RWByteAddressBuffer _Verts;          // skinned output: per vertex _Stride bytes, position at _PosOff, normal at _NrmOff
 uint _Stride, _PosOff, _NrmOff, _Count;
@@ -209,6 +210,40 @@ float4 _MusAmp[8];                   // 32 bulges (m)
 float4 _MusAct[8];                   // 32 activations 0..1
 float _MusFirm;                      // soft depth x (1 - _MusFirm x activation): a flexed muscle dents less
 uint _MusOn;
+// 0.11.31 skin folds and chubby (ContactBake.BakeFolds / BakeFat): per vertex (fold slot, crease, roll, 0) and (area, w, area, w); per slot
+// the crease depth (m, BendPose.FoldAmt), per area its fat (m). _FoldOn = 0: none of it is read.
+StructuredBuffer<float4> _Fold;
+StructuredBuffer<float4> _Fat;
+float4 _FoldAmt0, _FoldAmt1;         // 6 fold slots: [0..3], [4..5]
+float4 _FatAmt0, _FatAmt1;           // 8 areas: [0..3], [4..7]; negative = slimmer (Chubby below 0)
+uint _FoldOn;
+static const float FatRoll = 0.006;  // the rolls beside a fold / the waist roll grow by fat / FatRoll (6 mm of fat doubles them)
+static const float FatHide = 0.006;  // fat hides the muscle bulge under it: x 1 / (1 + fat / FatHide)
+
+float Slot8(float4 a, float4 b, float id)
+{
+    if (id < -0.5) return 0.0;
+    uint j = (uint)(id + 0.5);
+    return j < 4u ? a[j] : (j < 8u ? b[j - 4u] : 0.0);
+}
+
+// 0.11.31: the vertex's fat (m, outward)
+float FatOf(uint v)
+{
+    if (_FoldOn == 0u) return 0.0;
+    float4 f = _Fat[v];
+    return f.y * Slot8(_FatAmt0, _FatAmt1, f.x) + f.w * Slot8(_FatAmt0, _FatAmt1, f.z);
+}
+
+// 0.11.31: the fold's signed depth (m, inward positive): the crease in, the rolls beside it out (fuller with fat)
+float FoldOf(uint v, float fat)
+{
+    if (_FoldOn == 0u) return 0.0;
+    float4 f = _Fold[v];
+    if (f.x < -0.5) return 0.0;
+    float a = Slot8(_FoldAmt0, _FoldAmt1, f.x);
+    return a * (f.y - f.z * max(0.25, 1.0 + fat / FatRoll));
+}
 
 float3 WorldPos(uint v)
 {
@@ -249,10 +284,12 @@ void Muscle(uint v, out float bulge, out float act)
 }
 
 // The vertex's tissue with its muscle's firmness: the soft part shrinks with the activation (the hard part, skin over bone, stays).
-float2 TissueOf(uint v, float act)
+// 0.11.31: fat adds to the soft part (a chubby area dents deeper and ripples more).
+float2 TissueOf(uint v, float act, float fat)
 {
     float2 t = _Tissue[v];
     t.y *= 1.0 - saturate(_MusFirm * act);
+    t.y += max(fat, -0.6 * t.y);   // slimmer: never below 40 % of her own soft depth
     return t;
 }
 
@@ -279,8 +316,10 @@ void Depth(uint3 id : SV_DispatchThreadID)
     float3 nIn = -nOut;
     float mb, ma;
     Muscle(v, mb, ma);
-    float3 p = WorldPos(v) + nOut * mb;     // 0.11.8: the hand meets the flexed (bulged) surface, Compose subtracts the bulge again
-    float2 t = TissueOf(v, ma);
+    float fat = FatOf(v);
+    mb /= max(0.5, 1.0 + fat / FatHide);
+    float3 p = WorldPos(v) + nOut * (mb + fat);   // 0.11.8: the hand meets the flexed (bulged) surface, Compose subtracts the bulge again; 0.11.31 and the fat
+    float2 t = TissueOf(v, ma, fat);
     float cap = TissueCap(t);
     bool bony = _Tissue[v].y < 0.0035;      // by the anatomy, not by how flexed the muscle is
     uint cls = _Class[v];
@@ -384,7 +423,9 @@ void Compose(uint3 id : SV_DispatchThreadID)
     if (_Canon[v] != v) return;
     float mb, ma;
     Muscle(v, mb, ma);
-    float2 t = TissueOf(v, ma);
+    float fat = FatOf(v);
+    mb /= max(0.5, 1.0 + fat / FatHide);   // 0.11.31: fat hides the muscle under it (slimmer shows it more)
+    float2 t = TissueOf(v, ma, fat);
     float n = 0, w = 0;
     // 0.8.9 (user: a hard pixelated seam around a finger's dent): the two Smooth passes lower the narrow field under a small contact (a
     // fingertip) below the real penetration, so the skin stayed a few mm inside the finger and the depth intersection drew an aliased line.
@@ -394,6 +435,7 @@ void Compose(uint3 id : SV_DispatchThreadID)
     float bulge = min(_Bulge * max(0.0, w - n), _BulgeCap);
     float4 bd = _Bend[v];
     float bend = bd.y * BendAmt(bd.x) + bd.w * BendAmt(bd.z);
+    bend *= max(0.25, 1.0 + fat / FatRoll);   // 0.11.31: the belly roll, the waist roll and the bulges are fuller on a chubby body
     float wave = 0;
     if (_WaveCount > 0u)
     {
@@ -412,7 +454,7 @@ void Compose(uint3 id : SV_DispatchThreadID)
         float wcap = 1.5 * TissueCap(t);
         wave = clamp(wave, -wcap, wcap);            // 0.9.4: bigger waves, but never deeper than the flesh is
     }
-    _FieldOut[v] = n - bulge - bend - wave - mb;   // 0.11.8: the muscle bulge sits under the dent (Depth measured from the bulged surface)
+    _FieldOut[v] = n - bulge - bend - wave - mb - fat + FoldOf(v, fat);   // 0.11.31: fat out, the fold's crease in   // 0.11.8: the muscle bulge sits under the dent (Depth measured from the bulged surface)
     if (_MarkOn != 0u)
     {
         float cap = TissueCap(t);
@@ -725,4 +767,10 @@ void MushFollow(uint3 id : SV_DispatchThreadID)
     if (m < 0) return;
     float4 o = _MushOffR[2 * (uint)m];
     MushMove(v, o.xyz, o.w * _MapW[v], _MushOffR[2 * (uint)m + 1].xyz);
+}
+
+// Folds: never dispatched; its presence tells the plugin Depth and Compose read the 0.11.31 folds and fat (_Fold, _Fat, _FoldOn ...).
+[numthreads(1, 1, 1)]
+void Folds(uint3 id : SV_DispatchThreadID)
+{
 }

@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.11.30";
+        public const string Version = "0.11.31";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -57,6 +57,11 @@ namespace SfMorph
         // 0.11.28 Delta Mush at her joints
         internal ConfigEntry<bool> DeltaMush;
         internal ConfigEntry<float> DeltaMushAmount, DeltaMushRadius;
+        // 0.11.31 skin folds at deep bends, chubby (soft fat by area)
+        internal ConfigEntry<float> SkinFolds, FoldElbowMm, FoldKneeMm, FoldHipMm, Chubby;
+        internal ConfigEntry<float>[] ChubbyArea;
+        internal ConfigEntry<float> BuildStrength, BuildFat;   // the build triangle's last pick (weights; skinny = 1 - both)
+        internal static readonly string[] ChubbyNames = { "Belly", "Waist", "Back", "Glutes", "Thighs", "Arms", "Calves", "Face" };
         internal ConfigEntry<bool> ReactPenSound, ReactPenReact;   // 0.11.25
         internal ConfigEntry<bool> HapticsOn;                      // 0.11.26
         internal ConfigEntry<float> HapticsStrength, HapticsTouch, HapticsImpact, HapticsGrab, HapticsPen;
@@ -104,6 +109,18 @@ namespace SfMorph
             DeltaMush = Config.Bind("Physics", "DeltaMush", true, "GPU contact: her elbows, knees, hips and shoulders keep their volume in deep bends instead of pinching and flattening (Delta Mush on the skinned body: the joint skin is smoothed, then its rest detail put back). Costs GPU time every frame she is visible.");
             DeltaMushAmount = Config.Bind("Physics", "DeltaMushAmount", 1f, new ConfigDescription("Strength of the Delta Mush at her joints (0 = the plain skinning).", new AcceptableValueRange<float>(0f, 1f)));
             DeltaMushRadius = Config.Bind("Physics", "DeltaMushRadius", 20f, new ConfigDescription("How far the Delta Mush smooths around each joint (mm). Larger = rounder bends, more GPU passes (at most 48). Applies when her body is rebuilt (character change, Rescan, restart).", new AcceptableValueRange<float>(5f, 60f)));
+            SkinFolds = Config.Bind("Physics", "SkinFolds", 1f, new ConfigDescription("GPU contact: her skin folds in at deeply bent joints (a crease with the flesh rolling up on both sides): inner elbow, back of the knee, groin when sitting (0 off).", new AcceptableValueRange<float>(0f, 2f)));
+            FoldElbowMm = Config.Bind("Physics", "FoldElbowMm", 4f, new ConfigDescription("Inner-elbow fold depth at a fully bent elbow (mm, before SkinFolds).", new AcceptableValueRange<float>(0f, 15f)));
+            FoldKneeMm = Config.Bind("Physics", "FoldKneeMm", 5f, new ConfigDescription("Back-of-the-knee fold depth at a fully bent knee (mm, before SkinFolds).", new AcceptableValueRange<float>(0f, 15f)));
+            FoldHipMm = Config.Bind("Physics", "FoldHipMm", 5f, new ConfigDescription("Groin fold depth with the hip drawn up (sitting; mm, before SkinFolds).", new AcceptableValueRange<float>(0f, 15f)));
+            Chubby = Config.Bind("Chubby", "Chubby", 0f, new ConfigDescription("GPU contact: soft fat on her body, the way the muscle shape makes her look muscular: the areas below x this (0 off). Fat hides the muscles under it, dents deeper, ripples more, and makes the belly / waist rolls and the folds beside her joints fuller. Below 0 she is slimmer in the same areas.", new AcceptableValueRange<float>(-1f, 2f)));
+            float[] fatDef = { 12f, 10f, 6f, 12f, 12f, 8f, 5f, 6f };
+            string[] fatDesc = { "the lower belly's pooch and a softer upper belly", "love handles over the hip bones", "the bra-line bulge and the lower back", "fuller, rounder glutes", "saddlebags and the inner thighs", "the backs of the upper arms", "the calves all round", "fuller cheeks, a double chin and a softer neck" };
+            BuildStrength = Config.Bind("Chubby", "BuildStrength", 1f / 3f, new ConfigDescription("Skin tab build triangle: the last pick's Strength weight (the dot; sets nothing by itself).", new AcceptableValueRange<float>(0f, 1f)));
+            BuildFat = Config.Bind("Chubby", "BuildFat", 1f / 3f, new ConfigDescription("Skin tab build triangle: the last pick's Fat weight (Skinny = 1 - Strength - Fat).", new AcceptableValueRange<float>(0f, 1f)));
+            ChubbyArea = new ConfigEntry<float>[ChubbyNames.Length];
+            for (int i = 0; i < ChubbyNames.Length; i++)
+                ChubbyArea[i] = Config.Bind("Chubby", ChubbyNames[i], fatDef[i], new ConfigDescription("Chubby: " + fatDesc[i] + " (mm at the fullest spot, x Chubby).", new AcceptableValueRange<float>(0f, 40f)));
             PartnerBody = Config.Bind("Physics", "PartnerBody", true, "The partner's pelvis and thighs press her skin too (not only his hands).");
             BendBulge = Config.Bind("Physics", "BendBulge", 0.6f, new ConfigDescription("Muscles and flesh bulge when joints bend: biceps with the elbow, thigh and calf with the knee, thigh tops and a belly fold when sitting (0 off).", new AcceptableValueRange<float>(0f, 1f)));
             BendBicepsMm = Config.Bind("Physics", "BendBicepsMm", 8f, new ConfigDescription("Biceps bulge at a fully bent elbow (mm, before BendBulge).", new AcceptableValueRange<float>(0f, 20f)));

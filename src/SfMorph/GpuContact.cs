@@ -93,6 +93,7 @@ namespace SfMorph
             // this frame: Mush = run it, MushRan = it ran (an overlay follows), MushFollow = an overlay takes its body's offsets
             public GraphicsBuffer MushGatherBuf, MushSmoothBuf, MushCoreBuf, MushAllBuf, MushDeltaBuf, MushNrmBuf, MushNbBuf, MushPA, MushPB, MushOffBuf;
             public bool Mush, MushRan, MushFollow;
+            public GraphicsBuffer FoldBuf, FatBuf;   // 0.11.31 skin folds and chubby areas per vertex (always made with the bake)
             public int DiscMask, CapOff, CapN, CapN1;
         }
 
@@ -117,7 +118,9 @@ namespace SfMorph
             PMusFirm = Shader.PropertyToID("_MusFirm"), PMusOn = Shader.PropertyToID("_MusOn"),
             PMushIdx = Shader.PropertyToID("_MushIdx"), PMushN = Shader.PropertyToID("_MushN"), PMushIn = Shader.PropertyToID("_MushIn"), PMushOut = Shader.PropertyToID("_MushOut"),
             PMushOut2 = Shader.PropertyToID("_MushOut2"), PMushDelta = Shader.PropertyToID("_MushDelta"), PMushNrm = Shader.PropertyToID("_MushNrm"), PMushNb = Shader.PropertyToID("_MushNb"),
-            PMushOff = Shader.PropertyToID("_MushOff"), PMushOffR = Shader.PropertyToID("_MushOffR"), PMushAmt = Shader.PropertyToID("_MushAmt"), PMushMax = Shader.PropertyToID("_MushMax");
+            PMushOff = Shader.PropertyToID("_MushOff"), PMushOffR = Shader.PropertyToID("_MushOffR"), PMushAmt = Shader.PropertyToID("_MushAmt"), PMushMax = Shader.PropertyToID("_MushMax"),
+            PFold = Shader.PropertyToID("_Fold"), PFat = Shader.PropertyToID("_Fat"), PFoldAmt0 = Shader.PropertyToID("_FoldAmt0"), PFoldAmt1 = Shader.PropertyToID("_FoldAmt1"),
+            PFatAmt0 = Shader.PropertyToID("_FatAmt0"), PFatAmt1 = Shader.PropertyToID("_FatAmt1"), PFoldOn = Shader.PropertyToID("_FoldOn");
         static readonly uint[] ZeroHits = new uint[1];
         const int SelfHitHold = 30;               // frames a positive probe keeps the full chain on (readbacks arrive 1-3 frames late)
 
@@ -131,6 +134,12 @@ namespace SfMorph
         bool _foreignMarks;
         int _kMushGather, _kMushSmooth, _kMushRecon, _kMushApply, _kMushFollow;
         bool _mushK;                          // 0.11.28 bundle: the Delta Mush kernels
+        bool _foldK;                          // 0.11.31 bundle: Depth / Compose read the folds and the fat (Folds marker kernel)
+        Vector4 _foldA0, _foldA1, _fatA0, _fatA1;
+        float _fatMax;                        // this frame's largest area fat (m); 0 = not chubby
+        public bool FoldKernels { get { return _foldK && _v2Kernels && !_v2Failed; } }
+        public int FoldVerts { get { int n = 0; for (int i = 0; i < _rs.Count; i++) if (_rs[i].V2 && _rs[i].Bake != null) n += _rs[i].Bake.FoldCount; return n; } }
+        public int FatVerts { get { int n = 0; for (int i = 0; i < _rs.Count; i++) if (_rs[i].V2 && _rs[i].Bake != null) n += _rs[i].Bake.FatCount; return n; } }
         int _mushVerts, _mushPasses;          // last frame: joint vertices mushed, smoothing passes summed over renderers
         public int MushVerts { get { return _mushVerts; } }
         public string MushNote = "";          // why Delta Mush does nothing ("" = it runs, or nothing is baked yet)
@@ -214,6 +223,8 @@ namespace SfMorph
                 g._foreignMarks = g._cs.HasKernel("ForeignMarks");
                 g._seamBlend = g._cs.HasKernel("SeamBlend");
                 g._muscleK = g._cs.HasKernel("MuscleFlex");
+                g._foldK = g._cs.HasKernel("Folds");
+                if (g._v2Kernels && !g._foldK) Plugin.Log.LogWarning("GPU contact: old sfmorph_shaders (no Folds): no skin folds or chubby areas; install the bundle that came with this DLL");
                 g._mushK = g._cs.HasKernel("MushGather") && g._cs.HasKernel("MushSmooth") && g._cs.HasKernel("MushRecon") && g._cs.HasKernel("MushApply") && g._cs.HasKernel("MushFollow");
                 if (g._mushK)
                 {
@@ -594,6 +605,7 @@ namespace SfMorph
                 s.MarksBuf = Upload(new Vector4[V], V, 16);
                 s.GradBuf = Upload(new Vector4[2 * V], 2 * V, 16);
                 s.HitsBuf = Upload(ZeroHits, 1, 4);
+                s.FoldBuf = Upload(b.Fold, V, 16); s.FatBuf = Upload(b.Fat, V, 16);   // 0.11.31
                 var md = b.Mush;
                 if (md != null)
                 {
@@ -796,6 +808,20 @@ namespace SfMorph
             cs.SetFloat(PMusFirm, Mathf.Clamp01(MuscleFlex.Firm));
         }
 
+        // 0.11.31: the folds' and the fat's inputs of Depth / Compose for one renderer
+        void BindFolds(int kernel, RendState s)
+        {
+            if (!_foldK) return;
+            var cs = _cs;
+            bool on = s.FoldBuf != null && s.FatBuf != null;
+            if (_musDummy4 == null) { _musDummy4 = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 1, 16); _musDummy1 = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 1, 4); }
+            cs.SetBuffer(kernel, PFold, on ? s.FoldBuf : _musDummy4);
+            cs.SetBuffer(kernel, PFat, on ? s.FatBuf : _musDummy4);
+            cs.SetInt(PFoldOn, on ? 1 : 0);
+            cs.SetVector(PFoldAmt0, _foldA0); cs.SetVector(PFoldAmt1, _foldA1);
+            cs.SetVector(PFatAmt0, _fatA0); cs.SetVector(PFatAmt1, _fatA1);
+        }
+
         static void Rel(ref GraphicsBuffer b) { if (b != null) { b.Release(); b = null; } }
 
         // Frees a renderer's v2 buffers and bake (bumps BakeVersion when there was a bake).
@@ -807,6 +833,7 @@ namespace SfMorph
             Rel(ref s.HitsBuf); Rel(ref s.MapBuf); Rel(ref s.MapWBuf); Rel(ref s.MusBuf); Rel(ref s.BellyBuf);
             Rel(ref s.MushGatherBuf); Rel(ref s.MushSmoothBuf); Rel(ref s.MushCoreBuf); Rel(ref s.MushAllBuf); Rel(ref s.MushDeltaBuf); Rel(ref s.MushNrmBuf);
             Rel(ref s.MushNbBuf); Rel(ref s.MushPA); Rel(ref s.MushPB); Rel(ref s.MushOffBuf);
+            Rel(ref s.FoldBuf); Rel(ref s.FatBuf);
             s.Mush = s.MushRan = s.MushFollow = false;
             s.Parent = null; s.Mapped = 0; s.Level = 0;
             for (int i = 0; i < _rs.Count; i++) if (_rs[i].Parent == s) { _rs[i].Parent = null; Rel(ref _rs[i].MapBuf); Rel(ref _rs[i].MapWBuf); _rs[i].Mapped = 0; _rs[i].Level = 0; }
@@ -1122,6 +1149,7 @@ namespace SfMorph
                     try
                     {
                         BendPose.Update(_set);
+                        FillFolds();
                         _musMax = _muscleK ? FillMuscles() : 0f;
                         nWaves = Mathf.Clamp(Ripple.Fill(now, _waveArr), 0, Ripple.MaxWaves);
                         if (nWaves > 0) _waveBuf.SetData(_waveArr, 0, 0, 2 * nWaves);
@@ -1170,7 +1198,8 @@ namespace SfMorph
                 s.SelfOnly = v2 && s.CapN > 0 && s.CapN1 == 0;
                 s.Depth = v2 && s.CapN > 0 && (!s.SelfOnly || (s.SelfHits > 0 && frame - s.HitFrame <= SelfHitHold));
                 s.Probe = s.SelfOnly && !s.Depth;
-                s.Bend = v2 && BendPose.Any && s.Bake.BendCount > 0;
+                s.Bend = v2 && ((BendPose.Any && s.Bake.BendCount > 0)
+                                 || (_foldK && ((BendPose.AnyFold && s.Bake.FoldCount > 0) || (_fatMax > 0f && s.Bake.FatCount > 0))));   // 0.11.31 folds, chubby
                 // 0.11.8: a flexed muscle bulges (Compose / Grad / Apply alone without contact, like a bend); its firmness only matters under a press
                 bool hasMus = v2 && _muscleK && _musLive && s.MusBuf != null;
                 s.Flex = hasMus && _musMax > 1e-5f;
@@ -1364,6 +1393,7 @@ namespace SfMorph
                 cs.SetBuffer(_kDepth, PClass, s.ClassBuf); cs.SetBuffer(_kDepth, PCaps, _capBuf); cs.SetBuffer(_kDepth, PFieldOut, s.FieldD);   // raw kept in D for Compose
                 cs.SetBuffer(_kDepth, PHits, s.HitsBuf);
                 BindMuscles(_kDepth, s);
+                BindFolds(_kDepth, s);
                 if (_foreignMarks) cs.SetBuffer(_kDepth, PForeign, s.Foreign);
                 cs.SetInt(PCapCount, s.CapN); cs.SetInt(PCapOff, s.CapOff);
                 cs.Dispatch(_kDepth, groups, 1, 1); n++;
@@ -1406,6 +1436,7 @@ namespace SfMorph
             cs.SetBuffer(_kCompose, PFieldR, s.FieldD); cs.SetBuffer(_kCompose, PFieldOut, B); cs.SetBuffer(_kCompose, PMarks, s.MarksBuf); cs.SetBuffer(_kCompose, PWaves, _waveBuf);
             if (_foreignMarks) cs.SetBuffer(_kCompose, PForeignR, s.Foreign);
             BindMuscles(_kCompose, s);
+            BindFolds(_kCompose, s);
             cs.SetInt(PNoField, s.Depth ? 0 : 1); cs.SetInt(PWaveCount, s.Wave ? nWaves : 0); cs.SetFloat(PWaveAmt, 1f); cs.SetFloat(PWaveImpact, Mathf.Clamp01(_set.RippleImpact));
             var amt = BendPose.Amt;
             cs.SetVector(PBendAmt0, new Vector4(amt[0], amt[1], amt[2], amt[3])); cs.SetVector(PBendAmt1, new Vector4(amt[4], amt[5], amt[6], amt[7]));
@@ -1428,6 +1459,19 @@ namespace SfMorph
             n += ApplyFinal(s, vb, groups, true);
             s.ChainRan = true;
             return n;
+        }
+
+        // 0.11.31: this frame's fold depths (BendPose) and area fat (Chubby x the area's mm) for the shader
+        void FillFolds()
+        {
+            var f = BendPose.FoldAmt;
+            _foldA0 = new Vector4(f[0], f[1], f[2], f[3]); _foldA1 = new Vector4(f[4], f[5], 0f, 0f);
+            float k = _set.Chubby * 0.001f;   // below 0: slimmer in the same areas
+            var m = _set.FatMm;
+            _fatA0 = new Vector4(m[0], m[1], m[2], m[3]) * k; _fatA1 = new Vector4(m[4], m[5], m[6], m[7]) * k;
+            _fatMax = 0f;
+            for (int i = 0; i < ContactSettings.FatAreas; i++) _fatMax = Mathf.Max(_fatMax, Mathf.Abs(m[i] * k));
+            if (_fatMax < 0.0002f) { _fatMax = 0f; _fatA0 = _fatA1 = Vector4.zero; }
         }
 
         // 0.11.28 Delta Mush on one body renderer: Gather -> Smooth x K (ping-pong A/B) -> Recon -> Apply. Returns the dispatch count.
@@ -1747,6 +1791,7 @@ namespace SfMorph
                 if (_muscleK) sb.Append(mv > 0 ? ", muscles " + mv + " verts" : ", no muscle geometry");
                 int jv = 0, kmax = 0;
                 for (int i = 0; i < _rs.Count; i++) if (_rs[i].V2 && _rs[i].Bake != null && _rs[i].Bake.Mush != null) { jv += _rs[i].Bake.Mush.Core.Length; kmax = Mathf.Max(kmax, _rs[i].Bake.Mush.K); }
+                if (_foldK) sb.Append(", folds ").Append(FoldVerts).Append(" verts, chubby ").Append(FatVerts).Append(" verts");
                 if (!_mushK) sb.Append(", delta mush off (").Append(MushNote).Append(')');
                 else if (jv == 0) sb.Append(", delta mush: nothing baked");
                 else sb.Append(_set.Mush ? ", delta mush " : ", delta mush (off) ").Append(jv).Append(" joint verts, ").Append(kmax).Append(" passes");

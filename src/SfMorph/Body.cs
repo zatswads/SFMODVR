@@ -767,6 +767,9 @@ namespace SfMorph
             s.Skirt = _p.ContactSkirt.Value; s.Bulge = _p.ContactBulge.Value; s.Normals = _p.ContactNormals.Value; s.RippleThrustAmt = _p.RippleThrustAmt.Value; s.NormalSmooth = _p.ContactNormalSmooth.Value / 1000f; s.Depth = _p.ContactDepth.Value;
             s.SelfContact = _p.SelfContact.Value; s.PartnerBody = _p.PartnerBody.Value;
             s.Mush = _p.DeltaMush.Value; s.MushAmt = _p.DeltaMushAmount.Value; s.MushRadius = _p.DeltaMushRadius.Value / 1000f;   // 0.11.28
+            s.FoldAmount = _p.SkinFolds.Value; s.ElbowFoldMm = _p.FoldElbowMm.Value; s.KneeFoldMm = _p.FoldKneeMm.Value; s.HipFoldMm = _p.FoldHipMm.Value;   // 0.11.31
+            s.Chubby = _p.Chubby.Value;
+            for (int i = 0; i < ContactSettings.FatAreas && i < _p.ChubbyArea.Length; i++) s.FatMm[i] = _p.ChubbyArea[i].Value;
             s.BendAmount = _p.BendBulge.Value; s.BicepsMm = _p.BendBicepsMm.Value; s.KneeMm = _p.BendKneeMm.Value; s.CalfMm = _p.BendCalfMm.Value;
             s.HipMm = _p.BendHipMm.Value; s.BellyFoldMm = _p.BendBellyFoldMm.Value; s.WaistRollMm = _p.BendWaistRollMm.Value;
             s.Flex = _p.MuscleFlexAmt.Value; s.CoreMm = _p.MuscleCoreMm.Value; s.BackMm = _p.MuscleBackMm.Value; s.LegsMm = _p.MuscleLegsMm.Value; s.ArmsMm = _p.MuscleArmsMm.Value; s.Obliques = _p.MuscleObliques.Value;
