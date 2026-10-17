@@ -44,6 +44,12 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.32 (Debug tab tests for the new shape layers):
+- Fold test: the inner elbows, the backs of the knees and the groin in turn at full depth for 2.5 s each, whatever her pose.
+- Chubby test: each area alone at full (at least 10 mm) for 2 s, then all of them slimmer (-100 %), then all fuller (+100 %).
+- Round joints A/B: Delta Mush on and off every second for 10 s, to compare a bent joint directly.
+- Like the Flex test, they run over whatever she is doing, put your settings back when they end and log one line per step.
+
 0.11.31 (skin folds, chubby, build triangle; the knee and waist bends work):
 - Skin folds at deep bends: where a joint bends far, her skin now folds in as geometry. A soft crease runs across the joint with the
   flesh rolling up on both sides of it: the inner elbow (from ~60 deg, full at 140), the back of the knee (kneeling, a deep squat) and

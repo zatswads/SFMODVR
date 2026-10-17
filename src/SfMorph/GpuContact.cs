@@ -1221,7 +1221,7 @@ namespace SfMorph
                 s.Work = work;
                 s.MapOnly = false;
                 s.MushRan = false; s.MushFollow = false;
-                s.Mush = v2 && _mushK && _set.Mush && _set.MushAmt > 0.001f && s.MushOffBuf != null && s.Bake.Mush != null;
+                s.Mush = v2 && _mushK && (ShapeTest.MushOverride ?? _set.Mush) && _set.MushAmt > 0.001f && s.MushOffBuf != null && s.Bake.Mush != null;
                 if (s.Depth || s.Imprint1) anyContact = true;
                 s.Run = s.NeedCalib || s.Imprint1 || smoke != 0f || work || s.Decay || s.Probe || s.Mush;
                 if (s.Run && (s.Imprint1 || work || s.Decay)) active++;
@@ -1462,12 +1462,14 @@ namespace SfMorph
         }
 
         // 0.11.31: this frame's fold depths (BendPose) and area fat (Chubby x the area's mm) for the shader
+        readonly float[] _fatTest = new float[ContactSettings.FatAreas];
         void FillFolds()
         {
             var f = BendPose.FoldAmt;
             _foldA0 = new Vector4(f[0], f[1], f[2], f[3]); _foldA1 = new Vector4(f[4], f[5], 0f, 0f);
             float k = _set.Chubby * 0.001f;   // below 0: slimmer in the same areas
             var m = _set.FatMm;
+            if (ShapeTest.FillFat(_set, _fatTest)) { m = _fatTest; k = 1f; }   // 0.11.32 Debug tab chubby test (metres)
             _fatA0 = new Vector4(m[0], m[1], m[2], m[3]) * k; _fatA1 = new Vector4(m[4], m[5], m[6], m[7]) * k;
             _fatMax = 0f;
             for (int i = 0; i < ContactSettings.FatAreas; i++) _fatMax = Mathf.Max(_fatMax, Mathf.Abs(m[i] * k));

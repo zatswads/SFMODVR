@@ -186,7 +186,7 @@ namespace SfMorph
             Any = false;
             AnyFold = false;
             for (int i = 0; i < FoldSlots; i++) FoldAmt[i] = 0f;
-            if (Joints == 0 || s == null || (s.BendAmount <= 0.0001f && s.FoldAmount <= 0.0001f))
+            if (Joints == 0 || s == null || (s.BendAmount <= 0.0001f && s.FoldAmount <= 0.0001f && ShapeTest.FoldIndex < 0))
             {
                 if (Amt[0] != 0f || Amt[8] != 0f || Amt[9] != 0f || Amt[10] != 0f || Status.Length > 0) { for (int i = 0; i < Slots; i++) Amt[i] = 0f; Status = ""; _statSig = -1; }
                 return;
@@ -227,6 +227,7 @@ namespace SfMorph
                                        + ", knee " + _theta[2].ToString("0") + "/" + _theta[3].ToString("0") + ", hip " + _theta[4].ToString("0") + "/" + _theta[5].ToString("0") + " deg)");
                 }
             }
+            if (ShapeTest.FillFolds(s, FoldAmt)) AnyFold = true;   // 0.11.32 Debug tab fold test
             float k = s.BendAmount;
             float mx = 0f;
             for (int i = 0; i < Slots; i++) Amt[i] = 0f;

@@ -98,6 +98,15 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.32 (shape tests)
+
+Install `dist/SfMorph.dll` (the bundle is unchanged since 0.11.31). Debug tab:
+- Fold test: three steps, `Shape test: fold ... at N mm` each. A crease with a roll on each side at each joint in turn. Nothing visible =
+  the folds are not reaching her mesh (send the bake lines with `folds N verts`).
+- Chubby test: ten steps (`Shape test: chubby ...`). Each area should fill out alone and nothing else should move, then all slimmer,
+  then all fuller.
+- Round joints A/B: bend an elbow or knee first (or a sitting pose), then watch it flip between round (ON) and pinched (off).
+
 ## 0.11.31 (skin folds, chubby, build triangle)
 
 Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log:

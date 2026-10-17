@@ -55,6 +55,43 @@ namespace SfMorph
                             "below. Adjust every slider freely afterwards; the dot shows the last pick.", _hint);
         }
 
+        // 0.11.32 Debug tab: the fold test, the chubby test and the Delta Mush A/B (ShapeTest)
+        void ShapeTests()
+        {
+            var gpu = _body.Gpu;
+            string off = !_p.GpuContactOn.Value ? "GPU contact is off (Physics tab)" : gpu == null ? "shader bundle not loaded" : null;
+            string foldOff = off ?? (!gpu.FoldKernels ? "the shader bundle is older than this DLL (install dist/sfmorph_shaders)" : null);
+            int fi = ShapeTest.FoldIndex, ci = ShapeTest.FatIndex;
+            GUILayout.BeginHorizontal();
+            GUI.enabled = foldOff == null && gpu.FoldVerts > 0;
+            if (fi < 0) { if (GUILayout.Button("Fold test (inner elbows, backs of the knees, groin: " + ShapeTest.FoldStep.ToString("0.0", CultureInfo.InvariantCulture) + " s each)")) ShapeTest.StartFold(); }
+            else if (GUILayout.Button("Stop test", GUILayout.Width(90))) ShapeTest.Stop();
+            GUI.enabled = true;
+            if (fi >= 0) GUILayout.Label("now: " + ShapeTest.FoldNames[fi] + " at full (" + ShapeTest.FoldLeft.ToString("0.0", CultureInfo.InvariantCulture) + " s)", _hint);
+            GUILayout.EndHorizontal();
+            if (foldOff != null) GUILayout.Label("    Fold test off: " + foldOff, _off);
+            else if (gpu.FoldVerts == 0) GUILayout.Label("    Fold test off: no fold on her baked body meshes (yet)", _off);
+            GUILayout.BeginHorizontal();
+            GUI.enabled = foldOff == null && gpu.FatVerts > 0;
+            if (ci < 0) { if (GUILayout.Button("Chubby test (each area alone, then all slimmer, all fuller: " + ShapeTest.FatStep.ToString("0.0", CultureInfo.InvariantCulture) + " s each)")) ShapeTest.StartFat(); }
+            else if (GUILayout.Button("Stop test", GUILayout.Width(90))) ShapeTest.Stop();
+            GUI.enabled = true;
+            if (ci >= 0) GUILayout.Label("now: " + ShapeTest.FatNames[ci] + " (" + ShapeTest.FatLeft.ToString("0.0", CultureInfo.InvariantCulture) + " s)", _hint);
+            GUILayout.EndHorizontal();
+            if (foldOff == null && gpu.FatVerts == 0) GUILayout.Label("    Chubby test off: no chubby area on her baked meshes (yet)", _off);
+            string mushOff = off ?? (gpu.MushNote.Length > 0 ? gpu.MushNote : null);
+            GUILayout.BeginHorizontal();
+            GUI.enabled = mushOff == null;
+            bool? mo = ShapeTest.MushOverride;
+            if (mo == null) { if (GUILayout.Button("Round joints A/B (Delta Mush on / off every " + ShapeTest.MushHalf.ToString("0", CultureInfo.InvariantCulture) + " s for " + ShapeTest.MushRun.ToString("0", CultureInfo.InvariantCulture) + " s; watch a bent joint)")) ShapeTest.StartMush(); }
+            else if (GUILayout.Button("Stop test", GUILayout.Width(90))) ShapeTest.Stop();
+            GUI.enabled = true;
+            if (mo != null) GUILayout.Label("now: " + (mo.Value ? "ON" : "off"), _bold);
+            GUILayout.EndHorizontal();
+            if (mushOff != null) GUILayout.Label("    Round joints A/B off: " + mushOff, _off);
+            GUILayout.Label("    The tests run over whatever she is doing and put your settings back when they end; the log has one line per step.", _hint);
+        }
+
         // Barycentric weights of p in the triangle (strength = top, skinny = bottom left, fat = bottom right), clamped into it.
         static void Bary(Vector2 p, Vector2 a, Vector2 b, Vector2 c, out float wa, out float wb, out float wc)
         {

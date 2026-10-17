@@ -76,6 +76,7 @@ namespace SfMorph
             if (testing != null) GUILayout.Label("now: " + testing + " at full (" + MuscleFlex.TestLeft(testing).ToString("0.0") + " s)", _hint);
             GUILayout.EndHorizontal();
             if (flexOff != null) GUILayout.Label("    Flex test off: " + flexOff, _off);
+            ShapeTests();
 
             HapticTests();
             ReactionTests(c);
