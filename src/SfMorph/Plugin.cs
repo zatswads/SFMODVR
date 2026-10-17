@@ -54,6 +54,8 @@ namespace SfMorph
         // 0.8.0 contact visuals v2 (GPU contact: dent edge, rim bulge, bent normals, self-contact, partner body, bend bulges, ripple, skin marks)
         internal ConfigEntry<bool> VoiceMuteDialogue, VoicePackInScenes;
         internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn, ReactRubSound, VoiceMuteGame, RippleThrust;
+        internal ConfigEntry<bool> ReactPenSound, ReactPenReact;   // 0.11.25
+        internal ConfigEntry<float> ReactPenVolume;
         internal ConfigEntry<float> ContactSkirt, ContactBulge, ContactDepth, BendBulge, BendBicepsMm, BendKneeMm, BendCalfMm, BendHipMm, BendBellyFoldMm,
             RippleAmount, RippleSpeed, RippleWavelength, RippleDamping, RippleImpact, MarksRedness, MarksFade, MarksAo, MarksBoost,
             MarksPrint, MarksPrintTime, MarksSmooth, MuscleObliques;   // 0.11.20
@@ -207,6 +209,9 @@ namespace SfMorph
             ReactSkinVolume = Config.Bind("Reactions", "SkinVolume", 0.8f, new ConfigDescription("Volume of the pat, grab and rub sounds (0.11.7: was the slap volume).", new AcceptableValueRange<float>(0f, 1f)));
             ReactFoley = Config.Bind("Reactions", "Foley", true, "Skin sounds: slaps from your own WAV files in BepInEx\\plugins\\SfMorph\\Sounds (slap_soft / slap_medium / slap_hard; none: the game's clips), a pat on light taps, a grab when a hand closes on her, a rub while a hand slides over her skin (your files in pat / grab / rub, else built-in sounds). Off: the game's slap clips only.");
             ReactRubSound = Config.Bind("Reactions", "RubSound", true, "With Skin sounds on: the soft rub while a hand slides over her skin (your files in Sounds\\rub, else a built one). Off mutes just the rub; slaps, pats and grabs keep sounding.");
+            ReactPenSound = Config.Bind("Reactions", "PenetrationSound", true, "With Skin sounds on: a sound when a finger (your hand models, the physics hands, the embodied partner's hands) goes into her vagina, anus or mouth, and on each in / out stroke (your files in Sounds\\penetration; an empty folder is silent). Louder with speed, at most a few per second.");
+            ReactPenVolume = Config.Bind("Reactions", "PenetrationVolume", 0.8f, new ConfigDescription("Volume of the penetration sound (times the skin volume).", new AcceptableValueRange<float>(0f, 1f)));
+            ReactPenReact = Config.Bind("Reactions", "PenetrationReacts", true, "A finger going into her vagina or anus excites her like a grope (excitement, voice, lines for the area, face, the game's desire), more on each in-stroke; in her mouth a little. Off: only the sound.");
             VoicePackName = Config.Bind("Voice", "Pack", "", "Her reaction voice from a voice pack: a folder name under BepInEx\\plugins\\SfMorph\\Sounds\\voice (breath_calm, breath_heavy, moan_low, moan_mid, moan_high, climax, exertion with WAV files). Empty: the game's own voice. While a pack is on, the game's lines and feeling sounds are not used (another voice).");
             VoiceMuteGame = Config.Bind("Voice", "MuteGameVoice", false, "While a voice pack is on: the game's own moans, sex voice and dirty talk are silent, and its moans in sex are answered by the pack's (the pack's clips still play on the same sources).");
             VoicePackInScenes = Config.Bind("Voice", "PackInScenes", true, "With MuteGameVoice: the game's climax / creampie / condom / clean / finish scenes (Timelines whose voice the mute silences) are filled with the pack's clips: request lines with climax sounds and high moans, invite lines, afterglow lines and breaths.");

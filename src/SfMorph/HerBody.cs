@@ -1087,6 +1087,7 @@ namespace SfMorph
             }
             _geoActive = false;
             ShapesNow();                                    // also for SkinDepth / CapsuleDepth, whatever the sources are
+            Penetration.Begin();                            // 0.11.25: the openings for this frame; every source below is fed to it too
             var caps = s.Caps;
             bool listOn = s.PushByTouch && caps != null && caps.Count > 0;
             int n = listOn ? caps.Count : 0;
@@ -1120,6 +1121,7 @@ namespace SfMorph
                 _geoActive = true;
                 string who = src != null && src.Name != null ? src.Name : (c.Owner ?? "a hand");
                 Feed(a, b, c.Radius, src, c.Owner, who, HandOf(who), true, va, vb, raA, raB);
+                Penetration.Feed(a, b, c.Radius, who, HandOf(who));
             }
             for (int gi = 0; gi < ng; gi++)
             {
@@ -1131,6 +1133,7 @@ namespace SfMorph
                 if (geo) Velocity(n + gi, w.A, w.B, invDt, out va, out vb, out raA, out raB);
                 _geoActive = true;
                 Feed(w.A, w.B, w.R, w.Src, w.By, w.By ?? "a hand", w.Hand, geo, va, vb, raA, raB);
+                Penetration.Feed(w.A, w.B, w.R, w.By ?? "a hand", w.Hand);
             }
 
             for (int i = 0; i < Segs.Count; i++)

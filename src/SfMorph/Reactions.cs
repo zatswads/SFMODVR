@@ -7,6 +7,7 @@ namespace SfMorph
     internal class ReactionSettings
     {
         public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley, RubSound, MuteGameVoice, MuteDialogue, PackInScenes, LipSync;
+        public bool PenSound, PenReact; public float PenVolume;   // 0.11.25
         public float LipStrength, LipLead, LipOverGame, LipMood;
         public float Sensitivity, Cooldown, Volume, SkinVolume, BlushGain, VoicePitchVar, LimbPush, LineChance, FaceStrength, VoicePitch, VoiceFormant;
         public string FaceMap = "", VoicePack = "";
@@ -22,7 +23,7 @@ namespace SfMorph
             VoiceMode = p.ReactVoiceMode.Value; Log = p.ReactLog.Value;
             Lines = p.ReactLines.Value; LineChance = p.ReactLineChance.Value;
             LinesGamePath = p.ReactLinesGamePath.Value;
-            Foley = p.ReactFoley.Value; RubSound = p.ReactRubSound.Value; VoicePack = p.VoicePackName.Value ?? ""; VoicePitch = p.VoicePitch.Value; VoiceFormant = p.VoiceFormant.Value;
+            Foley = p.ReactFoley.Value; RubSound = p.ReactRubSound.Value; PenSound = p.ReactPenSound.Value; PenReact = p.ReactPenReact.Value; PenVolume = p.ReactPenVolume.Value; VoicePack = p.VoicePackName.Value ?? ""; VoicePitch = p.VoicePitch.Value; VoiceFormant = p.VoiceFormant.Value;
             FaceClips = p.ReactFaceClips.Value; FaceStrength = p.ReactFaceStrength.Value; FaceMap = p.ReactFaceMap.Value ?? "";
             LipSync = p.LipSyncOn.Value; LipStrength = p.LipStrength.Value; LipLead = p.LipLead.Value; LipOverGame = p.LipOverGame.Value; LipMood = p.LipMood.Value;
             PushByTouch = p.HandsPushByTouch.Value;   // the geometric push of other hands: without it and without physics hands nothing is classified
@@ -136,6 +137,13 @@ namespace SfMorph
         readonly Slide[] _sl = new Slide[HerBody.SegNames.Length];
         float _rubLvl, _lastPatT = -100f, _lastGrabT = -100f;
         readonly bool[] _grabWas = new bool[2];
+        // 0.11.25 penetration (Penetration.cs): per opening whether a finger is in, its depth, the stroke's extreme and direction (+1 in),
+        // the depth speed (m/s, + inward), the last sound; _penK / _penEv are set while Fire runs for a penetration event
+        struct PenR { public bool In, Seen; public float D, Ext, Spd, LastSnd; public int Dir, Strokes; }
+        readonly PenR[] _pen = new PenR[Penetration.NO];
+        int _penK = -1, _penEv;
+        static readonly string[] PenEvNames = { "in", "in-stroke", "out", "out-stroke" };
+        static readonly float[] PenEnterE = { 0.03f, 0.02f, 0.008f }, PenStrokeE = { 0.01f, 0.007f, 0.002f };   // vagina, anus, mouth
         Vector3 _rubPt, _testRubAt;
         float _testRubUntil = -1f;
         bool _rubNoted;
@@ -199,7 +207,7 @@ namespace SfMorph
                 {
                     if (HerBody.BuildVersion != _bv) RebuildMap();
                     if (cut) ClearR();
-                    else { Classify(dt, s); GrabButtonSound(s); }
+                    else { Classify(dt, s); GrabButtonSound(s); PenStep(dt, s); }
                 }
                 else if (_bv != -2) { _bv = -2; ClearR(); }
                 // 0.9.0: the skin rub loop follows the fastest sliding touch of this frame
@@ -305,6 +313,7 @@ namespace SfMorph
         {
             System.Array.Clear(_r, 0, _r.Length);
             System.Array.Clear(_sl, 0, _sl.Length);
+            System.Array.Clear(_pen, 0, _pen.Length);
             var segs = HerBody.Segs;
             for (int i = 0; i < segs.Count; i++)
                 if (segs[i].Index >= 0 && segs[i].Index < _r.Length) _r[segs[i].Index].LastHitRead = segs[i].HitT;
@@ -323,7 +332,7 @@ namespace SfMorph
                 bool closed = _grabWas[h] ? gv > 0.35f : gv >= 0.6f;
                 bool edge = closed && !_grabWas[h];
                 _grabWas[h] = closed;
-                if (!edge || _now - _lastGrabT < 0.5f) continue;
+                if (!edge || _now - _lastGrabT < 0.5f || PenByHand(h)) continue;   // 0.11.25: fingers in her: the penetration sound, not a grab
                 HerBody.Seg best = null; float bt = 0.3f;
                 var segs = HerBody.Segs;
                 for (int i = 0; i < segs.Count; i++)
@@ -338,6 +347,98 @@ namespace SfMorph
                 if (ok) _sfx++;
                 if (s.Log >= 1) L("grab sound: your " + (h == 0 ? "left" : "right") + " hand closed on " + best.Name + (ok ? "" : " (no sound: " + (_g.Found ? "sound effects off or no clip" : "no game link") + ")"));
             }
+        }
+
+        // ================= penetration (0.11.25) =================
+
+        // A finger in an opening of this zone now (hips: vagina / anus; face: mouth).
+        bool PenIn(int zone)
+        {
+            if (zone == ZHips) return _pen[Penetration.Vagina].In || _pen[Penetration.Anus].In;
+            if (zone == ZFace) return _pen[Penetration.Mouth].In;
+            return false;
+        }
+        bool PenByHand(int h)
+        {
+            for (int k = 0; k < Penetration.NO; k++) if (_pen[k].In && Penetration.Hand[k] == h) return true;
+            return false;
+        }
+
+        // The depth of the deepest finger in each opening (Penetration, filled this frame by HerBody) -> events: in (past the opening by
+        // 6 mm), out (4 mm back out, or gone), and while in, a stroke each time the depth turns by 12 mm (in-stroke / out-stroke).
+        void PenStep(float dt, ReactionSettings s)
+        {
+            bool fresh = Penetration.Frame == Time.frameCount;
+            for (int k = 0; k < Penetration.NO; k++)
+            {
+                float d = fresh && Penetration.Ok[k] ? Penetration.Depth[k] : float.NaN;
+                if (float.IsNaN(d))
+                {
+                    if (_pen[k].In) { _pen[k].In = false; PenEvent(k, 2, Mathf.Max(0f, -_pen[k].Spd), Penetration.O[k], Penetration.By[k] ?? "a hand", s); }
+                    _pen[k].Seen = false; _pen[k].Spd = 0f;
+                    continue;
+                }
+                if (_pen[k].Seen)
+                {
+                    float v = (d - _pen[k].D) / Mathf.Max(dt, 1e-4f);
+                    if (Mathf.Abs(v) < 3f) _pen[k].Spd += (v - _pen[k].Spd) * Mathf.Clamp01(dt / 0.05f);   // a jump is not a stroke
+                }
+                else _pen[k].Spd = 0f;
+                _pen[k].D = d; _pen[k].Seen = true;
+                string by = Penetration.By[k] ?? "a hand";
+                Vector3 at = Penetration.O[k];
+                if (!_pen[k].In)
+                {
+                    if (d > 0.006f) { _pen[k].In = true; _pen[k].Dir = 1; _pen[k].Ext = d; _pen[k].Strokes = 0; PenEvent(k, 0, Mathf.Max(0f, _pen[k].Spd), at, by, s); }
+                    continue;
+                }
+                if (d < -0.004f) { _pen[k].In = false; PenEvent(k, 2, Mathf.Max(0f, -_pen[k].Spd), at, by, s); continue; }
+                if (_pen[k].Dir > 0)
+                {
+                    if (d > _pen[k].Ext) _pen[k].Ext = d;
+                    else if (d < _pen[k].Ext - 0.012f) { _pen[k].Dir = -1; _pen[k].Ext = d; _pen[k].Strokes++; PenEvent(k, 3, Mathf.Max(0f, -_pen[k].Spd), at, by, s); }
+                }
+                else
+                {
+                    if (d < _pen[k].Ext) _pen[k].Ext = d;
+                    else if (d > _pen[k].Ext + 0.012f) { _pen[k].Dir = 1; _pen[k].Ext = d; _pen[k].Strokes++; PenEvent(k, 1, Mathf.Max(0f, _pen[k].Spd), at, by, s); }
+                }
+            }
+        }
+
+        // One penetration event (ev: 0 in, 1 in-stroke, 2 out, 3 out-stroke) at speed spd (m/s along the opening): the sound (at most 5 a
+        // second per opening, louder with speed, the way out a little softer), and for in / in-stroke her reaction like a grope (Fire with
+        // _penK set: its own excitement gains, the area's lines, no grab sound). Logged at Log 1 (strokes: the first 20 of an entry), Log 2 all.
+        void PenEvent(int k, int ev, float spd, Vector3 at, string by, ReactionSettings s)
+        {
+            float I = Mathf.Clamp01((spd - 0.03f) / 0.3f);
+            string snd;
+            if (!(s.Sound && s.Foley && s.PenSound)) snd = "sound off";
+            else if (_now - _pen[k].LastSnd < 0.2f) snd = "sound skipped (too soon)";
+            else
+            {
+                float vol = s.SkinVolume * s.PenVolume * Mathf.Lerp(0.35f, 1f, I) * (ev >= 2 ? 0.7f : 1f) * (k == Penetration.Mouth ? 0.6f : 1f);
+                bool ok = _g.FoleyShot(SkinFoley.Penetration, at, vol, Mathf.Lerp(0.94f, 1.06f, Rand()) + (ev >= 2 ? 0.03f : 0f));
+                if (ok) { _pen[k].LastSnd = _now; _sfx++; snd = "sound " + vol.ToString("0.00"); }
+                else snd = "no sound (" + (!_g.Found ? "no game link" : !_g.FoleyReady() ? "skin sounds not loaded"
+                         : !ReactionsGame.Foley.HasFiles(SkinFoley.Penetration) ? "no files in Sounds, penetration folder" : "sound effects off in the game") + ")";
+            }
+            string re = "";
+            if ((ev == 0 || ev == 1) && s.PenReact)
+            {
+                var g = HerBody.Find(k == Penetration.Mouth ? "head" : "pelvis");
+                if (g != null && g.Index >= 0)
+                {
+                    float e0 = E;
+                    _penK = k; _penEv = ev;
+                    try { Fire(k == Penetration.Mouth ? ZFace : ZHips, g, 2, Mathf.Max(I, 0.1f), at, Penetration.N[k], by, spd, 0f, false); }
+                    finally { _penK = -1; }
+                    re = "; E " + e0.ToString("0.00") + " -> " + E.ToString("0.00") + (_resp.Length > 0 ? " (" + _resp + ")" : "");
+                }
+                else re = "; no " + (k == Penetration.Mouth ? "head" : "pelvis") + " segment: no reaction";
+            }
+            bool logIt = s.Log >= 2 || (s.Log == 1 && (ev == 0 || ev == 2 || _pen[k].Strokes <= 20));
+            if (logIt) L("penetration: " + Penetration.Names[k] + " " + PenEvNames[ev] + " by " + by + " (" + spd.ToString("0.00") + " m/s, depth " + (_pen[k].D * 100f).ToString("0.0") + " cm) -> " + snd + re);
         }
 
         // ================= classifier (design 1.4) =================
@@ -454,6 +555,7 @@ namespace SfMorph
             _sl[gi].L = lp; _sl[gi].Pt = cp; _sl[gi].Src = src;
             // from 4 cm/s, full at 40 cm/s; a firmer hand is a little louder
             float lvl = Mathf.Clamp01((_sl[gi].Spd - 0.04f) / 0.36f) * Mathf.Lerp(0.6f, 1f, Mathf.Clamp01(force / 20f));
+            if (PenIn(_zoneOf[gi])) lvl = 0f;                        // 0.11.25: a finger moving in her is not a rub on her skin
             if (lvl > _rubLvl) { _rubLvl = lvl; _rubPt = cp; }
         }
 
@@ -542,9 +644,11 @@ namespace SfMorph
             _resp.Length = 0;
             _zAny[zone] = _now; if (tier >= 3) _zArr[zone] = _now;
 
-            // excitement and pain
-            E = Mathf.Clamp01(E + ZoneGain[zone][Mathf.Min(tier, 4) - 1] * TierFactor[tier] * StateFactor());
-            float dP = tier == 4 ? 0.15f * I * (zone == ZFace ? 2f : 1f) : tier == 5 ? 0.35f : (tier == 2 && zone == ZNeck ? 0.1f : 0f);
+            // excitement and pain (0.11.25: a penetration event has its own gains; a fast entry into her anus hurts a little)
+            float gain = _penK >= 0 ? (_penEv == 0 ? PenEnterE[_penK] : PenStrokeE[_penK] * Mathf.Lerp(0.5f, 1f, I)) : ZoneGain[zone][Mathf.Min(tier, 4) - 1] * TierFactor[tier];
+            E = Mathf.Clamp01(E + gain * StateFactor());
+            float dP = _penK >= 0 ? (_penK == Penetration.Anus && _penEv == 0 && I > 0.6f ? 0.1f * I : 0f)
+                     : tier == 4 ? 0.15f * I * (zone == ZFace ? 2f : 1f) : tier == 5 ? 0.35f : (tier == 2 && zone == ZNeck ? 0.1f : 0f);
             P = Mathf.Clamp01(P + dP);
             _lastEvT = _now; _lastStimT = _now;
             SetTier();
@@ -622,7 +726,7 @@ namespace SfMorph
                 if (s.Gaze && (tier >= 4 || wasGuarded)) _gazeHold = Mathf.Max(_gazeHold, _now + (tier >= 5 ? 1.5f : 0.4f));
             }
             // 0.9.0: a grab sound when a hand closes on her (the grope's onset)
-            if (tier == 2 && s.Sound && s.Foley && !_quiet && _now - _lastGrabT >= 0.5f)
+            if (tier == 2 && s.Sound && s.Foley && !_quiet && _now - _lastGrabT >= 0.5f && _penK < 0 && !PenIn(zone))
             {
                 _lastGrabT = _now;
                 if (_g.FoleyShot(SkinFoley.Grab, pt, s.SkinVolume * Mathf.Lerp(0.45f, 0.9f, I), Mathf.Lerp(0.92f, 1.08f, Rand()))) { _sfx++; Note("grab sound"); }
@@ -635,7 +739,8 @@ namespace SfMorph
             // log
             // (only the voiced best hit of a swing is the event: the quiet ones of the same swing show up in the log at Log 2 only)
             if (!_quiet) _evN++;
-            bool logIt = _quiet ? s.Log >= 2 : s.Log >= 2 || (s.Log == 1 && (test || _evN <= 20 || _evN % 10 == 0));
+            bool logIt = _penK >= 0 ? false                         // PenEvent logs it with the sound
+                       : _quiet ? s.Log >= 2 : s.Log >= 2 || (s.Log == 1 && (test || _evN <= 20 || _evN % 10 == 0));
             if (logIt)
             {
                 _sb.Length = 0;
@@ -653,7 +758,8 @@ namespace SfMorph
             // the panel's "last:" line (built per event only, for the best hit of a swing)
             if (_quiet) return;
             _last.Length = 0;
-            _last.Append("last: ").Append(TierNames[tier]).Append(" on ").Append(ZoneNames[zone]).Append(" by ").Append(by != null ? by : "a hand");
+            if (_penK >= 0) _last.Append("last: penetration (").Append(Penetration.Names[_penK]).Append(' ').Append(PenEvNames[_penEv]).Append(") by ").Append(by != null ? by : "a hand");
+            else _last.Append("last: ").Append(TierNames[tier]).Append(" on ").Append(ZoneNames[zone]).Append(" by ").Append(by != null ? by : "a hand");
             if (test) _last.Append(" (test)");
             _last.Append(" -> ").Append(_resp.Length > 0 ? _resp.ToString() : "no visible response");
             _last.Append("  [E ").Append(E.ToString("0.00")).Append(", ").Append(_g.InSexMode ? "sex mode" : "outside sex mode").Append(']');
@@ -957,6 +1063,7 @@ namespace SfMorph
         // -1 none (chest, belly, arms, calves, face, neck keep their moans).
         int LineCatOf(int zone, HerBody.Seg g, Vector3 pt)
         {
+            if (_penK >= 0) return _penK == Penetration.Vagina ? 1 : _penK == Penetration.Anus ? 2 : -1;   // 0.11.25: a finger in her mouth: no lines
             switch (zone)
             {
                 case ZBreast: return 0;
@@ -1561,6 +1668,27 @@ namespace SfMorph
                         var g = FindSeg(ZButt, 0); Vector3 at = g != null ? SegCentre(g) : _root.position;
                         bool ok = _g.Found && _g.FoleyShot(which == 6 ? SkinFoley.Pat : SkinFoley.Grab, at, _s.SkinVolume * 0.8f, 1f);
                         res = (ok ? "played" : "failed") + " (" + (which == 6 ? "pat" : "grab") + ", volume " + (_s.SkinVolume * 0.8f).ToString("0.00") + (_s.Sound ? "" : "; Sound is off") + ")";
+                        break;
+                    }
+                case 9:
+                case 10:
+                    {
+                        // 0.11.25: 9 the penetration sound alone at her vagina; 10 a whole in-stroke there (sound, excitement, voice)
+                        int k = Penetration.Vagina;
+                        var g = HerBody.Find("pelvis");
+                        Vector3 at = Penetration.Ok[k] ? Penetration.O[k] : g != null ? SegCentre(g) : _root.position;
+                        if (which == 10)
+                        {
+                            if (!HerBody.Built || g == null) { res = "her body is not built"; break; }
+                            _pen[k].LastSnd = -100f;
+                            PenEvent(k, 1, 0.2f, at, "the test button", _s);
+                            res = _resp.Length > 0 ? _resp.ToString() : "see the penetration line above";
+                            break;
+                        }
+                        float vol = _s.SkinVolume * _s.PenVolume * 0.8f;
+                        bool ok = _g.Found && _g.FoleyShot(SkinFoley.Penetration, at, vol, 1f);
+                        res = (ok ? "played" : "failed") + " (penetration, volume " + vol.ToString("0.00") + (_s.Sound ? "" : "; Sound is off")
+                            + (ok || !ReactionsGame.Foley.Loaded || ReactionsGame.Foley.HasFiles(SkinFoley.Penetration) ? "" : "; no files in the penetration folder") + ")";
                         break;
                     }
                 case 7:

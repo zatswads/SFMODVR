@@ -112,6 +112,10 @@ namespace SfMorph
             if (GUILayout.Button("Test grab")) react.TestResponse(8);
             if (GUILayout.Button("Test rub (1.5 s)")) react.TestResponse(7);
             GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Test penetration sound")) react.TestResponse(9);
+            if (GUILayout.Button("Test penetration stroke")) react.TestResponse(10);
+            GUILayout.EndHorizontal();
             GUI.enabled = true;
             if (skinOff != null) GUILayout.Label("    skin sounds off: " + skinOff, _off);
 

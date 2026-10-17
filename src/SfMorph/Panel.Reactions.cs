@@ -72,6 +72,22 @@ namespace SfMorph
             float skinCfg = _p.ReactSkinVolume.Value;
             float sv = Slider("    skin volume", skinCfg * 100f, 0f, 100f, "0", 80f, skinOff == null ? null : "off: " + skinOff, " %") / 100f;
             if (skinOff == null && Mathf.Abs(sv - skinCfg) > 0.0001f) _p.ReactSkinVolume.Value = sv;
+            // 0.11.25: a finger going into her vagina, anus or mouth (your files in Sounds\penetration) and whether it excites her
+            bool penCfg = _p.ReactPenSound.Value;
+            GUI.enabled = skinOff == null;
+            bool tpen = GUILayout.Toggle(penCfg, "    Penetration sound: a finger going into her, each in / out stroke");
+            GUI.enabled = true;
+            if (skinOff == null && tpen != penCfg) _p.ReactPenSound.Value = tpen;
+            float pvCfg = _p.ReactPenVolume.Value;
+            string penOff = skinOff ?? (!penCfg ? "the penetration sound is off" : null);
+            float pv = Slider("    penetration volume", pvCfg * 100f, 0f, 100f, "0", 80f, penOff == null ? null : "off: " + penOff, " %") / 100f;
+            if (penOff == null && Mathf.Abs(pv - pvCfg) > 0.0001f) _p.ReactPenVolume.Value = pv;
+            bool prCfg = _p.ReactPenReact.Value;
+            GUI.enabled = sub == null;
+            bool tpr = GUILayout.Toggle(prCfg, " Penetration excites her (voice, lines, face; a finger in her mouth a little)");
+            GUI.enabled = true;
+            if (sub == null && tpr != prCfg) _p.ReactPenReact.Value = tpr;
+            if (Penetration.Status.Length > 0) GUILayout.Label("    " + Penetration.Status.Replace("Penetration: ", ""), Penetration.Status.StartsWith("off") ? _off : _hint);
             if (!sound) GUILayout.Label("    off: Sound is off", _off);
             else if (foley)
             {

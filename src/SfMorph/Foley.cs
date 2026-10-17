@@ -13,8 +13,9 @@ namespace SfMorph
     // the game's AudioSource.clip property type, handed in by ReactionsGame. Everything loads once, on the main thread, on first use.
     internal sealed class SkinFoley
     {
-        public const int SlapSoft = 0, SlapMedium = 1, SlapHard = 2, Pat = 3, Grab = 4, Rub = 5, NC = 6;
-        public static readonly string[] Folders = { "slap_soft", "slap_medium", "slap_hard", "pat", "grab", "rub" };
+        // 0.11.25: penetration (a finger going into her vagina, anus or mouth, each in / out stroke): files only, no built fallback
+        public const int SlapSoft = 0, SlapMedium = 1, SlapHard = 2, Pat = 3, Grab = 4, Rub = 5, Penetration = 6, NC = 7;
+        public static readonly string[] Folders = { "slap_soft", "slap_medium", "slap_hard", "pat", "grab", "rub", "penetration" };
 
         sealed class Set
         {
@@ -48,6 +49,7 @@ namespace SfMorph
                 for (int c = 0; c < NC; c++) _sets[c] = new Set();
                 string dir = Dir;
                 EnsureFolders(dir);
+                try { foreach (var f in Folders) Directory.CreateDirectory(Path.Combine(dir, f)); } catch (Exception) { }   // a category added later (penetration)
                 var sb = new System.Text.StringBuilder("Skin foley: ");
                 int bad = 0;
                 for (int c = 0; c < NC; c++)
@@ -74,7 +76,7 @@ namespace SfMorph
                     sb.Append(Folders[c]).Append(' ');
                     if (st.Files > 0) sb.Append(st.Files).Append(st.Files == 1 ? " file" : " files");
                     else if (st.Clips.Count > 0) sb.Append("built");
-                    else sb.Append(c <= SlapHard ? "none (next strength / the game's clips)" : "none");
+                    else sb.Append(c <= SlapHard ? "none (next strength / the game's clips)" : c == Penetration ? "none (silent)" : "none");
                 }
                 if (bad > 0) sb.Append("; ").Append(bad).Append(" file(s) skipped");
                 sb.Append(" (folder ").Append(dir).Append(')');
@@ -135,7 +137,8 @@ namespace SfMorph
                 File.WriteAllText(Path.Combine(dir, "README.txt"),
                     "SF Body Morphs skin foley: put WAV files (PCM 8/16/24/32-bit or float, mono or stereo, any rate) in these folders.\r\n" +
                     "slap_soft / slap_medium / slap_hard: slaps by strength. pat: light taps. grab: a hand closing on her. rub: a skin-on-skin\r\n" +
-                    "stroke, played as a loop while a hand slides over her (seamless loops sound best).\r\n" +
+                    "stroke, played as a loop while a hand slides over her (seamless loops sound best). penetration: a finger going\r\n" +
+                    "into her vagina, anus or mouth (each in / out stroke; no built sound, an empty folder is silent).\r\n" +
                     "Empty folders fall back: slaps to the next strength, then to the game's own slap clips; pat, grab and rub to built-in sounds.\r\n" +
                     "Read once per game start.\r\n");
             }
