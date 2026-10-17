@@ -220,8 +220,10 @@ namespace SfMorph
                 if (rub && !_rubNoted) { _rubNoted = true; Note("rub sound"); if (s.Log >= 1) L("rub sound on (level " + _rubLvl.ToString("0.00") + ", volume " + (_rubLvl * s.SkinVolume * 0.7f).ToString("0.00") + ")"); }
                 else if (!rub) _rubNoted = false;
                 _g.MuteDialogue = s.MuteDialogue;
-                _g.MuteGameVoice(s.MuteGameVoice && ReactionsGame.Pack.Loaded);
-                _g.SceneFill(s.MuteGameVoice && s.PackInScenes && ReactionsGame.Pack.Loaded);
+                // 0.11.35 (user: "pack replaces anyway"): a pack always stands in for her game voice wherever it has a fitting clip; the
+                // game's own voice plays where it has none (MuteGameVoice is no longer a switch)
+                _g.MuteGameVoice(ReactionsGame.Pack.Loaded);
+                _g.SceneFill(s.PackInScenes && ReactionsGame.Pack.Loaded);
 
                 if (cut) return;
                 Tick(dt, s);
@@ -846,10 +848,11 @@ namespace SfMorph
             LipSync.LoadMap(false);
             // 0.11.7: no arkit-map.txt yet (the user's PC in 0.11.4): seed the poses from her face clips once and save them, so the curves move
             // her lips out of the box instead of nothing but the loudness jaw; the editor refines them
-            // 0.11.11: a map from before 0.11.11 holds whole clip frames (curled lower lip, 7 shapes): set aside and rebuilt the same way
+            // 0.11.11: a map from before 0.11.11 holds whole clip frames (curled lower lip, 7 shapes); 0.11.35: one from 0.11.11-0.11.38 was built in a
+            // mouth frame whose up pointed forward (lower lip pulled off her teeth): set aside and rebuilt
             string oldMap = "";
             if (!_autoSeeded && _s.LipSync && LipSync.RetireOldMap(out oldMap))
-                L("lip sync: the mouth poses from an older version were set aside as " + oldMap + " (they curled her lower lip); building new ones");
+                L("lip sync: the mouth poses from an older version were set aside as " + oldMap + " (built in a wrong mouth frame: lower lip off her teeth); building new ones");
             if (!_autoSeeded && _s.LipSync && LipSync.PosedShapes == 0 && !System.IO.File.Exists(LipSync.MapPath))
             {
                 _autoSeeded = true;
