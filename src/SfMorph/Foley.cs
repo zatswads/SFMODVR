@@ -380,11 +380,40 @@ namespace SfMorph
         bool HasLine(int bank, int lvl) { return _lines[bank * 3 + lvl - 1] != null && _lines[bank * 3 + lvl - 1].Files.Length > 0; }
         public bool HasState(int s) { return Loaded && _state[s] != null && _state[s].Files.Length > 0; }
 
+        // 0.11.44: a pack may carry its spoken lines in other languages, <pack>\lang\<Language>\lines\... (same banks as lines\); with
+        // nonEnglish on, the lines come from the first such language (moans, breaths, climax and exertion are shared). Their lip-sync curves
+        // mirror that path under lipsync\<pack>\lang\<Language>\lines\... like any other clip of the pack.
+        public string[] Languages = new string[0];
+        public string Language = "";      // the language the lines come from now ("" = the pack's own lines\)
+        public bool WantNonEnglish;       // what the last Load was asked for (UsePack reloads when the switch changes)
+
+        // The languages of pack `name` (folders under lang\ with a lines\ folder), sorted; cached per name for the panel.
+        static readonly Dictionary<string, string[]> _langOf = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+        public static string[] LanguagesOf(string name, bool fresh = false)
+        {
+            string[] r;
+            if (string.IsNullOrEmpty(name)) return new string[0];
+            if (!fresh && _langOf.TryGetValue(name, out r)) return r;
+            var l = new List<string>();
+            try
+            {
+                string d = Path.Combine(Path.Combine(Root, name), "lang");
+                if (Directory.Exists(d))
+                    foreach (var x in Directory.GetDirectories(d)) if (Directory.Exists(Path.Combine(x, "lines"))) l.Add(Path.GetFileName(x));
+            }
+            catch (Exception) { }
+            l.Sort(StringComparer.OrdinalIgnoreCase);
+            r = l.ToArray(); _langOf[name] = r;
+            return r;
+        }
+
         // Lists pack `name` (empty: unloads). tClip = UnityEngine.AudioClip. Logs one line; never throws.
-        public void Load(string name, Type tClip)
+        public void Load(string name, Type tClip, bool nonEnglish = false)
         {
             Unload();
             Name = name ?? "";
+            WantNonEnglish = nonEnglish; Language = "";
+            Languages = LanguagesOf(Name, true);
             if (Name.Length == 0) { Summary = ""; return; }
             try
             {
@@ -402,6 +431,7 @@ namespace SfMorph
                     sb.Append(Folders[c]).Append(' ').Append(_cats[c].Files.Length);
                 }
                 string ld = Path.Combine(dir, "lines");
+                if (nonEnglish && Languages.Length > 0) { Language = Languages[0]; ld = Path.Combine(Path.Combine(Path.Combine(dir, "lang"), Language), "lines"); }
                 var lb = new System.Text.StringBuilder();
                 for (int b = 0; b < 4; b++)
                 {
@@ -411,7 +441,8 @@ namespace SfMorph
                 for (int s = 0; s < StateLines.Length; s++) { _state[s] = Scan(Path.Combine(ld, StateLines[s])); lines += _state[s].Files.Length; lb.Append(", ").Append(StateLines[s]).Append(' ').Append(_state[s].Files.Length); }
                 HasLines = lines > 0;
                 Loaded = total + lines > 0;
-                Summary = (Loaded ? "" : "no clips: ") + sb + (HasLines ? "; lines: " + lb : "; no lines");
+                Summary = (Loaded ? "" : "no clips: ") + sb + (HasLines ? "; " + (Language.Length > 0 ? Language + " " : "") + "lines: " + lb : "; no lines")
+                        + (Languages.Length > 0 && Language.Length == 0 ? " (also in " + string.Join(", ", Languages) + ")" : "");
                 Plugin.Log.LogInfo("Voice pack '" + Name + "': " + Summary + " (read as they are first used, " + Cache + " kept in memory)");
             }
             catch (Exception e) { Unload(); Summary = "failed: " + e.Message; Plugin.Log.LogWarning("Voice pack '" + name + "' failed: " + e); }

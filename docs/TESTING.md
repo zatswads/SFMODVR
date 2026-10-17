@@ -98,6 +98,15 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.44 (pack languages, drop-down)
+
+Install `dist/SfMorph.dll`. Reactions tab:
+1. Voice pack is a drop-down: the game's voice, Anime, Aria51 (English, Japanese), Ashley, from_your_mouth (English, Russian),
+   hummingael (English, French), Kiwi, Mariana (English, Spanish), Pixie, Pixie Dominant, Scottish Peach, Southern Domme; no Rebecca / Amy.
+2. Pick Mariana: "Non-English lines (Spanish)" is usable; Kiwi: greyed "(this pack has none)". Tick it with Mariana: log
+   `Voice pack 'Mariana': ...; Spanish lines: ...`; her lines are Spanish, her moans unchanged; lip sync still moves her lips
+   (`Lip sync: curve for Mariana\SfVoice_...`). Untick: English lines again within a second.
+
 ## 0.11.43 (avatar face)
 
 Log, in the `Avatar ...` line: `face: her rig from reika_face_x by 8 landmarks (lipcorner.L ... browout.R), moved up to N mm for the

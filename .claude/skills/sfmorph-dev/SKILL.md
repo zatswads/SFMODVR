@@ -8,6 +8,12 @@ description: Work on SF Body Morphs (src/SfMorph), the BepInEx plugin for Sex Fo
 Read `docs/HANDOFF.md` (architecture, game facts, apply model) before changing code, and `docs/TESTING.md`
 for what to verify and what to ask the user to test.
 
+## Session title
+
+`YYMMDD_HHMM <version> <topic>` (UK local time of the latest activity; the version the work is about; SfNr work writes `SfNr`), e.g.
+`261017_1531 0.11.10 headset feedback: muscles, dents, ripple, voice`. Set it with `set_session_title` (`self`) at the start and again at
+each wrap-up / release; give sessions you start the same format.
+
 ## Loop for every change
 
 1. **Triage first, cheaply.** The user attaches `LogOutput.log` and desktop-mirror screenshots.

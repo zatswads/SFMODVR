@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.11.44";
+        public const string Version = "0.11.45";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -52,7 +52,7 @@ namespace SfMorph
         internal ConfigEntry<float> LipStrength, LipLead, LipOverGame, LipMood;
         internal ConfigEntry<int> ReactVoiceMode, ReactLog, ReactConfigRev;
         // 0.8.0 contact visuals v2 (GPU contact: dent edge, rim bulge, bent normals, self-contact, partner body, bend bulges, ripple, skin marks)
-        internal ConfigEntry<bool> VoiceMuteDialogue, VoicePackInScenes;
+        internal ConfigEntry<bool> VoiceMuteDialogue, VoicePackInScenes, VoiceNonEnglish;
         internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn, ReactRubSound, VoiceMuteGame, RippleThrust;
         // 0.11.28 Delta Mush at her joints
         internal ConfigEntry<bool> DeltaMush;
@@ -250,6 +250,7 @@ namespace SfMorph
             ReactPenReact = Config.Bind("Reactions", "PenetrationReacts", true, "A finger going into her vagina or anus excites her like a grope (excitement, voice, lines for the area, face, the game's desire), more on each in-stroke; in her mouth a little. Off: only the sound.");
             VoicePackName = Config.Bind("Voice", "Pack", "", "Her reaction voice from a voice pack: a folder name under BepInEx\\plugins\\SfMorph\\Sounds\\voice (breath_calm, breath_heavy, moan_low, moan_mid, moan_high, climax, exertion with WAV files). Empty: the game's own voice. While a pack is on, the game's lines and feeling sounds are not used (another voice).");
             VoiceMuteGame = Config.Bind("Voice", "MuteGameVoice", false, "Unused since 0.11.35 (a pack always replaces her game voice where it has a fitting clip). Was: While a voice pack is on: the game's own moans, sex voice and dirty talk are silent, and its moans in sex are answered by the pack's (the pack's clips still play on the same sources).");
+            VoiceNonEnglish = Config.Bind("Voice", "NonEnglish", false, "A pack with lines in another language (its lang\\<Language> folder: Mariana Spanish, Aria51 Japanese, hummingael French, from_your_mouth Russian) speaks those instead of its English lines; moans and breaths are the same.");
             VoicePackInScenes = Config.Bind("Voice", "PackInScenes", true, "With a pack: the game's climax / creampie / condom / clean / finish / tease scenes (Timelines whose voice the mute silences) are filled with the pack's clips: request lines with climax sounds and high moans, invite lines, afterglow lines and breaths.");
             VoiceMuteDialogue = Config.Bind("Voice", "MuteGameDialogue", true, "Unused since 0.11.35 (the dialogue source plays nothing in this game build). Was: With MuteGameVoice: the game's dialogue voice is silent too (it also talks through it in sex scenes). Off = story dialogue stays audible.");
             VoicePitch = Config.Bind("Voice", "Pitch", 1f, new ConfigDescription("Her voice's pitch (moans, lines, dialogue), without changing its speed. 1 = as recorded.", new AcceptableValueRange<float>(0.75f, 1.4f)));
