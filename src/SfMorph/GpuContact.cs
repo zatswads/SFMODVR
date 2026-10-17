@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using UnityEngine;
 using UnityEngine.LowLevel;
 using UnityEngine.PlayerLoop;
@@ -66,6 +67,9 @@ namespace SfMorph
             public bool Ok { get { return Layout >= 0 && Mask != null && R != null; } }
             // 0.8.0 v2 (design 1.5): the bake and its GPU buffers (null/false = this renderer stays on the v1 imprint)
             public ContactBake Bake;
+            public ContactBake.Job Job;           // 0.11.34: a bake running on a worker thread (picked up by PollBakes)
+            public bool MushTried;                // 0.11.34: the bake was asked for Delta Mush data
+            public string BadNote;                // 0.11.34: the last reason its chain was skipped (said once per reason)
             public GraphicsBuffer CanonBuf, AdjOffBuf, AdjVBuf, TissueBuf, ClassBuf, BendBuf, FieldA, FieldB, FieldC, FieldD, MarksBuf, GradBuf, Foreign;
             public bool V2;
             public int TanOff = -1;               // byte offset of the tangent (Float32x4) in the skinned buffer, -1 = none
@@ -112,7 +116,7 @@ namespace SfMorph
             PMarkFade = Shader.PropertyToID("_MarkFade"), PDentFade = Shader.PropertyToID("_DentFade"), PPrintAmt = Shader.PropertyToID("_PrintAmt"), PWaveAmt = Shader.PropertyToID("_WaveAmt"),
             PBendAmt0 = Shader.PropertyToID("_BendAmt0"), PBendAmt1 = Shader.PropertyToID("_BendAmt1"), PBendAmt2 = Shader.PropertyToID("_BendAmt2"),
             PDisc = Shader.PropertyToID("_Disc"), PDiscAmt = Shader.PropertyToID("_DiscAmt"),
-            PHits = Shader.PropertyToID("_Hits"), PMap = Shader.PropertyToID("_Map"), PParentGrad = Shader.PropertyToID("_ParentGrad"),
+            PHits = Shader.PropertyToID("_Hits"), PMap = Shader.PropertyToID("_Map"), PParentCount = Shader.PropertyToID("_ParentCount"), PParentGrad = Shader.PropertyToID("_ParentGrad"),
             PParentOn = Shader.PropertyToID("_ParentOn"), POwnOn = Shader.PropertyToID("_OwnOn"), PCountHits = Shader.PropertyToID("_CountHits"),
             PMus = Shader.PropertyToID("_Mus"), PMusBelly = Shader.PropertyToID("_MusBelly"), PMusAmp = Shader.PropertyToID("_MusAmp"), PMusAct = Shader.PropertyToID("_MusAct"),
             PMusFirm = Shader.PropertyToID("_MusFirm"), PMusOn = Shader.PropertyToID("_MusOn"),
@@ -310,17 +314,18 @@ namespace SfMorph
                         s.Extra = true;
                         s.Limb = SkinLimb(r);
                         SetupMesh(s, new float[r.sharedMesh.vertexCount], null);
-                        if (s.V2) keep.Add(r);
+                        if (s.V2 || s.Job != null) keep.Add(r);   // 0.11.34: its bake may still be running (dropped by PollBakes if it fails)
                     }
                 RemoveRenderers(keep);
-                if (_v2Kernels && !_v2Failed) BuildMaps();
                 if (_v2Kernels && !_v2Failed && her != null) BendPose.Bind(her);
-                UpdateStatus();
-                int baked = 0;
-                for (int i = 0; i < _rs.Count; i++) if (_rs[i].V2) baked++;
-                if (_v2Kernels && !_v2Failed)
-                    Plugin.Log.LogInfo("GPU contact: v2 " + (baked > 0 ? "on (" + baked + " of " + _rs.Count + " renderers baked" + (_rs.Count > baked ? ", the rest on the v1 imprint" : "")
-                                       + ", bend " + BendPose.Joints + " joints)" : "off for now: no renderer baked, v1 imprint"));
+                int jobs = 0;
+                for (int i = 0; i < _rs.Count; i++) if (_rs[i].Job != null) jobs++;
+                if (jobs == 0) BakesDone();
+                else
+                {
+                    UpdateStatus();
+                    Plugin.Log.LogInfo("GPU contact: baking " + jobs + " renderers on worker threads (v1 imprint until they are done)");
+                }
             }
             catch (Exception e) { Plugin.Log.LogError("GPU contact: sync failed, turned off: " + e); GoDead("error"); }
         }
@@ -577,18 +582,96 @@ namespace SfMorph
             return b;
         }
 
-        // The v2 bake of one renderer and its GPU buffers; a failure leaves the renderer on the v1 imprint (said once per build).
+        // 0.11.28 Delta Mush wanted (the setting, or the Debug tab's A/B test)
+        bool MushWanted() { return _mushK && (_set.Mush || ShapeTest.MushOverride.HasValue); }
+
+        // The v2 bake of one renderer: 0.11.34 the Unity side here, the arithmetic on a worker thread (ContactBake.Job), the GPU buffers when
+        // PollBakes picks the result up. Until then the renderer stays on the v1 imprint. A failure is said once per build.
         void MakeBake(RendState s, float[] zone)
         {
             string err;
-            // 0.11.28: Delta Mush on her body skin meshes (upper / lower body), never the neck, face, feet or overlays
-            float mushR = _mushK && IsBodyMesh(s) && !s.Extra ? Mathf.Clamp(_set.MushRadius, 0.005f, 0.06f) : 0f;
-            ContactBake b = ContactBake.Build(s.R, zone, _her, s.Extra && !s.Limb ? null : MuscleMapFor(), mushR, out err);
-            if (b == null || b.V != s.Count)
+            // 0.11.28: Delta Mush on her body skin meshes (upper / lower body), never the neck, face, feet or overlays; 0.11.34: only while it is
+            // on (its bake cost seconds of the 0.11.33 freeze with DeltaMush off)
+            bool mushMesh = _mushK && IsBodyMesh(s) && !s.Extra;
+            float mushR = mushMesh && MushWanted() ? Mathf.Clamp(_set.MushRadius, 0.005f, 0.06f) : 0f;
+            s.MushTried = mushR > 0f;
+            s.Job = null;
+            var job = ContactBake.Prepare(s.R, zone, _her, s.Extra && !s.Limb ? null : MuscleMapFor(), mushR, out err);
+            if (job == null)
             {
-                Plugin.Log.LogWarning("GPU contact: renderer " + s.Name + ": v2 bake failed (" + (b == null ? err : "vertex count " + b.V + " != " + s.Count) + "): v1 imprint for it");
+                Plugin.Log.LogWarning("GPU contact: renderer " + s.Name + ": v2 bake failed (" + err + "): v1 imprint for it");
                 return;
             }
+            s.Job = job;
+            try
+            {
+                var th = new Thread(job.Run) { IsBackground = true, Priority = System.Threading.ThreadPriority.BelowNormal, Name = "SfMorph bake " + s.Name };
+                th.Start();
+            }
+            catch (Exception e)
+            {
+                // no thread: bake here (the old freeze, but working)
+                Plugin.Log.LogWarning("GPU contact: no worker thread for the bake of " + s.Name + " (" + e.Message + "): baked on the main thread");
+                job.Run();
+            }
+        }
+
+        // 0.11.34: finished worker bakes -> GPU buffers; once none is left running, the seams / overlay maps and the status. Main thread, every frame.
+        void PollBakes()
+        {
+            bool finished = false, running = false;
+            for (int i = _rs.Count - 1; i >= 0; i--)
+            {
+                var s = _rs[i];
+                var job = s.Job;
+                if (job == null) continue;
+                if (!job.Done) { running = true; continue; }
+                s.Job = null;
+                finished = true;
+                if (!s.Alive || s.R == null || s.Mesh != job.M || s.R.sharedMesh != job.M) continue;   // the mesh changed meanwhile: a new bake runs
+                FinishBake(s, job);
+                if (s.Extra && !s.V2) { DropState(s); _rs.RemoveAt(i); }   // her neck / face skin are only in the chain with a bake
+            }
+            if (finished && !running) BakesDone();
+        }
+
+        // After the last bake of a build: the maps between the meshes, the status, the summary line.
+        void BakesDone()
+        {
+            if (!_v2Kernels || _v2Failed) { UpdateStatus(); return; }
+            BuildMaps();
+            UpdateStatus();
+            int baked = 0;
+            for (int i = 0; i < _rs.Count; i++) if (_rs[i].V2) baked++;
+            Plugin.Log.LogInfo("GPU contact: v2 " + (baked > 0 ? "on (" + baked + " of " + _rs.Count + " renderers baked" + (_rs.Count > baked ? ", the rest on the v1 imprint" : "")
+                               + ", bend " + BendPose.Joints + " joints)" : "off for now: no renderer baked, v1 imprint"));
+        }
+
+        bool BakesRunning() { for (int i = 0; i < _rs.Count; i++) if (_rs[i].Job != null) return true; return false; }
+
+        // 0.11.34: Delta Mush switched on (or its A/B test started) after a build that skipped its bake: bake the body meshes again, once.
+        void MushRebake()
+        {
+            if (_z == null || !MushWanted() || BakesRunning()) return;
+            for (int i = 0; i < _rs.Count; i++)
+            {
+                var s = _rs[i];
+                if (!s.V2 || s.MushTried || s.Extra || !IsBodyMesh(s) || s.R == null) continue;
+                Plugin.Log.LogInfo("GPU contact: Delta Mush on: baking " + s.Name + " again with its joint data");
+                SetupMesh(s, _z.MaskFor(s.R), _z.ZoneFor(s.R));
+            }
+        }
+
+        // The GPU side of a finished bake.
+        void FinishBake(RendState s, ContactBake.Job job)
+        {
+            var b = job.Result;
+            if (b == null || b.V != s.Count)
+            {
+                Plugin.Log.LogWarning("GPU contact: renderer " + s.Name + ": v2 bake failed (" + (b == null ? job.Error : "vertex count " + b.V + " != " + s.Count) + "): v1 imprint for it");
+                return;
+            }
+            ReleaseV2(s);
             try
             {
                 int V = s.Count;
@@ -878,6 +961,7 @@ namespace SfMorph
         void DropState(RendState s)
         {
             s.Alive = false;
+            s.Job = null;   // a running bake finishes on its thread and is never picked up
             RestoreRaw(s);
             ReleaseV2(s);
             if (s.Mask != null) { s.Mask.Release(); s.Mask = null; }
@@ -1132,6 +1216,8 @@ namespace SfMorph
                 catch (Exception e) { Plugin.Log.LogWarning("GPU contact: BeforeImprint handler failed: " + e.Message); }
             Perf.Begin(Perf.S.GpuRun);   // after the wrinkle strain (timed on its own), ended in Run
             if (_rs.Count == 0) return;
+            try { PollBakes(); MushRebake(); }
+            catch (Exception e) { V2Fail("bake pickup", e); }
             float cpu0 = Time.realtimeSinceStartup;
             float now = Time.time;
             float smokeT = _smokeDur > 0f ? (cpu0 - _smokeStart) / _smokeDur : 2f;
@@ -1271,15 +1357,18 @@ namespace SfMorph
                     s.NullVb = 0;
                     if (s.Layout == 0 && !CheckBuffer(s, vb)) continue;
                     if (s.Layout < 0) continue;
+                    // 0.11.34: the skinned buffer is fetched every frame, but its size was checked only once; Unity recreates it when the mesh
+                    // changes in place (Fidelity's subdivision, its undo): never dispatch over a buffer of another size, set it up again instead
+                    if (vb.count != s.Count || vb.stride != s.Stride) { BufferChanged(s, vb); continue; }
                     if (s.NeedCalib) { RequestCalibration(s, vb); continue; }   // read the untouched skinning result first
                     int groups = (s.Count + 63) / 64;
                     // 0.11.28: Delta Mush first: the dents, bulges and muscles below build on the corrected joint
-                    if (s.Mush)
+                    if (s.Mush && MushOk(s))
                     {
                         try { dispatches += RunMush(s, vb); }
                         catch (Exception e) { MushFail(s, e); }
                     }
-                    if (s.MushFollow && s.Parent != null && s.Parent.MushRan)
+                    if (s.MushFollow && s.Parent != null && s.Parent.MushRan && FollowOk(s))
                     {
                         try { dispatches += FollowMush(s, vb, groups); }
                         catch (Exception e) { MushFail(s, e); }
@@ -1297,7 +1386,7 @@ namespace SfMorph
                         _cs.Dispatch(_kImprint, groups, 1, 1);
                         dispatches++;
                     }
-                    if (s.IsV2 && (s.Work || s.Decay || s.Probe || s.MapOnly))
+                    if (s.IsV2 && (s.Work || s.Decay || s.Probe || s.MapOnly) && ChainOk(s))
                     {
                         try { dispatches += RunV2(s, vb, nWaves, dt, softScale, depthMul); v2Count++; }
                         catch (Exception e) { V2Fail("chain on " + s.Name, e); }
@@ -1523,6 +1612,7 @@ namespace SfMorph
             cs.SetMatrix(PToWorld, toWorld); cs.SetMatrix(PToLocal, toWorld.inverse);
             cs.SetBuffer(_kMushFollow, PVerts, vb); cs.SetBuffer(_kMushFollow, PMap, s.MapBuf); cs.SetBuffer(_kMushFollow, PMapW, s.MapWBuf);
             cs.SetBuffer(_kMushFollow, PMushOffR, s.Parent.MushOffBuf);
+            cs.SetInt(PParentCount, s.Parent.Count);   // 0.11.34: the shader drops a map entry past the parent's end
             cs.Dispatch(_kMushFollow, groups, 1, 1);
             return 1;
         }
@@ -1565,6 +1655,7 @@ namespace SfMorph
             cs.SetBuffer(_kApplyMap, PVerts, vb); cs.SetBuffer(_kApplyMap, PCanon, s.CanonBuf); cs.SetBuffer(_kApplyMap, PGrad, s.GradBuf);
             cs.SetBuffer(_kApplyMap, PMap, s.MapBuf); cs.SetBuffer(_kApplyMap, PParentGrad, par.GradBuf); cs.SetBuffer(_kApplyMap, PMapW, s.MapWBuf);
             cs.SetInt(PParentOn, par.ChainRan ? 1 : 0); cs.SetInt(POwnOn, own ? 1 : 0);
+            cs.SetInt(PParentCount, par.Count);   // 0.11.34: the shader drops a map entry past the parent's end
             if (!par.ChainRan && !own) return 0;
             cs.Dispatch(_kApplyMap, groups, 1, 1);
             return 1;
@@ -1604,6 +1695,82 @@ namespace SfMorph
             Plugin.Log.LogInfo("GPU contact: renderer " + s.Name + " skinned buffer ok: count " + vb.count + " stride " + vb.stride + " (mesh stream-0 stride " + meshStride
                 + (meshStride != vb.stride ? ", differs: using the buffer's" : "") + ", target " + vb.target + ")");
             return true;
+        }
+
+        // 0.11.34: the skinned buffer no longer matches what this renderer was set up for: said once per change, set up again from the mesh
+        // (a new bake), nothing dispatched on it meanwhile
+        void BufferChanged(RendState s, GraphicsBuffer vb)
+        {
+            string why = "count " + s.Count + " -> " + vb.count + ", stride " + s.Stride + " -> " + vb.stride;
+            if (why != s.BadNote)
+            {
+                s.BadNote = why;
+                Plugin.Log.LogWarning("GPU contact: renderer " + s.Name + ": its skinned buffer changed (" + why + "): skipped, set up again from its mesh");
+            }
+            s.Layout = 0;
+            s.Mesh = null;   // the plan of the next frame sees a different mesh and runs SetupMesh (a new bake)
+            if (s.V2) { ReleaseV2(s); UpdateStatus(); }
+        }
+
+        // 0.11.34: every buffer the v2 chain indexes per vertex must be this renderer's vertex count (2 x for _Grad), the bake too, and an
+        // overlay's map must point into its parent's buffers. A mismatch skips the chain (said once per reason) instead of dispatching past
+        // the end of a buffer.
+        bool ChainOk(RendState s)
+        {
+            int V = s.Count;
+            string why = null;
+            if (s.Bake == null || s.Bake.V != V) why = "bake has " + (s.Bake != null ? s.Bake.V : 0) + " vertices";
+            else if (!Len(s.CanonBuf, V) || !Len(s.AdjOffBuf, V + 1) || !Len(s.TissueBuf, V) || !Len(s.ClassBuf, V) || !Len(s.BendBuf, V)) why = "a bake buffer has the wrong size";
+            else if (!Len(s.FieldA, V) || !Len(s.FieldB, V) || !Len(s.FieldC, V) || !Len(s.FieldD, V) || !Len(s.Foreign, V) || !Len(s.MarksBuf, V)) why = "a field buffer has the wrong size";
+            else if (!Len(s.GradBuf, 2 * V)) why = "the gradient buffer has the wrong size";
+            else if (s.AdjVBuf == null || s.HitsBuf == null) why = "a buffer is missing";
+            else if ((s.MusBuf != null && !Len(s.MusBuf, V)) || (s.BellyBuf != null && !Len(s.BellyBuf, V)) || (s.FoldBuf != null && !Len(s.FoldBuf, V)) || (s.FatBuf != null && !Len(s.FatBuf, V)))
+                why = "a shape buffer has the wrong size";
+            else if (s.Parent != null && (s.MapBuf != null || s.MapWBuf != null))
+            {
+                var p = s.Parent;
+                if (!Len(s.MapBuf, V) || !Len(s.MapWBuf, V)) why = "its map has the wrong size";
+                else if (p.GradBuf == null || p.Bake == null || p.GradBuf.count != 2 * p.Count || p.Bake.V != p.Count) why = "its parent " + p.Name + " is not set up";
+            }
+            return Bad(s, why);
+        }
+
+        bool MushOk(RendState s)
+        {
+            var md = s.Bake != null ? s.Bake.Mush : null;
+            int V = s.Count;
+            string why = null;
+            if (md == null || s.Bake.V != V) why = "no delta mush bake for its vertices";
+            else if (!Len(s.MushDeltaBuf, V) || !Len(s.MushNrmBuf, V) || !Len(s.MushNbBuf, 2 * V) || !Len(s.MushPA, V) || !Len(s.MushPB, V) || !Len(s.MushOffBuf, 2 * V)
+                     || !Len(s.AdjOffBuf, V + 1) || !Len(s.CanonBuf, V))
+                why = "a delta mush buffer has the wrong size";
+            else if (!Len(s.MushGatherBuf, Math.Max(1, md.Gather.Length)) || !Len(s.MushSmoothBuf, Math.Max(1, md.Smooth.Length)) || !Len(s.MushCoreBuf, Math.Max(1, md.Core.Length))
+                     || !Len(s.MushAllBuf, Math.Max(1, md.All.Length)))
+                why = "a delta mush list has the wrong size";
+            return Bad(s, why);
+        }
+
+        bool FollowOk(RendState s)
+        {
+            var p = s.Parent;
+            string why = null;
+            if (!Len(s.MapBuf, s.Count) || !Len(s.MapWBuf, s.Count)) why = "its map has the wrong size";
+            else if (p == null || !Len(p.MushOffBuf, 2 * p.Count) || p.Bake == null || p.Bake.V != p.Count) why = "its parent's delta mush is not set up";
+            return Bad(s, why);
+        }
+
+        static bool Len(GraphicsBuffer b, int n) { return b != null && b.count == n; }
+
+        // false (and said once per reason) when why is set
+        static bool Bad(RendState s, string why)
+        {
+            if (why == null) return true;
+            if (why != s.BadNote)
+            {
+                s.BadNote = why;
+                Plugin.Log.LogWarning("GPU contact: renderer " + s.Name + ": chain skipped, " + why + " (count " + s.Count + ")");
+            }
+            return false;
         }
 
         static Matrix4x4 ToWorld(RendState s)

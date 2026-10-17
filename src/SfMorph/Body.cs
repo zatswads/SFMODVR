@@ -748,8 +748,9 @@ namespace SfMorph
             _gpuOn = true;
             try
             {
-                Gpu.Sync(her.Soft, her);
+                // 0.11.34: the settings first, so a build's bake sees this frame's [Physics] values (DeltaMush decides whether its data is baked)
                 Gpu.SetCapsules(Contacts(), Mathf.Lerp(0.02f, 0.045f, _p.Softness.Value), 0.003f, Contact);
+                Gpu.Sync(her.Soft, her);
             }
             catch (Exception e)
             {

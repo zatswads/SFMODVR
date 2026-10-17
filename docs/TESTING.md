@@ -98,6 +98,18 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.34 (GPU resets: worker-thread bake, buffer guards)
+
+Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Then:
+- **10-minute run with [Physics] GpuContact on**: change character and outfit at least twice (the moments that froze before), touch
+  her, let her bend. Afterwards there should be **no nvlddmkm 153 events** in Windows' System log for that time (Event Viewer -> Windows
+  Logs -> System, source nvlddmkm), no freeze and no crash. Send the log either way.
+- Log: `GPU contact: baking N renderers on worker threads`, then one `baked <mesh>: ... ms on a worker thread (weld .. tissue .. shape ..
+  skin .. muscles ..), N ms on the main thread` per renderer and `GPU contact: v2 on (...)` once they are done. The main-thread share
+  should be a few hundred ms at most, and the `Perf last 10 s` line after a change should no longer show `gpuSync` in seconds.
+- With DeltaMush off the bake lines have no `delta mush` part. Switching DeltaMush on (Physics tab): `Delta Mush on: baking <body> again`.
+- Red flags: `its skinned buffer changed`, `chain skipped, ...` (a guard caught a size mismatch: send the log, it says which buffer).
+
 ## 0.11.33 (shape tests)
 
 Install `dist/SfMorph.dll` (the bundle is unchanged since 0.11.31). Debug tab:

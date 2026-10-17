@@ -126,14 +126,52 @@ namespace SfMorph
 
         // ---- the bake ----
 
-        public static ContactBake Build(SkinnedMeshRenderer r, float[] zone, Character her, MuscleMap mm, float mushRadius, out string error)
+        // 0.11.34 (user: GPU resets ending in crashes or freezes since 17 Oct; their logs: an 11-17 s freeze of the main thread in GPU contact's
+        // sync at every character / outfit change, 5-8 s per body mesh, each followed by nvlddmkm resets): the bake is split in two. Prepare (main
+        // thread) reads everything that touches a Unity object (the mesh's arrays, bone names and transforms, her frames, the CPU skin's matrices,
+        // which submeshes are on the body sheet, the Delta Mush rest shape); Job.Run does the arithmetic on a worker thread and touches no Unity
+        // object. GpuContact starts the job and picks the result up on a later frame (Done), so the headset keeps getting frames meanwhile.
+        internal sealed class Job
+        {
+            internal SkinnedMeshRenderer R;
+            internal Mesh M;
+            internal int V;
+            internal Vector3[] P, N, MushRest;
+            internal Vector2[] Uv;
+            internal BoneWeight[] W;
+            internal List<int[]> Subs;
+            internal float[] Zone;
+            internal int[] BoneCls;
+            internal float Mpu, MushRadius;
+            internal Frame Fr;
+            internal HeadFrame Hf;
+            internal bool HasHer;
+            internal Matrix4x4[] SkinM;
+            internal MuscleMap Mm;
+            internal bool[] SubOnSheet;
+            internal int MushShapes;
+            internal long PrepMs;
+            public volatile bool Done;
+            public ContactBake Result;
+            public string Error;
+
+            public void Run()
+            {
+                try { string e; Result = Compute(this, out e); Error = e; }
+                catch (Exception e) { Result = null; Error = e.GetType().Name + ": " + e.Message; }
+                Done = true;
+            }
+        }
+
+        // Main thread: the Unity side of the bake. null + error = no bake for this renderer.
+        public static Job Prepare(SkinnedMeshRenderer r, float[] zone, Character her, MuscleMap mm, float mushRadius, out string error)
         {
             error = null;
-            try { return BuildInner(r, zone, her, mm, mushRadius, out error); }
+            try { return PrepareInner(r, zone, her, mm, mushRadius, out error); }
             catch (Exception e) { error = e.GetType().Name + ": " + e.Message; return null; }
         }
 
-        static ContactBake BuildInner(SkinnedMeshRenderer r, float[] zone, Character her, MuscleMap mm, float mushRadius, out string error)
+        static Job PrepareInner(SkinnedMeshRenderer r, float[] zone, Character her, MuscleMap mm, float mushRadius, out string error)
         {
             error = null;
             var sw = Stopwatch.StartNew();
@@ -166,6 +204,61 @@ namespace SfMorph
             if (uv != null && uv.Length != V) uv = null;
             if (zone != null && zone.Length != V) { error = "zone length " + zone.Length + " != vertex count " + V; return null; }
             var bones = r.bones;
+            var j = new Job { R = r, M = m, V = V, P = P, N = N, Uv = uv, W = W, Subs = subs, Zone = zone, HasHer = her != null, Mm = mm, MushRadius = mushRadius };
+            // units: metres per mesh unit (the mesh's bind space may not be metres)
+            j.Mpu = MetresPerUnit(bones, bind, W);
+            // her frame in this mesh's bind space (left / up / forward, root) and her head's (the face / neck fat)
+            j.Fr = Frame.Make(bones, bind, her);
+            j.Hf = HeadFrame.Make(bones, bind, her);
+            // the bone class of each bone (by name, or its nearest recognised ancestor)
+            var boneCls = new int[bones.Length];
+            var bcache = new Dictionary<Transform, int>();
+            for (int i = 0; i < bones.Length; i++)
+            {
+                var t = bones[i];
+                int c = ClsNone;
+                if (t != null && !bcache.TryGetValue(t, out c)) { c = ClassOfBone(t); bcache[t] = c; }
+                boneCls[i] = c;
+            }
+            j.BoneCls = boneCls;
+            // the CPU skin's matrices with the current bones (the overlay -> body map)
+            var bm = new Matrix4x4[bones.Length];
+            for (int i = 0; i < bones.Length; i++) bm[i] = bones[i] != null && i < bind.Length ? bones[i].localToWorldMatrix * bind[i] : Matrix4x4.zero;
+            j.SkinM = bm;
+            // muscles: the body-atlas submeshes (Wrinkles' class 3: her body / skin materials; the foot's own texture is not the body atlas)
+            if (mm != null && uv != null)
+            {
+                var mats = r.sharedMaterials;
+                j.SubOnSheet = new bool[subs.Count];
+                for (int si = 0; si < subs.Count && si < mats.Length; si++)
+                    j.SubOnSheet[si] = mats[si] != null && Wrinkles.Classify(mats[si], r) == 3 && (mats[si].name ?? "").IndexOf("foot", StringComparison.OrdinalIgnoreCase) < 0;
+            }
+            // 0.11.28 Delta Mush: the rest shape is her current one (the character and slider blendshapes, never the pose correctives)
+            if (mushRadius > 0f && j.Fr.Bp != null)
+            {
+                var pm = (Vector3[])P.Clone();
+                Vector3[] dv = null;
+                j.MushShapes = HerBody.ApplyMorphs(r, pm, ref dv);
+                j.MushRest = pm;
+            }
+            j.PrepMs = sw.ElapsedMilliseconds;
+            return j;
+        }
+
+        // Worker thread: the arithmetic of the bake (no Unity object is touched here: only the Job's arrays and Unity's value types).
+        static ContactBake Compute(Job jb, out string error)
+        {
+            error = null;
+            var sw = Stopwatch.StartNew();
+            var lap = new StringBuilder();
+            long t0 = 0;
+            Action<string> Lap = what => { long t = sw.ElapsedMilliseconds; lap.Append(lap.Length > 0 ? " " : "").Append(what).Append(' ').Append(t - t0); t0 = t; };
+            int V = jb.V;
+            Vector3[] P = jb.P, N = jb.N;
+            Vector2[] uv = jb.Uv;
+            BoneWeight[] W = jb.W;
+            var subs = jb.Subs;
+            float[] zone = jb.Zone;
             int totalTris = 0;
             for (int s = 0; s < subs.Count; s++)
             {
@@ -234,9 +327,10 @@ namespace SfMorph
             }
             adjOff[V] = (uint)outN;
             if (outN < adjV.Length) Array.Resize(ref adjV, outN);
+            Lap("weld");
 
-            // 3. units: metres per mesh unit (the mesh's bind space may not be metres), edge length, UV density
-            float mpu = MetresPerUnit(bones, bind, W);
+            // 3. units (metres per mesh unit from Prepare), edge length, UV density
+            float mpu = jb.Mpu;
             double edgeSum = 0.0;
             for (int v = 0; v < V; v++)
             {
@@ -269,20 +363,12 @@ namespace SfMorph
                 if (a3 > 0.0 && a2 > 1e-12) mPerUv = (float)(Math.Sqrt(a3 / a2) * mpu);
             }
 
-            // 4. her frame in this mesh's bind space (left / up / forward, root), for the bend weights and the shin / biceps floors
-            var frame = Frame.Make(bones, bind, her);
+            // 4. her frame in this mesh's bind space (Prepare), for the bend weights and the shin / biceps floors
+            var frame = jb.Fr;
 
             // 5. bone class and tissue per vertex: hard depth and soft depth, blended over the bone weights like the class itself
-            var boneCls = new int[bones.Length];
+            var boneCls = jb.BoneCls;
             var clsSeen = new int[ClassCount];
-            var bcache = new Dictionary<Transform, int>();
-            for (int i = 0; i < bones.Length; i++)
-            {
-                var t = bones[i];
-                int c = ClsNone;
-                if (t != null && !bcache.TryGetValue(t, out c)) { c = ClassOfBone(t); bcache[t] = c; }
-                boneCls[i] = c;
-            }
             var cls = new uint[V];
             var tissue = new Vector2[V];
             for (int v = 0; v < V; v++)
@@ -342,13 +428,14 @@ namespace SfMorph
             }
             float skinEdge = skinN > 0 ? (float)(skinSum / skinN) * mpu : avgEdge;
             if (!(skinEdge > 1e-5f)) skinEdge = avgEdge;
+            Lap("tissue");
 
             // 6. bend weights
             var bend = new Vector4[V];
             for (int v = 0; v < V; v++) bend[v] = new Vector4(-1f, 0f, -1f, 0f);
             string bendNote = "bend off (no " + (N == null ? "normals" : "character") + ")";
             int bendVerts = 0;
-            if (N != null && her != null) bendVerts = BakeBend(frame, bind, P, N, cls, canon, mpu, bend, out bendNote);
+            if (N != null && jb.HasHer) bendVerts = BakeBend(frame, P, N, cls, canon, mpu, bend, out bendNote);
 
             // 6b. 0.11.31 skin folds and the chubby areas
             var fold = new Vector4[V];
@@ -357,13 +444,13 @@ namespace SfMorph
             int foldVerts = 0, fatVerts = 0;
             string foldNote = "", fatNote = "";
             if (N != null && frame.Ok) foldVerts = BakeFolds(frame, P, N, cls, canon, mpu, fold, out foldNote);
-            if (N != null) fatVerts = BakeFat(frame, HeadFrame.Make(bones, bind, her), P, N, cls, canon, mpu, fat, out fatNote);
+            if (N != null) fatVerts = BakeFat(frame, jb.Hf, P, N, cls, canon, mpu, fat, out fatNote);
+            Lap("shape");
 
-            // 7. a CPU skin with the current bones (no blendshapes: the overlays carry the same "follow" deltas as the body under them, so leaving
-            // them out on both keeps them matched): GpuContact's overlay -> body map
+            // 7. a CPU skin with the current bones (matrices from Prepare; no blendshapes: the overlays carry the same "follow" deltas as the body
+            // under them, so leaving them out on both keeps them matched): GpuContact's overlay -> body map
             var wp = new Vector3[V];
-            var bm = new Matrix4x4[bones.Length];
-            for (int i = 0; i < bones.Length; i++) bm[i] = bones[i] != null && i < bind.Length ? bones[i].localToWorldMatrix * bind[i] : Matrix4x4.zero;
+            var bm = jb.SkinM;
             for (int v = 0; v < V; v++)
             {
                 var w = W[v];
@@ -375,30 +462,31 @@ namespace SfMorph
                 if (w.weight3 > 0f && w.boneIndex3 < bm.Length) { acc += bm[w.boneIndex3].MultiplyPoint3x4(P[v]) * w.weight3; sum += w.weight3; }
                 wp[v] = sum > 0.5f ? acc / sum : new Vector3(float.NaN, float.NaN, float.NaN);
             }
+            Lap("skin");
 
             // 8. 0.11.8 muscles (body sheet only): ids + shares at the vertex UV, the belly weight over the mesh
             Vector4[] mus = null;
             float[] belly = null;
             int musN = 0;
             string musNote = "";
-            if (mm != null && uv != null) musN = BakeMuscles(r, mm, P, uv, subs, canon, adjOff, adjV, cls, mpu, out mus, out belly, out musNote);
+            if (jb.Mm != null && uv != null) musN = BakeMuscles(jb.SubOnSheet, jb.Mm, P, uv, subs, canon, adjOff, adjV, cls, mpu, out mus, out belly, out musNote);
+            Lap("muscles");
 
             // 9. 0.11.28 Delta Mush at the joints (body skin meshes): the rest shape is her current one (the character and slider blendshapes,
-            // never the pose correctives), so the detail it puts back is hers
+            // never the pose correctives), so the detail it puts back is hers. 0.11.34: only baked while [Physics] DeltaMush is on (GpuContact
+            // passes radius 0 otherwise and bakes again when it is switched on)
             MushData mush = null;
             string mushNote = "";
-            if (mushRadius > 0f && frame.Bp != null)   // 0.11.29: not frame.Ok (that needs the hips: the upper body has none)
+            if (jb.MushRadius > 0f && jb.MushRest != null && frame.Bp != null)   // 0.11.29: not frame.Ok (that needs the hips: the upper body has none)
             {
-                var pm = (Vector3[])P.Clone();
-                Vector3[] dv = null;
-                int shapes = HerBody.ApplyMorphs(r, pm, ref dv);
-                mush = MushBake.Build(pm, N, canon, adjOff, adjV, cls, subs, mpu, skinEdge, frame.Bp, mushRadius, out mushNote);
-                if (shapes > 0) mushNote += " (rest with " + shapes + " shapes)";
+                mush = MushBake.Build(jb.MushRest, N, canon, adjOff, adjV, cls, subs, mpu, skinEdge, frame.Bp, jb.MushRadius, out mushNote);
+                if (jb.MushShapes > 0) mushNote += " (rest with " + jb.MushShapes + " shapes)";
+                Lap("mush");
             }
 
             var res = new ContactBake
             {
-                R = r, Mesh = m, V = V, CanonCount = groups, Canon = canon, AdjOff = adjOff, AdjV = adjV, Tissue = tissue, Class = cls, Bend = bend,
+                R = jb.R, Mesh = jb.M, V = V, CanonCount = groups, Canon = canon, AdjOff = adjOff, AdjV = adjV, Tissue = tissue, Class = cls, Bend = bend,
                 BendCount = bendVerts, Uv = uv, SubTris = subs.ToArray(), AvgEdge = avgEdge, SkinEdge = skinEdge, MetresPerUv = mPerUv, WorldP = wp,
                 Muscle = musN > 0 ? mus : null, Belly = musN > 0 ? belly : null, MuscleCount = musN, Mush = mush,
                 Fold = fold, FoldCount = foldVerts, Fat = fat, FatCount = fatVerts
@@ -417,7 +505,7 @@ namespace SfMorph
             if (mushNote.Length > 0) sb.Append(", ").Append(mushNote);
             if (foldNote.Length > 0) sb.Append(", ").Append(foldNote);
             if (fatNote.Length > 0) sb.Append(", ").Append(fatNote);
-            sb.Append(", ").Append(sw.ElapsedMilliseconds).Append(" ms");
+            sb.Append(", ").Append(sw.ElapsedMilliseconds).Append(" ms on a worker thread (").Append(lap).Append("), ").Append(jb.PrepMs).Append(" ms on the main thread");
             res.Note = sb.ToString();
             return res;
         }
@@ -498,7 +586,7 @@ namespace SfMorph
 
         // Her frame in the mesh's own bind space (needs the hips and something above the root in this mesh's bone list: a foot or nipple mesh has
         // neither, so Ok is false there: no bend, no shin floor).
-        struct Frame
+        internal struct Frame
         {
             public bool Ok;
             public Vector3 Left, Up, Fwd, RootP;
@@ -511,12 +599,19 @@ namespace SfMorph
                 if (her == null) { f.Note = "no frame (no character)"; return f; }
                 var idx = new Dictionary<Transform, int>();
                 for (int i = 0; i < bones.Length; i++) if (bones[i] != null && !idx.ContainsKey(bones[i])) idx[bones[i]] = i;
+                // 0.11.34: every named bone's bind position read here, on the main thread: Bp is called by the bake's worker thread, which must
+                // not touch a Transform (not even as a dictionary key: Unity's equality checks the native object)
+                var at = new Dictionary<string, Vector3>();
+                foreach (var kv in her.Bones)
+                {
+                    int i;
+                    if (kv.Value != null && idx.TryGetValue(kv.Value, out i) && i < bind.Length) at[kv.Key] = bind[i].inverse.MultiplyPoint3x4(Vector3.zero);
+                }
                 Func<string, Vector3?> bp = name =>
                 {
-                    Transform t;
-                    int i;
-                    if (!her.Bones.TryGetValue(name, out t) || t == null || !idx.TryGetValue(t, out i) || i >= bind.Length) return null;
-                    return bind[i].inverse.MultiplyPoint3x4(Vector3.zero);
+                    Vector3 p;
+                    if (name == null || !at.TryGetValue(name, out p)) return null;
+                    return p;
                 };
                 f.Bp = bp;
                 Vector3? hl = bp("Hip_L"), hr = bp("Hip_R"), root = bp("Root_M");
@@ -544,7 +639,7 @@ namespace SfMorph
         }
 
         // The slot weights per vertex from the rest pose in the mesh's own bind space. Returns the number of canonical vertices that got a weight.
-        static int BakeBend(Frame fr, Matrix4x4[] bind, Vector3[] P, Vector3[] N, uint[] cls, uint[] canon, float mpu, Vector4[] bend, out string note)
+        static int BakeBend(Frame fr, Vector3[] P, Vector3[] N, uint[] cls, uint[] canon, float mpu, Vector4[] bend, out string note)
         {
             if (!fr.Ok) { note = "no bend (" + (fr.Note.Length > 0 ? fr.Note : "no frame") + ")"; return 0; }
             Func<string, Vector3?> bp = fr.Bp;
@@ -811,7 +906,7 @@ namespace SfMorph
         // 0.11.31: her head's frame in this mesh's bind space (for the face / neck fat). The neck mesh has no left / right bones, so the frame
         // comes from her live bones (cheeks left / right, neck -> head up, the cheeks in front of the head joint), expressed in Head_M's own
         // space and carried into the mesh by Head_M's bind pose; positions from the mesh's own bind poses where it has the bone.
-        struct HeadFrame
+        internal struct HeadFrame
         {
             public bool Ok, HasCheeks, HasJaw, HasNeck, HasLip;
             public Vector3 Head, Neck, Jaw, CheekL, CheekR, LipLow, Up, Left, Fwd;
@@ -883,7 +978,7 @@ namespace SfMorph
         // smoothing passes (the region is point-sampled at ~1 cm: ids step from texel to texel). A mesh's open border (the waist cut between
         // her upper and lower body) is not an edge: the bulge carries across it. Hands, feet, head, breasts and genitals carry none (0.11.23:
         // the neck does: the neck muscles and the traps' neck part; a neck vertex without a muscle texel under it stays at 0).
-        static int BakeMuscles(SkinnedMeshRenderer r, MuscleMap mm, Vector3[] P, Vector2[] uv, List<int[]> subs, uint[] canon, uint[] adjOff, uint[] adjV,
+        static int BakeMuscles(bool[] sheet, MuscleMap mm, Vector3[] P, Vector2[] uv, List<int[]> subs, uint[] canon, uint[] adjOff, uint[] adjV,
                                uint[] cls, float mpu, out Vector4[] mus, out float[] belly, out string note)
         {
             int V = P.Length;
@@ -893,15 +988,13 @@ namespace SfMorph
             for (int v = 0; v < V; v++) mus[v] = new Vector4(-1f, 0f, -1f, 0f);
             var L = mm.Layer;
             if (L == null || mm.Region == null || mm.RW <= 0 || mm.RH <= 0) { note = "muscles: no map"; return 0; }
-            // the body-atlas submeshes (Wrinkles' class 3: her body / skin / foot materials)
-            var mats = r.sharedMaterials;
+            // the body-atlas submeshes (Prepare: Wrinkles' class 3, her body / skin materials, not the foot's own texture)
             var onSheet = new bool[V];
             var uvOn = new bool[V];   // this copy's UV is on the body atlas
             int subsOn = 0;
-            for (int si = 0; si < subs.Count && si < mats.Length; si++)
+            for (int si = 0; si < subs.Count && sheet != null && si < sheet.Length; si++)
             {
-                if (mats[si] == null || Wrinkles.Classify(mats[si], r) != 3) continue;
-                if ((mats[si].name ?? "").IndexOf("foot", StringComparison.OrdinalIgnoreCase) >= 0) continue;   // the foot's own texture, not the body atlas
+                if (!sheet[si]) continue;
                 subsOn++;
                 var tr = subs[si];
                 for (int i = 0; i < tr.Length; i++) { onSheet[canon[tr[i]]] = true; uvOn[tr[i]] = true; }

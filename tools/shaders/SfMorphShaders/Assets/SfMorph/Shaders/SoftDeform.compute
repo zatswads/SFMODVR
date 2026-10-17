@@ -191,6 +191,9 @@ RWStructuredBuffer<float2> _Foreign;// 0.9.4 Depth: per canonical vertex x = the
 StructuredBuffer<float2> _ForeignR;  // the same buffer, read by Compose
 RWStructuredBuffer<uint> _Hits;      // [0]: canonical vertices Depth found pressed (read back: her own limbs run the full chain only while they touch)
 StructuredBuffer<int> _Map;          // ApplyMap: per vertex of an overlay mesh (areola, tattoo...) the body canonical vertex under it, -1 = its own field
+uint _ParentCount;                   // 0.11.34: the parent body's vertex count (a map entry past it is ignored, never read past the parent's buffers)
+// 0.11.34 guards: every index read from a buffer (neighbours, canonical ids, maps, Delta Mush lists) is checked against _Count / _ParentCount
+// before it addresses another buffer; the plugin checks the sizes before it dispatches (GpuContact.ChainOk), this is the second line
 StructuredBuffer<float> _MapW;       // 0.9.7 ApplyMap: how much of the parent's Grad (1 = an overlay / the seam itself; a skin mesh blends toward its
                                      // own field over 1 cm from a seam with another skin mesh, so the two sides of a seam move as one surface)
 StructuredBuffer<float4> _ParentGrad;// ApplyMap: the body renderer's _Grad of this frame
@@ -373,6 +376,7 @@ void Dilate(uint3 id : SV_DispatchThreadID)
     for (uint i = _AdjOff[v]; i < o1; i++)
     {
         uint u = _AdjV[i];
+        if (u >= _Count) continue;
         float fu = _FieldIn[u];
         if (fu <= m) continue;
         if (!have) { pv = WorldPos(v); have = true; }
@@ -393,7 +397,7 @@ void Smooth(uint3 id : SV_DispatchThreadID)
     float f = _FieldIn[v];
     if (o1 <= o0) { _FieldOut[v] = f; return; }
     float s = 0;
-    for (uint i = o0; i < o1; i++) s += _FieldIn[_AdjV[i]];
+    for (uint i = o0; i < o1; i++) { uint u = _AdjV[i]; s += u < _Count ? _FieldIn[u] : f; }
     _FieldOut[v] = 0.5 * f + 0.5 * s / (float)(o1 - o0);
 }
 
@@ -484,7 +488,7 @@ void Grad(uint3 id : SV_DispatchThreadID)
     float S = sm ? _FieldS[v] : D;
     uint o0 = _AdjOff[v], o1 = _AdjOff[v + 1];
     float mx = max(abs(D), abs(S));
-    for (uint i = o0; i < o1; i++) { uint u0 = _AdjV[i]; mx = max(mx, max(abs(_FieldIn[u0]), sm ? abs(_FieldS[u0]) : 0.0)); }
+    for (uint i = o0; i < o1; i++) { uint u0 = _AdjV[i]; if (u0 >= _Count) continue; mx = max(mx, max(abs(_FieldIn[u0]), sm ? abs(_FieldS[u0]) : 0.0)); }
     if (mx < 1e-6)
     {
         _Grad[2 * v] = float4(0, 0, 0, 0);
@@ -499,6 +503,7 @@ void Grad(uint3 id : SV_DispatchThreadID)
         for (uint j = o0; j < o1; j++)
         {
             uint u = _AdjV[j];
+            if (u >= _Count) continue;
             float3 e = WorldPos(u) - pc;
             float dd = dot(e, e);
             if (dd < 1e-10) continue;
@@ -523,6 +528,7 @@ void Apply(uint3 id : SV_DispatchThreadID)
     uint v = id.x;
     if (v >= _Count) return;
     uint c = _Canon[v];
+    if (c >= _Count) return;
     ApplyCore(v, _Grad[2 * c], _Grad[2 * c + 1]);
 }
 
@@ -536,6 +542,8 @@ void ApplyMap(uint3 id : SV_DispatchThreadID)
     if (v >= _Count) return;
     int m = _Map[v];
     uint c = _Canon[v];
+    if (c >= _Count) return;
+    if (m >= 0 && (uint)m >= _ParentCount) m = -1;   // 0.11.34: a map entry past the parent's end: its own field
     if (m < 0)
     {
         if (_OwnOn == 0u) return;
@@ -667,6 +675,7 @@ void MushGather(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= _MushN) return;
     uint v = _MushIdx[id.x];
+    if (v >= _Count) return;
     float4 p = float4(WorldPos(v), 0);
     _MushOut[v] = p;
     _MushOut2[v] = p;
@@ -677,11 +686,12 @@ void MushSmooth(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= _MushN) return;
     uint v = _MushIdx[id.x];
+    if (v >= _Count) return;
     uint o0 = _AdjOff[v], o1 = _AdjOff[v + 1];
     float3 f = _MushIn[v].xyz;
     if (o1 <= o0) { _MushOut[v] = float4(f, 0); return; }
     float3 s = float3(0, 0, 0);
-    for (uint k = o0; k < o1; k++) s += _MushIn[_AdjV[k]].xyz;
+    for (uint k = o0; k < o1; k++) { uint u = _AdjV[k]; s += u < _Count ? _MushIn[u].xyz : f; }
     _MushOut[v] = float4(0.5 * f + 0.5 * s / (float)(o1 - o0), 0);
 }
 
@@ -690,10 +700,13 @@ void MushRecon(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= _MushN) return;
     uint v = _MushIdx[id.x];
+    if (v >= _Count) return;
+    uint n0 = _MushNb[2 * v], n1 = _MushNb[2 * v + 1];
+    if (n0 >= _Count || n1 >= _Count) { _MushOff[2 * v] = float4(0, 0, 0, 0); _MushOff[2 * v + 1] = float4(0, 0, 0, 0); return; }
     float4 d = _MushDelta[v];
     float3 S = _MushIn[v].xyz;
-    float3 e0 = _MushIn[_MushNb[2 * v]].xyz - S;
-    float3 e1 = _MushIn[_MushNb[2 * v + 1]].xyz - S;
+    float3 e0 = _MushIn[n0].xyz - S;
+    float3 e1 = _MushIn[n1].xyz - S;
     float3 n = cross(e0, e1);
     float nl = dot(n, n);
     float3 t = e0 - n * (dot(e0, n) / max(nl, 1e-30));
@@ -753,7 +766,9 @@ void MushApply(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= _MushN) return;
     uint v = _MushIdx[id.x];
+    if (v >= _Count) return;
     uint c = _Canon[v];
+    if (c >= _Count) return;
     float4 o = _MushOff[2 * c];
     MushMove(v, o.xyz, o.w, _MushOff[2 * c + 1].xyz);
 }
@@ -764,7 +779,7 @@ void MushFollow(uint3 id : SV_DispatchThreadID)
     uint v = id.x;
     if (v >= _Count) return;
     int m = _Map[v];
-    if (m < 0) return;
+    if (m < 0 || (uint)m >= _ParentCount) return;
     float4 o = _MushOffR[2 * (uint)m];
     MushMove(v, o.xyz, o.w * _MapW[v], _MushOffR[2 * (uint)m + 1].xyz);
 }

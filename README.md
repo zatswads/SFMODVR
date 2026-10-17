@@ -44,6 +44,22 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.34 (GPU resets, crashes and freezes since 17 Oct):
+- Symptom (user, three runs on 17 Oct with 0.11.30 / 0.11.33): the NVIDIA driver reset the GPU (System log nvlddmkm 153) and the game
+  froze or crashed ("d3d11: failed to create buffer ... 0x887A0005", device removed).
+- Cause found in the logs: at every character, outfit or mesh change GPU contact's bake froze the game's main thread for 11-17 s
+  (5-8 s per body mesh; `gpuSync` 11-15 s in the Perf line). Each freeze lined up with one cluster of driver resets (four stalls,
+  four clusters in the 03:03 run; both crashes followed one). The bake had grown with the Delta Mush data (0.11.28, baked even with
+  DeltaMush off), the skin folds and chubby areas (0.11.31) and Fidelity's subdivided meshes.
+- Fix: the bake's arithmetic runs on a worker thread; the main thread only reads the mesh and her bones (a few hundred ms). Until a
+  renderer's bake is done it keeps the v1 imprint, then the seams and overlay maps are rebuilt. The Delta Mush data is baked only
+  while [Physics] DeltaMush is on (switching it on bakes the body again). The bake line now gives its stages' times.
+- Guards: the skinned buffer's count and stride are checked every frame (not only once): a buffer Unity recreated with another size
+  is skipped and the renderer set up again. Before a chain is dispatched every buffer it indexes is checked against the vertex count
+  (a mismatch skips it, logged once per reason); the shader checks every index it reads (neighbours, canonical ids, overlay maps,
+  Delta Mush lists) before using it to address another buffer. Shader bundle rebuilt.
+- Not run in the game yet.
+
 0.11.33 (Debug tab tests for the new shape layers):
 - Fold test: the inner elbows, the backs of the knees and the groin in turn at full depth for 2.5 s each, whatever her pose.
 - Chubby test: each area alone at full (at least 10 mm) for 2 s, then all of them slimmer (-100 %), then all fuller (+100 %).
