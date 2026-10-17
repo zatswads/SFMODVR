@@ -63,6 +63,19 @@ namespace SfMorph
         // Soft zones (SoftZones ids, by prefix): spring stiffness, dent depth and damping relative to the global Softness/Springiness values.
         // breast: softest, deepest, least damped (it jiggles); glute: deep and soft; belly: medium, shallower (abdominal wall under it);
         // inner thigh: soft; outer thigh: firm and shallow (fascia lata, vastus lateralis).
+        // 0.11.37: this frame's Chubby fat per area (mm, signed; ContactSettings.FatMm x Chubby, filled by Body), for the soft zones' physics
+        public static readonly float[] AreaFatMm = new float[ContactSettings.FatAreas];
+
+        // The fat (mm) under a soft zone: glutes -> the glutes' area, belly -> belly, inner / outer thigh -> thighs; breasts have their own.
+        public static float ZoneFatMm(string id)
+        {
+            if (id == null) return 0f;
+            if (id.StartsWith("glute")) return AreaFatMm[3];
+            if (id.StartsWith("belly")) return AreaFatMm[0];
+            if (id.StartsWith("thigh")) return AreaFatMm[4];
+            return 0f;
+        }
+
         public static void Zone(string id, out float kMul, out float limitMul, out float dampMul)
         {
             kMul = 1f; limitMul = 1f; dampMul = 1f;
