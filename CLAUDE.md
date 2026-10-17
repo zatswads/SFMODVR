@@ -2,7 +2,10 @@
 
 BepInEx 5 plugin (`src/SfMorph`, built to `dist/SfMorph.dll`) for the HDRP VR game Sex Formula: VaM-style
 body-part sizes, blendshape sliders, bone scaling and presets for the game's woman. Sibling of the SF Neural
-Rendering VR plugin in `zatswads/UDLSS5VR` (both load together; keep them independent).
+Rendering VR plugin in `zatswads/UDLSS5VR` (both load together; keep them independent). Its checkout is
+`C:\Users\rings\Claude\Projects\Modding\UDLSS5VR`: SfNr work starts there (its own CLAUDE.md, skill and branch), not in a
+worktree of this repo; a change that needs both plugins is two commits, one per repo. Both projects' sessions sit in the sidebar
+group "Sex Formula VR" (file new sessions there).
 
 - Start with `docs/HANDOFF.md` (state, architecture, game facts, rules). Test plan: `docs/TESTING.md`.
   Changelog: `README.md`. Workflow skill: `.claude/skills/sfmorph-dev/SKILL.md`.
