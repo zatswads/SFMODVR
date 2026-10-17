@@ -260,6 +260,12 @@ namespace SfMorph
             // 0.11.11: her mood's mouth (smile, grimace) under the visemes; eyes and brows always stay the mood's
             float md = Slider("Keep her expression's mouth", moodCfg * 100f, 0f, 100f, "0", 70f, soff, " %") / 100f;
             if (soff == null && Mathf.Abs(md - moodCfg) > 0.0001f) _p.LipMood.Value = md;
+            // 0.11.45: the curves' brows on top of her expression's, and sticky lips
+            float bwCfg = _p.LipBrows.Value, skCfg = _p.LipSticky.Value;
+            float bw = Slider("Brows while she speaks", bwCfg * 100f, 0f, 150f, "0", 70f, soff, " %") / 100f;
+            if (soff == null && Mathf.Abs(bw - bwCfg) > 0.0001f) _p.LipBrows.Value = bw;
+            float sk = Slider("Sticky lips", skCfg * 100f, 0f, 100f, "0", 60f, soff, " %") / 100f;
+            if (soff == null && Mathf.Abs(sk - skCfg) > 0.0001f) _p.LipSticky.Value = sk;
             if (off != null) GUILayout.Label("    off: " + off, _off);
             else if (!fc.LipReady) GUILayout.Label("    waiting for her face survey (" + fc.Status + ")", _hint);
             else

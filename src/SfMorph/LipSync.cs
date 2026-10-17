@@ -19,7 +19,7 @@ namespace SfMorph
     // sum of the deltas. Sculpted in the Reactions tab's mouth pose editor, seeded from her face clips survey (ReactionsFace.Seed).
     internal static class LipSync
     {
-        // the ARKit shapes that move the mouth (eyes and brows stay with the face clips / the game)
+        // the ARKit shapes that move the mouth, and (0.11.45) the brows and nose wrinkler; the eyes stay with the face clips / the game
         public static readonly string[] Shapes =
         {
             "jawOpen", "jawForward", "jawLeft", "jawRight", "mouthClose", "mouthFunnel", "mouthPucker", "mouthLeft", "mouthRight",
@@ -27,9 +27,12 @@ namespace SfMorph
             "mouthStretchLeft", "mouthStretchRight", "mouthRollLower", "mouthRollUpper", "mouthShrugLower", "mouthShrugUpper",
             "mouthPressLeft", "mouthPressRight", "mouthLowerDownLeft", "mouthLowerDownRight", "mouthUpperUpLeft", "mouthUpperUpRight",
             "cheekPuff", "cheekSquintLeft", "cheekSquintRight", "tongueOut",
+            // 0.11.45: her brows while she speaks (on top of her expression's brows) and the nose wrinkler (no nose bones: upper lip,
+            // cheek raiser and inner brow)
+            "browInnerUp", "browOuterUpLeft", "browOuterUpRight", "browDownLeft", "browDownRight", "noseSneerLeft", "noseSneerRight",
         };
         public static readonly int K = Shapes.Length;
-        public const int JawOpen = 0, MouthClose = 4;
+        public const int JawOpen = 0, MouthClose = 4, BrowFirst = 31, BrowLast = 35;
 
         public static string Dir { get { return Path.Combine(Store.Dir, "lipsync"); } }
         public static string MapPath { get { return Path.Combine(Store.Dir, "arkit-map.txt"); } }

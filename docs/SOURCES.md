@@ -209,13 +209,13 @@ So the avatar now shares her skeleton (the VRChat "armature merge" idea, with th
 
 Generality (user, 2026-10-17: not bespoke to one character): everything on the avatar side goes by per-rig tables (body: g9 / g8 /
 g2 from tools/sources/humanoid.py; face landmarks: the same three families; DAZ surface names of each generation) and by geometry
-(fits, crotch, soles); nothing is keyed to RKS Krista 9. VaM characters (Genesis 2): see *VaM looks as avatars* below (0.11.45).
+(fits, crotch, soles); nothing is keyed to RKS Krista 9. VaM characters (Genesis 2): see *VaM looks as avatars* below (0.11.46).
 Offline (tools/avatar/drive_test.ps1, the plugin's own Avatar.cs + MeshData.cs in the Unity editor on her export and two recordings):
 her body skin to the avatar's 3 mm median, soles within 3-7 mm of hers, the avatar's skin stretch in the range of her own upper
 body's (x0.45-2.8 vs x0.3-2.3 at 0.1 / 99.9 %), all her renderers given back. The per-frame retarget below stays as the record of
 step 1 (and as the way for an avatar that cannot share her skeleton).
 
-### VaM looks as avatars, and the importer (0.11.45)
+### VaM looks as avatars, and the importer (0.11.46)
 
 **Weights from VaM itself.** VaM's Assembly-CSharp keeps a Person's skinning in `DAZSkinV2.nodes` (public; one `DAZSkinV2Node`
 per bone, in `skin.dazBones` order; `DAZMergedSkinV2.Merge` re-indexes the genital graft into the merged mesh): `weights` (DAZ
