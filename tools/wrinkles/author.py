@@ -249,6 +249,7 @@ class Crease:
         self.roll = roll
         self.breaks = breaks
         self.mid = mid
+        self.micro = True             # 0.11.47: False = add_micro leaves it alone (the groin's own branch folds)
 
 
 class Bunch:
@@ -452,7 +453,7 @@ def add_micro(prims, surf, regions, minw, log, feather_regions=(), scale=1.0):
     skin = SkinNear(surf)
     extra = []
     for c in prims:
-        if not isinstance(c, Crease):
+        if not isinstance(c, Crease) or not c.micro:
             continue
         rng = np.random.default_rng(c.seed * 1009 + 17)
         extra.extend(micro_lines(c, skin, rng, minw, feather=regions[c.region][0].split('_')[0] in feather_regions, scale=scale))
@@ -1120,21 +1121,63 @@ def body_creases(surf, sk, log):
             c = ring_crease(surf, kn, lax, np.array([0, 0, -1.0]), 50, al, 0.0009, 0.0018, rk, 240 + i + (10 if side == 'R' else 0), radius=0.1)
             if c:
                 out.append(c)
-        # hip fold (groin crease): from the front of the hip down and in towards the pubis, plus a fainter parallel one below
+        # hip fold (groin / inguinal crease): from the front of the hip down and in towards the pubis. 0.11.47 (refs: seated with legs
+        # apart the crease is a sharp, deep line with short folds fanning from it onto the compressed thigh): a narrow deep core with
+        # the thigh's skin rolling over it, a fainter broken echo below, and 3-4 small folds branching off the core on the thigh side
+        # (each leaves the crease at a shallow angle and curves away; no line crosses the crease). Per side its own shape and depths.
         rh = reg('hipfold_' + sn, 'body', 0.20)
         rr[rh] = 0.03
-        for i, dy in enumerate((0.0, -0.012)):
+        so = 10 if side == 'R' else 0
+        hr = np.random.default_rng(265 + so)
+        thigh = unit([sx, -1.0, 0.0])                   # across the crease towards the thigh (down and out)
+
+        def groin_xy(u, dy=0.0):
+            return (sx * (0.105 - 0.075 * u), 0.905 - 0.075 * u + dy - 0.008 * math.sin(math.pi * u))
+
+        def front_hit(x, y):
+            return surf.ray(np.array([x, y, 0.4]), np.array([0, 0, -1.0]))
+
+        #             dy      u0 .. u1      depth mm                width mm  ridge  breaks
+        for i, (dy, u0, u1, dep, wid, rdg, brk) in enumerate(((0.0, 0.0, 1.0, 1.15 if side == 'L' else 1.05, 2.5, 0.6, 0.0),
+                                                                (-0.016, 0.12, 0.8, 0.36 if side == 'L' else 0.3, 2.9, 0.4, 0.3))):
             pts = []
-            for k in range(11):
-                u = k / 10.0
-                x = sx * (0.105 - 0.075 * u)
-                y = 0.905 - 0.075 * u + dy - 0.008 * math.sin(math.pi * u)
-                h = surf.ray(np.array([x, y, 0.4]), np.array([0, 0, -1.0]))
+            for k in range(13):
+                x, y = groin_xy(u0 + (u1 - u0) * k / 12.0, dy)
+                h = front_hit(x, y)
                 if h is not None:
                     pts.append(h)
             if len(pts) > 5:
-                out.append(Crease(wobble(np.array(pts), lambda q: np.tile([0, 0, 1.0], (len(q), 1)), 0.0008, 260 + i),
-                                  rh, 0.0009 - 0.0003 * i, 0.0018, seed=260 + i + (10 if side == 'R' else 0)))
+                out.append(Crease(wobble(np.array(pts), lambda q: np.tile([0, 0, 1.0], (len(q), 1)), 0.0007, 260 + i + so),
+                                  rh, dep * 0.001, wid * 0.001, seed=260 + i + so, ridge=rdg, roll_toward=thigh, roll=(1.0, 0.45),
+                                  breaks=brk))
+        nbr = 4 if side == 'L' else 3
+        us = np.sort(hr.uniform(0.18, 0.86, nbr))
+        for b, u in enumerate(us):
+            x0, y0 = groin_xy(u)
+            x1, y1 = groin_xy(min(u + 0.02, 1.0))
+            tg = unit([x1 - x0, y1 - y0, 0.0])          # along the crease, towards the pubis
+            nn = thigh - np.dot(thigh, tg) * tg
+            nn = unit(nn)
+            dirn = tg if hr.uniform() < 0.6 else -tg    # most fan towards the pubis
+            ang = math.radians(hr.uniform(18, 30))
+            bend = hr.uniform(0.15, 0.45) * (1 if hr.uniform() < 0.5 else -1)
+            ln = hr.uniform(0.016, 0.026)
+            p0 = np.array([x0, y0, 0.0]) + nn * 0.0035
+            pts = []
+            for k in range(9):
+                v = k / 8.0
+                a = ang * (1 + bend * v)
+                q = p0 + (dirn * math.cos(a) + nn * math.sin(a)) * ln * v
+                if np.dot(q - p0, nn) > 0.0065:         # stop short of the echo below (a fold crossing it read as a stitch)
+                    break
+                h = front_hit(q[0], q[1])
+                if h is not None:
+                    pts.append(h)
+            if len(pts) > 4:
+                c = Crease(np.array(pts), rh, (1.2 if side == 'L' else 1.1) * hr.uniform(0.25, 0.35) * 0.001, hr.uniform(0.0021, 0.0025),
+                           taper=(0, 1), seed=340 + b + so, ridge=0.3)
+                c.micro = False
+                out.append(c)
         # armpit: creases in the hollow under the shoulder, running front to back, when the arm comes down. Cast from below and
         # outside (the armpit faces down and out in her bind pose); a ray from the front would land on the side of her breast.
         ra = reg('armpit_' + sn, 'body', 0.25)
@@ -1212,6 +1255,93 @@ def body_creases(surf, sk, log):
             out.append(Crease(wobble(np.array(pts), lambda q: np.tile([0, 0, 1.0], (len(q), 1)), 0.0009, seed + 5),
                               rbel, dep * 0.001, wid * 0.001, seed=seed, ridge=0.75, roll_toward=np.array([0, 1.0, 0]), roll=(1.0, 0.35),
                               breaks=brk))
+
+    # 0.11.47 trunk folds from the reference images / videos. Points are cast from inside her trunk outwards (from outside, rays at
+    # the waist meet her arms first): a = degrees from her front round to her side sx (90 = the side, 180 = the back).
+    def around(samples, sxx, zc=0.0):
+        pts = []
+        for a, y in samples:
+            ar = math.radians(a)
+            c = np.array([0.0, y, zc])
+            h = surf.ray(c, np.array([sxx * math.sin(ar), 0.0, math.cos(ar)]), near=0.25)
+            if h is not None and np.linalg.norm(h - c) < 0.2:
+                pts.append(h)
+        return np.array(pts)
+
+    def trunk_line(sxx, a0, a1, y0, drop, wave, seed, n=21, bow=0.0):
+        """a line from angle a0 at height y0 to a1, dropping `drop` metres on the way, bowing up by `bow` in the middle, with a slow
+        irregular wave"""
+        ph = np.random.default_rng(seed).uniform(0, 6.28, 2)
+        smp = []
+        for k in range(n):
+            u = k / (n - 1.0)
+            smp.append((a0 + (a1 - a0) * u, y0 - drop * u + bow * math.sin(math.pi * u) + wave * (0.6 * math.sin(5.3 * u + ph[0]) + 0.4 * math.sin(11.0 * u + ph[1]))))
+        pts = around(smp, sxx)
+        if len(pts) < 8:
+            return None
+        return wobble(pts, lambda q: unit_rows(q * np.array([1.0, 0.0, 1.0])), 0.0006, seed + 5)
+
+    up = np.array([0, 1.0, 0])
+    # flank (refs: back / side, arched with a twist or a side bend): 3-5 stacked near-horizontal creases between the 12th rib and the
+    # iliac crest, from the erector column round to just behind her side, sloping a little down towards the front, 15-25 mm apart,
+    # the middle ones the deepest and longest, the skin rolling above each. Only the compressed side's region activates, so the
+    # one-sidedness comes from the plugin's per-region compression. Per side its own count, heights, reach and depths.
+    #       height at the back, back / front end (deg), drop to the front (m), depth mm, width mm, wave (m), seed
+    flank = {'L': ((1.075, 150, 110, 0.004, 0.55, 3.2, 0.0012, 400),
+                   (1.054, 160, 102, 0.007, 0.95, 3.8, 0.0015, 401),
+                   (1.031, 163, 99, 0.008, 1.1, 4.0, 0.0013, 402),
+                   (1.010, 154, 107, 0.006, 0.7, 3.4, 0.0011, 403)),
+             'R': ((1.088, 144, 116, 0.003, 0.5, 2.8, 0.0010, 410),
+                   (1.069, 155, 104, 0.005, 0.75, 3.4, 0.0013, 411),
+                   (1.048, 162, 100, 0.006, 1.05, 3.9, 0.0016, 412),
+                   (1.025, 158, 102, 0.009, 0.9, 3.7, 0.0012, 413),
+                   (1.004, 149, 110, 0.005, 0.6, 3.0, 0.0010, 414))}
+    # side waist (refs: a crunch / a side bend): 2-4 diagonal folds on the side of the waist running down and forward (~20-25 deg),
+    # 10-15 mm apart, 50-80 mm long, a sharper core; in front of the flank creases (they do not meet: separate poses)
+    #       height at the back end, back / front end (deg), drop (m), depth mm, width mm, wave (m), seed
+    waist = {'L': ((1.090, 86, 57, 0.024, 0.55, 2.4, 0.0008, 420),
+                   (1.076, 88, 52, 0.029, 0.85, 2.8, 0.0009, 421),
+                   (1.061, 84, 55, 0.026, 0.7, 2.6, 0.0008, 422)),
+             'R': ((1.094, 82, 63, 0.016, 0.4, 2.2, 0.0006, 430),
+                   (1.082, 87, 55, 0.027, 0.8, 2.7, 0.0009, 431),
+                   (1.068, 86, 52, 0.030, 0.85, 2.8, 0.0009, 432),
+                   (1.054, 83, 59, 0.022, 0.55, 2.4, 0.0007, 433))}
+    for side in ('L', 'R'):
+        sxx = -1.0 if side == 'L' else 1.0
+        rf = reg('flank_' + side, 'body', 0.12)
+        rr[rf] = 0.025
+        for y0, a0, a1, drop, dep, wid, wave, seed in flank[side]:
+            p = trunk_line(sxx, a0, a1, y0, drop, wave, seed)
+            if p is not None:
+                c = Crease(p, rf, dep * 0.001, wid * 0.001, seed=seed, ridge=0.8, roll_toward=up, roll=(1.0, 0.25))
+                c.micro = dep >= 0.9     # micro lines only around the deep middle folds (on all of them the flank read as cracked)
+                out.append(c)
+        rw = reg('sidewaist_' + side, 'body', 0.10)
+        rr[rw] = 0.016
+        for y0, a0, a1, drop, dep, wid, wave, seed in waist[side]:
+            p = trunk_line(sxx, a0, a1, y0, drop, wave, seed, n=15, bow=0.004)     # bunched skin bows: straight ones read as scratches
+            if p is not None:
+                out.append(Crease(p, rw, dep * 0.001, wid * 0.001, seed=seed, ridge=0.75, roll_toward=up, roll=(1.0, 0.3)))
+    # upper belly (ref: sitting slightly hunched): two transverse creases across the upper belly under the breasts, the upper one
+    # arched up in the middle (along the costal margin), the lower one nearly straight with a slight dip, each with its roll on
+    # the side facing the other so a paler raised band runs between them
+    rub = reg('upperbelly', 'body', 0.15)
+    rr[rub] = 0.025
+    #        height above the navel, arch at the middle (m), left / right end (deg), depth mm, width mm, roll towards, seed
+    for dy, arch, (a0, a1), dep, wid, rt, seed in ((0.124, 0.009, (-38, 34), 0.4, 3.4, -up, 440),
+                                                    (0.070, -0.003, (-36, 42), 0.42, 3.6, up, 441)):
+        ph = np.random.default_rng(seed).uniform(0, 6.28, 2)
+        smp = []
+        for k in range(23):
+            a = a0 + (a1 - a0) * k / 22.0
+            an = a / 45.0
+            smp.append((a, ny + dy + arch * (1 - an * an) + 0.0012 * math.sin(4.0 * an + ph[0]) + 0.0015 * an))
+        pts = around(smp, 1.0)                          # negative angles: her left
+        if len(pts) > 12:
+            c = Crease(wobble(pts, lambda q: np.tile([0, 0, 1.0], (len(q), 1)), 0.0006, seed + 5), rub, dep * 0.001, wid * 0.001,
+                       seed=seed, ridge=0.7, roll_toward=rt, roll=(1.0, 0.3), breaks=0.12)
+            c.micro = False      # two plain rolls (with echoes beside them the upper one read as a doubled, drawn line)
+            out.append(c)
     log('body: %d creases in %d regions' % (len(out), len(regions)))
     excl = []
     for side in ('Left', 'Right'):

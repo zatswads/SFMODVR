@@ -29,3 +29,8 @@ region 9 hipfold_R body 0.200
 region 10 armpit_R body 0.250
 region 11 neck neck 0.030
 region 12 belly body 0.200
+region 13 flank_L body 0.120
+region 14 sidewaist_L body 0.100
+region 15 flank_R body 0.120
+region 16 sidewaist_R body 0.100
+region 17 upperbelly body 0.150
