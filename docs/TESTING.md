@@ -98,6 +98,15 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.30 (Delta Mush fixed)
+
+Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log: a `delta mush ...` part on BOTH `baked reika_upperBody...` (4 joints:
+shoulders, elbows) and `baked reika_lowerBody...` (hips, knees); the bake's total ms back near 0.11.27's (lower body ~100-300 ms, was
+5-9 s in 0.11.28).
+
+- Standing still: no patches at her hips, groin or knees; toggling Round joints in deep bends changes nothing visible.
+- Then the 0.11.28 checks below (deep bends A/B, seams, GPU cost).
+
 ## 0.11.29 (avatar replacement, first build)
 
 Install `dist/SfMorph.dll`, and copy the avatar folder `%LOCALAPPDATA%\SfMorph\avatars\RKS Krista 9` (built by

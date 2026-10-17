@@ -44,6 +44,16 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.30 (round joints, fixed):
+- 0.11.28's Delta Mush tore her hips, groin and knees into purple, inside-out patches even standing still (user's screenshot). Her
+  skinned body is mirrored relative to her mesh. The pass rebuilt each vertex's detail in a frame made with cross products, and a
+  mirror flips a cross product, so the detail came back inside out with flipped normals. Her skin's subsurface scattering then shows
+  through red-purple. The frame no longer has a handedness: it is oriented by the skinned normal and the second neighbour edge.
+  Checked offline on her exported lower body: exact at rest, under rotations, mirrors, and when applied again on its own output.
+- 0.11.28 only ran on her lower body. The upper body (shoulders, elbows) was skipped because its mesh has no hip bones; it is
+  included now.
+- Her lower body's bake took 5-9 s with 0.11.28 (a stall on every rebuild). The rest smoothing now runs on flat arrays.
+
 0.11.29 (avatar replacement, first build):
 - A third character mode (docs/SOURCES.md, 'A third mode: avatar replacement'). Instead of reshaping her mesh to a character
   (the full conversion folded under the breasts) or baking its skin onto her UVs (her blush and makeup layers drew over it), the
