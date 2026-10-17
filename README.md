@@ -44,6 +44,23 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.35 (chubby on whole limbs and the torso; the lower body's bends back; no red smears from his body):
+- Her lower body had no bend bulges, knee or groin folds and no chubby since 0.11.31 (log: "no frame (no toes or breasts to tell
+  her front)"). Her toes are on the foot mesh, so 0.11.31's front check found nothing there. It now uses the leg's front skin helper
+  (in front of the hip) or the butt skin helper (behind it). That also explains why Chubby hardly changed her body: the belly's
+  lower half, the glutes and the thighs are on the lower body.
+- Chubby covers whole limbs and the whole torso (user: it only inflated the upper arm and barely showed on the body).
+  - Arms: the upper arm and the forearm as one, tapering to the wrist, softest at the back of the upper arm.
+  - Thighs: down to the knee, sharing it with the calves so there is no step there.
+  - Calves: fade out before her foot mesh starts.
+  - Torso: belly, waist and back are each a soft layer over their side of the torso with the deposits on it.
+  - Area defaults are a little fuller (belly 14, waist 12, back 8, glutes 14, thighs 14, arms 10, calves 7 mm); your saved values
+    stay.
+- Dark red smears across her groin and upper thighs in sex scenes (user's screenshot): his pelvis and thighs press deep into her
+  there and move fast while he thrusts, so they reddened and printed a band like a slapping hand. His body now stays under the
+  redness threshold and shades / prints at half strength; hands and slaps are unchanged.
+- Shader bundle rebuilt: install dist/sfmorph_shaders too.
+
 0.11.34 (GPU resets, crashes and freezes since 17 Oct):
 - Symptom (user, three runs on 17 Oct with 0.11.30 / 0.11.33): the NVIDIA driver reset the GPU (System log nvlddmkm 153) and the game
   froze or crashed ("d3d11: failed to create buffer ... 0x887A0005", device removed).

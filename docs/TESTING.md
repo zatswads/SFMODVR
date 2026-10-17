@@ -98,6 +98,16 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.35 (chubby whole limbs, lower-body frame, partner marks)
+
+Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log: the `baked reika_lowerBody...` line has `bend N verts`, `folds N verts`
+and `chubby N verts` again (no `no frame`).
+- Chubby test (Debug tab): arms = the whole arm to the wrist; thighs = the whole thigh into the knee with no step; belly / waist / back
+  round the whole torso side, the deposits leading.
+- Kneel / squat: the back-of-knee bulges and folds are back.
+- Sex scene with his body against her groin for a minute: no dark red bands. A faint pressed shade is expected. If red bands still
+  appear, switch Skin marks off: gone = marks (tell me), still there = something else (send a screenshot with the Debug views).
+
 ## 0.11.34 (GPU resets: worker-thread bake, buffer guards)
 
 Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Then:

@@ -170,6 +170,7 @@ namespace SfMorph
         readonly uint[] _wcMask = new uint[MaxCaps];
         readonly bool[] _wcV2Only = new bool[MaxCaps];
         readonly float[] _wcW = new float[MaxCaps];   // 0.9.4 mark weight (0 = her own limb)
+        const float PartnerMark = 0.2f;              // 0.11.35: the partner's body (pelvis, thighs): below the shader's MarkKnee (0.25), so no redness
         // 0.9.4: per foreign capsule its centre last frame and its smoothed speed relative to her pelvis (the mark weight)
         struct CapVel { public Vector3 P; public float Spd; public int Frame; }
         readonly Dictionary<long, CapVel> _capVel = new Dictionary<long, CapVel>();
@@ -1053,6 +1054,10 @@ namespace SfMorph
                         else if (cv.Frame == fr) spd = cv.Spd;
                         _capVel[key] = new CapVel { P = mid, Spd = spd, Frame = fr };
                         w = Mathf.Clamp(0.4f + 1.5f * spd, 0.4f, 1.5f);   // resting 0.4 (only a firm squeeze marks, slowly), 0.4 m/s 1.0, from 0.73 m/s 1.5
+                        // 0.11.35 (user: dark red smears across her groin and upper thighs): his pelvis and thighs are broad capsules his animations push
+                        // deep into her and move fast while he thrusts, so they reddened and printed a band along her groin like a slapping hand would.
+                        // A body against a body is not a hand: under the redness knee (no redness), half the pressed shade and print (the shader)
+                        if (isBody) w = PartnerMark;
                     }
                     // her own hand: the capsule (22 mm) is about twice a palm's half-thickness; a hand hanging at her side would dimple the thigh by a cm
                     float rad = kind == "hand" ? c.Radius * 0.6f : c.Radius;
