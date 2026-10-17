@@ -98,6 +98,20 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.29 (avatar replacement, first build)
+
+Install `dist/SfMorph.dll`, and copy the avatar folder `%LOCALAPPDATA%\SfMorph\avatars\RKS Krista 9` (built by
+`tools/avatar/build.ps1`) into `BepInEx\config\SfMorphs\avatars\`. Characters tab -> Avatars -> RKS Krista 9 (converted character on
+None). Log: `Avatar RKS Krista 9: g9 rig, 54 bones mapped (3 spread, 12 twist), x0.96..., N of her renderers hidden; facing turned 0
+deg; her skin material reika_body (Shader Graphs/Skin)`, `Avatar: HDMaterial.ValidateMaterial found`, `Avatar materials: HDRP/Lit for
+the skin, Lit from <material>, ... Eyelashes / EyeMoisture / Tear ...`. Headset: (1) she is gone and Krista stands where she stood,
+same pose, feet on the floor, following every animation (idle, sex poses, her hands on her hips, kneeling); (2) her skin: not pink /
+black / white, subsurface scattering soft like hers, no shiny plastic (Skin shader: HDRP Lit vs Her skin shader, Skin brightness);
+(3) eyes (no cornea yet: matte), lashes and brows cut out, teeth and mouth inside when she opens it; (4) the jaw opens when she
+moans / speaks, eyes follow the game's look-at; (5) Hands onto hers 1: hands on her hips land on Krista's hips? (they target hers,
+so they may sink in or hover); (6) None: she is back exactly, nothing left; switch avatars / sizes back and forth; a scene change
+while on; (7) Perf line: avatar cost (part of 'other').
+
 ## 0.11.28 (Delta Mush at her joints)
 
 Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log, per body renderer: `GPU contact: baked reika_upperBody... delta mush

@@ -333,6 +333,8 @@ namespace SfMorph
                 GUILayout.Label("off: no converted characters yet. Export her (Presets tab) and a VaM character (SfExport plugin), then run tools/pipeline/run.ps1.", _off);
             if (GUILayout.Button("Rescan the folder", GUILayout.Width(160))) MorphSet.Rescan();
 
+            AvatarSection(c);
+
             // Pose check: records the game's own animation of her for the pipeline (PoseRecorder).
             string recStatus = PoseRecorder.Status;   // read once: the same controls in the Layout pass and the click pass
             bool recBusy = PoseRecorder.Busy;
