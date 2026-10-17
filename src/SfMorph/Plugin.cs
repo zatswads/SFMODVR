@@ -17,7 +17,7 @@ namespace SfMorph
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "sfmodvr.sfmorph";
-        public const string Version = "0.11.27";
+        public const string Version = "0.11.28";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal ConfigEntry<KeyCode> PanelKey;
@@ -54,6 +54,9 @@ namespace SfMorph
         // 0.8.0 contact visuals v2 (GPU contact: dent edge, rim bulge, bent normals, self-contact, partner body, bend bulges, ripple, skin marks)
         internal ConfigEntry<bool> VoiceMuteDialogue, VoicePackInScenes;
         internal ConfigEntry<bool> ContactNormals, SelfContact, PartnerBody, SkinMarksOn, ReactRubSound, VoiceMuteGame, RippleThrust;
+        // 0.11.28 Delta Mush at her joints
+        internal ConfigEntry<bool> DeltaMush;
+        internal ConfigEntry<float> DeltaMushAmount, DeltaMushRadius;
         internal ConfigEntry<bool> ReactPenSound, ReactPenReact;   // 0.11.25
         internal ConfigEntry<bool> HapticsOn;                      // 0.11.26
         internal ConfigEntry<float> HapticsStrength, HapticsTouch, HapticsImpact, HapticsGrab, HapticsPen;
@@ -97,6 +100,9 @@ namespace SfMorph
             RippleThrust = Config.Bind("Physics", "RippleThrust", true, "Every stroke of the partner's hips against her (0.35 m/s or faster) sends a ripple, not only a first touch (needs PartnerBody).");
             RippleThrustAmt = Config.Bind("Physics", "RippleThrustAmt", 1f, new ConfigDescription("Size of the ripple from each stroke of his hips (1 = 8 mm for a slow stroke up to 20 mm for a fast one; 0 off).", new AcceptableValueRange<float>(0f, 3f)));
             ContactNormalSmooth = Config.Bind("Physics", "ContactNormalSmooth", 8f, new ConfigDescription("GPU contact: how far the dent's shading is smoothed (mm). Larger = rounder, less faceted pressed-flesh shading; 0 = the exact field (0.11.11 look).", new AcceptableValueRange<float>(0f, 20f)));
+            DeltaMush = Config.Bind("Physics", "DeltaMush", true, "GPU contact: her elbows, knees, hips and shoulders keep their volume in deep bends instead of pinching and flattening (Delta Mush on the skinned body: the joint skin is smoothed, then its rest detail put back). Costs GPU time every frame she is visible.");
+            DeltaMushAmount = Config.Bind("Physics", "DeltaMushAmount", 1f, new ConfigDescription("Strength of the Delta Mush at her joints (0 = the plain skinning).", new AcceptableValueRange<float>(0f, 1f)));
+            DeltaMushRadius = Config.Bind("Physics", "DeltaMushRadius", 20f, new ConfigDescription("How far the Delta Mush smooths around each joint (mm). Larger = rounder bends, more GPU passes (at most 48). Applies when her body is rebuilt (character change, Rescan, restart).", new AcceptableValueRange<float>(5f, 60f)));
             PartnerBody = Config.Bind("Physics", "PartnerBody", true, "The partner's pelvis and thighs press her skin too (not only his hands).");
             BendBulge = Config.Bind("Physics", "BendBulge", 0.6f, new ConfigDescription("Muscles and flesh bulge when joints bend: biceps with the elbow, thigh and calf with the knee, thigh tops and a belly fold when sitting (0 off).", new AcceptableValueRange<float>(0f, 1f)));
             BendBicepsMm = Config.Bind("Physics", "BendBicepsMm", 8f, new ConfigDescription("Biceps bulge at a fully bent elbow (mm, before BendBulge).", new AcceptableValueRange<float>(0f, 20f)));

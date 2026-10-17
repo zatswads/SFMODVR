@@ -41,6 +41,24 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.28 (round joints in deep bends: Delta Mush):
+- Her elbows, knees, hips and shoulders pinched and flattened in deep bends (user). The game skins her with plain linear skinning:
+  a vertex near a joint follows the average of the two bones' matrices, so in a deep bend the skin collapses toward the bone (the
+  inner elbow and the back of the knee fold flat, the hip and groin lose their volume, the armpit caves in). Now a Delta Mush pass
+  runs on her skinned body first in the GPU contact chain, every frame she is visible. The skin around each joint is smoothed,
+  which removes the collapse and the detail with it. Then the rest pose's detail is put back in the frame of the smoothed surface,
+  so it turns with the bend. In her rest pose it changes nothing.
+- Only the joints are touched: a weight around each shoulder, elbow, hip and knee (about 6-11 cm). Hands, feet, head, neck,
+  breasts and genitals are never mushed. The weight fades to zero toward the edges of each mesh, so the seams between her upper
+  and lower body stay closed. Overlays lying on her skin (areolas, tattoo, the vulva rim) follow the body under them.
+- The rest shape is her current one (character and body-slider shapes, never the pose correctives). The dents, bend bulges,
+  ripples and muscle geometry are built on top of the corrected joint.
+- It shapes the bend; it does not add creases or folds. Those still come from the wrinkle maps (crease shading) and the bend
+  bulges / muscles (geometry).
+- Physics tab under the contact rows: "Round joints in deep bends" (on by default) and "joint smoothing" (strength). Config
+  [Physics] DeltaMush, DeltaMushAmount, DeltaMushRadius (mm; applies when her body is rebuilt). Shader bundle rebuilt: install
+  dist/sfmorph_shaders too. With the old bundle it stays off and the panel says why.
+
 0.11.27 (her face wrinkles re-sculpted):
 - The face's wrinkle maps were thin drawn lines (0.4 mm deep, 1 mm wide, the single strongest line per texel): next to sculpted
   expression maps (the user's MetaHuman-style references) they read as scratches, and her skin's subsurface scattering blurs such

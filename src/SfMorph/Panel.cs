@@ -780,6 +780,15 @@ namespace SfMorph
             if (en && _p.PartnerBody.Value && rt != _p.RippleThrust.Value) _p.RippleThrust.Value = rt;
             v = Slider("    stroke ripple", _p.RippleThrustAmt.Value * 100f, 0f, 300f, "0", 100f, so ?? (!_p.PartnerBody.Value ? "off: the partner's body is off" : !_p.RippleThrust.Value ? "off: strokes are off" : null), " %") / 100f;
             if (Mathf.Abs(v - _p.RippleThrustAmt.Value) > 0.0001f) _p.RippleThrustAmt.Value = v;
+            // 0.11.28: Delta Mush at her joints
+            string mo = so ?? (_body.Gpu != null && _body.Gpu.MushNote.Length > 0 ? "off: " + _body.Gpu.MushNote : null);
+            GUI.enabled = mo == null;
+            bool mush = GUILayout.Toggle(_p.DeltaMush.Value, " Round joints in deep bends (Delta Mush: no pinching at elbows, knees, hips, shoulders)");
+            GUI.enabled = true;
+            if (mo == null && mush != _p.DeltaMush.Value) _p.DeltaMush.Value = mush;
+            if (mo != null) GUILayout.Label("    " + mo, _off);
+            v = Slider("    joint smoothing", _p.DeltaMushAmount.Value * 100f, 0f, 100f, "0", 100f, mo ?? (_p.DeltaMush.Value ? null : "off: round joints is off"), " %") / 100f;
+            if (Mathf.Abs(v - _p.DeltaMushAmount.Value) > 0.0001f) _p.DeltaMushAmount.Value = v;
             v = Slider("  Bend bulges", _p.BendBulge.Value * 100f, 0f, 100f, "0", 60f, so, " %") / 100f;
             if (Mathf.Abs(v - _p.BendBulge.Value) > 0.0001f) _p.BendBulge.Value = v;
             // 0.11.23: the waist roll on the side she bends toward

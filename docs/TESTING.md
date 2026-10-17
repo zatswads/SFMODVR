@@ -98,6 +98,22 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.28 (Delta Mush at her joints)
+
+Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log, per body renderer: `GPU contact: baked reika_upperBody... delta mush
+N joint verts (mean weight 0.xx, 8 joints), K passes over M verts (radius 20 mm at e mm edges), B border verts`. Status line (Physics
+tab): `delta mush N joint verts, K passes`. Old bundle: `old sfmorph_shaders (no Mush kernels)` and the toggle greyed.
+
+- Her rest pose / a standing idle: no visible change with the toggle on or off. If her skin shifts or shimmers at rest, the rest
+  side does not match (report the bake line and a screenshot).
+- Deep bends, toggle on/off A/B (desktop mirror screenshots, same frame if possible): elbow past 120 deg (inner elbow and the
+  biceps keep their roundness), knee past 130 deg in a kneel or squat (the back of the knee keeps the calf and thigh volume), hip
+  flexed in sitting or cowgirl (the groin and the top of the thigh stay full, the glute fold keeps its curve), arms raised (the
+  armpit and the front of the shoulder don't cave in).
+- Seams: the waist line between her upper and lower body, the vulva rim and the areolas must not open or float in a deep hip bend.
+- Spikes or a vertex pulled away: a frame could not be built there (offsets are capped at 4 cm). Send the bake line.
+- GPU cost: compare the 10 s perf line (gpuRun) with the toggle off and on. Higher DeltaMushRadius means more passes (48 at most).
+
 ## 0.11.27 (face wrinkles re-sculpted)
 
 Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log: the wrinkle layouts line lists 14 face regions (glabella ... chin).

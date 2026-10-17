@@ -26,6 +26,11 @@
 #pragma kernel ForeignMarks
 #pragma kernel SeamBlend
 #pragma kernel MuscleFlex
+#pragma kernel MushGather
+#pragma kernel MushSmooth
+#pragma kernel MushRecon
+#pragma kernel MushApply
+#pragma kernel MushFollow
 
 RWByteAddressBuffer _Verts;          // skinned output: per vertex _Stride bytes, position at _PosOff, normal at _NrmOff
 uint _Stride, _PosOff, _NrmOff, _Count;
@@ -593,4 +598,124 @@ void SeamBlend(uint3 id : SV_DispatchThreadID)
 [numthreads(1, 1, 1)]
 void MuscleFlex(uint3 id : SV_DispatchThreadID)
 {
+}
+
+// ================================================================ 0.11.28 Delta Mush ================================================================
+// Her joints pinch and flatten in deep bends (linear skinning averages the bone matrices there). Runs at the head of a body renderer's chain,
+// before anything else of ours moves its vertices (MushBake.cs has the rest side, made with the same smoothing on the same lists):
+//   MushGather (rings <= K+1 of the joint core: world position into both ping-pong buffers) -> MushSmooth x K (rings <= K)
+//   -> MushRecon (core: smoothed position + the rest offset in the smoothed surface's frame -> offset and normal per canonical vertex)
+//   -> MushApply (every vertex of the core, welded copies too: position += offset x weight, normal toward the rebuilt one, tangent re-orthogonalised).
+// MushFollow: an overlay mesh (areola, tattoo, vulva rim) takes the offset of the body vertex under it (its _Map), like ApplyMap.
+// Each kernel reads only the buffers the previous one wrote, and only MushApply / MushFollow write the skinned buffer.
+StructuredBuffer<uint> _MushIdx;     // the pass's vertex list
+uint _MushN;                         // its length
+StructuredBuffer<float4> _MushIn;    // smoothed positions (world, xyz) by canonical id
+RWStructuredBuffer<float4> _MushOut, _MushOut2;
+StructuredBuffer<float4> _MushDelta; // per canonical: rest offset in the frame (t, b, n), metres; w = weight
+StructuredBuffer<float4> _MushNrm;   // per canonical: rest normal in the frame
+StructuredBuffer<uint> _MushNb;      // 2 per canonical: the frame's neighbours
+RWStructuredBuffer<float4> _MushOff; // 2 per canonical: (world offset, blend weight), (rebuilt normal, world)
+StructuredBuffer<float4> _MushOffR;  // MushFollow: the parent body's _MushOff of this frame
+float _MushAmt;                      // strength 0..1
+float _MushMax;                      // the largest offset allowed (m): a broken frame can never throw a vertex across the room
+
+[numthreads(64, 1, 1)]
+void MushGather(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _MushN) return;
+    uint v = _MushIdx[id.x];
+    float4 p = float4(WorldPos(v), 0);
+    _MushOut[v] = p;
+    _MushOut2[v] = p;
+}
+
+[numthreads(64, 1, 1)]
+void MushSmooth(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _MushN) return;
+    uint v = _MushIdx[id.x];
+    uint o0 = _AdjOff[v], o1 = _AdjOff[v + 1];
+    float3 f = _MushIn[v].xyz;
+    if (o1 <= o0) { _MushOut[v] = float4(f, 0); return; }
+    float3 s = float3(0, 0, 0);
+    for (uint k = o0; k < o1; k++) s += _MushIn[_AdjV[k]].xyz;
+    _MushOut[v] = float4(0.5 * f + 0.5 * s / (float)(o1 - o0), 0);
+}
+
+[numthreads(64, 1, 1)]
+void MushRecon(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _MushN) return;
+    uint v = _MushIdx[id.x];
+    float4 d = _MushDelta[v];
+    float3 S = _MushIn[v].xyz;
+    float3 e0 = _MushIn[_MushNb[2 * v]].xyz - S;
+    float3 e1 = _MushIn[_MushNb[2 * v + 1]].xyz - S;
+    float3 n = cross(e0, e1);
+    float nl = dot(n, n);
+    float3 t = e0 - n * (dot(e0, n) / max(nl, 1e-30));
+    float tl = dot(t, t);
+    if (nl < 1e-20 || tl < 1e-20) { _MushOff[2 * v] = float4(0, 0, 0, 0); _MushOff[2 * v + 1] = float4(0, 0, 0, 0); return; }
+    n *= rsqrt(nl);
+    t *= rsqrt(tl);
+    float3 b = cross(n, t);
+    float3 target = S + t * d.x + b * d.y + n * d.z;
+    float3 off = target - WorldPos(v);
+    float ol = length(off);
+    if (ol > _MushMax) off *= _MushMax / ol;
+    float4 r = _MushNrm[v];
+    float3 nt = t * r.x + b * r.y + n * r.z;
+    _MushOff[2 * v] = float4(off, saturate(d.w * _MushAmt));
+    _MushOff[2 * v + 1] = float4(nt, 0);
+}
+
+// The move of one vertex: position += off x w, normal turned toward the rebuilt one by w, tangent kept orthogonal.
+void MushMove(uint v, float3 off, float w, float3 nt)
+{
+    if (w <= 0.0) return;
+    uint a = v * _Stride;
+    float3 pw = mul(_ToWorld, float4(LoadF3(a + _PosOff), 1)).xyz + off * w;
+    StoreF3(a + _PosOff, mul(_ToLocal, float4(pw, 1)).xyz);
+    float ntl = dot(nt, nt);
+    if (ntl < 1e-12) return;
+    float3 nw = mul(LoadF3(a + _NrmOff), (float3x3)_ToLocal);
+    float l = dot(nw, nw);
+    if (l < 1e-20) return;
+    float3 n2 = lerp(nw * rsqrt(l), nt * rsqrt(ntl), w);
+    float l2 = dot(n2, n2);
+    if (l2 < 1e-12) return;
+    float3 nl = mul(n2 * rsqrt(l2), (float3x3)_ToWorld);
+    float ll = dot(nl, nl);
+    if (ll < 1e-20) return;
+    nl *= rsqrt(ll);
+    StoreF3(a + _NrmOff, nl);
+    if (_TanOff != 0xFFFFFFFFu)
+    {
+        float4 tg = asfloat(_Verts.Load4(a + _TanOff));
+        float3 tv = tg.xyz - nl * dot(nl, tg.xyz);
+        float tl = dot(tv, tv);
+        if (tl > 1e-12) _Verts.Store4(a + _TanOff, asuint(float4(tv * rsqrt(tl), tg.w)));
+    }
+}
+
+[numthreads(64, 1, 1)]
+void MushApply(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _MushN) return;
+    uint v = _MushIdx[id.x];
+    uint c = _Canon[v];
+    float4 o = _MushOff[2 * c];
+    MushMove(v, o.xyz, o.w, _MushOff[2 * c + 1].xyz);
+}
+
+[numthreads(64, 1, 1)]
+void MushFollow(uint3 id : SV_DispatchThreadID)
+{
+    uint v = id.x;
+    if (v >= _Count) return;
+    int m = _Map[v];
+    if (m < 0) return;
+    float4 o = _MushOffR[2 * (uint)m];
+    MushMove(v, o.xyz, o.w * _MapW[v], _MushOffR[2 * (uint)m + 1].xyz);
 }

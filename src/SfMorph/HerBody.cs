@@ -628,7 +628,7 @@ namespace SfMorph
         // Adds the blendshape frames her readable meshes carry to bind-space positions (a character's clone has "SfMorph body/face"
         // shapes whose weights the sliders drive), so the radii and the hull follow her current shape. The last frame of each shape is
         // taken (the clones have one, at weight 100). Returns how many shapes contributed. dv: one scratch array per build.
-        static int ApplyMorphs(SkinnedMeshRenderer r, Vector3[] pos, ref Vector3[] dv)
+        internal static int ApplyMorphs(SkinnedMeshRenderer r, Vector3[] pos, ref Vector3[] dv)
         {
             var m = r.sharedMesh;
             if (m == null || pos == null || !m.isReadable) return 0;   // the game's own GPU-only meshes have no blendshapes

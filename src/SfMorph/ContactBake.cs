@@ -22,6 +22,9 @@ namespace SfMorph
         public float Redness = 0.5f, MarkFade = 15f, MarkGain = 0.6f, Ao = 0.5f, MarkBoost = 1f;
         // 0.11.20: the lingering print's depth share and time constant (s), and the marks' blur on her skin (m, sigma)
         public float Print = 1f, PrintTime = 0.8f, MarkSmooth = 0.006f;
+        // 0.11.28 Delta Mush at her joints: on, strength 0..1, radius (m; read when a renderer is baked)
+        public bool Mush = true;
+        public float MushAmt = 1f, MushRadius = 0.02f;
     }
 
     // 0.8.0: what GpuContact's v2 field chain needs per renderer, baked on the CPU once per soft-zones build (design 1.2): welded vertices,
@@ -50,6 +53,7 @@ namespace SfMorph
         public int MuscleCount;       // canonical vertices with a muscle
         public Vector3[] WorldP;      // V: where each vertex was at bake time (CPU skin with the bones then, no blendshapes; NaN = unskinned). GpuContact
                                       // maps overlay meshes (areola caps, tattoo, vulva rim) onto the body vertex under them with it
+        public MushData Mush;         // 0.11.28 Delta Mush at her joints (body skin meshes only; null = none)
         public string Note = "";
 
         // ---- bone classes (design 1.3): id, side in the id's parity for the paired ones (even = left) ----
@@ -112,14 +116,14 @@ namespace SfMorph
 
         // ---- the bake ----
 
-        public static ContactBake Build(SkinnedMeshRenderer r, float[] zone, Character her, MuscleMap mm, out string error)
+        public static ContactBake Build(SkinnedMeshRenderer r, float[] zone, Character her, MuscleMap mm, float mushRadius, out string error)
         {
             error = null;
-            try { return BuildInner(r, zone, her, mm, out error); }
+            try { return BuildInner(r, zone, her, mm, mushRadius, out error); }
             catch (Exception e) { error = e.GetType().Name + ": " + e.Message; return null; }
         }
 
-        static ContactBake BuildInner(SkinnedMeshRenderer r, float[] zone, Character her, MuscleMap mm, out string error)
+        static ContactBake BuildInner(SkinnedMeshRenderer r, float[] zone, Character her, MuscleMap mm, float mushRadius, out string error)
         {
             error = null;
             var sw = Stopwatch.StartNew();
@@ -360,11 +364,24 @@ namespace SfMorph
             string musNote = "";
             if (mm != null && uv != null) musN = BakeMuscles(r, mm, P, uv, subs, canon, adjOff, adjV, cls, mpu, out mus, out belly, out musNote);
 
+            // 9. 0.11.28 Delta Mush at the joints (body skin meshes): the rest shape is her current one (the character and slider blendshapes,
+            // never the pose correctives), so the detail it puts back is hers
+            MushData mush = null;
+            string mushNote = "";
+            if (mushRadius > 0f && frame.Ok)
+            {
+                var pm = (Vector3[])P.Clone();
+                Vector3[] dv = null;
+                int shapes = HerBody.ApplyMorphs(r, pm, ref dv);
+                mush = MushBake.Build(pm, N, canon, adjOff, adjV, cls, subs, mpu, skinEdge, frame.Bp, mushRadius, out mushNote);
+                if (shapes > 0) mushNote += " (rest with " + shapes + " shapes)";
+            }
+
             var res = new ContactBake
             {
                 R = r, Mesh = m, V = V, CanonCount = groups, Canon = canon, AdjOff = adjOff, AdjV = adjV, Tissue = tissue, Class = cls, Bend = bend,
                 BendCount = bendVerts, Uv = uv, SubTris = subs.ToArray(), AvgEdge = avgEdge, SkinEdge = skinEdge, MetresPerUv = mPerUv, WorldP = wp,
-                Muscle = musN > 0 ? mus : null, Belly = musN > 0 ? belly : null, MuscleCount = musN
+                Muscle = musN > 0 ? mus : null, Belly = musN > 0 ? belly : null, MuscleCount = musN, Mush = mush
             };
             sw.Stop();
             var sb = new StringBuilder();
@@ -377,6 +394,7 @@ namespace SfMorph
             sb.Append(", tissue ").Append((tmin * 1000f).ToString("0.#")).Append("-").Append((tmax * 1000f).ToString("0.#")).Append(" mm at softness 50 %, ").Append(frame.Note.Length > 0 ? frame.Note + ", " : "").Append(bendNote);
             if (mPerUv > 0f) sb.Append(", ").Append(mPerUv.ToString("0.###")).Append(" m/uv");
             if (musNote.Length > 0) sb.Append(", ").Append(musNote);
+            if (mushNote.Length > 0) sb.Append(", ").Append(mushNote);
             sb.Append(", ").Append(sw.ElapsedMilliseconds).Append(" ms");
             res.Note = sb.ToString();
             return res;

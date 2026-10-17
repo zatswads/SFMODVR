@@ -89,6 +89,10 @@ namespace SfMorph
             // bulge to draw (Compose / Grad / Apply run like a bend-only frame), MusOn = Depth / Compose read the muscles (bulge or firmness)
             public GraphicsBuffer MusBuf, BellyBuf;
             public bool Flex, MusOn;
+            // 0.11.28 Delta Mush at her joints (MushBake): vertex lists, rest data, ping-pong positions, per canonical offset + normal;
+            // this frame: Mush = run it, MushRan = it ran (an overlay follows), MushFollow = an overlay takes its body's offsets
+            public GraphicsBuffer MushGatherBuf, MushSmoothBuf, MushCoreBuf, MushAllBuf, MushDeltaBuf, MushNrmBuf, MushNbBuf, MushPA, MushPB, MushOffBuf;
+            public bool Mush, MushRan, MushFollow;
             public int DiscMask, CapOff, CapN, CapN1;
         }
 
@@ -110,7 +114,10 @@ namespace SfMorph
             PHits = Shader.PropertyToID("_Hits"), PMap = Shader.PropertyToID("_Map"), PParentGrad = Shader.PropertyToID("_ParentGrad"),
             PParentOn = Shader.PropertyToID("_ParentOn"), POwnOn = Shader.PropertyToID("_OwnOn"), PCountHits = Shader.PropertyToID("_CountHits"),
             PMus = Shader.PropertyToID("_Mus"), PMusBelly = Shader.PropertyToID("_MusBelly"), PMusAmp = Shader.PropertyToID("_MusAmp"), PMusAct = Shader.PropertyToID("_MusAct"),
-            PMusFirm = Shader.PropertyToID("_MusFirm"), PMusOn = Shader.PropertyToID("_MusOn");
+            PMusFirm = Shader.PropertyToID("_MusFirm"), PMusOn = Shader.PropertyToID("_MusOn"),
+            PMushIdx = Shader.PropertyToID("_MushIdx"), PMushN = Shader.PropertyToID("_MushN"), PMushIn = Shader.PropertyToID("_MushIn"), PMushOut = Shader.PropertyToID("_MushOut"),
+            PMushOut2 = Shader.PropertyToID("_MushOut2"), PMushDelta = Shader.PropertyToID("_MushDelta"), PMushNrm = Shader.PropertyToID("_MushNrm"), PMushNb = Shader.PropertyToID("_MushNb"),
+            PMushOff = Shader.PropertyToID("_MushOff"), PMushOffR = Shader.PropertyToID("_MushOffR"), PMushAmt = Shader.PropertyToID("_MushAmt"), PMushMax = Shader.PropertyToID("_MushMax");
         static readonly uint[] ZeroHits = new uint[1];
         const int SelfHitHold = 30;               // frames a positive probe keeps the full chain on (readbacks arrive 1-3 frames late)
 
@@ -122,6 +129,11 @@ namespace SfMorph
         int _kDepth, _kDilate, _kSmooth, _kCompose, _kGrad, _kApply, _kDisc, _kDecay, _kApplyMap;   // 0.8.0 v2 kernels
         bool _v2Kernels, _v2Failed, _loggedFirstV2;
         bool _foreignMarks;
+        int _kMushGather, _kMushSmooth, _kMushRecon, _kMushApply, _kMushFollow;
+        bool _mushK;                          // 0.11.28 bundle: the Delta Mush kernels
+        int _mushVerts, _mushPasses;          // last frame: joint vertices mushed, smoothing passes summed over renderers
+        public int MushVerts { get { return _mushVerts; } }
+        public string MushNote = "";          // why Delta Mush does nothing ("" = it runs, or nothing is baked yet)
         bool _muscleK;                        // 0.11.8 bundle: Depth / Compose read the muscle bulge and firmness (MuscleFlex marker kernel)
         ContactBake.MuscleMap _mmap;          // the muscle maps read back once (the first bake that wants them)
         bool _mmapTried;
@@ -202,6 +214,17 @@ namespace SfMorph
                 g._foreignMarks = g._cs.HasKernel("ForeignMarks");
                 g._seamBlend = g._cs.HasKernel("SeamBlend");
                 g._muscleK = g._cs.HasKernel("MuscleFlex");
+                g._mushK = g._cs.HasKernel("MushGather") && g._cs.HasKernel("MushSmooth") && g._cs.HasKernel("MushRecon") && g._cs.HasKernel("MushApply") && g._cs.HasKernel("MushFollow");
+                if (g._mushK)
+                {
+                    g._kMushGather = g._cs.FindKernel("MushGather"); g._kMushSmooth = g._cs.FindKernel("MushSmooth"); g._kMushRecon = g._cs.FindKernel("MushRecon");
+                    g._kMushApply = g._cs.FindKernel("MushApply"); g._kMushFollow = g._cs.FindKernel("MushFollow");
+                }
+                else
+                {
+                    g.MushNote = "old shader bundle";
+                    if (g._v2Kernels) Plugin.Log.LogWarning("GPU contact: old sfmorph_shaders (no Mush kernels): her joints keep the plain skinning; install the bundle that came with this DLL");
+                }
                 if (g._v2Kernels && !g._muscleK) Plugin.Log.LogWarning("GPU contact: old sfmorph_shaders (no MuscleFlex): tensed muscles don't bulge or firm up; install the bundle that came with this DLL");
                 Plugin.Log.LogInfo("GPU contact: bundle loaded, kernels Smoke=" + g._kSmoke + " Imprint=" + g._kImprint + (g._v2Kernels ? ", v2: Depth Dilate Smooth Compose Grad Apply MarkDisc MarksDecay ApplyMap" : ""));
                 if (!g._v2Kernels) Plugin.Log.LogWarning("GPU contact: bundle has no v2 kernels (old sfmorph_shaders?): v1 imprint (missing:" + miss + ")");
@@ -547,7 +570,9 @@ namespace SfMorph
         void MakeBake(RendState s, float[] zone)
         {
             string err;
-            ContactBake b = ContactBake.Build(s.R, zone, _her, s.Extra && !s.Limb ? null : MuscleMapFor(), out err);
+            // 0.11.28: Delta Mush on her body skin meshes (upper / lower body), never the neck, face, feet or overlays
+            float mushR = _mushK && IsBodyMesh(s) && !s.Extra ? Mathf.Clamp(_set.MushRadius, 0.005f, 0.06f) : 0f;
+            ContactBake b = ContactBake.Build(s.R, zone, _her, s.Extra && !s.Limb ? null : MuscleMapFor(), mushR, out err);
             if (b == null || b.V != s.Count)
             {
                 Plugin.Log.LogWarning("GPU contact: renderer " + s.Name + ": v2 bake failed (" + (b == null ? err : "vertex count " + b.V + " != " + s.Count) + "): v1 imprint for it");
@@ -569,6 +594,15 @@ namespace SfMorph
                 s.MarksBuf = Upload(new Vector4[V], V, 16);
                 s.GradBuf = Upload(new Vector4[2 * V], 2 * V, 16);
                 s.HitsBuf = Upload(ZeroHits, 1, 4);
+                var md = b.Mush;
+                if (md != null)
+                {
+                    s.MushGatherBuf = Upload(md.Gather, md.Gather.Length, 4); s.MushSmoothBuf = Upload(md.Smooth, md.Smooth.Length, 4);
+                    s.MushCoreBuf = Upload(md.Core, md.Core.Length, 4); s.MushAllBuf = Upload(md.All, md.All.Length, 4);
+                    s.MushDeltaBuf = Upload(md.Delta, V, 16); s.MushNrmBuf = Upload(md.Nrm, V, 16); s.MushNbBuf = Upload(md.Nb, 2 * V, 4);
+                    s.MushPA = Upload(null, V, 16); s.MushPB = Upload(null, V, 16);
+                    s.MushOffBuf = Upload(new Vector4[2 * V], 2 * V, 16);   // zeros: a vertex outside the core never moves (overlays read it too)
+                }
             }
             catch (Exception e)
             {
@@ -771,6 +805,9 @@ namespace SfMorph
             Rel(ref s.CanonBuf); Rel(ref s.AdjOffBuf); Rel(ref s.AdjVBuf); Rel(ref s.TissueBuf); Rel(ref s.ClassBuf); Rel(ref s.BendBuf);
             Rel(ref s.FieldA); Rel(ref s.FieldB); Rel(ref s.FieldC); Rel(ref s.FieldD); Rel(ref s.Foreign); Rel(ref s.MarksBuf); Rel(ref s.GradBuf);
             Rel(ref s.HitsBuf); Rel(ref s.MapBuf); Rel(ref s.MapWBuf); Rel(ref s.MusBuf); Rel(ref s.BellyBuf);
+            Rel(ref s.MushGatherBuf); Rel(ref s.MushSmoothBuf); Rel(ref s.MushCoreBuf); Rel(ref s.MushAllBuf); Rel(ref s.MushDeltaBuf); Rel(ref s.MushNrmBuf);
+            Rel(ref s.MushNbBuf); Rel(ref s.MushPA); Rel(ref s.MushPB); Rel(ref s.MushOffBuf);
+            s.Mush = s.MushRan = s.MushFollow = false;
             s.Parent = null; s.Mapped = 0; s.Level = 0;
             for (int i = 0; i < _rs.Count; i++) if (_rs[i].Parent == s) { _rs[i].Parent = null; Rel(ref _rs[i].MapBuf); Rel(ref _rs[i].MapWBuf); _rs[i].Mapped = 0; _rs[i].Level = 0; }
             s.Bake = null;
@@ -1098,7 +1135,7 @@ namespace SfMorph
 
             int ncap = _capList != null && frame - _capFrame <= 3 ? PrepareCaps() : 0;
             long sig = ((((long)_rs.Count * 31 + (useV2 ? 1 : 0)) * 31 + _selfN) * 31 + _pbN) * 31 + BendPose.Joints;
-            sig = ((sig * 1009 + Mathf.RoundToInt(_set.Skirt * 1000f)) * 1009 + Mathf.RoundToInt(_set.Bulge * 100f)) * 3 + (_set.Normals ? 1 : 0) + (_set.SelfContact ? 7 : 0);
+            sig = ((sig * 1009 + Mathf.RoundToInt(_set.Skirt * 1000f)) * 1009 + Mathf.RoundToInt(_set.Bulge * 100f)) * 3 + (_set.Normals ? 1 : 0) + (_set.SelfContact ? 7 : 0) + (_set.Mush ? 13 : 0);
             if (sig != _statSig) { _statSig = sig; UpdateStatus(); }
 
             // plan: who has work this frame, and which capsules reach whom (all renderers' capsules go up in one upload)
@@ -1154,8 +1191,10 @@ namespace SfMorph
                 s.Decay = v2 && !work && (s.MarkOn || s.ClearMarks);
                 s.Work = work;
                 s.MapOnly = false;
+                s.MushRan = false; s.MushFollow = false;
+                s.Mush = v2 && _mushK && _set.Mush && _set.MushAmt > 0.001f && s.MushOffBuf != null && s.Bake.Mush != null;
                 if (s.Depth || s.Imprint1) anyContact = true;
-                s.Run = s.NeedCalib || s.Imprint1 || smoke != 0f || work || s.Decay || s.Probe;
+                s.Run = s.NeedCalib || s.Imprint1 || smoke != 0f || work || s.Decay || s.Probe || s.Mush;
                 if (s.Run && (s.Imprint1 || work || s.Decay)) active++;
             }
             // an overlay whose body moves this frame runs at least its ApplyMap (it follows the body even with no work of its own)
@@ -1166,6 +1205,15 @@ namespace SfMorph
                 if (par == null || !s.IsV2 || s.Work) continue;
                 if (par.IsV2 && par.Work && par.Run && s.R != null && s.R.enabled && s.R.gameObject.activeInHierarchy && s.Ok) { s.MapOnly = true; s.Run = true; }
             }
+            // 0.11.28: an overlay (not a skin mesh: those are faded to rest at their seams) follows its body's Delta Mush
+            for (int i = 0; i < _rs.Count; i++)
+            {
+                var s = _rs[i];
+                var par = s.Parent;
+                if (par == null || !s.IsV2 || !par.Mush || !par.Run || SkinRank(s) >= 0 || s.MapBuf == null || s.MapWBuf == null) continue;
+                if (s.R != null && s.R.enabled && s.R.gameObject.activeInHierarchy && s.Ok) { s.MushFollow = true; s.Run = true; }
+            }
+            _mushVerts = 0; _mushPasses = 0;
             if (capUsed > 0) _capBuf.SetData(_capArr, 0, 0, capUsed);
             ActiveRenderers = active;
             Contact = anyContact;
@@ -1196,6 +1244,17 @@ namespace SfMorph
                     if (s.Layout < 0) continue;
                     if (s.NeedCalib) { RequestCalibration(s, vb); continue; }   // read the untouched skinning result first
                     int groups = (s.Count + 63) / 64;
+                    // 0.11.28: Delta Mush first: the dents, bulges and muscles below build on the corrected joint
+                    if (s.Mush)
+                    {
+                        try { dispatches += RunMush(s, vb); }
+                        catch (Exception e) { MushFail(s, e); }
+                    }
+                    if (s.MushFollow && s.Parent != null && s.Parent.MushRan)
+                    {
+                        try { dispatches += FollowMush(s, vb, groups); }
+                        catch (Exception e) { MushFail(s, e); }
+                    }
                     if (s.Imprint1)
                     {
                         Matrix4x4 toWorld = ToWorld(s);
@@ -1369,6 +1428,67 @@ namespace SfMorph
             n += ApplyFinal(s, vb, groups, true);
             s.ChainRan = true;
             return n;
+        }
+
+        // 0.11.28 Delta Mush on one body renderer: Gather -> Smooth x K (ping-pong A/B) -> Recon -> Apply. Returns the dispatch count.
+        int RunMush(RendState s, GraphicsBuffer vb)
+        {
+            var md = s.Bake.Mush;
+            var cs = _cs;
+            Matrix4x4 toWorld = ToWorld(s);
+            cs.SetInt(PCount, s.Count); cs.SetInt(PStride, s.Stride); cs.SetInt(PPosOff, s.PosOff); cs.SetInt(PNrmOff, s.NrmOff); cs.SetInt(PTanOff, s.TanOff);
+            cs.SetMatrix(PToWorld, toWorld); cs.SetMatrix(PToLocal, toWorld.inverse);
+            int n = 0;
+            cs.SetBuffer(_kMushGather, PVerts, vb); cs.SetBuffer(_kMushGather, PMushIdx, s.MushGatherBuf);
+            cs.SetBuffer(_kMushGather, PMushOut, s.MushPA); cs.SetBuffer(_kMushGather, PMushOut2, s.MushPB);
+            cs.SetInt(PMushN, md.Gather.Length);
+            cs.Dispatch(_kMushGather, (md.Gather.Length + 63) / 64, 1, 1); n++;
+            GraphicsBuffer src = s.MushPA, dst = s.MushPB;
+            cs.SetBuffer(_kMushSmooth, PAdjOff, s.AdjOffBuf); cs.SetBuffer(_kMushSmooth, PAdjV, s.AdjVBuf); cs.SetBuffer(_kMushSmooth, PMushIdx, s.MushSmoothBuf);
+            cs.SetInt(PMushN, md.Smooth.Length);
+            int sg = (md.Smooth.Length + 63) / 64;
+            for (int k = 0; k < md.K; k++)
+            {
+                cs.SetBuffer(_kMushSmooth, PMushIn, src); cs.SetBuffer(_kMushSmooth, PMushOut, dst);
+                cs.Dispatch(_kMushSmooth, sg, 1, 1); n++;
+                var t = src; src = dst; dst = t;
+            }
+            cs.SetFloat(PMushAmt, Mathf.Clamp01(_set.MushAmt)); cs.SetFloat(PMushMax, 0.04f);
+            cs.SetBuffer(_kMushRecon, PVerts, vb); cs.SetBuffer(_kMushRecon, PMushIdx, s.MushCoreBuf); cs.SetBuffer(_kMushRecon, PMushIn, src);
+            cs.SetBuffer(_kMushRecon, PMushDelta, s.MushDeltaBuf); cs.SetBuffer(_kMushRecon, PMushNrm, s.MushNrmBuf); cs.SetBuffer(_kMushRecon, PMushNb, s.MushNbBuf);
+            cs.SetBuffer(_kMushRecon, PMushOff, s.MushOffBuf);
+            cs.SetInt(PMushN, md.Core.Length);
+            cs.Dispatch(_kMushRecon, (md.Core.Length + 63) / 64, 1, 1); n++;
+            cs.SetBuffer(_kMushApply, PVerts, vb); cs.SetBuffer(_kMushApply, PMushIdx, s.MushAllBuf); cs.SetBuffer(_kMushApply, PCanon, s.CanonBuf);
+            cs.SetBuffer(_kMushApply, PMushOff, s.MushOffBuf);
+            cs.SetInt(PMushN, md.All.Length);
+            cs.Dispatch(_kMushApply, (md.All.Length + 63) / 64, 1, 1); n++;
+            s.MushRan = true;
+            _mushVerts += md.Core.Length; _mushPasses += md.K;
+            return n;
+        }
+
+        // An overlay on a mushed body: each mapped vertex takes the offset of the body vertex under it (x its map weight).
+        int FollowMush(RendState s, GraphicsBuffer vb, int groups)
+        {
+            var cs = _cs;
+            Matrix4x4 toWorld = ToWorld(s);
+            cs.SetInt(PCount, s.Count); cs.SetInt(PStride, s.Stride); cs.SetInt(PPosOff, s.PosOff); cs.SetInt(PNrmOff, s.NrmOff); cs.SetInt(PTanOff, s.TanOff);
+            cs.SetMatrix(PToWorld, toWorld); cs.SetMatrix(PToLocal, toWorld.inverse);
+            cs.SetBuffer(_kMushFollow, PVerts, vb); cs.SetBuffer(_kMushFollow, PMap, s.MapBuf); cs.SetBuffer(_kMushFollow, PMapW, s.MapWBuf);
+            cs.SetBuffer(_kMushFollow, PMushOffR, s.Parent.MushOffBuf);
+            cs.Dispatch(_kMushFollow, groups, 1, 1);
+            return 1;
+        }
+
+        // A Delta Mush failure turns it off for good (the rest of the chain carries on).
+        void MushFail(RendState s, Exception e)
+        {
+            if (!_mushK) return;
+            _mushK = false;
+            MushNote = "failed, see the log";
+            Plugin.Log.LogError("GPU contact: Delta Mush failed on " + s.Name + ", turned off: " + e);
+            UpdateStatus();
         }
 
         // Marks fading with nothing pressing, or wiped (marks switched off: a huge step), then MarkUntil cleared.
@@ -1625,6 +1745,11 @@ namespace SfMorph
                 int mv = 0;
                 for (int i = 0; i < _rs.Count; i++) if (_rs[i].V2 && _rs[i].Bake != null) mv += _rs[i].Bake.MuscleCount;
                 if (_muscleK) sb.Append(mv > 0 ? ", muscles " + mv + " verts" : ", no muscle geometry");
+                int jv = 0, kmax = 0;
+                for (int i = 0; i < _rs.Count; i++) if (_rs[i].V2 && _rs[i].Bake != null && _rs[i].Bake.Mush != null) { jv += _rs[i].Bake.Mush.Core.Length; kmax = Mathf.Max(kmax, _rs[i].Bake.Mush.K); }
+                if (!_mushK) sb.Append(", delta mush off (").Append(MushNote).Append(')');
+                else if (jv == 0) sb.Append(", delta mush: nothing baked");
+                else sb.Append(_set.Mush ? ", delta mush " : ", delta mush (off) ").Append(jv).Append(" joint verts, ").Append(kmax).Append(" passes");
             }
             else if (_v2Failed) sb.Append(", v2 failed (see the log)");
             Status = sb.ToString();
