@@ -10,9 +10,10 @@ for what to verify and what to ask the user to test.
 
 ## Session title
 
-`YYMMDD_HHMM <version> <topic>` (UK local time of the latest activity; the version the work is about; SfNr work writes `SfNr`), e.g.
-`261017_1531 0.11.10 headset feedback: muscles, dents, ripple, voice`. Set it with `set_session_title` (`self`) at the start and again at
-each wrap-up / release; give sessions you start the same format.
+`MMDD HHMM <mark> [Tag] <topic> <ver>`, at most 44 characters, e.g. `1017 1612 🧪 [SfMorph] Lip sync, voices 11.45`. Marks: ⚙ working,
+❓ waiting for the user, 🧪 installed and waiting for a headset test, ✅ done. Tags `[SfMorph]` / `[SfNr]` / `[Pipeline]`; topic at most
+20 characters; ver = your last release without `0.`. Full rule in CLAUDE.md. Set it (`set_session_title`, `self`) when you start and at
+every wrap-up so the time and the mark stay current.
 
 ## Loop for every change
 
