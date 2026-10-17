@@ -69,6 +69,7 @@ namespace SfMorph
             public ContactBake Bake;
             public ContactBake.Job Job;           // 0.11.34: a bake running on a worker thread (picked up by PollBakes)
             public bool MushTried;                // 0.11.34: the bake was asked for Delta Mush data
+            public float MushR;                   // 0.11.47: the Delta Mush radius it was baked with (m; 0 = none)
             public string BadNote;                // 0.11.34: the last reason its chain was skipped (said once per reason)
             public GraphicsBuffer CanonBuf, AdjOffBuf, AdjVBuf, TissueBuf, ClassBuf, BendBuf, FieldA, FieldB, FieldC, FieldD, MarksBuf, GradBuf, Foreign;
             public bool V2;
@@ -100,6 +101,9 @@ namespace SfMorph
             public bool Mush, MushRan, MushFollow;
             public GraphicsBuffer FoldBuf, FatBuf;   // 0.11.31 skin folds and chubby areas per vertex (always made with the bake)
             public int DiscMask, CapOff, CapN, CapN1;
+            // 0.11.47 cull (RunChains): Planned = passed this frame's checks; CullRaw = out of every camera's view or beyond [Physics]
+            // ContactCullDistance (Far keeps the distance test's hysteresis); Culled = its own work skipped this frame
+            public bool Planned, CullRaw, Far, Culled;
         }
 
         static readonly int PVerts = Shader.PropertyToID("_Verts"), PStride = Shader.PropertyToID("_Stride"),
@@ -128,7 +132,8 @@ namespace SfMorph
             PFold = Shader.PropertyToID("_Fold"), PFat = Shader.PropertyToID("_Fat"), PFoldAmt0 = Shader.PropertyToID("_FoldAmt0"), PFoldAmt1 = Shader.PropertyToID("_FoldAmt1"),
             PFatAmt0 = Shader.PropertyToID("_FatAmt0"), PFatAmt1 = Shader.PropertyToID("_FatAmt1"), PFoldOn = Shader.PropertyToID("_FoldOn");
         static readonly uint[] ZeroHits = new uint[1];
-        const int SelfHitHold = 30;               // frames a positive probe keeps the full chain on (readbacks arrive 1-3 frames late)
+        // frames a positive probe keeps the full chain on (readbacks arrive 1-3 frames late): 0.11.47 ContactSettings.SelfHitHold ([Physics]
+        // SelfHitHold, was the constant 30)
 
         static readonly string[] SpaceNames = { "pending", "rootBone", "transform", "identity", "rootBone (unscaled)" };
 
@@ -190,6 +195,7 @@ namespace SfMorph
         Character _her;
         // 0.8.0: renderers that did contact work last frame, and whether any capsule reached one
         public int ActiveRenderers;
+        public int CulledRenderers;   // 0.11.47: renderers whose work the view / distance cull skipped last frame
         public bool Contact;
         List<SoftCapsule> _capList;           // the caller's list; converted to world space inside the dispatch
         int _capFrame = -1000;
@@ -606,6 +612,7 @@ namespace SfMorph
             bool mushMesh = _mushK && IsBodyMesh(s) && !s.Extra;
             float mushR = mushMesh && MushWanted() ? Mathf.Clamp(_set.MushRadius, 0.005f, 0.06f) : 0f;
             s.MushTried = mushR > 0f;
+            s.MushR = mushR;
             s.Job = null;
             var job = ContactBake.Prepare(s.R, zone, _her, s.Extra && !s.Limb ? null : MuscleMapFor(), mushR, out err);
             if (job == null)
@@ -661,14 +668,23 @@ namespace SfMorph
         bool BakesRunning() { for (int i = 0; i < _rs.Count; i++) if (_rs[i].Job != null) return true; return false; }
 
         // 0.11.34: Delta Mush switched on (or its A/B test started) after a build that skipped its bake: bake the body meshes again, once.
+        // 0.11.47: also when a quality preset changed only [Physics] DeltaMushRadius (MushRadiusAsk; the radius is read at bake time and a
+        // preset that keeps the soft-point quality triggers no rebuild). The slider alone never rebakes: a drag would bake on every step.
+        internal static bool MushRadiusAsk;
         void MushRebake()
         {
             if (_z == null || !MushWanted() || BakesRunning()) return;
+            bool radius = MushRadiusAsk;
+            MushRadiusAsk = false;
+            float want = Mathf.Clamp(_set.MushRadius, 0.005f, 0.06f);
             for (int i = 0; i < _rs.Count; i++)
             {
                 var s = _rs[i];
-                if (!s.V2 || s.MushTried || s.Extra || !IsBodyMesh(s) || s.R == null) continue;
-                Plugin.Log.LogInfo("GPU contact: Delta Mush on: baking " + s.Name + " again with its joint data");
+                if (!s.V2 || s.Extra || !IsBodyMesh(s) || s.R == null) continue;
+                bool moved = radius && s.MushTried && Mathf.Abs(s.MushR - want) > 0.0005f;
+                if (s.MushTried && !moved) continue;
+                Plugin.Log.LogInfo("GPU contact: " + (moved ? "Delta Mush radius " + (s.MushR * 1000f).ToString("0") + " -> " + (want * 1000f).ToString("0") + " mm" : "Delta Mush on")
+                                   + ": baking " + s.Name + " again with its joint data");
                 SetupMesh(s, _z.MaskFor(s.R), _z.ZoneFor(s.R));
             }
         }
@@ -1280,13 +1296,21 @@ namespace SfMorph
             sig = ((sig * 1009 + Mathf.RoundToInt(_set.Skirt * 1000f)) * 1009 + Mathf.RoundToInt(_set.Bulge * 100f)) * 3 + (_set.Normals ? 1 : 0) + (_set.SelfContact ? 7 : 0) + (_set.Mush ? 13 : 0);
             if (sig != _statSig) { _statSig = sig; UpdateStatus(); }
 
+            // 0.11.47 cull: the headset's position for [Physics] ContactCullDistance, looked up by the first renderer with work (no camera =
+            // only the view test)
+            float cullD = _set.CullDistance;
+            bool camOk = false, camTried = false;
+            Vector3 camPos = Vector3.zero;
+            int levels = 0;
+            for (int i = 0; i < _rs.Count; i++) if (_rs[i].Parent != null && _rs[i].Level > levels) levels = _rs[i].Level;
+
             // plan: who has work this frame, and which capsules reach whom (all renderers' capsules go up in one upload)
             int capUsed = 0, active = 0;
             bool anyContact = false;
             for (int i = 0; i < _rs.Count; i++)
             {
                 var s = _rs[i];
-                s.Run = false;
+                s.Run = false; s.Planned = false; s.Culled = false;
                 if (s.R == null || !s.R.enabled || !s.R.gameObject.activeInHierarchy) continue;
                 if (s.Mesh != s.R.sharedMesh && _z != null) { if (s.Extra) SetupMesh(s, new float[s.R.sharedMesh != null ? s.R.sharedMesh.vertexCount : 0], null); else SetupMesh(s, _z.MaskFor(s.R), _z.ZoneFor(s.R)); }   // the mesh was swapped under us
                 if (!s.Ok) continue;
@@ -1310,7 +1334,7 @@ namespace SfMorph
                 s.Imprint1 = !v2 && s.Space > 0 && s.CapN1 > 0;
                 // only her own limbs / the partner's body in reach: probe (Depth alone, counting pressed vertices) until a probe found some
                 s.SelfOnly = v2 && s.CapN > 0 && s.CapN1 == 0;
-                s.Depth = v2 && s.CapN > 0 && (!s.SelfOnly || (s.SelfHits > 0 && frame - s.HitFrame <= SelfHitHold));
+                s.Depth = v2 && s.CapN > 0 && (!s.SelfOnly || (s.SelfHits > 0 && frame - s.HitFrame <= Mathf.Max(1, _set.SelfHitHold)));
                 s.Probe = s.SelfOnly && !s.Depth;
                 s.Bend = v2 && ((BendPose.Any && s.Bake.BendCount > 0)
                                  || (_foldK && ((BendPose.AnyFold && s.Bake.FoldCount > 0) || (_fatMax > 0f && s.Bake.FatCount > 0))));   // 0.11.31 folds, chubby
@@ -1326,6 +1350,52 @@ namespace SfMorph
                         float rr = _discArr[d].w + 0.02f;
                         if (b.SqrDistance(new Vector3(_discArr[d].x, _discArr[d].y, _discArr[d].z)) <= rr * rr) s.DiscMask |= 1 << d;
                     }
+                // 0.11.47 cull, raw: out of every camera's view (Renderer.isVisible counts shadow casting, so her shadow keeps its dents and
+                // bends; it is last frame's culling, one frame late at the edge of the view), or farther from the headset than
+                // ContactCullDistance (10 % hysteresis, so nothing flickers at the line). Asked only of a renderer with work to skip: the idle
+                // path stays as it was (no bounds / visibility queries, no dispatches)
+                bool maybe = v2 && (s.Depth || s.Probe || s.Bend || s.Flex || s.Wave
+                                    || (_mushK && s.MushOffBuf != null && (ShapeTest.MushOverride ?? _set.Mush) && _set.MushAmt > 0.001f));
+                if (maybe && cullD > 0f && !camTried)
+                {
+                    camTried = true;
+                    Camera cam = null;
+                    try { cam = GameRig.VrCamera(); } catch { }
+                    if (cam != null) { camPos = cam.transform.position; camOk = true; }
+                }
+                if (maybe && camOk)
+                {
+                    float lim = s.Far ? 0.9f * cullD : cullD;
+                    s.Far = s.R.bounds.SqrDistance(camPos) > lim * lim;
+                }
+                else if (cullD <= 0f || (camTried && !camOk)) s.Far = false;
+                s.CullRaw = maybe && (!s.R.isVisible || s.Far);
+                s.Planned = true;
+            }
+
+            // 0.11.47 cull: a renderer still runs while a hand presses it (CapN1: foreign capsules) or a slap lands on it, so every hand
+            // print and slap mark builds up exactly as before (skin marks are frozen: docs/LESSONS.md); her own limbs and his body only
+            // dent / shade (their print is re-made on the first frame it shows). A parent runs while any child runs: the child's ApplyMap /
+            // seam reads the parent's Grad of this frame, so a culled parent implies culled children (both on plain skinning, aligned).
+            int culled = 0;
+            for (int i = 0; i < _rs.Count; i++) { var s = _rs[i]; s.Culled = s.Planned && s.CullRaw && s.CapN1 == 0 && s.DiscMask == 0; }
+            for (int it = 0; it <= levels; it++)
+                for (int i = 0; i < _rs.Count; i++)
+                {
+                    var s = _rs[i];
+                    if (s.Planned && !s.Culled && s.Parent != null && s.Parent.Culled) s.Parent.Culled = false;
+                }
+            for (int i = 0; i < _rs.Count; i++)
+            {
+                var s = _rs[i];
+                if (!s.Planned) continue;
+                bool v2 = s.IsV2;
+                if (s.Culled)
+                {
+                    // its own work waits; marks already on it keep fading (Decay below), calibration and the GPU check still run
+                    s.Depth = s.Probe = s.Bend = s.Flex = s.MusOn = s.Wave = false;
+                    culled++;
+                }
                 if (v2 && _set.Marks && (s.Depth || s.DiscMask != 0)) s.MarkUntil = now + 4f * Mathf.Max(3f, _set.MarkFade);   // pressure or a slap: fade for 4 time constants
                 // marks switched off: wipe what is left once, so switching them on again doesn't bring back an old print
                 bool work = s.Depth || s.Bend || s.Flex || s.Wave || s.DiscMask != 0;
@@ -1335,7 +1405,7 @@ namespace SfMorph
                 s.Work = work;
                 s.MapOnly = false;
                 s.MushRan = false; s.MushFollow = false;
-                s.Mush = v2 && _mushK && (ShapeTest.MushOverride ?? _set.Mush) && _set.MushAmt > 0.001f && s.MushOffBuf != null && s.Bake.Mush != null;
+                s.Mush = v2 && !s.Culled && _mushK && (ShapeTest.MushOverride ?? _set.Mush) && _set.MushAmt > 0.001f && s.MushOffBuf != null && s.Bake.Mush != null;
                 if (s.Depth || s.Imprint1) anyContact = true;
                 s.Run = s.NeedCalib || s.Imprint1 || smoke != 0f || work || s.Decay || s.Probe || s.Mush;
                 if (s.Run && (s.Imprint1 || work || s.Decay)) active++;
@@ -1359,12 +1429,11 @@ namespace SfMorph
             _mushVerts = 0; _mushPasses = 0;
             if (capUsed > 0) _capBuf.SetData(_capArr, 0, 0, capUsed);
             ActiveRenderers = active;
+            CulledRenderers = culled;
             Contact = anyContact;
 
             int dispatches = 0, v2Count = 0;
             for (int i = 0; i < _rs.Count; i++) _rs[i].ChainRan = false;
-            int levels = 0;
-            for (int i = 0; i < _rs.Count; i++) if (_rs[i].Parent != null && _rs[i].Level > levels) levels = _rs[i].Level;
             for (int pass = 0; pass <= levels; pass++)   // parents first: an overlay's / a seam's ApplyMap reads its parent's Grad of this frame
             for (int i = 0; i < _rs.Count; i++)
             {

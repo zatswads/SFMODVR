@@ -359,6 +359,8 @@ namespace SfMorph
 
         void PhysicsTab(Character c)
         {
+            QualitySection(false);   // 0.11.47 (Panel.Quality.cs)
+            GUILayout.Space(10);
             PhysicsSection(c);
             GUILayout.Space(10);
             MotionSection(c);
@@ -761,7 +763,8 @@ namespace SfMorph
             float sp = Slider("Springiness", _p.Springiness.Value * 100f, 0f, 100f, "0", 30f, sliderOff == null ? null : "off: " + sliderOff, " %") / 100f;
             if (Mathf.Abs(sp - _p.Springiness.Value) > 0.0001f) _p.Springiness.Value = sp;
             GUI.enabled = sliderOff == null;
-            GUILayout.Label("Quality", _hint);
+            // 0.11.47: "Soft points" (the presets above are the overall quality; this row is only the soft zones' density / subdivision)
+            GUILayout.Label("Soft points (a change rebuilds her soft zones: 1-3 s; Fidelity subdivides her body, about 4x the GPU work)", _hint);
             int q = GUILayout.Toolbar(Mathf.Clamp(_p.Quality.Value, 0, 2), Qualities);
             if (sliderOff == null && q != _p.Quality.Value) _p.Quality.Value = q;
             bool gpu = GUILayout.Toggle(_p.GpuContactOn.Value, " Per-vertex contact on the GPU");

@@ -642,6 +642,7 @@ namespace SfMorph
                         _hands.On = true; _hands.Collide = _p.HandsCollide.Value; _hands.Mesh = _p.HandsMesh.Value;
                         _hands.ShowColliders = _p.ShowSoftPoints.Value; _hands.Softness = _p.Softness.Value;
                         _hands.HullColliders = _p.HandsHull.Value; _hands.Friction = _p.HandsFriction.Value; _hands.JointedFingers = _p.HandsJointed.Value;
+                        PhysicsHands.CookPerFrame = _p.HandsCookPerFrame.Value; PhysicsHands.SolverIters = _p.HandsSolverIters.Value;   // 0.11.47 (were constants)
                         _hands.DrawnOffsetFade = _p.HandsDrawnFade.Value; _hands.FingerConform = _p.HandsFingerConform.Value; _hands.RestCurl = _p.HandsRestCurl.Value; _hands.SoftZonesOn = physics;
                         _hands.HideVisual = _p.EmbodyOn.Value && _p.EmbodyHands.Value != 0;   // his own hands are shown then
                         _hands.LeftPos = _p.LeftHandPos.Value; _hands.LeftRot = _p.LeftHandRot.Value; _hands.RightPos = _p.RightHandPos.Value; _hands.RightRot = _p.RightHandRot.Value;
@@ -797,6 +798,8 @@ namespace SfMorph
             s.Skirt = _p.ContactSkirt.Value; s.Bulge = _p.ContactBulge.Value; s.Normals = _p.ContactNormals.Value; s.RippleThrustAmt = _p.RippleThrustAmt.Value; s.NormalSmooth = _p.ContactNormalSmooth.Value / 1000f; s.Depth = _p.ContactDepth.Value;
             s.SelfContact = _p.SelfContact.Value; s.PartnerBody = _p.PartnerBody.Value;
             s.Mush = _p.DeltaMush.Value; s.MushAmt = _p.DeltaMushAmount.Value; s.MushRadius = _p.DeltaMushRadius.Value / 1000f;   // 0.11.28
+            s.CullDistance = _p.ContactCullDistance.Value; s.SelfHitHold = _p.SelfHitHold.Value;   // 0.11.47 quality knobs
+            SoftZones.MaxSteps = Mathf.Clamp(_p.SoftMaxSteps.Value, 1, 32);
             s.FoldAmount = _p.SkinFolds.Value; s.ElbowFoldMm = _p.FoldElbowMm.Value; s.KneeFoldMm = _p.FoldKneeMm.Value; s.HipFoldMm = _p.FoldHipMm.Value;   // 0.11.31
             s.Chubby = _p.Chubby.Value;
             for (int i = 0; i < ContactSettings.FatAreas && i < _p.ChubbyArea.Length; i++) s.FatMm[i] = _p.ChubbyArea[i].Value;
@@ -883,6 +886,7 @@ namespace SfMorph
                 int res = _p.WrinkResolution.Value;
                 s.CullDistance = _p.WrinkCullDistance.Value; s.Resolution = res == 1 ? 2048 : res == 2 ? 1024 : 0;
                 s.Cavity = _p.WrinkCavity.Value;
+                s.RasterGap = _p.WrinkRasterGap.Value; s.AsleepAfter = _p.WrinkAsleepAfter.Value; s.MuscleInterval = _p.MuscleBlendInterval.Value;   // 0.11.47
                 s.Recapture = _wrRecapture; _wrRecapture = false;
                 Wrink.Update(her, s);
             }

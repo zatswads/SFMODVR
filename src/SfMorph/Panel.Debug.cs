@@ -15,6 +15,11 @@ namespace SfMorph
             GUILayout.Label("Timing (last 10 s)", _bold);
             if (!_p.PerfLog.Value) GUILayout.Label("    off: [General] PerfLog is off", _off);
             else GUILayout.Label(Perf.Summary.Length > 0 ? Perf.Summary : "the first line comes after 10 s", _hint);
+            // 0.11.47: the quality presets beside the numbers they move (Panel.Quality.cs)
+            QualitySection(true);
+            if (_body.Gpu != null && _p.GpuContactOn.Value)
+                GUILayout.Label("GPU contact: " + _body.Gpu.ActiveRenderers + " renderers working, " + _body.Gpu.CulledRenderers + " culled (out of view"
+                                + (_p.ContactCullDistance.Value > 0f ? " or beyond " + _p.ContactCullDistance.Value.ToString("0.0") + " m)" : ")"), _hint);
 
             // physics / contact
             GUILayout.Label("Physics and contact", _bold);

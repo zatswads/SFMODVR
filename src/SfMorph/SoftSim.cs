@@ -16,7 +16,9 @@ namespace SfMorph
     internal partial class SoftZones
     {
         const float Step = 1f / 120f;                  // fixed substep: the springs behave the same at any frame rate
-        const int MaxSteps = 4;
+        // 0.11.47 [Physics] SoftMaxSteps (Body sets it every frame): was a constant 4, so below 30 fps the rest of every frame's time was
+        // dropped by the hitch rule in Simulate (at 23 fps a quarter of it: the jiggle ran slow). 8 keeps all of it down to 15 fps.
+        public static int MaxSteps = 8;
         // 0.7.7: the reach of a capsule is its radius plus this. The points sit ON the skin (SoftZones picks skin vertices), so a capsule
         // dents exactly when its surface reaches the skin; the 0.7.6 PointRadius 12 mm + Margin 8 mm made every hand dent from 2 cm away,
         // fatter than itself, and made the physics hands' force cap fall before visible contact. 3 mm is GpuContact's margin too.
@@ -428,7 +430,7 @@ namespace SfMorph
                 }
                 _acc -= Step; steps++;
             }
-            if (_acc > Step) _acc = 0f;   // fell behind (hitch): drop the rest rather than spiral
+            if (_acc > Step) _acc = 0f;   // fell behind (hitch, or below 120 / MaxSteps fps): drop the rest rather than spiral
 
             // 4: contacts, the skin point is pushed out of every capsule that reaches it
             for (int i = 0; i < nh; i++)

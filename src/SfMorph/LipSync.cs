@@ -59,7 +59,50 @@ namespace SfMorph
                 int o0 = i0 * K, o1 = i1 * K;
                 for (int k = 0; k < K; k++) w[k] = W[o0 + k] * a + W[o1 + k] * b;
             }
+
+            // 0.11.47 [Voice] LipFilter: the K weights for the frame that ends at t and lasted win seconds of clip time. 0 = Sample(t). 1 = the
+            // mean of the (linear) curve over [t - win, t]: at ~23 fps a frame spans 2-3 curve frames, and a point sample jumped between
+            // them. 2 = that mean, but the lip-closure channels keep their peak over the window: a p / b / m closure lasts 1-2 curve frames
+            // (17-33 ms), shorter than a 43 ms frame, so a point sample could miss it and the mean halves it. No allocations.
+            public void SampleWindow(float t, float win, int filter, float[] w)
+            {
+                float last = Frames - 1;
+                float f1 = Mathf.Clamp(t * Fps, 0f, last), f0 = Mathf.Clamp((t - win) * Fps, 0f, last);
+                if (filter <= 0 || f1 - f0 < 1e-3f) { Sample(t, w); return; }
+                Array.Clear(w, 0, K);
+                for (int i = (int)f0; i < Frames - 1 && i < f1; i++)
+                {
+                    // the segment [i, i + 1] clipped to the window: trapezoid of the linear curve
+                    float a = Mathf.Max(f0, i), b = Mathf.Min(f1, i + 1f);
+                    if (b <= a) continue;
+                    float fa = a - i, fb = b - i, h = 0.5f * (b - a) / 65535f;
+                    int o0 = i * K, o1 = o0 + K;
+                    for (int k = 0; k < K; k++) { float w0 = W[o0 + k]; w[k] += h * (2f * w0 + (W[o1 + k] - w0) * (fa + fb)); }
+                }
+                float inv = 1f / (f1 - f0);
+                for (int k = 0; k < K; k++) w[k] *= inv;
+                if (filter < 2) return;
+                for (int c = 0; c < Closure.Length; c++)
+                {
+                    int k = Closure[c];
+                    if (k < 0) continue;
+                    float pk = Mathf.Max(At(f0, k), At(f1, k));
+                    for (int j = Mathf.CeilToInt(f0); j <= (int)f1; j++) pk = Mathf.Max(pk, W[j * K + k] / 65535f);
+                    if (pk > w[k]) w[k] = pk;
+                }
+            }
+
+            // one channel at a fractional curve frame
+            float At(float fi, int k)
+            {
+                int i0 = (int)fi, i1 = Math.Min(i0 + 1, Frames - 1);
+                float f = fi - i0;
+                return (W[i0 * K + k] * (1f - f) + W[i1 * K + k] * f) / 65535f;
+            }
         }
+
+        // 0.11.47: the channels that close the lips (p / b / m): their peak over a frame is kept by LipFilter 2
+        static readonly int[] Closure = { ShapeIndex("mouthClose"), ShapeIndex("mouthPressLeft"), ShapeIndex("mouthPressRight"), ShapeIndex("mouthRollLower"), ShapeIndex("mouthRollUpper") };
 
         static readonly Dictionary<string, Curve> _cache = new Dictionary<string, Curve>(StringComparer.OrdinalIgnoreCase);
         static readonly LinkedList<string> _lru = new LinkedList<string>();

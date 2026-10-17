@@ -78,6 +78,10 @@ namespace SfMorph
         internal ConfigEntry<string> PanelRect;
         internal ConfigEntry<int> Tab;
         internal ConfigEntry<bool> PerfLog;
+        // 0.11.47 quality presets ([General] QualityPreset, Quality.cs) and the costs that were constants until now
+        internal ConfigEntry<int> QualityPreset, SoftMaxSteps, SelfHitHold, WrinkRasterGap, FaceTrackRate, FaceTrackBudget, LipFilter, HandsCookPerFrame, HandsSolverIters;
+        internal ConfigEntry<float> ContactCullDistance, WrinkAsleepAfter, MuscleBlendInterval;
+        internal ConfigEntry<bool> LipAutoLead;
 
         void Awake()
         {
@@ -94,7 +98,12 @@ namespace SfMorph
             Physics = Config.Bind("Physics", "SoftZones", true, "Hands and limbs press into her glutes, thighs, belly and breasts (helper bones driven by the game's DynamicBone).");
             Softness = Config.Bind("Physics", "Softness", 0.5f, new ConfigDescription("How much the soft zones give (0 firm, 1 soft).", new AcceptableValueRange<float>(0f, 1f)));
             Springiness = Config.Bind("Physics", "Springiness", 0.45f, new ConfigDescription("Secondary motion of the soft zones from her own movement (0 none, 1 a lot).", new AcceptableValueRange<float>(0f, 1f)));
-            Quality = Config.Bind("Physics", "Quality", 2, new ConfigDescription("Soft zones: 0 Performance (few points), 1 Balanced (dense points), 2 Fidelity (dense points + smoothed, subdivided body mesh).", new AcceptableValueRange<int>(0, 2)));
+            // 0.11.47: default Balanced (was Fidelity since 0.11.21): Fidelity subdivides her body meshes, about 4x the vertices for every GPU
+            // contact and Delta Mush pass, the costliest single setting at ~23 fps
+            Quality = Config.Bind("Physics", "Quality", 1, new ConfigDescription("Soft points: 0 Performance (few points), 1 Balanced (dense points), 2 Fidelity (dense points + smoothed, subdivided body mesh: about 4x her body's vertices for every GPU contact and Delta Mush pass, the costliest setting). A change rebuilds her soft zones (a 1-3 s hitch).", new AcceptableValueRange<int>(0, 2)));
+            SoftMaxSteps = Config.Bind("Physics", "SoftMaxSteps", 8, new ConfigDescription("Soft zones: at most this many 1/120 s spring steps per frame. Below 120 / this fps the rest of the frame's simulation time is dropped and the jiggle runs slow (4, the old limit, lost a quarter of it at 23 fps; 8 keeps all of it down to 15 fps). Each step costs a little CPU per soft point.", new AcceptableValueRange<int>(4, 16)));
+            ContactCullDistance = Config.Bind("Physics", "ContactCullDistance", 3f, new ConfigDescription("GPU contact: her meshes farther than this from your headset (m), or out of every camera's view (their shadows count as in view), skip their dents, bends, muscles and Delta Mush until they are near / seen again; a hand pressing them or a slap still runs (0 = only the view test).", new AcceptableValueRange<float>(0f, 20f)));
+            SelfHitHold = Config.Bind("Physics", "SelfHitHold", 30, new ConfigDescription("GPU contact: frames her own limbs or his body keep the full dent chain running after a probe found them pressing (its readback arrives 1-3 frames late). Lower = less GPU time when they barely touch; too low and such a dent can flicker.", new AcceptableValueRange<int>(10, 120)));
             OverlapAmount = Config.Bind("Motion", "Overlap", 0.3f, new ConfigDescription("Secondary motion: her limbs, head and spine trail the animation a little (0 off).", new AcceptableValueRange<float>(0f, 1f)));
             OverlapStrength = Config.Bind("Motion", "Strength", 1f, new ConfigDescription("Multiplies the secondary motion on top of Overlap (1 = as designed, up to 4x: bigger trailing and swings; the springs themselves don't change, so it stays stable).", new AcceptableValueRange<float>(1f, 4f)));
             OverlapArms = Config.Bind("Motion", "Arms", 1f, new ConfigDescription("Overlap amount on the arms.", new AcceptableValueRange<float>(0f, 1f)));
@@ -113,7 +122,7 @@ namespace SfMorph
             ContactNormalSmooth = Config.Bind("Physics", "ContactNormalSmooth", 8f, new ConfigDescription("GPU contact: how far the dent's shading is smoothed (mm). Larger = rounder, less faceted pressed-flesh shading; 0 = the exact field (0.11.11 look).", new AcceptableValueRange<float>(0f, 20f)));
             DeltaMush = Config.Bind("Physics", "DeltaMush", true, "GPU contact: her elbows, knees, hips and shoulders keep their volume in deep bends instead of pinching and flattening (Delta Mush on the skinned body: the joint skin is smoothed, then its rest detail put back). Costs GPU time every frame she is visible.");
             DeltaMushAmount = Config.Bind("Physics", "DeltaMushAmount", 1f, new ConfigDescription("Strength of the Delta Mush at her joints (0 = the plain skinning).", new AcceptableValueRange<float>(0f, 1f)));
-            DeltaMushRadius = Config.Bind("Physics", "DeltaMushRadius", 20f, new ConfigDescription("How far the Delta Mush smooths around each joint (mm). Larger = rounder bends, more GPU passes (at most 48). Applies when her body is rebuilt (character change, Rescan, restart).", new AcceptableValueRange<float>(5f, 60f)));
+            DeltaMushRadius = Config.Bind("Physics", "DeltaMushRadius", 20f, new ConfigDescription("How far the Delta Mush smooths around each joint (mm). Larger = rounder bends, more GPU passes (at most 48). Applies when her body is rebuilt (character change, Rescan, restart) or when a quality preset changes it.", new AcceptableValueRange<float>(5f, 60f)));
             // 0.11.47: Delta Mush per joint and its volume keeping (read every frame)
             MushShoulder = Config.Bind("Physics", "MushShoulder", 1f, new ConfigDescription("Delta Mush strength at her shoulders and armpits (x DeltaMushAmount; 0 = plain skinning there).", new AcceptableValueRange<float>(0f, 1f)));
             MushElbow = Config.Bind("Physics", "MushElbow", 1f, new ConfigDescription("Delta Mush strength at her elbows (x DeltaMushAmount).", new AcceptableValueRange<float>(0f, 1f)));
@@ -174,6 +183,8 @@ namespace SfMorph
             HandsDrawnFade = Config.Bind("Hands", "DrawnOffsetFade", true, "The drawn physics hand is exactly the controller in free air; the blocked displacement fades in on contact (off: always the physics pose, for comparing).");
             HandsFingerConform = Config.Bind("Hands", "FingerConform", true, "Fingers close until they touch her and sink in by the part's softness (off: the grip alone poses them).");
             HandsGrabButton = Config.Bind("Hands", "GrabButton", 0, new ConfigDescription("The controller button that closes the hand (all fingers together): 0 trigger (the grip is the game's menu button), 1 grip, 2 whichever is pressed further.", new AcceptableValueRange<int>(0, 2)));
+            HandsCookPerFrame = Config.Bind("Hands", "CookPerFrame", 2, new ConfigDescription("Convex hulls of her body colliders cooked per frame after a rebuild (a few ms each; a capsule stands in until its hull is ready).", new AcceptableValueRange<int>(1, 4)));
+            HandsSolverIters = Config.Bind("Hands", "SolverIterations", 16, new ConfigDescription("PhysX solver iterations of the physics hands' palm and finger bodies (velocity iterations: a quarter of this). Lower = cheaper, slightly softer finger joints. Applies when the hands are built again (switch them off and on).", new AcceptableValueRange<int>(4, 32)));
             HandsRestCurl = Config.Bind("Hands", "RestCurl", 0.25f, new ConfigDescription("How much the fingers curl with nothing pressed (0 flat, 1 a fist). Physics hands and his hands.", new AcceptableValueRange<float>(0f, 1f)));
             ShowSoftPoints = Config.Bind("Physics", "ShowSoftPoints", false, "Small markers on the soft points (green at rest, red touched) and the contact capsules, to see what touches what.");
             WrinkOn = Config.Bind("Wrinkles", "On", false, "Skin wrinkles: authored expression lines and joint creases fade into her skin's normal map where the skin compresses across them, measured on the GPU (shader bundle sfmorph_shaders next to the DLL).");
@@ -191,6 +202,8 @@ namespace SfMorph
             // 0.11.47 curve-driven face wrinkles (read by Wrinkles.UpdateActs through WrinkleSettings' statics)
             WrinkCurveDrive = Config.Bind("Wrinkles", "CurveDrive", true, "Face and neck lines also follow what her face is told to do (the lip sync's mouth / brow / nose curves, and an estimate per face-clip mood: smile, pain, pleasure, surprise...), not only how far her skin compresses. Expressions she holds keep their lines.");
             WrinkCurveGain = Config.Bind("Wrinkles", "CurveGain", 1f, new ConfigDescription("How strongly those curves fade the lines in (0 off, 2 double).", new AcceptableValueRange<float>(0f, 2f)));
+            WrinkRasterGap = Config.Bind("Wrinkles", "RasterGap", 2, new ConfigDescription("Frames between two re-blends of a wrinkle / muscle texture while the lines change (1 = every frame: smoothest, most GPU time; 3 = a third less often). Skin marks keep their own rate.", new AcceptableValueRange<int>(1, 6)));
+            WrinkAsleepAfter = Config.Bind("Wrinkles", "AsleepAfter", 0.5f, new ConfigDescription("Seconds without a change before a wrinkle texture goes idle (her skin's compression is then measured every 4th frame instead of every frame).", new AcceptableValueRange<float>(0.1f, 2f)));
             WrinkleSettings.CurveDrive = WrinkCurveDrive.Value; WrinkleSettings.CurveGain = WrinkCurveGain.Value;
             WrinkCurveDrive.SettingChanged += (o, e) => WrinkleSettings.CurveDrive = WrinkCurveDrive.Value;
             WrinkCurveGain.SettingChanged += (o, e) => WrinkleSettings.CurveGain = WrinkCurveGain.Value;
@@ -207,6 +220,7 @@ namespace SfMorph
             MuscleAttack = Config.Bind("Muscles", "Attack", 0.25f, new ConfigDescription("Seconds for a muscle to tense.", new AcceptableValueRange<float>(0.02f, 2f)));
             MuscleRelease = Config.Bind("Muscles", "Release", 0.8f, new ConfigDescription("Seconds for a muscle to relax.", new AcceptableValueRange<float>(0.02f, 3f)));
             MuscleDriver = Config.Bind("Muscles", "Driver", 1, new ConfigDescription("What tenses her muscles: 0 joint-angle tables (before 0.11.47), 1 muscle lengths (origin to insertion on her bones, a shortened muscle contracts) plus the load terms (her weight on legs / arms / trunk), 2 the stronger of lengths and the angle tables.", new AcceptableValueRange<int>(0, 2)));
+            MuscleBlendInterval = Config.Bind("Muscles", "BlendInterval", 0.15f, new ConfigDescription("Shortest time between two re-blends of the muscle relief (s; was a fixed 0.1). Her muscles change slowly and each re-blend redraws her 2048 body normal texture.", new AcceptableValueRange<float>(0.03f, 0.5f)));
             MuscleFlexAmt = Config.Bind("Muscles", "Flex", 1f, new ConfigDescription("Tensed muscles bulge as geometry (needs GPU contact): the per-area sizes below x this (0 off).", new AcceptableValueRange<float>(0f, 2f)));
             MuscleCoreMm = Config.Bind("Muscles", "CoreMm", 3f, new ConfigDescription("Bulge of a fully active abs / obliques / serratus muscle at the area's highest sculpted belly (mm, before Flex; the sculpt keeps the other bellies and grooves in proportion).", new AcceptableValueRange<float>(0f, 20f)));
             MuscleBackMm = Config.Bind("Muscles", "BackMm", 4f, new ConfigDescription("Bulge of the fully active spinal erectors / lats (mm, before Flex).", new AcceptableValueRange<float>(0f, 20f)));
@@ -256,6 +270,8 @@ namespace SfMorph
             ReactLinesGamePath = Config.Bind("Reactions", "LinesGamePath", true, "Her lines go through the game's own dirty-talk path (her talking face and the subtitle come with them; the game's dirty-talk state is put back right after). Off: the clip plays on the game's dirty-talk source, without face or subtitle.");
             ReactLineChance = Config.Bind("Reactions", "LineChance", 0.5f, new ConfigDescription("Chance that a voiced touch of an area with lines speaks a line instead of a moan (at most one line per 8 s at the default voice gap).", new AcceptableValueRange<float>(0f, 1f)));
             ReactFaceClips = Config.Bind("Reactions", "FaceClips", true, "Her face Animator's own clips play over her face as reactions (pleasure by excitement on breasts, hips, butt, thighs and neck; ticklish or surprised elsewhere; surprise on soft slaps, pain on hard ones; climax). Found by a one-time survey of her face clips (log and BepInEx\\config\\SfMorphs\\face-clips.txt). Her mouth is left to the game while she speaks or moans.");
+            FaceTrackRate = Config.Bind("Reactions", "FaceTrackRate", 15, new ConfigDescription("Samples per second of the cached face-clip tracks (15 = the old fixed rate; 30 = smoother fast expressions, twice the memory and build time). Applies to tracks built after the change.", new AcceptableValueRange<int>(10, 60)));
+            FaceTrackBudget = Config.Bind("Reactions", "FaceTrackBudget", 6, new ConfigDescription("Face-clip samples taken per frame while a track is built (each poses her face from the clip once; fewer = a lighter frame, the track is ready later).", new AcceptableValueRange<int>(1, 16)));
             ReactFaceStrength = Config.Bind("Reactions", "FaceStrength", 0.8f, new ConfigDescription("How strongly the face clips show over the game's face.", new AcceptableValueRange<float>(0f, 1f)));
             ReactFaceMap = Config.Bind("Reactions", "FaceMap", "", "The face clip per mood chosen in the panel, 'Mood=clip;...'. Empty: picked by name, then by strength.");
             ReactFace = Config.Bind("Reactions", "Face", true, "Her face reacts to touch: the game's own eye reaction on slaps (and soft ones on caresses and gropes), with a wince or blink alongside when no moan carries the face.");
@@ -280,6 +296,9 @@ namespace SfMorph
             // 0.11.12: replaces LipLead (its range could not move the mouth later, and a maxed value put it ~0.3 s early); the audio output's own
             // buffer latency is now added by the plugin, this is only the rest (the headset link)
             LipLead = Config.Bind("Voice", "LipTiming", 0f, new ConfigDescription("Seconds the mouth moves ahead of the sound (+ = earlier, - = later). The game's audio buffer delay is already accounted for; this is for the rest (wireless headset audio).", new AcceptableValueRange<float>(-0.3f, 0.3f)));
+            // 0.11.47: at ~23 fps a frame is 43 ms, longer than a p / b / m closure in the 60 fps curves: a point sample could fall either side of it
+            LipFilter = Config.Bind("Voice", "LipFilter", 2, new ConfigDescription("How the lip-sync curve is read each frame: 0 at the frame's moment (at a low frame rate a short p / b / m closure can fall between two frames and be missed), 1 the average over the frame (smoother), 2 the average plus the frame's strongest lip closure (mouthClose / press / roll), so p / b / m always show.", new AcceptableValueRange<int>(0, 2)));
+            LipAutoLead = Config.Bind("Voice", "LipAutoLead", true, "The mouth leads the sound by one frame time, measured every frame (the frame being drawn reaches your eyes about a frame later than the sound reaches your ears). LipTiming adds on top.");
             LipOverGame = Config.Bind("Voice", "LipOverGame", 0.5f, new ConfigDescription("Under the lip-sync poses: 0 = the game's mouth of the moment (the poses add on top), 1 = her neutral mouth (the game's mouth is replaced).", new AcceptableValueRange<float>(0f, 1f)));
             LipMood = Config.Bind("Voice", "LipMood", 0.7f, new ConfigDescription("While a lip-synced clip plays, how much of her expression's mouth (the face clip of her mood: a smile, a grimace) stays under the lip-sync poses. 0 = the poses go on the base above (the expression keeps only its eyes, brows and cheeks), 1 = the expression's full mouth under them.", new AcceptableValueRange<float>(0f, 1f)));
             LipBrows = Config.Bind("Voice", "LipBrows", 0.7f, new ConfigDescription("How much the lip-sync curves move her brows while she speaks (inner / outer raise, lowerer), on top of her expression's brows. 0 = the expression's brows only.", new AcceptableValueRange<float>(0f, 1.5f)));
@@ -311,6 +330,22 @@ namespace SfMorph
                 ReactConfigRev.Value = 2;
                 if (moved.Count > 0) Logger.LogInfo("Config migration: [Physics] " + string.Join(", ", moved.ToArray()) + " (revision 2)");
             }
+            // one-time migration (0.11.47): Quality 2 (Fidelity) was the default from 0.11.21, so it is in every config whose owner never picked
+            // a quality, and it is the costliest setting (about 4x her body's vertices in every GPU pass). Like revision 2, a value still at the
+            // old default moves to the new one (Balanced); the Best quality preset or the Soft points row brings Fidelity back. Nothing else
+            // is changed on the first start: the presets write their settings only when one is picked.
+            if (ReactConfigRev.Value < 3)
+            {
+                bool wasFid = Quality.Value == 2;
+                if (wasFid) Quality.Value = 1;
+                ReactConfigRev.Value = 3;
+                if (wasFid) Logger.LogInfo("Config migration: [Physics] Quality Fidelity -> Balanced, the new default (revision 3; pick Best quality or Soft points: Fidelity for it again)");
+            }
+            // 0.11.47 quality presets: the last pick. A pick in the panel, or a change of this value (a config manager), writes the settings the
+            // preset covers (Quality.cs); the value alone at start changes nothing
+            QualityPreset = Config.Bind("General", "QualityPreset", 1, new ConfigDescription("Quality preset: 0 Performance, 1 Balanced, 2 Quality, 3 Best quality (Physics tab top, Debug tab). Picking one writes the settings it covers (soft points, GPU contact passes and culling, Delta Mush, wrinkle textures, face-clip tracks, lip filter, physics hands); her look (sizes, bulges, folds, chubby, flex, ripple, skin marks, lip look) is never touched. The panel shows Custom when a covered setting differs from the pick.", new AcceptableValueRange<int>(0, 3)));
+            QualityPresets.Init(this);
+            QualityPreset.SettingChanged += (o, e) => QualityPresets.Apply(this, QualityPreset.Value, "config");
             Logger.LogInfo("SF Body Morphs " + Version + ": panel on " + PanelKey.Value + ", looks in " + Store.Dir);
             // The game destroys plugin components; a hidden object of our own keeps running.
             var go = new GameObject("SfMorphRunner") { hideFlags = HideFlags.HideAndDontSave };

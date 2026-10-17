@@ -19,6 +19,11 @@ namespace SfMorph
         public float Attack = 0.12f, Release = 0.3f, CullDistance = 3f;
         public int Resolution;        // 0 base size (cap 4096), else 2048/1024
         public float Cavity = 0.3f;   // 0.8.4: crease shade in the albedo copy (0 = no albedo copy unless the debug view is on)
+        // 0.11.47 quality knobs (were constants): frames between two re-blends of a sheet ([Wrinkles] RasterGap, was 2), seconds without a
+        // change before a sheet goes idle ([Wrinkles] AsleepAfter, was 0.5), shortest time between two muscle re-blends ([Muscles]
+        // BlendInterval, was 0.1)
+        public int RasterGap = 2;
+        public float AsleepAfter = 0.5f, MuscleInterval = 0.15f;
         // 0.10.0: muscle definition, a second layer of the same sheets (Muscles.cs); On above = the wrinkles themselves
         public readonly MuscleSettings Muscles = new MuscleSettings();
         // 0.11.47: curve-driven face wrinkles ([Wrinkles] CurveDrive / CurveGain; set by Plugin from the config, read by UpdateActs)
@@ -120,6 +125,7 @@ namespace SfMorph
                 var sh = sheets[i];
                 if (sh == null || sh.Mat != m || !sh.Built) continue;
                 sh.Dirty = true;
+                sh.MarksDirty = true;   // 0.11.47: this re-blend keeps the marks' own rate (RasterGap never applies to it: docs/LESSONS.md)
                 sh.LastChange = Time.unscaledTime;
             }
         }
@@ -186,7 +192,7 @@ namespace SfMorph
         static readonly int PMOn = Shader.PropertyToID("_MOn"), PMDetail = Shader.PropertyToID("_MDetail"), PMRegion = Shader.PropertyToID("_MRegion"),
             PMRegionSize = Shader.PropertyToID("_MRegionSize"), PMAct = Shader.PropertyToID("_MAct"), PMStrength = Shader.PropertyToID("_MStrength"),
             PMShade = Shader.PropertyToID("_MShade"), PMDebug = Shader.PropertyToID("_MDebug"), PMSlopeMax = Shader.PropertyToID("_MSlopeMax");
-        const float MuscleStep = 1f / 32f, MuscleMinInterval = 0.1f;
+        const float MuscleStep = 1f / 32f;   // 0.11.47: the shortest re-blend interval is WrinkleSettings.MuscleInterval ([Muscles] BlendInterval, was 0.1 s)
 
         // ---- state ----
 
@@ -249,6 +255,7 @@ namespace SfMorph
             public RenderTexture Normal, Albedo;  // Albedo (0.8.4): crease darkening + SkinMarks' marks + the debug tint, in the albedo slot
             public int DebugMode;
             public bool Built, Dirty, Asleep, Culled, RasterLogged, AlbedoHeld;
+            public bool MarksDirty;               // 0.11.47: SkinMarks touched it since the last raster (re-blended at its fixed 2-frame gap)
             public float LastChange, LastComputeAt, LastTransLog = -100f;
             public int LastRasterFrame = -100;
             public float StrengthApplied = -1f, CavityApplied = -1f;
@@ -592,10 +599,10 @@ namespace SfMorph
             {
                 var sh = _sheets[si];
                 if (!sh.Built || sh.Culled || sh.Sums == null) continue;
-                if (!sh.Asleep && !sh.Dirty && now - sh.LastChange > 0.5f)
+                if (!sh.Asleep && !sh.Dirty && now - sh.LastChange > _s.AsleepAfter)
                 {
                     sh.Asleep = true;
-                    TransLog(sh, now, "Wrinkles: sheet '" + sh.Name + "' idle (no change for 0.5 s): strain every 4th frame");
+                    TransLog(sh, now, "Wrinkles: sheet '" + sh.Name + "' idle (no change for " + _s.AsleepAfter.ToString("0.0#") + " s): strain every 4th frame");
                 }
                 // 0.10.0: the strain only drives the wrinkles; with only the muscles on there is nothing to measure
                 bool compute = _s.On && (!sh.Asleep || (frame & 3) == 0) && sh.Inflight < MaxInflight;
@@ -617,7 +624,10 @@ namespace SfMorph
                         AsyncGPUReadback.Request(sh.Sums, sh.OnSums);
                     }
                 }
-                if (sh.Dirty && frame - sh.LastRasterFrame >= 2) Raster(sh, frame, false);
+                // 0.11.47: [Wrinkles] RasterGap for the wrinkles' and muscles' own changes; a skin marks touch keeps its 2-frame gap (the marks'
+                // timing is frozen and each re-blend is the biggest steady GPU cost in contact: never faster, never slower)
+                int gap = sh.MarksDirty ? 2 : Mathf.Clamp(_s.RasterGap, 1, 8);
+                if (sh.Dirty && frame - sh.LastRasterFrame >= gap) Raster(sh, frame, false);
             }
         }
 
@@ -955,6 +965,7 @@ namespace SfMorph
             if (!sh.RasterLogged && !initial) sw = Stopwatch.StartNew();
             Graphics.ExecuteCommandBuffer(cmd);
             sh.Dirty = false;
+            sh.MarksDirty = false;
             sh.LastRasterFrame = frame;
             sh.StrengthApplied = _s.Strength;
             sh.CavityApplied = _s.Cavity;
@@ -1492,7 +1503,7 @@ namespace SfMorph
 
         // 0.10.0: the muscles' activations from her pose (MusclePose), faded with attack / release. A muscle whose area is off goes to 0;
         // the rest sit at the resting tone (Fitness) plus the pose's tension x Gain. The sheet blends again when one moves by 1/32, at most
-        // every MuscleMinInterval s (her muscles change slowly; a raster of the 2048 normal RT costs GPU time every time).
+        // every s.MuscleInterval s (her muscles change slowly; a raster of the 2048 normal RT costs GPU time every time).
         void UpdateMuscles(Sheet sh, Character her, WrinkleSettings s, float now)
         {
             var M = sh.Muscle;
@@ -1518,7 +1529,7 @@ namespace SfMorph
                 if (Mathf.Abs(a - sh.MActSent[k]) >= MuscleStep || (a == 0f) != (sh.MActSent[k] == 0f)) moved = true;
             }
             MuscleFlex.Publish(M, sh.MAct);   // 0.11.8: the same activations push her muscles out as geometry (GpuContact) and firm them under a hand
-            if (moved && now - sh.MLastDirty >= MuscleMinInterval)
+            if (moved && now - sh.MLastDirty >= Mathf.Max(0.01f, s.MuscleInterval))
             {
                 sh.MLastDirty = now;
                 sh.Dirty = true;

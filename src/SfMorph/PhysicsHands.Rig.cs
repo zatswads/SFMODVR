@@ -130,7 +130,7 @@ namespace SfMorph
             rb.interpolation = RigidbodyInterpolation.None;   // the visual interpolates the relative pose itself (PoseFromRig)
             rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
             rb.maxAngularVelocity = 30f; rb.maxDepenetrationVelocity = 2f;
-            rb.solverIterations = 16; rb.solverVelocityIterations = 4; rb.sleepThreshold = 0f;
+            rb.solverIterations = Mathf.Clamp(SolverIters, 1, 64); rb.solverVelocityIterations = SolverVelIters; rb.sleepThreshold = 0f;   // 0.11.47 [Hands] SolverIterations
             var it = rb.inertiaTensor;
             rb.inertiaTensor = new Vector3(Mathf.Max(it.x, InertiaFloor), Mathf.Max(it.y, InertiaFloor), Mathf.Max(it.z, InertiaFloor));
 

@@ -9,6 +9,7 @@ namespace SfMorph
         public bool PushByTouch, On, Voice, Face, Flinch, Sound, Blush, BlushBody, Gaze, FeedDesire, AutoState, AllowClimax, VoiceGuard, Lines, FaceClips, LinesGamePath, Foley, RubSound, MuteGameVoice, MuteDialogue, PackInScenes, PackNonEnglish, LipSync;
         public bool PenSound, PenReact; public float PenVolume;   // 0.11.25
         public float LipStrength, LipLead, LipOverGame, LipMood, LipBrows, LipSticky;
+        public int LipFilter = 2; public bool LipAutoLead = true;   // 0.11.47
         public float Sensitivity, Cooldown, Volume, SkinVolume, BlushGain, VoicePitchVar, LimbPush, LineChance, FaceStrength, VoicePitch, VoiceFormant;
         public string FaceMap = "", VoicePack = "";
         public int VoiceMode, Log;
@@ -26,6 +27,8 @@ namespace SfMorph
             Foley = p.ReactFoley.Value; RubSound = p.ReactRubSound.Value; PenSound = p.ReactPenSound.Value; PenReact = p.ReactPenReact.Value; PenVolume = p.ReactPenVolume.Value; VoicePack = p.VoicePackName.Value ?? ""; PackNonEnglish = p.VoiceNonEnglish.Value; VoicePitch = p.VoicePitch.Value; VoiceFormant = p.VoiceFormant.Value;
             FaceClips = p.ReactFaceClips.Value; FaceStrength = p.ReactFaceStrength.Value; FaceMap = p.ReactFaceMap.Value ?? "";
             LipSync = p.LipSyncOn.Value; LipStrength = p.LipStrength.Value; LipLead = p.LipLead.Value; LipOverGame = p.LipOverGame.Value; LipMood = p.LipMood.Value; LipBrows = p.LipBrows.Value; LipSticky = p.LipSticky.Value;
+            ReactionsFace.TrackRate = p.FaceTrackRate.Value; ReactionsFace.TrackBudget = p.FaceTrackBudget.Value;   // 0.11.47 quality knobs
+            LipFilter = p.LipFilter.Value; LipAutoLead = p.LipAutoLead.Value;
             PushByTouch = p.HandsPushByTouch.Value;   // the geometric push of other hands: without it and without physics hands nothing is classified
             LimbPush = p.HandsLimbPush.Value;   // the flinch's swing is a push on her limbs: it needs the slider above 0
         }
@@ -919,7 +922,11 @@ namespace SfMorph
                         // the pitch / formant filter (VoiceShift) delays her voice by about 45 ms while it is on: the mouth waits for it
                         float fx = Mathf.Abs(_s.VoicePitch - 1f) > 1e-3f || Mathf.Abs(_s.VoiceFormant - 1f) > 1e-3f ? 0.045f : 0f;
                         // 0.11.12: AudioSource.time is where the mixer reads, ahead of what reaches her ears by the output buffers
-                        _lipCurve.Sample(_lipT + _lipLead + _s.LipLead - fx - _g.OutputLatency, _lipW);
+                        // 0.11.47 [Voice] LipAutoLead: the frame drawn now reaches her eyes about one frame later (render + the headset's
+                        // compositor), the sound does not wait for it: lead by the smoothed frame time (~43 ms at 23 fps, ~11 ms at 90)
+                        float autoLead = _s.LipAutoLead ? Mathf.Clamp(Time.smoothDeltaTime, 0f, 0.1f) * pitch : 0f;
+                        // [Voice] LipFilter: the curve over the clip time this frame covers, not one instant of it (LipSync.SampleWindow)
+                        _lipCurve.SampleWindow(_lipT + _lipLead + _s.LipLead - fx - _g.OutputLatency + autoLead, Mathf.Clamp(dt, 0f, 0.1f) * pitch, _s.LipFilter, _lipW);
                         float k = Mathf.Max(0f, _s.LipStrength);
                         // ARKit's mouthClose only means "lips together while the jaw is open": Audio2Face often gives more of it than of
                         // jawOpen (0.49 vs 0.16), which pushed her lower lip up past her neutral mouth into a pout

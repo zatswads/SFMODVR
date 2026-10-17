@@ -63,6 +63,9 @@ namespace SfMorph
         readonly List<ClipInfo> _clips = new List<ClipInfo>();
         readonly List<ClipInfo> _ranked = new List<ClipInfo>();
         readonly Dictionary<string, Track> _tracks = new Dictionary<string, Track>();
+        // 0.11.47 [Reactions] FaceTrackRate (samples / s of a track built from now on; was 15) and FaceTrackBudget (samples per frame while
+        // building; was 6). ReactionSettings.Fill sets them every frame.
+        public static int TrackRate = 15, TrackBudget = 6;
         readonly ClipInfo[] _pick = new ClipInfo[NM];
         readonly string[] _pickWhy = new string[NM];
         // 0.9.0 (from a VaM scene's face reactions: pools of hand-keyed clips per tier, picked at random without the last ones): a few clips
@@ -334,7 +337,7 @@ namespace SfMorph
                 Snapshot();
                 try
                 {
-                    int budget = 6;
+                    int budget = Mathf.Clamp(TrackBudget, 1, 32);
                     while (budget > 0 && _build.Count > 0)
                     {
                         var tr = _build.Peek();
@@ -707,11 +710,14 @@ namespace SfMorph
         Track TrackOf(ClipInfo ci)
         {
             Track tr;
-            if (_tracks.TryGetValue(ci.Name, out tr)) return tr;
+            float dt = 1f / Mathf.Clamp(TrackRate, 5, 120);
+            // 0.11.47: a ready track sampled at another rate than [Reactions] FaceTrackRate is sampled again when it is next asked for (a
+            // track playing now keeps its own copy; the mood waits for the new one like any track being built)
+            if (_tracks.TryGetValue(ci.Name, out tr) && (!tr.Ready || Mathf.Abs(tr.Dt - dt) < 1e-5f)) return tr;
             var bones = new List<int>();
             for (int b = 0; b < _face.Length; b++) if (ci.PosB[b] || ci.RotB[b]) bones.Add(b);
             float len = Mathf.Clamp(ci.Len, 0.05f, 6f);
-            tr = new Track { Ci = ci, Dt = 1f / 15f, Bones = bones.ToArray() };
+            tr = new Track { Ci = ci, Dt = dt, Bones = bones.ToArray() };
             tr.N = Mathf.Max(2, Mathf.CeilToInt(len / tr.Dt) + 1);
             tr.PosB = new bool[tr.Bones.Length]; tr.RotB = new bool[tr.Bones.Length];
             for (int k = 0; k < tr.Bones.Length; k++) { tr.PosB[k] = ci.PosB[tr.Bones[k]]; tr.RotB[k] = ci.RotB[tr.Bones[k]]; }

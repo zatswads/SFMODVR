@@ -129,7 +129,11 @@ namespace SfMorph
         // 13.4: a free-air offset above LostLo..LostHi (m) fades to nothing (a lost target; counted above LostMm), the shown rotation is capped at ShownRotMax degrees
         const float LostLo = 0.05f, LostHi = 0.10f, LostMm = 100f, ShownRotMax = 45f;
         const float HerMaxV = 4f;                  // sampled speed cap of her kinematic segments (m/s)
-        const int CookPerFrame = 2;                // convex hulls cooked per rendered frame (the capsule collides until then)
+        // convex hulls cooked per rendered frame (the capsule collides until then); 0.11.47 [Hands] CookPerFrame, Body sets it (was the constant 2)
+        internal static int CookPerFrame = 2;
+        // 0.11.47 [Hands] SolverIterations of the palm and finger bodies (was the constant 16 / 4; velocity = a quarter), read when a hand is built
+        internal static int SolverIters = 16;
+        static int SolverVelIters { get { return Mathf.Max(1, SolverIters / 4); } }
 
         // Sizes (metres, from the design).
         // 0.7.7: the soft capsules of the palm are half of the 3 cm physical palm (PalmThick), not the old 3.5 cm radius that stuck 2 cm
@@ -1000,7 +1004,7 @@ namespace SfMorph
             rb.interpolation = RigidbodyInterpolation.None;
             rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
             rb.maxAngularVelocity = 50f; rb.maxDepenetrationVelocity = 2f;
-            rb.solverIterations = 16; rb.solverVelocityIterations = 4; rb.sleepThreshold = 0f;
+            rb.solverIterations = Mathf.Clamp(SolverIters, 1, 64); rb.solverVelocityIterations = SolverVelIters; rb.sleepThreshold = 0f;
             rb.centerOfMass = Vector3.zero;   // so the velocity we command is the wrist's
             h.Rb = rb;
             h.TotalMass = PalmMass;
@@ -1292,7 +1296,7 @@ namespace SfMorph
             if (_cookQueue.Count == 0) return;
             _cookSw.Reset(); _cookSw.Start();
             int n = 0;
-            while (n < CookPerFrame && _cookQueue.Count > 0)
+            while (n < Mathf.Max(1, CookPerFrame) && _cookQueue.Count > 0)
             {
                 var b = _cookQueue.Dequeue();
                 b.Queued = false;

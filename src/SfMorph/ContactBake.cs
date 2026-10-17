@@ -31,6 +31,10 @@ namespace SfMorph
         public float Chubby = 0f;
         public readonly float[] FatMm = new float[FatAreas];
         public const int FatAreas = 8;   // belly, waist, back, glutes, thighs, arms, calves, face (cheeks, double chin, neck)
+        // 0.11.47 quality knobs: the GPU chain's distance cull (m from the headset; 0 = only the view test) and how many frames a positive
+        // self / partner-body probe keeps the full chain on (was the constant 30)
+        public float CullDistance = 3f;
+        public int SelfHitHold = 30;
     }
 
     // 0.8.0: what GpuContact's v2 field chain needs per renderer, baked on the CPU once per soft-zones build (design 1.2): welded vertices,
