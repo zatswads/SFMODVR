@@ -287,7 +287,7 @@ Install `dist/SfMorph.dll` and `dist/sfmorph_shaders` (the bundle changed). Log:
 ## 0.11.11 (expression under lip sync, new voice packs)
 
 Install `dist/SfMorph.dll`. Log: `SF Body Morphs 0.11.11`. Reactions, Face, Face clips and Lip sync on. Voice packs installed under
-`plugins\SfMorph\Soundsoice` (Pixie, Pixie Dominant, Southern Domme, Scottish Peach), curves under `config\SfMorphs\lipsync\<pack>`.
+`plugins\SfMorph\Sounds\voice` (Pixie, Pixie Dominant, Southern Domme, Scottish Peach), curves under `config\SfMorphs\lipsync\<pack>`.
 1. Pick each pack in turn: log `Voice pack 'Pixie': breath_calm 7, ... ; lines: nipple 0/0/0, pussy 8/0/0, ...`; the Lip sync block
    says `Pack 'Pixie': N curves` (Pixie 191, Pixie Dominant 207, Southern Domme 321, Scottish Peach 278). No `Maive` in the chooser.
 2. Test: a pack clip with lip sync. First time: log `lip sync: the mouth poses from an older version were set aside as ...arkit-map-0.11.9.txt`
