@@ -1,18 +1,23 @@
 export: E:/Bak/New folder/Misc/SF/VR/BepInEx/config/SfMorphs/export/Reika-20261016-023017
-face: 29 creases in 10 regions
+face: 34 folds and 28 bunches in 14 regions
 face: 8992 triangles, rasterising 2048x2048
 face: 95.0% of the texels on her skin
-  region  1 forehead_L       face range 0.03:  56530 texels, 4945 with creases
-  region  2 crowsfeet_L      face range 0.03:  21549 texels, 1388 with creases
-  region  3 undereye_L       face range 0.03:  21846 texels, 1294 with creases
-  region  4 nasolabial_L     face range 0.03:  33371 texels, 1370 with creases
-  region  5 forehead_R       face range 0.03:  56590 texels, 4982 with creases
-  region  6 crowsfeet_R      face range 0.03:  21587 texels, 1363 with creases
-  region  7 undereye_R       face range 0.03:  21588 texels, 1281 with creases
-  region  8 nasolabial_R     face range 0.03:  33384 texels, 1324 with creases
-  region  9 glabella         face range 0.04:  32447 texels, 2968 with creases
-  region 10 nose             face range 0.03:  32389 texels, 2367 with creases
-face renders (columns: neutral, brows up, frown, smile / squint, nose scrunch; rows: light from above, from her left): C:\Users\rings\Claude\Projects\Modding\SFMODVR\.claude\worktrees\relaxed-kalam-9cec68\tools\wrinkles\preview\wrinkle_face_expressions.png
+face: relief -0.50 to 1.34 mm, slope max 0.50 (encoded up to 1.5)
+  region  1 glabella         face range 0.04:  80402 texels, relief up to 0.55 mm, cut at its edge 0.05 mm
+  region  2 forehead_L       face range 0.03:  42560 texels, relief up to 0.39 mm, cut at its edge 0.23 mm
+  region  3 crowsfeet_L      face range 0.03:  61919 texels, relief up to 0.50 mm, cut at its edge 0.01 mm
+  region  4 undereye_L       face range 0.03:   8706 texels, relief up to 0.54 mm, cut at its edge 0.19 mm
+  region  5 nasolabial_L     face range 0.03: 113672 texels, relief up to 1.00 mm, cut at its edge 0.48 mm
+  region  6 nose_L           face range 0.03:   6263 texels, relief up to 0.28 mm, cut at its edge 0.10 mm
+  region  7 mouthcorner_L    face range 0.03:  36853 texels, relief up to 0.40 mm, cut at its edge 0.08 mm
+  region  8 forehead_R       face range 0.03:  65324 texels, relief up to 0.38 mm, cut at its edge 0.24 mm
+  region  9 crowsfeet_R      face range 0.03:  61906 texels, relief up to 0.50 mm, cut at its edge 0.01 mm
+  region 10 undereye_R       face range 0.03:   8419 texels, relief up to 0.51 mm, cut at its edge 0.22 mm
+  region 11 nasolabial_R     face range 0.03: 114444 texels, relief up to 1.00 mm, cut at its edge 0.48 mm
+  region 12 nose_R           face range 0.03:   6383 texels, relief up to 0.28 mm, cut at its edge 0.13 mm
+  region 13 mouthcorner_R    face range 0.03:  38151 texels, relief up to 0.40 mm, cut at its edge 0.08 mm
+  region 14 chin             face range 0.03:  93338 texels, relief up to 0.50 mm, cut at its edge 0.09 mm
+face renders: C:\Users\rings\Claude\Projects\Modding\SFMODVR\.claude\worktrees\relaxed-kalam-9cec68\tools\wrinkles\preview\wrinkle_face_expressions.png (neutral, brows up, frown, squint, smile, nose scrunch, frown lips); close-ups (neutral | expression, light from above her left): wrinkle_face_closeups.png
 body: 28 creases in 12 regions
 body: 180112 triangles, rasterising 2048x2048
 body: 59.1% of the texels on her skin

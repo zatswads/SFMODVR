@@ -178,10 +178,12 @@ class Surf:
         t = np.where(hit, t, np.inf)
         return o + d * t.min()
 
-    def raster(self, n):
-        """Texel centres in UV -> (triangle id or -1, barycentric weights). Row 0 = v 1."""
+    def raster(self, n, depth=None):
+        """Texel centres in UV -> (triangle id or -1, barycentric weights). Row 0 = v 1. depth (per vertex, 0.11.25 previews): where
+        triangles overlap, the one with the highest interpolated depth wins (a z-buffer); None = the last one drawn."""
         tri = np.full(n * n, -1, np.int64)
         bary = np.zeros((n * n, 3), np.float32)
+        zbuf = np.full(n * n, -np.inf) if depth is not None else None
         uv = self.uv[self.f] * n                     # (T,3,2) in texel units, x = u*n, y = v*n
         lo = np.floor(uv.min(1) - 0.5).astype(np.int64)
         hi = np.ceil(uv.max(1) - 0.5).astype(np.int64)
@@ -213,8 +215,18 @@ class Surf:
                 inside = (l0 >= -1e-6) & (l1 >= -1e-6) & (l2 >= -1e-6) & (px >= 0) & (px < n) & (py >= 0) & (py < n)
                 ti, ci = np.nonzero(inside)
                 pix = (n - 1 - py[ti, ci]) * n + px[ti, ci]
+                bb = np.stack([l0[ti, ci], l1[ti, ci], l2[ti, ci]], 1)
+                if zbuf is not None:
+                    z = (depth[self.f[t[ti]]] * bb).sum(1)
+                    o = np.argsort(z)                  # nearest last: its write wins among duplicates, then against the buffer
+                    pix, ti_o, bb, z = pix[o], t[ti][o], bb[o], z[o]
+                    win = z > zbuf[pix]
+                    tri[pix[win]] = ti_o[win]
+                    bary[pix[win]] = bb[win]
+                    zbuf[pix[win]] = z[win]
+                    continue
                 tri[pix] = t[ti]
-                bary[pix] = np.stack([l0[ti, ci], l1[ti, ci], l2[ti, ci]], 1)
+                bary[pix] = bb
         return tri, bary
 
 
@@ -222,14 +234,32 @@ class Surf:
 
 
 class Crease:
-    def __init__(self, pts, region, depth, width, taper=(1, 1), seed=0, ridge=0.25):
+    def __init__(self, pts, region, depth, width, taper=(1, 1), seed=0, ridge=0.25, roll_toward=None, roll=(1.0, 1.0), breaks=0.0, mid=None):
         self.p = np.asarray(pts, np.float64)
         self.region = region
-        self.depth = depth
+        self.depth = depth            # metres; negative = a raised roll along the line instead of a furrow (0.11.25, face)
         self.width = width
         self.taper = taper            # (start, end): 1 = fade to 0 at that end, 0 = full depth to the end (a half of a symmetric line)
         self.seed = seed
         self.ridge = ridge            # height of the rounded skin beside the crease, as a share of its depth (a soft roll: ~0.6)
+        # 0.11.25 (face only, the summing build): the roll on the side towards roll_toward (a 3D direction) x roll[0], the other side x
+        # roll[1] (a fold whose skin bunches over one side); breaks 0..1 = how much of the line fades out in gaps; mid = (share, metres):
+        # the depth at the midline (x = 0) as a share, back to full that far out (the forehead's two frontalis bellies)
+        self.roll_toward = None if roll_toward is None else np.asarray(roll_toward, np.float64)
+        self.roll = roll
+        self.breaks = breaks
+        self.mid = mid
+
+
+class Bunch:
+    """0.11.25 a soft mass the expression pushes up (positive height) or a dimple (negative): h = height x exp(-(u/r1)^2 - (v/r2)^2),
+    u along `axis` (projected onto the skin), v across it, centred on a point of her skin."""
+
+    def __init__(self, c, axis, r1, r2, height, region):
+        self.c = np.asarray(c, np.float64)
+        self.axis = np.asarray(axis, np.float64)
+        self.r1, self.r2, self.h = r1, r2, height
+        self.region = region
 
 
 def resample(p, step):
@@ -290,6 +320,191 @@ def wobble(p, nrm, amp, seed):
 
 
 # ---------------------------------------------------------------- layout build
+
+
+def line_noise(L, seed, k0=0, wl=(0.012, 0.035)):
+    """A smooth irregular signal along a line's arc length L (metres), about -1..1: three sines of wl wavelengths."""
+    rng = np.random.default_rng(seed * 7 + 3 + k0)
+    out = np.zeros_like(L)
+    for k in range(3):
+        out += rng.uniform(0.5, 1.0) * np.sin(2 * math.pi * L / rng.uniform(*wl) + rng.uniform(0, 6.28)) / (1 + 0.6 * k)
+    return out / 1.6
+
+
+def eval_prim(pr, X, N, region_radius):
+    """0.11.25 one primitive of the summing build -> (texel ids, height, 3D gradient, region weight, measuring direction, crease shade)
+    or None when it reaches no texel."""
+    rr = region_radius[pr.region]
+    if isinstance(pr, Bunch):
+        ext = 3.0 * max(pr.r1, pr.r2) + rr
+        near = np.nonzero(np.linalg.norm(X - pr.c, axis=1) < ext)[0]
+        if len(near) == 0:
+            return None
+        nc = N[near[np.argmin(np.linalg.norm(X[near] - pr.c, axis=1))]]
+        a1 = pr.axis - np.dot(pr.axis, nc) * nc
+        a1 /= max(np.linalg.norm(a1), 1e-12)
+        a2 = np.cross(nc, a1)
+        d = X[near] - pr.c
+        u, v = d @ a1, d @ a2
+        g = np.exp(-(u / pr.r1) ** 2 - (v / pr.r2) ** 2)
+        h = pr.h * g
+        grad = h[:, None] * (-2 * u[:, None] / pr.r1 ** 2 * a1[None] - 2 * v[:, None] / pr.r2 ** 2 * a2[None])
+        nn = N[near]
+        grad -= (grad * nn).sum(1)[:, None] * nn
+        wr = np.exp(-((u / (pr.r1 + rr)) ** 2 + (v / (pr.r2 + rr)) ** 2))
+        dirv = np.tile(a1, (len(near), 1))
+        cav = np.maximum(-h, 0) / 0.0006 * 0.5          # a dimple shades a little
+        return near, h, grad, wr, dirv, cav
+    q, sarc = resample(pr.p, 0.0004)
+    ctr = q.mean(0)
+    rad = np.linalg.norm(q - ctr, axis=1).max() + max(rr, 4 * pr.width)
+    near = np.nonzero(np.linalg.norm(X - ctr, axis=1) < rad)[0]
+    if len(near) == 0:
+        return None
+    x = X[near]
+    d, cp, si, fr = nearest_on_polyline(x, q)
+    sp = sarc[si] + (sarc[np.minimum(si + 1, len(sarc) - 1)] - sarc[si]) * fr
+    tan = q[np.minimum(si + 1, len(q) - 1)] - q[si]
+    tan /= np.maximum(np.linalg.norm(tan, axis=1), 1e-12)[:, None]
+    Ltot = np.linalg.norm(np.diff(q, axis=0), axis=1).sum()
+    L = sp * Ltot
+    n1 = line_noise(L, pr.seed)
+    n2 = line_noise(L, pr.seed, 11, (0.02, 0.045))
+    amp = taper_fn(sp, pr.taper) * np.clip(0.8 + 0.25 * n1, 0.4, 1.0)
+    if pr.breaks > 0:
+        # a line fades out and back in over ~1 cm where it breaks (a gap opening over a millimetre read as a cut)
+        gx = np.clip((n2 + 1.1 - 1.6 * pr.breaks) / 0.9, 0, 1)
+        amp = amp * (gx * gx * (3 - 2 * gx))
+    if pr.mid is not None:
+        mx = np.clip(np.abs(cp[:, 0]) / pr.mid[1], 0, 1)
+        amp = amp * (pr.mid[0] + (1 - pr.mid[0]) * mx * mx * (3 - 2 * mx))
+    w = pr.width * (0.88 + 0.2 * line_noise(L, pr.seed, 23, (0.015, 0.04)))
+    g1 = np.exp(-(d / w) ** 2)
+    r = (d - 1.9 * w) / (1.2 * w)
+    g2 = np.exp(-r ** 2)
+    rad_dir = x - cp
+    rad_dir /= np.maximum(np.linalg.norm(rad_dir, axis=1), 1e-12)[:, None]
+    ridge = np.full(len(near), pr.ridge)
+    if pr.roll_toward is not None:
+        ridge = pr.ridge * np.where(rad_dir @ pr.roll_toward > 0, pr.roll[0], pr.roll[1])
+    h = pr.depth * amp * (-g1 + ridge * g2)
+    dh = pr.depth * amp * (2 * d / (w * w) * g1 - ridge * 2 * r / (1.2 * w) * g2)
+    grad = dh[:, None] * rad_dir
+    nn = N[near]
+    grad -= (grad * nn).sum(1)[:, None] * nn
+    wr = np.exp(-(d / rr) ** 2) * np.clip(taper_fn(sp, pr.taper) * 1.5, 0, 1)
+    cav = amp * g1 * max(pr.depth, 0) / 0.001
+    return near, h, grad, wr, tan, cav
+
+
+def build_sum(name, surf, prims, regions, n, nreg, region_radius, log, excl=()):
+    """0.11.25 the face's build: every texel belongs to one region (the strongest weight, as before: the plugin fades a texel by one
+    region's activation) and sums the heights and slopes of all that region's folds and bunches (a furrow's rolls overlap its
+    neighbour's; a bunch sits between lines), instead of taking the single strongest line. A region's relief that would have shown on
+    another region's texels is cut there: the log reports the largest cut per region, so regions can be spaced to keep it small."""
+    log('%s: %d triangles, rasterising %dx%d' % (name, len(surf.f), n, n))
+    tri, bary = surf.raster(n)
+    cov = tri >= 0
+    idx = np.nonzero(cov)[0]
+    t = tri[idx]
+    X = (surf.v[surf.f[t]] * bary[idx][:, :, None]).sum(1)
+    N = (surf.vn[surf.f[t]] * bary[idx][:, :, None]).sum(1)
+    N /= np.maximum(np.linalg.norm(N, axis=1), 1e-12)[:, None]
+    log('%s: %.1f%% of the texels on her skin' % (name, 100.0 * cov.mean()))
+    M, R = len(idx), len(regions)
+    keep = np.ones(M)
+    for ec, er in excl:
+        keep *= np.clip((np.linalg.norm(X - ec, axis=1) - er) / 0.01, 0, 1)
+    w_reg = np.zeros((M, R), np.float32)
+    dir_reg = np.zeros((M, R, 3), np.float32)
+    has_line = np.zeros((M, R), bool)
+    evals = []
+    for pi_, pr in enumerate(prims):
+        e = eval_prim(pr, X, N, region_radius)
+        if e is None:
+            log('  %s primitive %d (%s): no texels near it' % (name, pi_, regions[pr.region][0]))
+            continue
+        near, h, grad, wr, dirv, cav = e
+        wr = wr * keep[near]
+        k = pr.region
+        upd = wr > w_reg[near, k]
+        w_reg[near[upd], k] = wr[upd]
+        # the measuring direction comes from the region's folds; a bunch sets it only where no fold of the region reaches
+        if isinstance(pr, Crease):
+            setd = upd | (~has_line[near, k] & (wr > 0.01))
+            dir_reg[near[setd], k] = dirv[setd]
+            has_line[near[wr > 0.01], k] = True
+        else:
+            setd = upd & ~has_line[near, k]
+            dir_reg[near[setd], k] = dirv[setd]
+        evals.append((k, near, h, grad, cav))
+    best = w_reg.argmax(1)
+    wbest = w_reg[np.arange(M), best]
+    fade = np.clip(wbest / 0.35, 0, 1)
+    H = np.zeros(M)
+    G = np.zeros((M, 3))
+    cavs = np.zeros(M)
+    cut = np.zeros(R)
+    peak = np.zeros(R)
+    for k, near, h, grad, cav in evals:
+        own = best[near] == k
+        hk = h * keep[near]
+        on = near[own]
+        H[on] += hk[own]
+        G[on] += grad[own] * keep[on][:, None]
+        cavs[on] = np.maximum(cavs[on], cav[own] * keep[on])
+        peak[k] = max(peak[k], np.abs(hk).max())
+        if (~own).any():
+            cut[k] = max(cut[k], np.abs(hk[~own]).max())
+    pu, pv = surf.pu[t], surf.pv[t]
+    tu = pu / np.maximum(np.linalg.norm(pu, axis=1), 1e-12)[:, None]
+    tv = pv / np.maximum(np.linalg.norm(pv, axis=1), 1e-12)[:, None]
+    sx = (G * tu).sum(1)
+    sy = (G * tv).sum(1)
+    smax = np.abs(np.concatenate([sx, sy])).max() if M else 0
+    log('%s: relief %.2f to %.2f mm, slope max %.2f (encoded up to %.1f)' % (name, H.min() * 1000, H.max() * 1000, smax, SLOPE_MAX))
+    cav = np.clip(cavs * 0.8, 0, 1)
+    det = np.zeros((n * n, 4), np.float32)
+    det[:, 0] = det[:, 1] = 0.5
+    det[idx, 0] = 0.5 + 0.5 * np.clip(sx / SLOPE_MAX, -1, 1)
+    det[idx, 1] = 0.5 + 0.5 * np.clip(sy / SLOPE_MAX, -1, 1)
+    det[idx, 2] = cav
+    det[idx, 3] = fade
+    det = dilate(det.reshape(n, n, 4), cov.reshape(n, n), 6)
+    reg = region_map(surf, t, idx, n, nreg, cov, best, wbest, dir_reg, M)
+    for k, (rn, rc, rg) in enumerate(regions):
+        m = (best == k) & (wbest > 0.02)
+        log('  region %2d %-16s %-4s range %.2f: %6d texels, relief up to %.2f mm, cut at its edge %.2f mm' % (k + 1, rn, rc, rg, m.sum(), peak[k] * 1000, cut[k] * 1000))
+    LAST.update(X=X, N=N, G=G, cav=cav, best=best, fade=fade, idx=idx, surf=surf)
+    return det, reg, cov.reshape(n, n), cav, idx, best, wbest
+
+
+def region_map(surf, t, idx, n, nreg, cov, best, wbest, dir_reg, M):
+    """The region map at nreg: point samples of the region id, its weight and the line direction (as build writes it)."""
+    step = n // nreg
+    reg = np.zeros((nreg, nreg, 4), np.uint8)
+    full_id = np.full(n * n, 255, np.int64)
+    full_id[idx] = np.where(wbest > 0.02, best + 1, 0)
+    full_w = np.zeros(n * n)
+    full_w[idx] = np.where(wbest > 0.02, wbest, 0)
+    d3 = dir_reg[np.arange(M), best]
+    du = (d3 * surf.gu[t]).sum(1)
+    dv = (d3 * surf.gv[t]).sum(1)
+    ang = np.arctan2(dv, du)
+    full_c = np.zeros(n * n)
+    full_s = np.zeros(n * n)
+    full_c[idx] = np.cos(2 * ang)
+    full_s[idx] = np.sin(2 * ang)
+    sel = (np.arange(nreg) * step + step // 2)
+    pick = (sel[:, None] * n + sel[None, :]).ravel()
+    covc = cov.reshape(nreg, step, nreg, step).any(axis=(1, 3)).ravel()
+    rid = full_id[pick]
+    rid = np.where((rid == 255) & covc, 0, rid)
+    reg[:, :, 0] = rid.reshape(nreg, nreg)
+    reg[:, :, 1] = np.clip(full_w[pick] * 255 + 0.5, 0, 255).reshape(nreg, nreg)
+    reg[:, :, 2] = np.clip((full_c[pick] * 0.5 + 0.5) * 255 + 0.5, 0, 255).reshape(nreg, nreg)
+    reg[:, :, 3] = np.clip((full_s[pick] * 0.5 + 0.5) * 255 + 0.5, 0, 255).reshape(nreg, nreg)
+    return reg
 
 
 def build(name, surf, creases, regions, n, nreg, region_radius, log, excl=()):
@@ -417,53 +632,78 @@ LAST = {}
 # with each expression's regions at full, as the plugin blends them at Strength 1 (normal = base - slope x act x fade) and Cavity 0.3
 # (albedo x (1 - Cavity x depth x act x fade)); the same groups as the Debug tab's Wrinkle test.
 EXPRESSIONS = (('neutral', ()), ('brows up', ('forehead_L', 'forehead_R')), ('frown', ('glabella',)),
-               ('smile / squint', ('crowsfeet_L', 'crowsfeet_R', 'undereye_L', 'undereye_R', 'nasolabial_L', 'nasolabial_R')),
-               ('nose scrunch', ('nose', 'glabella')))
+               ('squint', ('crowsfeet_L', 'crowsfeet_R', 'undereye_L', 'undereye_R')),
+               ('smile', ('crowsfeet_L', 'crowsfeet_R', 'undereye_L', 'undereye_R', 'nasolabial_L', 'nasolabial_R')),
+               ('nose scrunch', ('nose_L', 'nose_R', 'glabella')), ('frown lips', ('chin', 'mouthcorner_L', 'mouthcorner_R')))
 
 
 def face_renders(regions, colour, n, d, log, strength=1.0, cavity=0.3):
-    X, N, G, cav, best, fade, idx = (LAST[k] for k in ('X', 'N', 'G', 'cav', 'best', 'fade', 'idx'))
-    base = np.full((len(idx), 3), 0.75)
+    """Her face rendered from the export: the mesh rasterised in an orthographic front view (front-facing triangles), each pixel's UV
+    looks up the authored relief (as the plugin blends it: normal - slope x act x fade x Strength) and her colour map (x the crease
+    shade, Cavity). Full faces per expression, then close-ups (neutral | expression) under a raking light."""
+    surf = LAST['surf']
+    X, G, cav, best, fade, idx = (LAST[k] for k in ('X', 'G', 'cav', 'best', 'fade', 'idx'))
+    names = [r[0] for r in regions]
+    GI = np.zeros((n * n, 3))
+    GI[idx] = G
+    CI = np.zeros(n * n)
+    CI[idx] = cav
+    col = np.full((n * n, 3), 0.75)
     if colour is not None:
         ys = (np.arange(n) * colour.shape[0] // n)
         xs = (np.arange(n) * colour.shape[1] // n)
-        base = colour[ys][:, xs].reshape(-1, 3)[idx].astype(np.float64) / 255.0
-    names = [r[0] for r in regions]
-    lo, hi = X.min(0), X.max(0)
-    xr = (lo[0] - 0.01, hi[0] + 0.01)
-    yr = (lo[1] - 0.005, hi[1] + 0.005)
-    rows = []
-    for lname, L in (('above', np.array([0.0, 0.75, 0.66])), ('side', np.array([0.7, 0.35, 0.62]))):
-        L = L / np.linalg.norm(L)
-        row = []
-        for ename, regs in EXPRESSIONS:
-            act = np.array([1.0 if names[k] in regs else 0.0 for k in range(len(names))])
-            a = act[best] * fade
-            Nn = N - G * (a * strength)[:, None]
-            Nn /= np.maximum(np.linalg.norm(Nn, axis=1), 1e-12)[:, None]
-            sh = np.clip(Nn @ L, 0, 1) * 0.85 + 0.2
-            c = base * sh[:, None] * (1 - cavity * np.clip(cav, 0, 1) * a)[:, None]
-            row.append(splat_face(X, c, xr, yr, 700))
-        rows.append(np.concatenate(row, 1))
-    path = os.path.join(d, 'wrinkle_face_expressions.png')
-    write_png(path, np.clip(np.concatenate(rows, 0) * 255, 0, 255).astype(np.uint8))
-    log('face renders (columns: %s; rows: light from above, from her left): %s' % (', '.join(e[0] for e in EXPRESSIONS), path))
+        col = colour[ys][:, xs].reshape(-1, 3).astype(np.float64) / 255.0
 
+    def act_img(regs):
+        a = np.zeros(n * n)
+        act = np.array([1.0 if names[k] in regs else 0.0 for k in range(len(names))])
+        a[idx] = act[best] * fade
+        return a
 
-def splat_face(X, c, xr, yr, H):
-    """Orthographic front view (looking at her face along -z), nearest point wins, each point covers 2 px around it."""
-    s = H / (yr[1] - yr[0])
-    W = int((xr[1] - xr[0]) * s)
-    ix = ((xr[1] - X[:, 0]) * s).astype(np.int64)          # her left (-x) on the image's right, as seen facing her
-    iy = ((yr[1] - X[:, 1]) * s).astype(np.int64)
-    img = np.full((H, W, 3), 0.1)
-    f = img.reshape(-1, 3)
-    o = np.argsort(X[:, 2])
-    for dy in (-1, 0, 1):
-        for dx in (-1, 0, 1):
-            lin = np.clip(iy + dy, 0, H - 1) * W + np.clip(ix + dx, 0, W - 1)
-            f[lin[o]] = c[o]
-    return img
+    keepf = surf.fn[:, 2] > 0.02                      # front-facing triangles only (no depth buffer needed for a front view)
+    ff = surf.f[keepf]
+
+    def view(cx, cy, h, px):
+        uvs = np.stack([(h - (surf.v[:, 0] - cx)) / (2 * h), (surf.v[:, 1] - (cy - h)) / (2 * h)], 1)   # her left (-x) on the right
+        tmp = Surf([(surf.v, uvs, ff)])
+        tri, bary = tmp.raster(px, depth=surf.v[:, 2])
+        ok = tri >= 0
+        fv = ff[tri[ok]]
+        b = bary[ok].astype(np.float64)
+        uv = (surf.uv[fv] * b[:, :, None]).sum(1)
+        nrm = (surf.vn[fv] * b[:, :, None]).sum(1)
+        tx = np.clip((uv[:, 0] * n).astype(np.int64), 0, n - 1)
+        ty = np.clip((uv[:, 1] * n).astype(np.int64), 0, n - 1)
+        return ok, (n - 1 - ty) * n + tx, nrm
+
+    def shade(vw, a, L, px):
+        ok, tex, nrm = vw
+        Nn = nrm - GI[tex] * (a[tex] * strength)[:, None]
+        Nn /= np.maximum(np.linalg.norm(Nn, axis=1), 1e-12)[:, None]
+        sh = np.clip(Nn @ L, 0, 1) * 0.9 + 0.15
+        c = col[tex] * sh[:, None] * (1 - cavity * np.clip(CI[tex], 0, 1) * a[tex])[:, None]
+        img = np.full((px * px, 3), 0.1)
+        img[ok] = c
+        return img.reshape(px, px, 3)
+
+    La = np.array([0.0, 0.75, 0.66]); La /= np.linalg.norm(La)
+    Lr = np.array([-0.45, 0.72, 0.5]); Lr /= np.linalg.norm(Lr)
+    full = view(0.0, 1.53, 0.115, 560)
+    row = [shade(full, act_img(regs), La, 560) for _, regs in EXPRESSIONS]
+    write_png(os.path.join(d, 'wrinkle_face_expressions.png'), np.clip(np.concatenate(row, 1) * 255, 0, 255).astype(np.uint8))
+    crops = {'brows up': (0.0, 1.588, 0.045), 'frown': (0.0, 1.548, 0.03), 'squint': (-0.045, 1.528, 0.035), 'smile': (-0.025, 1.495, 0.05),
+             'nose scrunch': (0.0, 1.532, 0.028), 'frown lips': (0.0, 1.452, 0.038)}
+    tiles = []
+    for ename, regs in EXPRESSIONS[1:]:
+        cx, cy, h = crops.get(ename, (0.0, 1.53, 0.05))
+        vw = view(cx, cy, h, 600)                      # the crop centre in mesh x (< 0 = her left)
+        tiles.append(np.concatenate([shade(vw, np.zeros(n * n), Lr, 600), np.full((600, 8, 3), 0.1), shade(vw, act_img(regs), Lr, 600)], 1))
+    rows = [np.concatenate(tiles[i:i + 2], 1) if i + 1 < len(tiles) else np.pad(tiles[i], ((0, 0), (0, tiles[i].shape[1]), (0, 0)), constant_values=0.1)
+            for i in range(0, len(tiles), 2)]
+    rows = [np.pad(r, ((0, 10), (0, 0), (0, 0)), constant_values=0.1) for r in rows]
+    write_png(os.path.join(d, 'wrinkle_face_closeups.png'), np.clip(np.concatenate(rows, 0) * 255, 0, 255).astype(np.uint8))
+    log('face renders: %s (%s); close-ups (neutral | expression, light from above her left): wrinkle_face_closeups.png'
+        % (os.path.join(d, 'wrinkle_face_expressions.png'), ', '.join(e[0] for e in EXPRESSIONS)))
 
 
 def dilate(img, cov, it):
@@ -496,125 +736,185 @@ def unit(v):
 
 
 def face_creases(surf, sk, log):
-    """Face layout creases. Her left = -x, front = +z, up = +y (Unity axes, bind space)."""
-    P = lambda b: sk[b]['pos']  # noqa: E731
+    """0.11.25 face sculpt (user: the old maps were thin drawn lines, 'very poor'; references: MetaHuman-style per-expression wrinkle
+    normal maps). Sculpted expression folds instead of lines: broad furrows with rolls of bunched skin between them, lines that vary in
+    depth and width, break and overlap, and the soft masses an expression pushes up (the corrugator bunch between the brows, the lower
+    lid's roll, the cheek mass over the nasolabial fold, the chin's dimpling). Grouped by expression like the references: brows up
+    (forehead), frown / angry brows (glabella), squint (crow's feet, under the eyes), smile (nasolabial + cheek, with the eyes), nose
+    scrunch (bunny lines), frown lips (chin, mouth corners). Her left = -x, front = +z, up = +y (Unity axes, bind space); the mm below
+    are the sculpt at full activation and Strength 1."""
+    P = lambda b: np.asarray(sk[b]['pos'], np.float64)  # noqa: E731
     front = np.array([0, 0, 1.0])
+    upv = np.array([0, 1.0, 0])
     out = []
+    regions = []
+    rr = {}
 
-    def on_front(x, y, back=None):
-        h = surf.ray(np.array([x, y, 0.4]), -front)
-        return h
+    def reg(name, cls, rng, radius):
+        regions.append((name, cls, rng))
+        rr[len(regions) - 1] = radius
+        return len(regions) - 1
+
+    def on_front(x, y):
+        return surf.ray(np.array([x, y, 0.4]), -front)
 
     def on_dir(p, nrm):
-        h = surf.ray(p + nrm * 0.08, -nrm, near=0.15)
-        return h
+        return surf.ray(p + nrm * 0.08, -nrm, near=0.15)
 
     def line_front(pts2):
         res = [on_front(x, y) for x, y in pts2]
-        return [r for r in res if r is not None]
+        return np.array([r for r in res if r is not None])
 
-    brow_in, brow_out = P('Eyebrow_Left_Insite'), P('Eyebrow_Left_Outsite')
-    brow_y = 0.5 * (brow_in[1] + brow_out[1])
-    canth = P('Eyelid_Left_Outsite_skin')
-    med = P('Eyelid_Left_Insite_skin')
-    low1 = P('Eyelid_LeftLower_skin_1')
+    def line_dir(pts3, nrm):
+        res = [on_dir(np.asarray(p), nrm) for p in pts3]
+        return np.array([r for r in res if r is not None])
+
+    def frontal(q):
+        return np.tile(front, (len(q), 1))
+
+    def add(line, region, depth_mm, width_mm, seed, **kw):
+        wob = kw.pop('wob', 0.0005)
+        nf = kw.pop('nrm', frontal)
+        if len(line) < 3:
+            log('  face: a line of %s missed her skin' % regions[region][0])
+            return
+        out.append(Crease(wobble(line, nf, wob, seed) if wob > 0 else line, region, depth_mm * 0.001, width_mm * 0.001, seed=seed, **kw))
+
+    def bunch(p, axis, r1_mm, r2_mm, h_mm, region, nrm=None):
+        if p is None:
+            log('  face: a bunch of %s missed her skin' % regions[region][0])
+            return
+        out.append(Bunch(p, axis, r1_mm * 0.001, r2_mm * 0.001, h_mm * 0.001, region))
+
+    brow_in, brow_mid, brow_out = P('Eyebrow_Left_Insite'), P('Eyebrow_Left_Middle'), P('Eyebrow_Left_Outsite')
+    brow_y = (brow_in[1] + brow_mid[1] + brow_out[1]) / 3
+    canth, med = P('Eyelid_Left_Outsite_skin'), P('Eyelid_Left_Insite_skin')
+    lowlid = [P('Eyelid_LeftLower_skin_%d' % k) for k in range(3)]
     raiser = P('Cheek_Left_Raiser')
     corner = P('Lip_Left_Inside')
-    # forehead top: the highest front-facing skin straight above the brows before the hairline (her face mesh is capped by hair)
-    top = brow_y + 0.045
-    regions = []
+    lower_lip = P('Lip_Lower_Insite')
+    # the chin's most forward point on her midline (below the lower lip)
+    chin = None
+    for y in np.arange(lower_lip[1] - 0.012, lower_lip[1] - 0.05, -0.002):
+        h = on_front(0.0, y)
+        if h is not None and (chin is None or h[2] > chin[2]):
+            chin = h
+    rng0 = np.random.default_rng(7)
 
-    def reg(name, cls, rng):
-        regions.append((name, cls, rng))
-        return len(regions) - 1
+    # ---- frown / angry brows: glabella (one region, both sides)
+    rg = reg('glabella', 'face', 0.035, 0.017)
+    gy0, gy1 = brow_in[1] - 0.005, brow_in[1] + 0.013
+    # (user: keep them feminine. The references are male / older faces: she is a young woman, so fewer, shallower, softer lines and
+    # wider gentler folds; most of an expression is carried by the soft masses - the brow bunch, the lid roll, round cheeks - not lines)
+    gy0, gy1 = brow_in[1] - 0.004, brow_in[1] + 0.0105
+    for i, (x0, dep, sd) in enumerate(((-0.0058, 0.5, 1), (0.0052, 0.58, -1))):
+        # the vertical '11' lines: short, soft, slightly curved and diverging upwards, one side a little deeper
+        pts = [(x0 + sd * 0.0015 * (k / 6.0) ** 1.5 - sd * 0.0007 * math.sin(math.pi * k / 6.0), gy0 + (gy1 - gy0) * k / 6.0) for k in range(7)]
+        add(line_front(pts), rg, dep, 1.4, 80 + i, ridge=0.5, roll_toward=np.array([-sd, 0, 0.0]), roll=(1.0, 0.5), breaks=0.0)
+    for sgn in (1.0, -1.0):
+        # corrugator bunch: the inner brow heads pulled together and down push up a soft mass above them
+        bunch(on_front(sgn * -0.0125, brow_in[1] + 0.0045), unit([1, 0.35 * sgn, 0]), 9.0, 4.5, 0.55, rg)
+    # procerus: one soft horizontal fold across the nose root with the skin bunched above it
+    pts = [(-0.0065 + 0.013 * k / 8.0, brow_in[1] - 0.0095 + 0.001 * math.sin(math.pi * k / 8.0)) for k in range(9)]
+    add(line_front(pts), rg, 0.22, 1.7, 88, ridge=0.55, roll_toward=upv, roll=(1.0, 0.3), breaks=0.0)
+    bunch(on_front(0.0, brow_in[1] - 0.005), np.array([1.0, 0, 0]), 7.5, 3.4, 0.4, rg)
 
-    side_names = (('L', 1.0), ('R', -1.0))
-    for sn, sgn in side_names:
-        mx = lambda pts: [(p[0] * sgn, p[1]) for p in pts]  # noqa: E731
-        sx = -1.0 * sgn         # her left = -x
-        # forehead: 4 lines across the forehead, each a half from the midline to the temple (full depth at the midline)
-        # 0.9.2: face ranges from the headset log (her bone-driven face peaks at 0.03-0.05 compression, 0.08-0.10 left it at 0-30 %)
-        rf = reg('forehead_' + sn, 'face', 0.03)
-        for i, f in enumerate((0.20, 0.42, 0.63, 0.82)):
-            y = brow_y + 0.006 + f * (top - brow_y - 0.006)
-            span = 0.052 - 0.010 * f
+    for sn, sgn in (('L', 1.0), ('R', -1.0)):
+        sx = -sgn                                   # her left = -x
+        mir = lambda p, s=sgn: np.array([p[0] * s, p[1], p[2]])   # noqa: E731  (the left bone mirrored to this side)
+        jit = 0.0003 * (1 if sn == 'L' else -1)     # the two sides are not mirror images
+        seed0 = 0 if sn == 'L' else 500
+
+        # ---- brows up: forehead furrows (frontalis). Five wavy furrows across the forehead, ~7 mm apart, with rolls of skin between them
+        # (the profile's ridges overlap into a corrugation); each half runs from the midline (weaker there: the frontalis has two
+        # bellies) to the temple, longer in the middle rows, the lowest dipping towards the brow's tail; depth and width wander along
+        # the line and some lines break.
+        # (feminine: three long soft lines, not five broken furrows)
+        rf = reg('forehead_' + sn, 'face', 0.03, 0.011)
+        for i in range(3):
+            y = brow_y + 0.0165 + 0.0085 * i
+            span = (0.047, 0.05, 0.042)[i]
             pts = []
-            for k in range(9):
-                u = k / 8.0
-                x = sx * u * span
-                pts.append((x, y + 0.004 * math.sin(math.pi * u) - 0.006 * u * u + 0.001 * i * u))
-            line = line_front(pts)
-            if len(line) > 3:
-                out.append(Crease(wobble(np.array(line), lambda q: np.tile(front, (len(q), 1)), 0.0006, 11 + i + 50 * (sgn > 0)),
-                                  rf, 0.00045 - 0.00006 * i, 0.0009, taper=(0, 1), seed=i + 100 * (sgn > 0)))
-        # crow's feet: 4 short lines fanning out of the outer eye corner, on the temple
-        rc = reg('crowsfeet_' + sn, 'face', 0.025)
-        c = np.array([canth[0] * (1 if sgn > 0 else -1), canth[1], canth[2]])
+            for k in range(13):
+                u = k / 12.0
+                pts.append((sx * u * span, y + jit * (i % 2 + 0.5) * u + 0.0018 * math.sin(math.pi * u) - 0.004 * u ** 2.2 - 0.0015 * u * (i == 0)
+                            + 0.0006 * math.sin(5 * u + i + seed0)))
+            add(line_front(pts), rf, (0.42, 0.48, 0.34)[i], 1.8, seed0 + 11 + i, taper=(0, 1), ridge=0.35, breaks=0.1, mid=(0.6, 0.012))
+        # ---- squint: crow's feet. A fan of six lines out of the outer eye corner, curving around the orbit, different lengths, starting
+        # 5-9 mm out from the corner, with puffy skin bunched between them and over the orbit's outer rim
+        rc = reg('crowsfeet_' + sn, 'face', 0.025, 0.012)
+        c = mir(canth)
         lat = unit([sx * 0.85, 0.0, -0.5])
         nrm = unit([sx * 0.8, 0.05, 0.6])
-        upv = np.array([0, 1.0, 0])
-        for i, a in enumerate((-32, -12, 8, 28)):
-            ar = math.radians(a)
-            dv = unit(lat * math.cos(ar) + upv * math.sin(ar))
-            p0 = c + lat * 0.006
-            pts = [on_dir(p0 + dv * (0.0045 * k), nrm) for k in range(6)]
-            pts = [p for p in pts if p is not None]
-            if len(pts) > 3:
-                out.append(Crease(np.array(pts), rc, 0.0004, 0.0008, seed=20 + i + 50 * (sgn > 0)))
-        # under the eye: one soft arc below the lower lid (the lid bones' skin), when the cheek pushes up
-        ru = reg('undereye_' + sn, 'face', 0.025)
-        l1 = np.array([low1[0] * (1 if sgn > 0 else -1), low1[1], low1[2]])
-        m1 = np.array([med[0] * (1 if sgn > 0 else -1), med[1], med[2]])
-        pts2 = []
-        for k in range(9):
-            u = k / 8.0
-            x = m1[0] + (c[0] - m1[0]) * u
-            y = l1[1] - 0.006 - 0.003 * math.sin(math.pi * u) + 0.002 * u
-            pts2.append((x, y))
-        line = line_front(pts2)
-        if len(line) > 3:
-            out.append(Crease(np.array(line), ru, 0.00035, 0.0009, seed=40 + 50 * (sgn > 0)))
-        line = line_front([(x, y - 0.0045) for x, y in pts2[2:]])
-        if len(line) > 3:
-            out.append(Crease(np.array(line), ru, 0.00025, 0.0008, seed=41 + 50 * (sgn > 0)))
-        # nasolabial fold: from beside the nose wing down and out to beside the mouth corner
-        rn = reg('nasolabial_' + sn, 'face', 0.03)
-        mc = np.array([corner[0] * (1 if sgn > 0 else -1), corner[1], corner[2]])
-        nose_wing = (sx * 0.0175, mc[1] + 0.024)
-        end = (mc[0] + sx * 0.009, mc[1] + 0.002)       # ends beside the mouth corner, not below it
-        pts2 = []
-        for k in range(10):
-            u = k / 9.0
-            x = nose_wing[0] + (end[0] - nose_wing[0]) * u + sx * 0.004 * math.sin(math.pi * u)
-            y = nose_wing[1] + (end[1] - nose_wing[1]) * u
-            pts2.append((x, y))
-        line = line_front(pts2)
-        if len(line) > 3:
-            out.append(Crease(np.array(line), rn, 0.0007, 0.0014, taper=(0, 1), seed=60 + 50 * (sgn > 0)))
-    # glabella: two short vertical lines between the brows (frown), plus a faint horizontal one at the nose root
-    rg = reg('glabella', 'face', 0.035)
-    bi = P('Eyebrow_Left_Insite')
-    for i, x in enumerate((-0.0055, 0.0055)):
-        line = line_front([(x + 0.0008 * (k - 3) * (1 if x > 0 else -1) * 0.3, bi[1] - 0.004 + 0.0035 * k) for k in range(7)])
-        if len(line) > 3:
-            out.append(Crease(np.array(line), rg, 0.0005, 0.0008, seed=80 + i))
-    line = line_front([(-0.008 + 0.002 * k, bi[1] - 0.011) for k in range(9)])
-    if len(line) > 3:
-        out.append(Crease(np.array(line), rg, 0.0003, 0.0009, seed=83))
-    # bunny lines: short oblique lines on the sides of the nose bridge (nose wrinkle)
-    rb = reg('nose', 'face', 0.03)
-    for sgn in (1.0, -1.0):
-        for i in range(2):
-            x0, y0 = sgn * 0.006, med[1] - 0.008 - 0.004 * i
-            line = line_front([(x0 + sgn * 0.0018 * k, y0 + 0.0016 * k) for k in range(6)])
-            if len(line) > 3:
-                out.append(Crease(np.array(line), rb, 0.00022, 0.0007, seed=90 + i + 5 * (sgn > 0)))
-    # (the front of her neck is on the body atlas: see body_creases. 0.9.1-0.9.6 cast its lines from the front here, which put them on
-    # her chin at those heights: two lines running down from under her mouth.)
-    for c in out:
-        c.depth *= 1.3        # 0.9.2: her skin's subsurface scattering softens the lines (headset: 'barely affects her face')
-    log('face: %d creases in %d regions' % (len(out), len(regions)))
-    return out, regions, {k: (0.010 if regions[k][1] != 'neck' else 0.015) for k in range(len(regions))}, []
+        # (feminine: four shorter, shallower lines; the puff of skin around them does most of the work)
+        for i, (a, l0, ln, dep) in enumerate(((-38, 0.007, 0.016, 0.22), (-17, 0.006, 0.02, 0.32), (2, 0.0065, 0.019, 0.29), (21, 0.008, 0.014, 0.19))):
+            pts = []
+            for k in range(8):
+                t = k / 7.0
+                ar = math.radians(a + 6 * t * (1 if a < 0 else -1))    # the outer ends curve back around the orbit
+                dv = unit(lat * math.cos(ar) + upv * math.sin(ar))
+                pts.append(c + lat * l0 + dv * (ln * t))
+            add(line_dir(pts, nrm), rc, dep, 1.5, seed0 + 20 + i, ridge=0.45, breaks=0.0, taper=(1, 1), nrm=lambda q, n=nrm: np.tile(n, (len(q), 1)))
+        bunch(on_dir(c + lat * 0.011 + upv * 0.001, nrm), upv, 9.5, 6.5, 0.5, rc)
+        # ---- squint: under the eye. The lower lid's roll of muscle (a raised band 3 mm under the lid), the crease at its lower edge, and
+        # two fainter arcs lower down that fan out towards the outer corner
+        ru = reg('undereye_' + sn, 'face', 0.025, 0.010)
+        lid = sorted([mir(p) for p in lowlid], key=lambda p: abs(p[0]))
+        xi, xo = mir(med)[0] + sx * 0.004, c[0]
+
+        def arc(dy, bow, x0f=0.0, x1f=1.0, lid=lid, xi=xi, xo=xo):
+            pts = []
+            for k in range(11):
+                u = x0f + (x1f - x0f) * k / 10.0
+                x = xi + (xo - xi) * u
+                ly = float(np.interp(abs(x), [abs(p[0]) for p in lid], [p[1] for p in lid]))
+                pts.append((x, ly - dy - bow * math.sin(math.pi * u) + 0.0025 * u * u))
+            return line_front(pts)
+        # (feminine: the lid roll - the soft band of a young woman's smiling eyes - carries it; one soft crease under it, one faint arc)
+        add(arc(0.0032, 0.0012), ru, -0.6, 2.0, seed0 + 40, ridge=0.0, wob=0.0003, breaks=0.0)        # the roll (a ridge: negative depth)
+        add(arc(0.0064, 0.0016, 0.08, 0.95), ru, 0.36, 1.2, seed0 + 41, ridge=0.3, roll_toward=-upv, roll=(1.0, 0.0), breaks=0.0)
+        add(arc(0.0100, 0.0016, 0.45, 1.0), ru, 0.11, 1.2, seed0 + 42, ridge=0.4, breaks=0.25)
+        # ---- smile: the nasolabial fold and the cheek. A deep fold from beside the nose wing down and out to beside the mouth corner,
+        # the cheek rolling over it on the outer side (the inner, lip side stays flat), and the cheek's apple pushed up and forward
+        rn = reg('nasolabial_' + sn, 'face', 0.03, 0.015)
+        mc = mir(corner)
+        top = (sx * 0.0165, mc[1] + 0.026)
+        end = (mc[0] + sx * 0.0095, mc[1] + 0.002)       # (feminine: it ends beside the corner)
+        pts = [(top[0] + (end[0] - top[0]) * u + sx * 0.0045 * math.sin(math.pi * u), top[1] + (end[1] - top[1]) * u) for u in np.linspace(0, 1, 12)]
+        add(line_front(pts), rn, 0.55, 2.3, seed0 + 60, taper=(1, 1), ridge=0.7, roll_toward=np.array([sx, 0.2, 0]), roll=(1.0, 0.1), breaks=0.0)
+        cheek = [(x + sx * 0.0052, y + 0.0008) for x, y in pts[1:-1]]
+        add(line_front(cheek), rn, -0.75, 4.0, seed0 + 61, taper=(1, 1), ridge=0.0, wob=0.0004, breaks=0.0)      # the cheek mass over the fold
+        bunch(on_front(sx * 0.037, raiser[1] - 0.0085), unit([1, -0.25 * sgn, 0]), 14.0, 9.5, 1.0, rn)            # the cheek's apple
+        # ---- nose scrunch: bunny lines, three oblique folds down the side of the nose bridge
+        rb = reg('nose_' + sn, 'face', 0.03, 0.009)
+        nn = unit([sx * 0.75, 0.15, 0.65])
+        for i, (y0, ln, dep) in enumerate(((med[1] + 0.002, 0.011, 0.36), (med[1] - 0.0025, 0.009, 0.26))):
+            p0 = np.array([sx * 0.0045, y0, 0.07])
+            dv = unit([sx * 0.75, -0.55, -0.35])
+            add(line_dir([p0 + dv * (ln * t) for t in np.linspace(0, 1, 7)], nn), rb, dep, 1.0, seed0 + 70 + i, ridge=0.5, breaks=0.0,
+                nrm=lambda q, n=nn: np.tile(n, (len(q), 1)))
+        # ---- frown lips: the mouth corner pulled down (depressor): a short marionette fold down and out, the modiolus bunched beside it
+        rm = reg('mouthcorner_' + sn, 'face', 0.03, 0.009)
+        pts = [(mc[0] + sx * (0.0035 + 0.0035 * u), mc[1] - 0.0055 - 0.013 * u) for u in np.linspace(0, 1, 8)]
+        add(line_front(pts), rm, 0.28, 1.6, seed0 + 90, taper=(1, 1), ridge=0.6, roll_toward=np.array([sx, 0, 0]), roll=(1.0, 0.3), breaks=0.0)
+        bunch(on_front(mc[0] + sx * 0.0065, mc[1] - 0.001), upv, 4.5, 5.5, 0.4, rm)
+
+    # ---- frown lips: chin (mentalis). The lip-chin crease deepens, the chin pad bunches up and dimples ('orange peel')
+    rch = reg('chin', 'face', 0.03, 0.010)
+    if chin is not None:
+        ys = lower_lip[1] - 0.0115
+        pts = [(-0.012 + 0.024 * k / 10.0, ys - 0.0025 * (1 - ((k - 5) / 5.0) ** 2)) for k in range(11)]
+        add(line_front(pts), rch, 0.4, 1.8, 95, taper=(1, 1), ridge=0.7, roll_toward=-upv, roll=(1.0, 0.25), breaks=0.0)
+        bunch(on_front(0.0, chin[1] + 0.002), np.array([1.0, 0, 0]), 12.0, 8.0, 0.5, rch)
+        for k in range(18):
+            a, r = rng0.uniform(0, 2 * math.pi), math.sqrt(rng0.uniform(0, 1))
+            p = on_front(r * 0.011 * math.cos(a), chin[1] + 0.001 + r * 0.008 * math.sin(a))
+            bunch(p, np.array([1.0, 0, 0]), rng0.uniform(1.8, 2.8), rng0.uniform(1.6, 2.6), -rng0.uniform(0.06, 0.14), rch)
+    else:
+        log('face: no chin found on her midline; no chin region detail')
+    n_line = sum(isinstance(c, Crease) for c in out)
+    log('face: %d folds and %d bunches in %d regions' % (n_line, len(out) - n_line, len(regions)))
+    return out, regions, rr, []
 
 
 def unit_rows(v):
@@ -787,7 +1087,10 @@ def main():
         ('face', ['reika_face_a'], 'reika_face_a', face_creases, 2048, 1024),
         ('body', ['reika_upperBody_normal', 'reika_lowerBody_normal', 'reika_neck', 'reika_foot'], 'reika_body', body_creases, 2048, 1024),
     ]
+    only = [a[7:] for a in sys.argv[1:] if a.startswith('--only=')]   # 0.11.25: --only=face while iterating (layouts.txt keeps the others)
     for name, mnames, mat, fn, n, nreg in jobs:
+        if only and name not in only:
+            continue
         pr = parts(mnames, mat)
         if not pr:
             log('%s: none of %s in the export; skipped' % (name, mnames))
@@ -795,7 +1098,7 @@ def main():
         surf = Surf(pr)
         creases, regions, rad, excl = fn(surf, sk, log)
         rad = {k: rad.get(k, 0.01) for k in range(len(regions))}
-        det, reg, cov, cav, idx, best, wbest = build(name, surf, creases, regions, n, nreg, rad, log, excl)
+        det, reg, cov, cav, idx, best, wbest = (build_sum if name == 'face' else build)(name, surf, creases, regions, n, nreg, rad, log, excl)
         write_png(os.path.join(OUT, 'wrinkle_%s_detail.png' % name), to_u8(det))
         write_png(os.path.join(OUT, 'wrinkle_%s_region.png' % name), reg)
         table.append('layout %s %d %d' % (name, n, nreg))
@@ -823,6 +1126,8 @@ def main():
             write_png(os.path.join(PREVIEW, 'wrinkle_%s_preview.png' % name), np.clip(flat.reshape(n, n, 3), 0, 255).astype(np.uint8))
             if name == 'face':
                 face_renders(regions, col, n, PREVIEW, log)
+    if only:
+        return
     with open(os.path.join(OUT, 'wrinkle_layouts.txt'), 'w', newline='\n') as f:
         f.write('\n'.join(table) + '\n')
     with open(os.path.join(HERE, 'author.log'), 'w', newline='\n') as f:

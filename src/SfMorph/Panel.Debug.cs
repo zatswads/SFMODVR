@@ -49,7 +49,7 @@ namespace SfMorph
             GUI.enabled = wOff == null;
             if (wt < 0)
             {
-                if (GUILayout.Button("Wrinkle test (brows, frown, smile, nose, whole face, neck, body: " + WrinkleTest.Step.ToString("0.0") + " s each)")) WrinkleTest.Start();
+                if (GUILayout.Button("Wrinkle test (brows, frown, squint, smile, nose, frown lips, whole face, neck, body: " + WrinkleTest.Step.ToString("0.0") + " s each)")) WrinkleTest.Start();
             }
             else if (GUILayout.Button("Stop test", GUILayout.Width(90))) WrinkleTest.Stop();
             GUI.enabled = true;

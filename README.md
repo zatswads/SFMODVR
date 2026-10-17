@@ -41,6 +41,23 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.27 (her face wrinkles re-sculpted):
+- The face's wrinkle maps were thin drawn lines (0.4 mm deep, 1 mm wide, the single strongest line per texel): next to sculpted
+  expression maps (the user's MetaHuman-style references) they read as scratches, and her skin's subsurface scattering blurs such
+  thin detail away, so in the headset they were barely there. Re-sculpted as expression folds: broad soft furrows with rolls of
+  bunched skin between them, lines that vary in depth and width and fade in and out, and the soft masses an expression pushes up
+  (the brow bunch in a frown, the lower lid's roll in a smile, the cheek rolling over the smile fold, the chin's dimpling). The
+  author now sums every fold and mass of a region per texel instead of keeping one line.
+- Kept feminine (user): the references are male / older faces, so she gets fewer, shallower, wider lines - three soft forehead
+  lines, two short frown lines, four soft crow's feet, one soft crease under the lid roll, a soft smile fold under round cheeks,
+  barely-there chin dimples.
+- Regions by expression: brows up (forehead), frown (glabella), squint (crow's feet, under the eyes), smile (+ nasolabial and cheek),
+  nose scrunch (bunny lines, now per side), and new frown lips (chin, mouth corners): 14 face regions. The Debug tab's Wrinkle test
+  follows (brows, frown, squint, smile, nose, frown lips, whole face, neck, body).
+- `tools/wrinkles/author.py --preview` renders her face properly (the mesh rasterised with a depth test, the relief looked up per
+  pixel): `wrinkle_face_expressions.png` and close-ups `wrinkle_face_closeups.png` (neutral | expression). `--only=face` for
+  iterating. Body creases unchanged. Shader bundle rebuilt.
+
 0.11.26 (controller haptics):
 - The controllers now vibrate with what your hands touch on her. This is new and **off by default**: [Haptics] On, or VR tab → Haptics.
   It uses the contacts SF Body Morphs already measures: your hand models, the physics hands' fingers at the controller pose and the

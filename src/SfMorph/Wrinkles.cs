@@ -40,14 +40,18 @@ namespace SfMorph
     // at full activation for Step s in turn (the same groups as tools/wrinkles/author.py --preview's face renders), then the body creases.
     internal static class WrinkleTest
     {
-        public static readonly string[] Names = { "brows up", "frown", "smile / squint", "nose scrunch", "whole face", "neck", "body creases" };
+        // 0.11.25: the re-sculpted face layout's regions (nose_L / _R, mouthcorner_L / _R, chin are new); an old bundle's "nose" still matches
+        public static readonly string[] Names = { "brows up", "frown", "squint", "smile", "nose scrunch", "frown lips", "whole face", "neck", "body creases" };
         static readonly string[][] Groups =
         {
             new[] { "forehead_L", "forehead_R" },
             new[] { "glabella" },
+            new[] { "crowsfeet_L", "crowsfeet_R", "undereye_L", "undereye_R" },
             new[] { "crowsfeet_L", "crowsfeet_R", "undereye_L", "undereye_R", "nasolabial_L", "nasolabial_R" },
-            new[] { "nose", "glabella" },
-            new[] { "forehead_L", "forehead_R", "glabella", "crowsfeet_L", "crowsfeet_R", "undereye_L", "undereye_R", "nasolabial_L", "nasolabial_R", "nose" },
+            new[] { "nose_L", "nose_R", "nose", "glabella" },
+            new[] { "chin", "mouthcorner_L", "mouthcorner_R" },
+            new[] { "forehead_L", "forehead_R", "glabella", "crowsfeet_L", "crowsfeet_R", "undereye_L", "undereye_R", "nasolabial_L", "nasolabial_R", "nose_L", "nose_R", "nose",
+                    "chin", "mouthcorner_L", "mouthcorner_R" },
             new[] { "neck" },
             new[] { "elbow_in_L", "elbow_back_L", "knee_back_L", "hipfold_L", "armpit_L", "elbow_in_R", "elbow_back_R", "knee_back_R", "hipfold_R", "armpit_R", "belly" },
         };

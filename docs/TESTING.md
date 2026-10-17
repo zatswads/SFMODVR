@@ -98,6 +98,17 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.27 (face wrinkles re-sculpted)
+
+Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log: the wrinkle layouts line lists 14 face regions (glabella ... chin).
+
+- Debug → Wrinkle test, watching her face up close: brows up = three soft lines across the forehead; frown = two short soft lines
+  between the brows with the skin bunched above them; squint = the roll under each lower lid and soft crow's feet; smile = that
+  plus a soft fold from the nose to beside the mouth with the cheek rounding over it; nose = soft lines on the nose sides; frown
+  lips = soft lines down from the mouth corners and a slightly dimpled chin. Nothing should look like scratches or a seam.
+- Compare with tools/wrinkles/preview/wrinkle_face_closeups.png. In play: the `Wrinkles: sheet 'face' peak compression` lines say
+  how far her expressions turn them on (if the test looks right but play shows little, lower Threshold).
+
 ## 0.11.26 (controller haptics)
 
 Install `dist/SfMorph.dll`. Startup log, even with haptics off: `Haptics: runtime VirtualDesktopXR 1.1.0, XR_FB_touch_controller_pro
