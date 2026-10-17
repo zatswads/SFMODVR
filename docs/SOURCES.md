@@ -245,12 +245,12 @@ pieces, in this order:
   change (v2). VaM Genesis 2: the SfExport folder has no skin weights (OBJ + joints); either `SfExport.cs` also writes the
   `DAZMergedMesh` weights (to look up in VaM's Assembly-CSharp), or the weights are transferred in Blender from a weighted
   Genesis 2 Female FBX exported once from DAZ Studio. Open.
-- **Build** (step 2, built 2026-10-17): `powershell -File toolsvataruild.ps1 -Fbx <character.fbx> [-Name N] [-Out dir]
+- **Build** (step 2, built 2026-10-17): `powershell -File tools\avatar\build.ps1 -Fbx <character.fbx> [-Name N] [-Out dir]
   [-MaxSize 4096] [-MapSize 2048]`, a separate Unity 2022.3.9 project `tools/avatar/SfAvatarBundle` (not the shader project:
   that one stays small and its compute bundle unaffected; Linear colour space like the game). build.ps1 copies the FBX,
   `<fbx>.materials.txt` and every texture it names plus `<name>.images` into `Assets/Avatars/<Name>` (git-ignored: never
   commit a character), then runs `AvatarBundle.Build` and loads the result back with `AvatarBundle.Verify`. Output
-  `%LOCALAPPDATA%\SfMorphvatars\<Name>\` (`<name>` bundle + `avatar.txt`); nothing goes into the game.
+  `%LOCALAPPDATA%\SfMorph\avatars\<Name>\` (`<name>` bundle + `avatar.txt`); nothing goes into the game.
   - Import: Generic rig with no avatar (rig type None drops the skinning), the Animator removed, **Read/Write on** (readable
     meshes: soft zones, GPU contact and the HerBody hulls need no GPU readback, unlike her meshes), blend shapes kept, no
     animation, 4 weights per vertex, file units (DAZ's centimetres come in as metres).
