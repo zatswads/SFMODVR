@@ -886,8 +886,9 @@ namespace SfMorph
         Src Read(SkinnedMeshRenderer r, Rs rs, List<string> problems)
         {
             var m = r.sharedMesh;
-            bool body = m.name.IndexOf("body", StringComparison.OrdinalIgnoreCase) >= 0;
-            if (_bq >= 2 && body && !_subdivFailed) { Subdivide(r, rs, problems); m = r.sharedMesh; }   // BEFORE the mesh is read, so the weights are computed on the dense mesh
+            bool avatar = Avatar.Owns(r);   // 0.11.42
+            bool body = avatar || m.name.IndexOf("body", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (_bq >= 2 && body && !avatar && !_subdivFailed) { Subdivide(r, rs, problems); m = r.sharedMesh; }   // BEFORE the mesh is read, so the weights are computed on the dense mesh
             var s = new Src { R = r, S = rs, Skin = body };
             if (IsMorphClone(m) || rs.OwnMesh)
             {

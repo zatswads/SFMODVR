@@ -473,7 +473,7 @@ namespace SfMorph
                 // 0.11.7: her face and neck meshes too (the shown ones: the game keeps every face variant under her). Without them the head
                 // was a 9.5 cm default sphere about Head_M and the neck a thin capsule, so hands stopped centimetres off her face and throat.
                 string mn = r.sharedMesh.name.ToLowerInvariant();
-                bool bodyMesh = mn.Contains("body");
+                bool bodyMesh = mn.Contains("body") || Avatar.Owns(r);   // 0.11.42: her colliders from the avatar drawn instead of her
                 bool faceMesh = !bodyMesh && (mn.Contains("face") || mn.Contains("neck")) && r.enabled && r.gameObject.activeInHierarchy;
                 if (!bodyMesh && !faceMesh) continue;
                 string err;

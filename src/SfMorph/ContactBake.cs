@@ -231,7 +231,7 @@ namespace SfMorph
                 var mats = r.sharedMaterials;
                 j.SubOnSheet = new bool[subs.Count];
                 for (int si = 0; si < subs.Count && si < mats.Length; si++)
-                    j.SubOnSheet[si] = mats[si] != null && Wrinkles.Classify(mats[si], r) == 3 && (mats[si].name ?? "").IndexOf("foot", StringComparison.OrdinalIgnoreCase) < 0;
+                    j.SubOnSheet[si] = mats[si] != null && !Avatar.Owns(r) && Wrinkles.Classify(mats[si], r) == 3 && (mats[si].name ?? "").IndexOf("foot", StringComparison.OrdinalIgnoreCase) < 0;
             }
             // 0.11.28 Delta Mush: the rest shape is her current one (the character and slider blendshapes, never the pose correctives)
             if (mushRadius > 0f && j.Fr.Bp != null)

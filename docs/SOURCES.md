@@ -200,6 +200,9 @@ So the avatar now shares her skeleton (the VRChat "armature merge" idea, with th
    customisation type), pubic hair and internal meshes stay drawn; the avatar's crotch is cut where it is nearer her patch than her
    skin, its skin within 3 cm of the patch / pubic hair is laid onto her body surface (fading out to 8 cm) so the patch rim fits;
    the patch is tinted to the avatar's skin around it (per-renderer _SkinColor). Her clothes, toys and props stay drawn too.
+6. her skin systems (0.11.42): the avatar's renderers replace her hidden ones in her character's renderer list, so GPU contact, skin
+   marks, soft zones and her body colliders run on it (all keyed by her bones); its skin defaults to a copy of her Skin material.
+   Wrinkles and muscle relief wait for a Genesis 9 UV layout (tools/wrinkles/author.py, tools/muscles/author.py on the avatar).
 Offline (tools/avatar/drive_test.ps1, the plugin's own Avatar.cs + MeshData.cs in the Unity editor on her export and two recordings):
 her body skin to the avatar's 3 mm median, soles within 3-7 mm of hers, the avatar's skin stretch in the range of her own upper
 body's (x0.45-2.8 vs x0.3-2.3 at 0.1 / 99.9 %), all her renderers given back. The per-frame retarget below stays as the record of

@@ -44,6 +44,17 @@ See `docs/HANDOFF.md` → Build for the DLL list. Windows: `dotnet build src/SfM
 
 ## Changelog
 
+0.11.42 (avatar: her skin shader and her skin systems):
+- The avatar looked like a ghost and none of her muscles, chubby, dents, marks or the game's subsurface scattering showed on it (user):
+  those systems ran on her hidden meshes, and its skin was an HDRP/Lit copy. Now the avatar's skin is a copy of her own skin material
+  (the game's skin shader and scattering) by default (new setting [Avatar] SkinShader; the old Material value is not carried over), and
+  the avatar's renderers are her body for the plugin's skin systems while her replaced renderers are left out: GPU contact (dents,
+  ripples, Delta Mush at the joints, chubby, bend bulges and folds), skin marks, soft zones and her body colliders for the physics
+  hands now work on the avatar's body (they go by her bones, which it is skinned to). Her face, breast and genital helper bones stay
+  known from her hidden meshes. The game's genital patch follows the avatar's body dents.
+- Not yet on the avatar: wrinkles and muscle relief (painted on her UV layout; they need one authored for the Genesis 9 layout, next),
+  blush.
+
 0.11.41 (natural wrinkles: micro lines, no scar on her belly):
 - Her stomach line still looked like a caesarean scar: the belly fold sat 2 cm below her navel and curved up to the sides, which is
   exactly where and how that scar runs. It is now where a sitting or curled-forward belly really folds: at the navel, drooping

@@ -919,6 +919,7 @@ namespace SfMorph
 
         internal static int Classify(Material mat, SkinnedMeshRenderer r)
         {
+            if (Avatar.Owns(r)) return Avatar.RegionOf(mat, r);   // 0.11.42: the avatar's skin surfaces (skin marks, GPU contact)
             string ml = (mat.name ?? "").ToLowerInvariant();
             string rl = (r.name ?? "").ToLowerInvariant();
             string sl = r.sharedMesh != null && r.sharedMesh.name != null ? r.sharedMesh.name.ToLowerInvariant() : "";
@@ -1021,6 +1022,7 @@ namespace SfMorph
                         Plugin.Log.LogInfo("Wrinkles: renderer '" + r.name + "' mesh '" + r.sharedMesh.name + "' slot " + sub + " material '" + mat.name + "' -> "
                             + (region == 1 ? "face" : region == 2 ? "neck" : region == 3 ? "body" : "not skin (skipped)"));
                     if (region == 0 || !Wanted(region, s)) continue;
+                    if (Avatar.Owns(r)) continue;   // 0.11.42: her wrinkle / muscle maps are on her UV layout, not the avatar's (its own layout: to author)
                     var rd = FindRend(r, sub);
                     if (rd == null || rd.Mat != mat)
                     {

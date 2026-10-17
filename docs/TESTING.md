@@ -98,6 +98,14 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.42 (avatar in her skin systems)
+
+Log: `Avatar materials: her skin shader for the skin`; then (within 2 s) her character rebuilt with the avatar: soft zones built on
+'Genesis9.Shape', `GPU contact: baking N renderers` incl. Genesis9.Shape with Delta Mush, her body segments incl. the avatar's mesh,
+`Wrinkles: renderer 'Genesis9.Shape' ... -> body / face` (and no wrinkle sheet for it). Headset: (1) skin like hers (no ghost);
+(2) a hand presses the avatar's thighs, glutes, belly, breasts: dents, marks, soft-zone give; (3) chubby / bend bulges / deep-bend
+joints on the avatar; (4) the physics hands stop on the avatar's surface; (5) None: her own body gets all of it back.
+
 ## 0.11.41 (micro lines, belly fold)
 
 Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log: `SF Body Morphs 0.11.41`. Wrinkles on (Face, Neck, Body), Debug ->

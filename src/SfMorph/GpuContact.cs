@@ -337,6 +337,7 @@ namespace SfMorph
 
         static bool IsBodyMesh(RendState s)
         {
+            if (Avatar.Owns(s.R)) return true;   // 0.11.42: the avatar drawn instead of her
             string n = s.Name ?? "";
             return n.IndexOf("body", StringComparison.OrdinalIgnoreCase) >= 0 && n.IndexOf("uterus", StringComparison.OrdinalIgnoreCase) < 0;
         }

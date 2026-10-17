@@ -249,14 +249,24 @@ namespace SfMorph
         void Scan()
         {
             var byRoot = new Dictionary<Transform, List<SkinnedMeshRenderer>>();
+            var hiddenBy = new Dictionary<Transform, List<SkinnedMeshRenderer>>();   // 0.11.42: her renderers the avatar replaces (bones only)
             var order = new List<Transform>();
             // The game's woman is everything under MovePlayerAndGirl.reika (whatever her scene root holds besides).
             _lady = GameRig.Lady();
             foreach (var r in UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>())
             {
-                if (r == null || r.sharedMesh == null || VrHands.UnderSf(r.transform)) continue;   // our own hand meshes aren't characters
-                var root = _lady != null && r.transform.IsChildOf(_lady) ? _lady : r.transform.root;
+                if (r == null || r.sharedMesh == null) continue;
+                bool avatar = Avatar.Owns(r);   // 0.11.42: the avatar drawn instead of her is her body for every skin system
+                if (!avatar && VrHands.UnderSf(r.transform)) continue;   // our own hand meshes aren't characters
+                var root = avatar ? (_lady != null ? _lady : Avatar.HerRoot) : _lady != null && r.transform.IsChildOf(_lady) ? _lady : r.transform.root;
+                if (root == null) continue;
                 List<SkinnedMeshRenderer> list;
+                if (!avatar && Avatar.Hides(r))
+                {
+                    if (!hiddenBy.TryGetValue(root, out list)) { list = new List<SkinnedMeshRenderer>(); hiddenBy[root] = list; }
+                    list.Add(r);
+                    continue;
+                }
                 if (!byRoot.TryGetValue(root, out list)) { list = new List<SkinnedMeshRenderer>(); byRoot[root] = list; order.Add(root); }
                 list.Add(r);
             }
@@ -276,7 +286,9 @@ namespace SfMorph
             {
                 var list = byRoot[root];
                 Character c;
-                if (!old.TryGetValue(root, out c) || !Same(c.Renderers, list)) c = Build(root, list, c, used);
+                List<SkinnedMeshRenderer> hid;
+                hiddenBy.TryGetValue(root, out hid);
+                if (!old.TryGetValue(root, out c) || !Same(c.Renderers, list)) c = Build(root, list, c, used, hid);
                 Found.Add(c);
                 old.Remove(root);
             }
@@ -305,7 +317,7 @@ namespace SfMorph
             return true;
         }
 
-        Character Build(Transform root, List<SkinnedMeshRenderer> list, Character prev, HashSet<string> used)
+        Character Build(Transform root, List<SkinnedMeshRenderer> list, Character prev, HashSet<string> used, List<SkinnedMeshRenderer> hidden = null)
         {
             string key = prev != null ? prev.Key : root.name.Replace("(Clone)", "").Trim();
             if (key.Length == 0) key = "Character";
@@ -316,9 +328,13 @@ namespace SfMorph
             if (prev != null) { c.Look.CopyFrom(prev.Look); c.Dirty = prev.Dirty; c.DirtyAt = prev.DirtyAt; c.Morph = prev.Morph; c.Soft = prev.Soft; } // clothes changed: same person
             else Store.LoadCharacter(c.Key, c.Look);
 
-            // Skin bones and their bind poses (mesh space -> bone), from the first mesh that has each bone.
+            // Skin bones and their bind poses (mesh space -> bone), from the first mesh that has each bone. 0.11.42: her renderers the avatar
+            // hides first (her face, breast and genital helper bones stay known; the avatar uses only some of her bones), then the shown ones.
             var bind = c.Bind;
-            foreach (var r in list)
+            var bindFrom = new List<SkinnedMeshRenderer>();
+            if (hidden != null) bindFrom.AddRange(hidden);
+            bindFrom.AddRange(list);
+            foreach (var r in bindFrom)
             {
                 var bones = r.bones;
                 var bp = r.sharedMesh.bindposes;

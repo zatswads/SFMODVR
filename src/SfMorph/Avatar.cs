@@ -39,7 +39,8 @@ namespace SfMorph
         public static void Bind(ConfigFile cfg)
         {
             Pick = cfg.Bind("Avatar", "Name", "", "Avatar replacement: the avatar drawn instead of her (a folder under BepInEx\\config\\SfMorphs\\avatars made by tools/avatar/build.ps1). Empty: off.");
-            MaterialRoute = cfg.Bind("Avatar", "Material", 1, new ConfigDescription("Avatar skin shader: 0 a copy of her own skin material (Shader Graphs/Skin) with the avatar's textures and her makeup / blush layers off, 1 the game's HDRP/Lit with subsurface scattering and her skin's diffusion profile.", new AcceptableValueRange<int>(0, 1)));
+            // 0.11.41: a new key, so the saved 0.11.29-0.11.39 value (HDRP/Lit, which looked like a ghost: user) does not carry over
+            MaterialRoute = cfg.Bind("Avatar", "SkinShader", 0, new ConfigDescription("Avatar skin shader: 0 a copy of her own skin material (Shader Graphs/Skin: the game's skin shading and subsurface scattering, her makeup / blush layers off) with the avatar's textures, 1 the game's HDRP/Lit with subsurface scattering and her skin's diffusion profile.", new AcceptableValueRange<int>(0, 1)));
             Brightness = cfg.Bind("Avatar", "Brightness", 1f, new ConfigDescription("Avatar skin brightness (multiplies its colour maps).", new AcceptableValueRange<float>(0.5f, 1.5f)));
             KeepHair = cfg.Bind("Avatar", "KeepHair", true, "Keep her hair on while the avatar is drawn (the avatar's head is fitted onto hers, so her hair sits on it).");
         }
@@ -88,6 +89,19 @@ namespace SfMorph
         static Transform _failedRoot;
 
         public static bool On { get { return _rig != null; } }
+
+        // 0.11.42: the avatar is her body for the plugin's skin systems (Body.Scan puts its renderers in her Character.Renderers and her
+        // hidden skin renderers out): GPU contact (dents, Delta Mush, chubby, bends, ripples), skin marks, soft zones, her body colliders
+        internal static bool Owns(Renderer r) { return _rig != null && _rig.Go != null && r != null && r.transform.IsChildOf(_rig.Go.transform); }
+        internal static bool Hides(Renderer r) { return _rig != null && r != null && _rig.HidesR(r); }
+        internal static Transform HerRoot { get { return _rig != null ? _rig.HerRoot : null; } }
+
+        // Wrinkles' region classes for the avatar's materials: 1 its head skin, 3 the rest of its skin (body, arms, legs), 0 not skin
+        internal static int RegionOf(Material m, Renderer r)
+        {
+            if (_rig == null || m == null) return 0;
+            return _rig.RegionOf(m);
+        }
 
         // From Runner.Update: loads / unloads by the config; every 2 s her renderers the game added since are hidden too.
         public static void Tick(Body body)
@@ -305,6 +319,18 @@ namespace SfMorph
             readonly Dictionary<string, Color> _surfCol = new Dictionary<string, Color>();
             Material _herSkin;
             Transform[] _herBones;   // the bones the new meshes are bound to
+
+            internal bool HidesR(Renderer r) { return _hidden.ContainsKey(r); }
+
+            internal int RegionOf(Material m)
+            {
+                string n = m.name ?? "";
+                if (n.StartsWith("SfAvatar ", StringComparison.Ordinal)) n = n.Substring(9);
+                if (!_surfRole.TryGetValue(n, out var role) || role != "skin") return 0;
+                var l = n.ToLowerInvariant();
+                if (l.Contains("mouth")) return 0;   // the mouth cavity
+                return l.Contains("head") || l.Contains("face") ? 1 : 3;
+            }
 
             // a bone of hers the new meshes use went away (the game rebuilt her): reload
             public bool Broken { get { if (_herBones == null) return false; foreach (var b in _herBones) if (b == null) return true; return false; } }
