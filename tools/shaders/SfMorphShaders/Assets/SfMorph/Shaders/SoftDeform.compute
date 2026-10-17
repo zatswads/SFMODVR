@@ -707,20 +707,20 @@ void MushRecon(uint3 id : SV_DispatchThreadID)
     float3 S = _MushIn[v].xyz;
     float3 e0 = _MushIn[n0].xyz - S;
     float3 e1 = _MushIn[n1].xyz - S;
-    float3 n = cross(e0, e1);
-    float nl = dot(n, n);
-    float3 t = e0 - n * (dot(e0, n) / max(nl, 1e-30));
+    // 0.11.39: the frame's normal is her skinned vertex normal (MushBake.Frame: the smoothed neighbours' cross product could lie at right
+    // angles to her skin at a fold or a border and flip between the bake and here: mirrored detail, flipped normals); t, b = the neighbour
+    // edges in its plane; a frame whose edges stand out of that plane (quality under 0.4, nothing under 0.15) fades out instead of flipping
+    float3 n = WorldNormal(v);
+    if (dot(n, n) < 0.5) { _MushOff[2 * v] = float4(0, 0, 0, 0); _MushOff[2 * v + 1] = float4(0, 0, 0, 0); return; }
+    float3 t = e0 - n * dot(e0, n);
+    float3 b0 = e1 - n * dot(e1, n);
     float tl = dot(t, t);
-    if (nl < 1e-20 || tl < 1e-20) { _MushOff[2 * v] = float4(0, 0, 0, 0); _MushOff[2 * v + 1] = float4(0, 0, 0, 0); return; }
-    n *= rsqrt(nl);
-    // 0.11.29 (user: her hips and knees torn up at rest): her skinning space is mirrored relative to the mesh, and a mirror flips a cross
-    // product, so b = cross(n, t) and the sign of n turned the rest offsets inside out. The frame now has no handedness: n points along
-    // the skinned normal (a mirror maps outward normals to outward normals), b is the second neighbour edge, orthogonalised.
-    if (dot(n, WorldNormal(v)) < 0.0) n = -n;
+    if (tl < 1e-20) { _MushOff[2 * v] = float4(0, 0, 0, 0); _MushOff[2 * v + 1] = float4(0, 0, 0, 0); return; }
     t *= rsqrt(tl);
-    float3 b = e1 - n * dot(e1, n) - t * dot(e1, t);
+    float3 b = b0 - t * dot(b0, t);
     float bl = dot(b, b);
     if (bl < 1e-20) { _MushOff[2 * v] = float4(0, 0, 0, 0); _MushOff[2 * v + 1] = float4(0, 0, 0, 0); return; }
+    float q = min(sqrt(tl / max(dot(e0, e0), 1e-30)), sqrt(bl / max(dot(e1, e1), 1e-30)));
     b *= rsqrt(bl);
     float3 target = S + t * d.x + b * d.y + n * d.z;
     float3 off = target - WorldPos(v);
@@ -728,7 +728,7 @@ void MushRecon(uint3 id : SV_DispatchThreadID)
     if (ol > _MushMax) off *= _MushMax / ol;
     float4 r = _MushNrm[v];
     float3 nt = t * r.x + b * r.y + n * r.z;
-    _MushOff[2 * v] = float4(off, saturate(d.w * _MushAmt));
+    _MushOff[2 * v] = float4(off, saturate(d.w * _MushAmt) * smoothstep(0.15, 0.4, q));
     _MushOff[2 * v + 1] = float4(nt, 0);
 }
 

@@ -180,15 +180,21 @@ namespace SfMorph
         // here, the skinned one on the GPU), t = e0 and b = e1 orthogonalised. Checked offline: exact at rest, under rotations and mirrors.
         static bool Frame(Vector3 e0, Vector3 e1, Vector3 nref, out Vector3 n, out Vector3 t, out Vector3 b)
         {
-            n = Vector3.Cross(e0, e1); t = b = Vector3.zero;
-            if (n.sqrMagnitude < 1e-20f) return false;
-            n.Normalize();
-            if (Vector3.Dot(n, nref) < 0f) n = -n;
+            // 0.11.39 (user: dark red inside-out smears with Round joints on, 0.11.30 too): at a vertex with few neighbours, a border or a
+            // tight fold (her crotch, the vulva opening, the glute cleft) the smoothed neighbours can span a plane at right angles to her skin;
+            // the cross product's normal was then perpendicular to the vertex normal and its sign a coin toss between this bake and the GPU, so
+            // the detail came back mirrored with flipped normals (the GPU test harness showed n.N = 0 exactly there). The frame's normal is the
+            // vertex normal itself now (her skinned normal on the GPU: always defined, mirror-proof); t and b are the neighbour edges in its
+            // plane. Quality = how much of each edge lies in that plane: under 0.3 at rest the vertex is left out; the GPU fades it the same way.
+            n = nref.normalized; t = b = Vector3.zero;
+            if (n.sqrMagnitude < 0.5f) return false;
             t = e0 - n * Vector3.Dot(e0, n);
-            if (t.sqrMagnitude < 1e-20f) return false;
+            b = e1 - n * Vector3.Dot(e1, n);
+            if (t.sqrMagnitude < 0.09f * e0.sqrMagnitude || t.sqrMagnitude < 1e-20f) return false;
             t.Normalize();
-            b = e1 - n * Vector3.Dot(e1, n) - t * Vector3.Dot(e1, t);
-            if (b.sqrMagnitude < 1e-20f) return false;
+            float bp = b.magnitude;
+            b -= t * Vector3.Dot(b, t);
+            if (b.sqrMagnitude < 0.09f * e1.sqrMagnitude || b.sqrMagnitude < 1e-20f || bp < 1e-10f) return false;
             b.Normalize();
             return true;
         }
