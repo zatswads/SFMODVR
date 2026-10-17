@@ -155,7 +155,7 @@ namespace SfMorph
                 if ((long)n * ch > 64L * 1024 * 1024) { why = "too long"; return false; }
                 if (_miLoadData != null) try { _miLoadData.Invoke(clip, null); } catch (Exception) { }
                 var data = new float[n * ch];
-                var ok = _miGetData.Invoke(clip, new object[] { data, 0 });
+                var ok = _miGetData.Invoke(clip, new object[] { data, 0 });   // timing-lint: ok once per clip
                 if (ok is bool && !(bool)ok) { why = "GetData refused (streamed or compressed in memory)"; return false; }
                 float pk = 0f; for (int i = 0; i < data.Length; i++) pk = Mathf.Max(pk, Mathf.Abs(data[i]));
                 if (pk < 1e-6f) { why = "GetData returned silence (streamed or compressed in memory?)"; return false; }

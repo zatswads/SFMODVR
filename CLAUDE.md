@@ -8,7 +8,7 @@ worktree of this repo; a change that needs both plugins is two commits, one per 
 group "Sex Formula VR" (file new sessions there).
 
 - Start with `docs/HANDOFF.md` (state, architecture, game facts, rules). Test plan: `docs/TESTING.md`.
-  Changelog: `README.md`. Workflow skill: `.claude/skills/sfmorph-dev/SKILL.md`.
+  Changelog: `README.md`. Workflow skill: `.claude/skills/sfmorph-dev/SKILL.md`; fps, cost, stutter or any per-frame simulation: `.claude/skills/sfmorph-timing/SKILL.md` (`sh tools/timing/check.sh` before such a release).
 - Before changing a system read `docs/LESSONS.md` (rules learnt the hard way: skin marks are frozen; folds, wrinkles, builds);
   add a lesson whenever a headset run teaches one.
 - Build: `REFS=<reference DLL folder> sh build.sh` (game DLLs must be uploaded by the user; never commit them).

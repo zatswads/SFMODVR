@@ -1959,7 +1959,7 @@ namespace SfMorph
                     if (_otMethod != null && !typeof(Texture).IsAssignableFrom(_otMethod.ReturnType)) _otMethod = null;
                 }
                 if (_otMethod == null) return null;
-                var o = _otMethod.Invoke(morph, new object[] { mat, prop }) as Texture;
+                var o = _otMethod.Invoke(morph, new object[] { mat, prop }) as Texture;   // timing-lint: ok only when the albedo copy is rebuilt
                 return Usable(o);
             }
             catch (Exception e)
@@ -2000,7 +2000,7 @@ namespace SfMorph
                 if (_cam == null && now >= _nextCamFind)
                 {
                     _nextCamFind = now + 2f;
-                    foreach (var c in Camera.allCameras) if (c != null && c.stereoEnabled && c.cameraType == CameraType.Game) { _cam = c; break; }
+                    foreach (var c in Camera.allCameras) if (c != null && c.stereoEnabled && c.cameraType == CameraType.Game) { _cam = c; break; }   // timing-lint: ok at most every 2 s while no camera
                 }
             }
             Transform head = null;

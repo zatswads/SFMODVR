@@ -295,7 +295,7 @@ namespace SfMorph
             // characters gone or with no active renderers: our soft-zone clones and bones go back now, not when they return
             foreach (var c in old.Values) try { c.Soft.Release(); } catch { }
             var eyes = new List<Vector3>();
-            foreach (var cam in Camera.allCameras) if (cam.stereoEnabled || cam == Camera.main) eyes.Add(cam.transform.position);
+            foreach (var cam in Camera.allCameras) if (cam.stereoEnabled || cam == Camera.main) eyes.Add(cam.transform.position);   // timing-lint: ok the 2 s character scan
             int women = 0;
             foreach (var c in Found)
             {
@@ -471,6 +471,12 @@ namespace SfMorph
             sb.Append("Character '").Append(c.Key).Append("': ").Append(c.Female ? "female" : "not detected as female")
               .Append(", ").Append(c.Renderers.Count).Append(" skinned meshes, ").Append(c.BoneList.Count).Append(" bones")
               .Append(c.Look.Empty ? "" : ", saved look with " + c.Look.Count + " changes loaded");
+            // 0.11.48: how her animation advances. AnimatePhysics moves the pose in 20 ms fixed steps (0-3 a frame) while the soft zones and
+            // Overlap integrate the frame time: the timing audit needs to know (TESTING.md, Soft zones clock)
+            if (c.Root != null)
+                foreach (var an in c.Root.GetComponentsInChildren<Animator>(true))
+                    sb.Append(", animator '").Append(an.name).Append("' ").Append(an.updateMode).Append(an.applyRootMotion ? " root motion" : "").Append(' ').Append(an.cullingMode)
+                      .Append(an.isActiveAndEnabled ? "" : " (off)");
             if (!c.Female) { Plugin.Log.LogInfo(sb.ToString()); return; }
             int readable = 0;
             foreach (var r in c.Renderers) if (r != null && r.sharedMesh != null && r.sharedMesh.isReadable) readable++;

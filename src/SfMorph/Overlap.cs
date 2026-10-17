@@ -60,6 +60,7 @@ namespace SfMorph
         const float Step = 1f / 120f;
         const float FadeTime = 0.15f;
         const float ResetPos = 0.3f, ResetAngle = 60f, ResetDt = 0.1f;
+        const float ResetSpeed = 8f, ResetTurn = 1500f;   // 0.11.48: m/s, deg/s: the cut test at low frame rates
         const float SameEps = 1e-6f;
         const float MaxOmega = 40f;                 // rad/s, hard cap on a spring state's angular velocity (safety, never reached normally)
 
@@ -406,11 +407,13 @@ namespace SfMorph
                     if (animWrote) { b.Prev = b.Target; b.Target = cur; } else b.Prev = b.Target;
                     int why = 0;
                     if (reset) why = 1;
-                    else if ((pos - b.LastPos).sqrMagnitude > ResetPos * ResetPos) why = 2;
-                    else if (Quaternion.Angle(b.Prev, b.Target) > ResetAngle) why = 3;
+                    // 0.11.48: a cut is 0.3 m / 60 deg in a frame or faster than 8 m/s / 1500 deg/s for this frame's dt (a flat 0.3 m / 60 deg is
+                    // ordinary dance motion at 23 fps: the lag snapped back to the animation, a visible hitch)
+                    else if (SimClock.Jumped((pos - b.LastPos).sqrMagnitude, ResetPos, ResetSpeed, dt)) why = 2;
+                    else if (Quaternion.Angle(b.Prev, b.Target) > Mathf.Max(ResetAngle, ResetTurn * dt)) why = 3;
                     if (why != 0)
                     {
-                        if (why > 1 && !_loggedReset[why - 1]) { _loggedReset[why - 1] = true; Plugin.Log.LogInfo("Overlap: reset on " + tr.name + ": " + (why == 2 ? "moved more than 0.3 m in one frame" : "turned more than 60 deg in one frame")); }
+                        if (why > 1 && !_loggedReset[why - 1]) { _loggedReset[why - 1] = true; Plugin.Log.LogInfo("Overlap: reset on " + tr.name + ": " + (why == 2 ? "jumped (moved more than 0.3 m and 8 m/s in one frame)" : "turned more than 60 deg and 1500 deg/s in one frame") + ", frame " + (dt * 1000f).ToString("0") + " ms"); }
                         b.Init = false; cut = why > 1;
                     }
                 }

@@ -1050,7 +1050,7 @@ namespace SfMorph
                 _wrBase = typeof(Wrinkles).GetMethod("BaseOf", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static,
                                                       null, new[] { typeof(Material), typeof(string) }, null);
             }
-            try { return _wrBase != null ? _wrBase.Invoke(null, new object[] { m, prop }) as Texture : null; }
+            try { return _wrBase != null ? _wrBase.Invoke(null, new object[] { m, prop }) as Texture : null; }   // timing-lint: ok only when skin textures are applied
             catch { return null; }
         }
 

@@ -49,6 +49,19 @@ Chain: `GpuContact` capsules -> `SoftDeform.compute` Depth (`_Foreign`) -> Compo
 14. **No face / neck marks (0.9.7, 0.11.7).** These meshes are GPU-only. They join as `Extra` v2 renderers and take their skinning
     space from a readable sibling (rootBone). Her own hands dent her face but never mark it.
 
+## Frame pacing (0.11.48: the jiggle stuttered in dances)
+
+1. **Simulations integrate exactly the frame time.** `SimClock.Substeps(dt, step, max)`: equal substeps of `dt / n`. Never a fixed-step
+   accumulator without output interpolation (step counts alternate with the frame rate: judder) and never "behind: drop the rest"
+   (0.11.47 and before lost a quarter of every frame at 23 fps). Overlap did it right from the start; SoftSim now does too.
+2. **Per-frame inputs are spread over the substeps.** A lag / kick applied once before the substeps is a step input every frame whose
+   size follows the frame time; it showed as the skin shivering against her body in fast motion.
+3. **Limits inside the substeps, with the velocity into the limit removed**, not once a frame (a swing knocked at its ends).
+4. **Cut tests need a speed**: `SimClock.Jumped(dist2, metres, speed, dt)`; 20 cm in one frame is ordinary motion at 23 fps.
+5. **Smoothing is dt-based** (`1 - exp(-dt / tau)`), not `Lerp(x, t, 0.5f)` per frame. The lint (`tools/timing/lint_timing.py`) flags
+   these and per-frame garbage; a line that is fine says `timing-lint: ok <why>`. `sh tools/timing/check.sh` before every release that
+   touches a per-frame system; extend the harness when adding a simulation.
+
 ## Cross-system lessons
 
 - **Rule out stale builds first.** Check the version in the log (`grep "SF Body Morphs"`) and in the DLL (`strings -el`). Each

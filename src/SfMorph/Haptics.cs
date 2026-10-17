@@ -427,7 +427,7 @@ namespace SfMorph
 
         static object NewAction(string name, string binding)
         {
-            var a = _actCtor.Invoke(new object[] { name, _passThrough, binding, null, null, null });
+            var a = _actCtor.Invoke(new object[] { name, _passThrough, binding, null, null, null });   // timing-lint: ok action set up once
             _actEnable.Invoke(a, null);
             return a;
         }
@@ -459,7 +459,7 @@ namespace SfMorph
                 }
                 if (n > 0 && _oxHandle != null)
                 {
-                    ulong hnd = Convert.ToUInt64(_oxHandle.Invoke(null, new object[] { action, null }));
+                    ulong hnd = Convert.ToUInt64(_oxHandle.Invoke(null, new object[] { action, null }));   // timing-lint: ok action set up once
                     if (hnd == 0UL) { dev += " (no OpenXR action handle)"; return 0; }
                 }
                 return n;
@@ -477,7 +477,7 @@ namespace SfMorph
             try
             {
                 if (_rtName != null) rtName = Convert.ToString(_rtName.GetValue(null, null)) + " " + Convert.ToString(_rtVer != null ? _rtVer.GetValue(null, null) : "");
-                if (_rtExt != null) ext = (bool)_rtExt.Invoke(null, new object[] { "XR_FB_touch_controller_pro" }) ? "on" : "off";
+                if (_rtExt != null) ext = (bool)_rtExt.Invoke(null, new object[] { "XR_FB_touch_controller_pro" }) ? "on" : "off";   // timing-lint: ok Probe every 2-5 s
             }
             catch (Exception) { }
             rtName = rtName.Trim();
@@ -522,7 +522,7 @@ namespace SfMorph
                 {
                     try
                     {
-                        var dev = _xrGetAt.Invoke(null, new object[] { Enum.ToObject(_xrNode, h == 0 ? 4 : 5) });
+                        var dev = _xrGetAt.Invoke(null, new object[] { Enum.ToObject(_xrNode, h == 0 ? 4 : 5) });   // timing-lint: ok Probe every 2-5 s
                         var valid = dev.GetType().GetProperty("isValid").GetValue(dev, null);
                         if (!(valid is bool) || !(bool)valid) { _xrDev[h] = null; continue; }
                         _xrDev[h] = dev; ok++;

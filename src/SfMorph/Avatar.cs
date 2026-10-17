@@ -1141,7 +1141,7 @@ namespace SfMorph
                     _validate = _hdMaterial != null ? _hdMaterial.GetMethod("ValidateMaterial", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(Material) }, null) : null;
                     Plugin.Log.LogInfo("Avatar: HDMaterial.ValidateMaterial " + (_validate != null ? "found" : "not found (keywords set by hand)"));
                 }
-                if (_validate != null) try { _validate.Invoke(null, new object[] { m }); } catch (Exception e) { Plugin.Log.LogWarning("Avatar: ValidateMaterial: " + e.Message); }
+                if (_validate != null) try { _validate.Invoke(null, new object[] { m }); } catch (Exception e) { Plugin.Log.LogWarning("Avatar: ValidateMaterial: " + e.Message); }   // timing-lint: ok once per material when an avatar is applied
             }
 
             Texture2D Tex(Dictionary<string, string> t, string kind)
