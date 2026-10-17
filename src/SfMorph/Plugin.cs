@@ -41,6 +41,7 @@ namespace SfMorph
         internal ConfigEntry<bool> MuscleOn, MuscleCore, MuscleBack, MuscleLegs, MuscleArms;
         internal ConfigEntry<float> MuscleFitness, MuscleGain, MuscleStrength, MuscleShade, MuscleAttack, MuscleRelease;
         internal ConfigEntry<int> MuscleDebug;
+        internal ConfigEntry<int> MuscleDriver;   // 0.11.47
         // 0.11.8 tensed muscles as geometry (GPU contact v2) and firmness under a hand
         internal ConfigEntry<float> RippleThrustAmt, ContactNormalSmooth;
         internal ConfigEntry<float> MuscleFlexAmt, MuscleCoreMm, MuscleBackMm, MuscleLegsMm, MuscleArmsMm, MuscleFirmness;
@@ -188,6 +189,7 @@ namespace SfMorph
             MuscleDebug = Config.Bind("Muscles", "Debug", 0, new ConfigDescription("0 off, 1 tint the muscles green (relaxed) to red (tensed), 2 show every muscle in its own colour.", new AcceptableValueRange<int>(0, 2)));
             MuscleAttack = Config.Bind("Muscles", "Attack", 0.25f, new ConfigDescription("Seconds for a muscle to tense.", new AcceptableValueRange<float>(0.02f, 2f)));
             MuscleRelease = Config.Bind("Muscles", "Release", 0.8f, new ConfigDescription("Seconds for a muscle to relax.", new AcceptableValueRange<float>(0.02f, 3f)));
+            MuscleDriver = Config.Bind("Muscles", "Driver", 1, new ConfigDescription("What tenses her muscles: 0 joint-angle tables (before 0.11.47), 1 muscle lengths (origin to insertion on her bones, a shortened muscle contracts) plus the load terms (her weight on legs / arms / trunk), 2 the stronger of lengths and the angle tables.", new AcceptableValueRange<int>(0, 2)));
             MuscleFlexAmt = Config.Bind("Muscles", "Flex", 1f, new ConfigDescription("Tensed muscles bulge as geometry (needs GPU contact): the per-area sizes below x this (0 off).", new AcceptableValueRange<float>(0f, 2f)));
             MuscleCoreMm = Config.Bind("Muscles", "CoreMm", 3f, new ConfigDescription("Bulge of a fully active abs / obliques / serratus muscle at the area's highest sculpted belly (mm, before Flex; the sculpt keeps the other bellies and grooves in proportion).", new AcceptableValueRange<float>(0f, 20f)));
             MuscleBackMm = Config.Bind("Muscles", "BackMm", 4f, new ConfigDescription("Bulge of the fully active spinal erectors / lats (mm, before Flex).", new AcceptableValueRange<float>(0f, 20f)));
