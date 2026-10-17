@@ -1011,21 +1011,33 @@ def body_creases(surf, sk, log):
                     pts.append(h)
             if len(pts) > 4:
                 out.append(Crease(np.array(pts), ra, 0.0005, 0.0013, seed=280 + i + (10 if side == 'R' else 0)))
-    # front of the neck: two soft horizontal bands when she looks down / tucks her chin. Cast from inside the neck outwards (from the
-    # front they would hit her chin first).
+    # front of the neck: 2-3 soft horizontal creases across the whole front when she looks down / tucks her chin, uneven like a real
+    # neck (headset 0.11.34: the 0.9.8 pair showed as two mirrored diagonal strokes): each line its own height, slight tilt and waves,
+    # its own reach to either side, depth and width; not mirrored. Cast from inside the neck outwards (from the front they would hit
+    # her chin first). Her front-of-neck UV patch is shared with the reika_neck piece under her chin (main(): the body layout is
+    # evaluated on the upper body there, so the lines run through the middle instead of stopping at the patch's edge).
     rk = reg('neck', 'neck', 0.03)
     rr[rk] = 0.02
-    for i, y in enumerate((1.392, 1.409)):
-        ctr = np.array([0, y, -0.045])
+    #        height  depth mm width mm  reach left / right (deg)  tilt (m over the arc)  wave (m)  seed
+    lines = ((1.3845, 0.45, 2.4, (-78, 70), 0.0012, 0.0011, 71),
+             (1.3985, 0.55, 2.7, (-66, 84), -0.0009, 0.0013, 72),
+             (1.4105, 0.3, 2.1, (-48, 58), 0.0007, 0.0008, 73))
+    for y0, dep, wid, (a0, a1), tilt, wave, seed in lines:
+        rng = np.random.default_rng(seed)
+        ph = rng.uniform(0, 6.28, 3)
+        ctr = np.array([0, y0, -0.045])
         pts = []
-        for k in range(13):
-            a = math.radians(-45 + 90 * k / 12.0)
-            h = surf.ray(ctr, unit([math.sin(a), 0, math.cos(a)]), near=0.15)
-            if h is not None and np.linalg.norm(h - ctr) < 0.08:
+        for k in range(25):
+            a = math.radians(a0 + (a1 - a0) * k / 24.0)
+            u = a / math.radians(80)
+            y = y0 + tilt * u + wave * (0.6 * math.sin(2.1 * a + ph[0]) + 0.4 * math.sin(4.7 * a + ph[1]))
+            c2 = np.array([0, y, -0.045])
+            h = surf.ray(c2, unit([math.sin(a), 0, math.cos(a)]), near=0.15)
+            if h is not None and np.linalg.norm(h - c2) < 0.08:
                 pts.append(h)
-        if len(pts) > 5:
-            out.append(Crease(wobble(np.array(pts), lambda q: unit_rows(q - ctr), 0.0006, 70 + i),
-                              rk, 0.0006 - 0.0002 * i, 0.0016, seed=70 + i, ridge=0.45))
+        if len(pts) > 8:
+            out.append(Crease(wobble(np.array(pts), lambda q: unit_rows(q - ctr), 0.0005, seed + 10),
+                              rk, dep * 0.001, wid * 0.001, seed=seed, ridge=0.35))
     # belly: when she squats or leans forward the belly folds into one soft roll that follows its curve (lowest at the middle, rising
     # to the sides), with a fainter one above; broad and shallow with a raised rounded edge. 0.9.1's two thin straight lines read as a
     # scar (headset, 0.9.1).
@@ -1085,7 +1097,9 @@ def main():
              '# export ' + os.path.basename(d)]
     jobs = [
         ('face', ['reika_face_a'], 'reika_face_a', face_creases, 2048, 1024),
-        ('body', ['reika_upperBody_normal', 'reika_lowerBody_normal', 'reika_neck', 'reika_foot'], 'reika_body', body_creases, 2048, 1024),
+        # 0.11.35: reika_neck (under her chin) shares its UVs with the upper body's front of the neck; evaluated on the upper body (the
+        # visible throat) so the neck lines cross it. The neck renderer still finds its region in the region map at runtime.
+        ('body', ['reika_upperBody_normal', 'reika_lowerBody_normal', 'reika_foot'], 'reika_body', body_creases, 2048, 1024),
     ]
     only = [a[7:] for a in sys.argv[1:] if a.startswith('--only=')]   # 0.11.25: --only=face while iterating (layouts.txt keeps the others)
     for name, mnames, mat, fn, n, nreg in jobs:

@@ -98,6 +98,12 @@ for seams at UV borders (jaw, behind the ears) and shimmer with DLSS; (3) move a
 (4) Physics quality Fidelity on/off and switching characters: no stuck textures, wrinkles come back; (5) send log + screenshots.
 
 
+## 0.11.36 (neck lines)
+
+Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log: `SF Body Morphs 0.11.36`. Wrinkles on with Neck on, Debug -> Wrinkle
+test (or chin down): 2-3 soft lines run across the whole front of her neck, uneven and not mirrored; no diagonal strokes under the
+jaw; nothing new under her chin when her head is up. Debug Regions: the neck colour covers the front of the neck in one piece.
+
 ## 0.11.35 (chubby whole limbs, lower-body frame, partner marks)
 
 Install `dist/SfMorph.dll` **and** `dist/sfmorph_shaders`. Log: the `baked reika_lowerBody...` line has `bend N verts`, `folds N verts`
